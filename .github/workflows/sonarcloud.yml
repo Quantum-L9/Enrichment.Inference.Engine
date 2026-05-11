@@ -97,7 +97,7 @@ jobs:
 
       - name: SonarCloud Scan
         if: steps.gate.outputs.run == 'true'
-        uses: SonarSource/sonarqube-scan-action@v4
+        uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
