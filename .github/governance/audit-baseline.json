@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "purpose": "Initial legacy audit baseline. Existing findings are advisory unless touched or security/chassis critical.",
+  "policy": {
+    "existing_findings": "advisory",
+    "new_findings": "blocking",
+    "touched_security_or_chassis_findings": "blocking"
+  },
+  "findings": [
+    {"file": "app/score/score_explainer.py", "line": 54, "rule": "flatcase_field", "message": "Likely flatcase field 'recommendation'"},
+    {"file": "app/score/score_explainer.py", "line": 103, "rule": "flatcase_field", "message": "Likely flatcase field 'recommendations'"},
+    {"file": "app/score/score_models.py", "line": 87, "rule": "flatcase_field", "message": "Likely flatcase field 'recommendation'"},
+    {"file": "app/agents/deal_risk.py", "line": 27, "rule": "flatcase_field", "message": "Likely flatcase field 'recommendations'"},
+    {"file": "app/services/simulation_bridge.py", "line": 1507, "rule": "f_string_sql", "message": "f-string SQL query -- injection risk"},
+    {"file": "app/services/crm/salesforce_client.py", "line": 101, "rule": "f_string_sql", "message": "f-string SQL query -- injection risk"},
+    {"file": "app/middleware/rate_limiter.py", "line": 11, "rule": "fastapi_import_engine", "message": "FastAPI import in engine module -- chassis isolation violation"},
+    {"file": "app/core/auth.py", "line": 13, "rule": "fastapi_import_engine", "message": "FastAPI import in engine module -- chassis isolation violation"},
+    {"file": "app/core/auth.py", "line": 14, "rule": "fastapi_import_engine", "message": "FastAPI import in engine module -- chassis isolation violation"},
+    {"file": "app/score/score_api.py", "line": 17, "rule": "fastapi_import_engine", "message": "FastAPI import in engine module -- chassis isolation violation"},
+    {"file": "app/bootstrap/l9_contract_runtime.py", "line": 5, "rule": "fastapi_import_engine", "message": "FastAPI import in engine module -- chassis isolation violation"}
+  ]
+}
