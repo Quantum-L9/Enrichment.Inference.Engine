@@ -7,7 +7,7 @@
 # owner: platform
 # status: active
 # --- /L9_META ---
-# Audit PR Review - relevance-aware bounded audit reporting.
+# Audit PR Review - touched-file scoped blocking with repo-wide advisory visibility.
 
 name: Audit PR Review
 
@@ -114,6 +114,43 @@ jobs:
           import json
           import os
           import sys
+          from pathlib import PurePosixPath
+
+          def normalize_path(value: object) -> str:
+              text = str(value or '').replace('\\', '/').strip()
+              while text.startswith('./'):
+                  text = text[2:]
+              return str(PurePosixPath(text)) if text else ''
+
+          def parse_changed_files(raw: str) -> set[str]:
+              try:
+                  parsed = json.loads(raw or '[]')
+              except json.JSONDecodeError as exc:
+                  print(f'ERROR: Failed to parse classifier changed files JSON: {exc}', file=sys.stderr)
+                  raise SystemExit(2)
+              if not isinstance(parsed, list):
+                  print('ERROR: classifier all_changed_files output must be a JSON list', file=sys.stderr)
+                  raise SystemExit(2)
+              return {normalize_path(path) for path in parsed if normalize_path(path)}
+
+          def is_security_or_chassis_finding(finding: dict) -> bool:
+              message = str(finding.get('message', '')).lower()
+              rule = str(finding.get('rule', '')).lower()
+              joined = f'{rule} {message}'
+              return any(
+                  token in joined
+                  for token in (
+                      'sql',
+                      'injection',
+                      'secret',
+                      'auth',
+                      'security',
+                      'fastapi import',
+                      'chassis',
+                      'transport',
+                      'ingress',
+                  )
+              )
 
           try:
               findings = json.load(open('audit_results.json', encoding='utf-8'))
@@ -125,41 +162,52 @@ jobs:
               print('ERROR: audit_results.json must be a list', file=sys.stderr)
               raise SystemExit(2)
 
-          changed = set(json.loads(os.environ.get('ALL_CHANGED_FILES') or '[]'))
+          changed = parse_changed_files(os.environ.get('ALL_CHANGED_FILES') or '[]')
           pr_class = os.environ.get('PR_CLASS', 'unknown')
           app_changed = os.environ.get('APP_CHANGED') == 'true'
-          python_changed = os.environ.get('PYTHON_CHANGED') == 'true'
           security_changed = os.environ.get('SECURITY_SENSITIVE_CHANGED') == 'true'
           transport_changed = os.environ.get('TRANSPORT_SENSITIVE_CHANGED') == 'true'
           ingress_changed = os.environ.get('INGRESS_SENSITIVE_CHANGED') == 'true'
 
+          for finding in findings:
+              finding['_normalized_file'] = normalize_path(finding.get('file'))
+
+          touched_findings = [finding for finding in findings if finding.get('_normalized_file') in changed]
+          inherited_findings = [finding for finding in findings if finding.get('_normalized_file') not in changed]
+
           blocking_classes = {'app_code', 'security', 'compliance', 'unknown_diff'}
-          advisory_classes = {'ci_workflow', 'dependency', 'dependency_python', 'dependency_types', 'tests_only'}
+          blocking_context = (
+              pr_class in blocking_classes
+              or app_changed
+              or security_changed
+              or transport_changed
+              or ingress_changed
+          )
 
-          touched_findings = [f for f in findings if f.get('file') in changed]
           blocking_findings = []
-
-          if pr_class in blocking_classes or app_changed or security_changed or transport_changed or ingress_changed:
+          if blocking_context:
               for finding in touched_findings:
-                  severity = finding.get('severity')
-                  message = str(finding.get('message', '')).lower()
-                  if severity in {'CRITICAL', 'HIGH'}:
-                      blocking_findings.append(finding)
-                  elif 'sql' in message or 'fastapi import' in message or 'chassis' in message:
+                  severity = str(finding.get('severity', '')).upper()
+                  if severity in {'CRITICAL', 'HIGH'} or is_security_or_chassis_finding(finding):
                       blocking_findings.append(finding)
 
-          if pr_class not in blocking_classes and not app_changed and not security_changed:
-              blocking_findings = []
+          for finding in findings:
+              finding.pop('_normalized_file', None)
 
           payload = {
+              'schema_version': 1,
+              'mode': 'touched_file_scoped_blocking',
               'pr_class': pr_class,
+              'changed_files': sorted(changed),
               'finding_count': len(findings),
               'touched_finding_count': len(touched_findings),
+              'inherited_finding_count': len(inherited_findings),
               'blocking_finding_count': len(blocking_findings),
               'findings': findings,
               'touched_findings': touched_findings,
+              'inherited_findings': inherited_findings,
               'blocking_findings': blocking_findings,
-              'advisory_mode': pr_class in advisory_classes,
+              'blocking_context': blocking_context,
           }
           json.dump(payload, open('audit_summary.json', 'w', encoding='utf-8'), indent=2)
 
@@ -167,6 +215,7 @@ jobs:
               handle.write(f"has_findings={'true' if findings else 'false'}\n")
               handle.write(f"finding_count={len(findings)}\n")
               handle.write(f"touched_finding_count={len(touched_findings)}\n")
+              handle.write(f"inherited_finding_count={len(inherited_findings)}\n")
               handle.write(f"blocking_finding_count={len(blocking_findings)}\n")
               handle.write(f"should_block={'true' if blocking_findings else 'false'}\n")
           PY
@@ -184,90 +233,97 @@ jobs:
           MAX_LINE_LENGTH = 500
 
           payload = json.load(open('audit_summary.json', encoding='utf-8'))
-          findings = payload['findings']
           blocking_findings = payload['blocking_findings']
           touched_findings = payload['touched_findings']
+          inherited_findings = payload['inherited_findings']
 
-          by_severity = {'CRITICAL': [], 'HIGH': [], 'MEDIUM': [], 'INFO': []}
-          for finding in findings:
-              by_severity.setdefault(finding.get('severity', 'INFO'), []).append(finding)
+          def append_finding_section(lines, title, findings, current_length):
+              if not findings:
+                  lines.append(f'### {title}')
+                  lines.append('')
+                  lines.append('- none')
+                  lines.append('')
+                  return current_length + len(title) + 12
+
+              by_severity = {'CRITICAL': [], 'HIGH': [], 'MEDIUM': [], 'INFO': []}
+              for finding in findings:
+                  by_severity.setdefault(str(finding.get('severity', 'INFO')).upper(), []).append(finding)
+
+              lines.append(f'### {title}')
+              lines.append('')
+              current_length += len(title) + 8
+              severity_icons = {'CRITICAL': '[CRITICAL]', 'HIGH': '[HIGH]', 'MEDIUM': '[MEDIUM]', 'INFO': '[INFO]'}
+              footer = '\n---\nGenerated by L9 Audit Engine (`tools/audit_engine.py`)'
+              reserve_for_footer = len(footer) + 200
+
+              for severity in ['CRITICAL', 'HIGH', 'MEDIUM', 'INFO']:
+                  current = by_severity.get(severity, [])
+                  if not current:
+                      continue
+                  header = f"#### {severity_icons[severity]} {severity} ({len(current)})\n\n"
+                  if current_length + len(header) + reserve_for_footer > MAX_COMMENT_LENGTH:
+                      continue
+                  lines.append(f"#### {severity_icons[severity]} {severity} ({len(current)})")
+                  lines.append('')
+                  current_length += len(header)
+                  included = 0
+                  for finding in current[:MAX_PER_SEVERITY]:
+                      msg = str(finding.get('message', ''))
+                      if len(msg) > MAX_LINE_LENGTH:
+                          msg = msg[:MAX_LINE_LENGTH] + '...'
+                      line = f"- `{finding.get('file')}:{finding.get('line')}` {msg}\n"
+                      if current_length + len(line) + reserve_for_footer > MAX_COMMENT_LENGTH:
+                          break
+                      lines.append(line.rstrip())
+                      current_length += len(line)
+                      included += 1
+                  remaining = len(current) - min(MAX_PER_SEVERITY, included)
+                  if remaining > 0:
+                      notice = f"... truncated {remaining} additional {severity} findings ..."
+                      if current_length + len(notice) + reserve_for_footer <= MAX_COMMENT_LENGTH:
+                          lines.append('')
+                          lines.append(notice)
+                          current_length += len(notice) + 2
+                  lines.append('')
+                  current_length += 1
+              return current_length
 
           lines = []
           lines.append('<!-- l9-audit-marker: v1 -->')
           lines.append('## L9 Audit Review')
           lines.append('')
-          lines.append(f"PR class: `{payload['pr_class']}`")
-          lines.append(f"Total findings: **{len(findings)}** | Touched findings: **{len(touched_findings)}** | Blocking touched findings: **{len(blocking_findings)}**")
+          lines.append('### Status')
+          lines.append(f"- Result: `{'blocking' if blocking_findings else 'pass_with_advisories'}`")
+          lines.append('- Mode: `touched_file_scoped_blocking`')
+          lines.append(f"- PR class: `{payload['pr_class']}`")
+          lines.append(f"- Total repo findings visible: **{payload['finding_count']}**")
+          lines.append(f"- Touched findings: **{payload['touched_finding_count']}**")
+          lines.append(f"- Inherited advisory findings: **{payload['inherited_finding_count']}**")
+          lines.append(f"- Blocking touched findings: **{payload['blocking_finding_count']}**")
           lines.append('')
 
           if blocking_findings:
-              lines.append('### Blocking touched issues found')
-              lines.append('')
-              lines.append('This PR cannot merge until blocking findings in touched files are resolved.')
+              lines.append('This PR is blocked because one or more touched files contain blocking audit findings.')
           else:
-              lines.append('### Advisory repo-wide findings')
-              lines.append('')
-              lines.append('No blocking findings were found in touched files. Repo-wide inherited findings remain advisory for this PR.')
-
+              lines.append('No blocking audit findings were found in touched files. Repo-wide inherited findings remain visible but advisory for this PR.')
           lines.append('')
           lines.append('---')
           lines.append('')
 
-          severity_icons = {'CRITICAL': '[CRITICAL]', 'HIGH': '[HIGH]', 'MEDIUM': '[MEDIUM]', 'INFO': '[INFO]'}
           current_length = len('\n'.join(lines))
-          footer = '\n---\nGenerated by L9 Audit Engine (`tools/audit_engine.py`)'
-          reserve_for_footer = len(footer) + 200
-          truncated_findings = 0
-
-          display_findings = blocking_findings or findings
-          display_by_severity = {'CRITICAL': [], 'HIGH': [], 'MEDIUM': [], 'INFO': []}
-          for finding in display_findings:
-              display_by_severity.setdefault(finding.get('severity', 'INFO'), []).append(finding)
-
-          for severity in ['CRITICAL', 'HIGH', 'MEDIUM', 'INFO']:
-              current = display_by_severity.get(severity, [])
-              if not current:
-                  continue
-              header = f"### {severity_icons[severity]} {severity} ({len(current)})\n\n"
-              if current_length + len(header) + reserve_for_footer > MAX_COMMENT_LENGTH:
-                  truncated_findings += len(current)
-                  continue
-              lines.append(f"### {severity_icons[severity]} {severity} ({len(current)})")
-              lines.append('')
-              current_length += len(header)
-              included = 0
-              for finding in current[:MAX_PER_SEVERITY]:
-                  msg = str(finding.get('message', ''))
-                  if len(msg) > MAX_LINE_LENGTH:
-                      msg = msg[:MAX_LINE_LENGTH] + '...'
-                  line = f"- `{finding.get('file')}:{finding.get('line')}` {msg}\n"
-                  if current_length + len(line) + reserve_for_footer > MAX_COMMENT_LENGTH:
-                      truncated_findings += len(current) - included
-                      break
-                  lines.append(line.rstrip())
-                  current_length += len(line)
-                  included += 1
-              remaining = len(current) - min(MAX_PER_SEVERITY, included)
-              if remaining > 0:
-                  notice = f"\n... truncated {remaining} additional {severity} findings ...\n"
-                  if current_length + len(notice) + reserve_for_footer <= MAX_COMMENT_LENGTH:
-                      lines.append('')
-                      lines.append(f"... truncated {remaining} additional {severity} findings ...")
-                      current_length += len(notice)
-              lines.append('')
-              current_length += 1
-
-          if truncated_findings > 0:
-              lines.append('')
-              lines.append(f"... truncated {truncated_findings} additional findings due to comment length limit ...")
-              lines.append('')
+          current_length = append_finding_section(lines, 'Blocking Touched Findings', blocking_findings, current_length)
+          current_length = append_finding_section(lines, 'Touched Advisory Findings', [f for f in touched_findings if f not in blocking_findings], current_length)
+          current_length = append_finding_section(lines, 'Inherited Repo-Wide Advisory Findings', inherited_findings, current_length)
 
           lines.append('---')
           lines.append('Generated by L9 Audit Engine (`tools/audit_engine.py`)')
           comment_body = '\n'.join(lines)
+          if len(comment_body) > MAX_COMMENT_LENGTH:
+              comment_body = comment_body[: MAX_COMMENT_LENGTH - 120] + '\n\n... truncated due to GitHub comment limit ...\n---\nGenerated by L9 Audit Engine (`tools/audit_engine.py`)'
+
           with open('pr_comment.md', 'w', encoding='utf-8') as handle:
               handle.write(comment_body)
-          print(f'Generated bounded comment with {len(findings)} findings ({len(comment_body)} chars)')
+          print(f'Generated scoped audit comment ({len(comment_body)} chars)')
           EOF
 
       - name: Post PR Comment
@@ -310,3 +366,4 @@ jobs:
           echo "Repo-wide findings remain advisory"
           echo "Total findings: ${{ steps.audit.outputs.finding_count }}"
           echo "Touched findings: ${{ steps.audit.outputs.touched_finding_count }}"
+          echo "Inherited advisory findings: ${{ steps.audit.outputs.inherited_finding_count }}"
