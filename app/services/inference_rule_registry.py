@@ -284,10 +284,10 @@ def infer_contamination_tolerance(entity: dict, ctx: InferenceContext) -> Infere
     grade = entity.get("material_grade")
     if not tier or not grade:
         return None
-    _HIGH_TOLERANCE_TIERS = {"micro", "small"}
-    _LOW_GRADE_PATTERNS = {"fiber", "generic"}
-    tolerance = "high" if (tier in _HIGH_TOLERANCE_TIERS or
-                           any(p in str(grade).lower() for p in _LOW_GRADE_PATTERNS)) else "low"
+    high_tolerance_tiers = {"micro", "small"}
+    low_grade_patterns = {"fiber", "generic"}
+    tolerance = "high" if (tier in high_tolerance_tiers or
+                           any(p in str(grade).lower() for p in low_grade_patterns)) else "low"
     conf = 0.78 if tolerance == "high" else 0.72
     return InferenceResult(
         field_name="contamination_tolerance",
@@ -342,20 +342,20 @@ def infer_buyer_persona(entity: dict, ctx: InferenceContext) -> InferenceResult 
     title_lower = str(title).lower()
     if not title_lower:
         return None
-    _EXEC_KEYWORDS = {"ceo", "coo", "president", "owner", "founder", "vp", "svp", "evp"}
-    _OPS_KEYWORDS = {"operations", "ops", "plant", "facility", "production", "supply"}
-    _PROC_KEYWORDS = {"procurement", "purchasing", "buyer", "sourcing"}
-    _TECH_KEYWORDS = {"engineer", "technical", "r&d", "research", "quality"}
-    for kw in _EXEC_KEYWORDS:
+    exec_keywords = {"ceo", "coo", "president", "owner", "founder", "vp", "svp", "evp"}
+    ops_keywords = {"operations", "ops", "plant", "facility", "production", "supply"}
+    proc_keywords = {"procurement", "purchasing", "buyer", "sourcing"}
+    tech_keywords = {"engineer", "technical", "r&d", "research", "quality"}
+    for kw in exec_keywords:
         if kw in title_lower:
             return InferenceResult("buyer_persona", "executive", 0.85, "infer_buyer_persona", rationale=f"title={title}")
-    for kw in _PROC_KEYWORDS:
+    for kw in proc_keywords:
         if kw in title_lower:
             return InferenceResult("buyer_persona", "procurement", 0.83, "infer_buyer_persona", rationale=f"title={title}")
-    for kw in _OPS_KEYWORDS:
+    for kw in ops_keywords:
         if kw in title_lower:
             return InferenceResult("buyer_persona", "operations", 0.80, "infer_buyer_persona", rationale=f"title={title}")
-    for kw in _TECH_KEYWORDS:
+    for kw in tech_keywords:
         if kw in title_lower:
             return InferenceResult("buyer_persona", "technical", 0.78, "infer_buyer_persona", rationale=f"title={title}")
     return InferenceResult("buyer_persona", "unknown", 0.55, "infer_buyer_persona", rationale=f"title={title} — no match")

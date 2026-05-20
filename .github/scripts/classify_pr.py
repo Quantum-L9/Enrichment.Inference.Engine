@@ -12,8 +12,8 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import PurePosixPath
-from typing import Iterable
 
 ZERO_SHA = "0000000000000000000000000000000000000000"
 
@@ -26,7 +26,7 @@ def _event() -> dict[str, object]:
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     if not event_path:
         return {}
-    with open(event_path, "r", encoding="utf-8") as fh:
+    with open(event_path, encoding="utf-8") as fh:
         loaded = json.load(fh)
     return loaded if isinstance(loaded, dict) else {}
 
