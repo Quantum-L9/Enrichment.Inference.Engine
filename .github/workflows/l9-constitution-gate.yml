@@ -1,4 +1,4 @@
-# L9 Constitution Gate — verifies node.constitution.yaml, inventories, and contract-bound PR edits.
+# L9 Constitution Gate - verifies node.constitution.yaml, inventories, and contract-bound PR edits.
 # Human-maintained accuracy matrix: docs/contracts/VERIFICATION_MATRIX.md
 
 name: L9 Constitution Gate
@@ -43,15 +43,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-ci.txt
+            pyproject.toml
 
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyyaml pytest pytest-cov fastapi
+          if [ -f requirements-ci.txt ]; then
+            python -m pip install -r requirements-ci.txt
+          fi
+          python -m pip install -e . --no-deps 2>/dev/null || true
 
       - name: Run Tier 2 constitution tests
         run: |
-          pytest tests/contracts/tier2/test_node_constitution_contract.py \
+          PYTHONPATH=. pytest tests/contracts/tier2/test_node_constitution_contract.py \
             tests/contracts/tier2/test_runtime_attestation_contract.py \
             -q --disable-warnings --maxfail=1 -o addopts=""
 
