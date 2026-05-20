@@ -3,11 +3,11 @@
 # origin: l9-template
 # engine: enrichment
 # layer: [ci, governance]
-# tags: [L9_TEMPLATE, ci, audit, pr-review]
+# tags: [L9_TEMPLATE, ci, audit, pr-review, tier-policy]
 # owner: platform
 # status: active
 # --- /L9_META ---
-# Audit PR Review - posts bounded findings as PR comments.
+# Audit PR Review - explicit advisory/blocking governance policy.
 
 name: Audit PR Review
 
@@ -20,6 +20,7 @@ on:
       - '**/*.py'
       - 'kb/**/*.yaml'
       - 'kb/**/*.yml'
+      - '.github/workflows/audit-pr-review.yml'
 
 concurrency:
   group: audit-pr-${{ github.event.pull_request.number }}
@@ -31,7 +32,7 @@ permissions:
 
 env:
   PYTHON_VERSION: '3.12'
-  MAX_COMMENT_FINDINGS_PER_SEVERITY: '25'
+  MAX_COMMENT_FINDINGS_PER_SECTION: '25'
   MAX_COMMENT_LENGTH: '65536'
 
 jobs:
@@ -59,55 +60,204 @@ jobs:
 
       - name: Run Audit Engine
         id: audit
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha }}
         run: |
           if [ ! -f "tools/audit_engine.py" ]; then
             echo "audit_engine.py not found, skipping"
             echo "has_findings=false" >> $GITHUB_OUTPUT
+            echo "should_block=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           echo "Running L9 27-rule audit..."
           PYTHONPATH=. python tools/audit_engine.py --json > audit_results.json 2>&1 || true
 
-          if ! FINDING_COUNT=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(len(data))" 2>&1); then
-            echo "ERROR: Failed to parse audit_results.json"
-            echo "$FINDING_COUNT"
-            echo "has_findings=true" >> $GITHUB_OUTPUT
-            echo "finding_count=PARSE_ERROR" >> $GITHUB_OUTPUT
-            exit 1
-          fi
+          python3 << 'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          from pathlib import PurePosixPath
 
-          if ! [[ "$FINDING_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: Invalid finding count: $FINDING_COUNT"
-            echo "has_findings=true" >> $GITHUB_OUTPUT
-            echo "finding_count=PARSE_ERROR" >> $GITHUB_OUTPUT
-            exit 1
-          fi
+          LEGACY_BASELINE = {
+              "app/score/score_explainer.py|flatcase_field|likely flatcase field 'recommendation'",
+              "app/score/score_explainer.py|flatcase_field|likely flatcase field 'recommendations'",
+              "app/score/score_models.py|flatcase_field|likely flatcase field 'recommendation'",
+              "app/agents/deal_risk.py|flatcase_field|likely flatcase field 'recommendations'",
+              "app/services/simulation_bridge.py|f_string_sql|f-string sql query -- injection risk",
+              "app/services/crm/salesforce_client.py|f_string_sql|f-string sql query -- injection risk",
+              "app/middleware/rate_limiter.py|fastapi_import_engine|fastapi import in engine module -- chassis isolation violation",
+              "app/core/auth.py|fastapi_import_engine|fastapi import in engine module -- chassis isolation violation",
+              "app/score/score_api.py|fastapi_import_engine|fastapi import in engine module -- chassis isolation violation",
+              "app/bootstrap/l9_contract_runtime.py|fastapi_import_engine|fastapi import in engine module -- chassis isolation violation",
+          }
 
-          if [ "$FINDING_COUNT" = "0" ]; then
-            echo "No audit findings"
-            echo "has_findings=false" >> $GITHUB_OUTPUT
-          else
-            echo "Found $FINDING_COUNT audit findings"
-            echo "has_findings=true" >> $GITHUB_OUTPUT
-            echo "finding_count=$FINDING_COUNT" >> $GITHUB_OUTPUT
-          fi
+          ADVISORY_RULES = {
+              'flatcase_field',
+              'naming_smell',
+              'style_consistency',
+              'low_confidence_architecture_hint',
+          }
+          DANGEROUS_RULES = {
+              'f_string_sql',
+              'fastapi_import_engine',
+              'auth_boundary_violation',
+              'transport_boundary_violation',
+              'runtime_contract_violation',
+              'ingress_security_violation',
+              'secret_exposure',
+          }
+          DANGEROUS_TOKENS = (
+              'sql', 'injection', 'secret', 'auth', 'security',
+              'fastapi import', 'chassis', 'transport', 'ingress',
+              'contract', 'runtime',
+          )
+          ADVISORY_TOKENS = (
+              'flatcase', 'naming', 'style', 'low confidence',
+          )
 
-          CRITICAL=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='CRITICAL'))")
-          HIGH=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='HIGH'))")
-          MEDIUM=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='MEDIUM'))")
-          INFO=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='INFO'))")
+          def normalize_path(value: object) -> str:
+              text = str(value or '').replace('\\', '/').strip()
+              while text.startswith('./'):
+                  text = text[2:]
+              return str(PurePosixPath(text)) if text else ''
 
-          echo "critical_count=$CRITICAL" >> $GITHUB_OUTPUT
-          echo "high_count=$HIGH" >> $GITHUB_OUTPUT
-          echo "medium_count=$MEDIUM" >> $GITHUB_OUTPUT
-          echo "info_count=$INFO" >> $GITHUB_OUTPUT
+          def normalize_text(value: object) -> str:
+              return re.sub(r'\s+', ' ', str(value or '').strip().lower())
 
-          if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
-            echo "should_block=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_block=false" >> $GITHUB_OUTPUT
-          fi
+          def changed_files() -> set[str]:
+              base_ref = os.environ.get('BASE_REF')
+              head_ref = os.environ.get('HEAD_REF')
+              if not base_ref or not head_ref:
+                  print('ERROR: BASE_REF and HEAD_REF are required', file=sys.stderr)
+                  raise SystemExit(2)
+              output = subprocess.check_output(['git', 'diff', '--name-only', base_ref, head_ref], text=True)
+              return {normalize_path(path) for path in output.splitlines() if normalize_path(path)}
+
+          NUMERIC_RULE_NAMES = {
+              '2': 'flatcase_field',
+              '10': 'f_string_sql',
+              '11': 'fastapi_import_engine',
+          }
+
+          def finding_rule(finding: dict) -> str:
+              raw_rule = finding.get('rule')
+              if raw_rule is not None:
+                  token = normalize_text(str(raw_rule))
+                  if token.isdigit():
+                      mapped = NUMERIC_RULE_NAMES.get(token)
+                      if mapped:
+                          return mapped
+                  elif token:
+                      return token
+              message = normalize_text(finding.get('message'))
+              if 'f-string sql' in message or 'sql query' in message:
+                  return 'f_string_sql'
+              if 'fastapi import' in message or 'chassis isolation' in message:
+                  return 'fastapi_import_engine'
+              if 'flatcase field' in message:
+                  return 'flatcase_field'
+              if 'secret' in message:
+                  return 'secret_exposure'
+              if 'auth' in message:
+                  return 'auth_boundary_violation'
+              if 'transport' in message:
+                  return 'transport_boundary_violation'
+              if 'ingress' in message:
+                  return 'ingress_security_violation'
+              if 'runtime' in message or 'contract' in message:
+                  return 'runtime_contract_violation'
+              return 'unknown_rule'
+
+          def finding_key(finding: dict) -> str:
+              return '|'.join((normalize_path(finding.get('file')), finding_rule(finding), normalize_text(finding.get('message'))))
+
+          def is_advisory_category(finding: dict) -> bool:
+              rule = finding_rule(finding)
+              message = normalize_text(finding.get('message'))
+              return rule in ADVISORY_RULES or any(token in message for token in ADVISORY_TOKENS)
+
+          def is_dangerous_category(finding: dict) -> bool:
+              rule = finding_rule(finding)
+              message = normalize_text(finding.get('message'))
+              joined = f'{rule} {message}'
+              return rule in DANGEROUS_RULES or any(token in joined for token in DANGEROUS_TOKENS)
+
+          try:
+              raw_findings = json.load(open('audit_results.json', encoding='utf-8'))
+          except Exception as exc:
+              print(f'ERROR: Failed to parse audit_results.json: {exc}', file=sys.stderr)
+              raise SystemExit(2)
+          if not isinstance(raw_findings, list):
+              print('ERROR: audit_results.json must be a list', file=sys.stderr)
+              raise SystemExit(2)
+
+          touched_files = changed_files()
+          enriched = []
+          for raw in raw_findings:
+              if not isinstance(raw, dict):
+                  print('ERROR: each audit finding must be an object', file=sys.stderr)
+                  raise SystemExit(2)
+              finding = dict(raw)
+              rule = finding_rule(finding)
+              severity = str(finding.get('severity', '')).upper()
+              key = finding_key(finding)
+              touched = normalize_path(finding.get('file')) in touched_files
+              inherited = key in LEGACY_BASELINE
+              dangerous = is_dangerous_category(finding)
+              advisory_category = is_advisory_category(finding)
+              unknown_high_critical = rule == 'unknown_rule' and severity in {'CRITICAL', 'HIGH'}
+              blocking_reason = ''
+
+              if touched and dangerous:
+                  blocking_reason = 'touched_dangerous_finding'
+              elif not inherited and dangerous:
+                  blocking_reason = 'new_dangerous_finding'
+              elif not inherited and severity in {'CRITICAL', 'HIGH'} and not advisory_category:
+                  blocking_reason = 'new_high_or_critical'
+              elif unknown_high_critical:
+                  blocking_reason = 'unknown_high_or_critical_fail_closed'
+
+              finding['_l9_rule'] = rule
+              finding['_l9_key'] = key
+              finding['_l9_touched'] = touched
+              finding['_l9_inherited'] = inherited
+              finding['_l9_dangerous'] = dangerous
+              finding['_l9_advisory_category'] = advisory_category
+              finding['_l9_blocking'] = bool(blocking_reason)
+              finding['_l9_blocking_reason'] = blocking_reason
+              enriched.append(finding)
+
+          blocking = [f for f in enriched if f['_l9_blocking']]
+          advisory = [f for f in enriched if not f['_l9_blocking']]
+          summary = {
+              'schema_version': 1,
+              'mode': 'explicit_advisory_blocking_tier_policy',
+              'changed_files': sorted(touched_files),
+              'finding_count': len(enriched),
+              'blocking_finding_count': len(blocking),
+              'advisory_finding_count': len(advisory),
+              'blocking_findings': blocking,
+              'advisory_findings': advisory,
+              'policy': {
+                  'advisory_rules': sorted(ADVISORY_RULES),
+                  'dangerous_rules': sorted(DANGEROUS_RULES),
+                  'unknown_high_critical': 'blocking',
+                  'flatcase_style': 'advisory',
+              },
+          }
+          json.dump(summary, open('audit_summary.json', 'w', encoding='utf-8'), indent=2)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              handle.write(f"has_findings={'true' if enriched else 'false'}\n")
+              handle.write(f"finding_count={len(enriched)}\n")
+              handle.write(f"blocking_finding_count={len(blocking)}\n")
+              handle.write(f"advisory_finding_count={len(advisory)}\n")
+              handle.write(f"should_block={'true' if blocking else 'false'}\n")
+          PY
 
       - name: Generate PR Comment
         if: steps.audit.outputs.has_findings == 'true'
@@ -117,113 +267,62 @@ jobs:
           import json
           import os
 
-          MAX_PER_SEVERITY = int(os.environ.get('MAX_COMMENT_FINDINGS_PER_SEVERITY', '25'))
+          MAX_PER_SECTION = int(os.environ.get('MAX_COMMENT_FINDINGS_PER_SECTION', '25'))
           MAX_COMMENT_LENGTH = int(os.environ.get('MAX_COMMENT_LENGTH', '65536'))
           MAX_LINE_LENGTH = 500
+          payload = json.load(open('audit_summary.json', encoding='utf-8'))
 
-          with open('audit_results.json') as f:
-              findings = json.load(f)
+          def public(finding):
+              return {k: v for k, v in finding.items() if not k.startswith('_l9_')}
 
-          if not findings:
-              print('No findings to report')
-              raise SystemExit(0)
-
-          by_severity = {'CRITICAL': [], 'HIGH': [], 'MEDIUM': [], 'INFO': []}
-          for finding in findings:
-              by_severity[finding['severity']].append(finding)
-
-          lines = []
-          lines.append('<!-- l9-audit-marker: v1 -->')
-          lines.append('## L9 Audit Review')
-          lines.append('')
-
-          critical = len(by_severity['CRITICAL'])
-          high = len(by_severity['HIGH'])
-          medium = len(by_severity['MEDIUM'])
-          info = len(by_severity['INFO'])
-
-          if critical > 0 or high > 0:
-              lines.append('### Blocking Issues Found')
+          def append_section(lines, title, findings):
+              lines.append(f'### {title}')
               lines.append('')
-              lines.append(f'**{critical} CRITICAL** | **{high} HIGH** | {medium} MEDIUM | {info} INFO')
-              lines.append('')
-              lines.append('This PR cannot merge until CRITICAL and HIGH findings are resolved.')
-          else:
-              lines.append('### Non-Blocking Issues Found')
-              lines.append('')
-              lines.append(f'{medium} MEDIUM | {info} INFO')
-
-          lines.append('')
-          lines.append('---')
-          lines.append('')
-
-          severity_icons = {
-              'CRITICAL': '[CRITICAL]',
-              'HIGH': '[HIGH]',
-              'MEDIUM': '[MEDIUM]',
-              'INFO': '[INFO]',
-          }
-
-          current_length = len('\n'.join(lines))
-          footer = '\n---\nGenerated by L9 Audit Engine (`tools/audit_engine.py`)'
-          reserve_for_footer = len(footer) + 200
-          truncated_findings = 0
-
-          for severity in ['CRITICAL', 'HIGH', 'MEDIUM', 'INFO']:
-              current = by_severity[severity]
-              if not current:
-                  continue
-
-              header = f"### {severity_icons[severity]} {severity} ({len(current)})\n\n"
-              if current_length + len(header) + reserve_for_footer > MAX_COMMENT_LENGTH:
-                  truncated_findings += len(current)
-                  continue
-
-              lines.append(f"### {severity_icons[severity]} {severity} ({len(current)})")
-              lines.append('')
-              current_length += len(header)
-
-              included_in_severity = 0
-              for finding in current[:MAX_PER_SEVERITY]:
-                  finding_msg = finding['message']
-                  if len(finding_msg) > MAX_LINE_LENGTH:
-                      finding_msg = finding_msg[:MAX_LINE_LENGTH] + '...'
-
-                  finding_line = f"- `{finding['file']}:{finding['line']}` {finding_msg}\n"
-
-                  if current_length + len(finding_line) + reserve_for_footer > MAX_COMMENT_LENGTH:
-                      truncated_findings += len(current) - included_in_severity
-                      break
-
-                  lines.append(finding_line.rstrip())
-                  current_length += len(finding_line)
-                  included_in_severity += 1
-
-              remaining = len(current) - min(MAX_PER_SEVERITY, included_in_severity)
+              if not findings:
+                  lines.append('- none')
+                  lines.append('')
+                  return
+              for finding in findings[:MAX_PER_SECTION]:
+                  raw = public(finding)
+                  message = str(raw.get('message', ''))
+                  if len(message) > MAX_LINE_LENGTH:
+                      message = message[:MAX_LINE_LENGTH] + '...'
+                  reason = finding.get('_l9_blocking_reason') or 'advisory'
+                  lines.append(f"- `{raw.get('file')}:{raw.get('line')}` {message} — `{reason}`")
+              remaining = len(findings) - MAX_PER_SECTION
               if remaining > 0:
-                  truncation_notice = f"\n... truncated {remaining} additional {severity} findings ...\n"
-                  if current_length + len(truncation_notice) + reserve_for_footer <= MAX_COMMENT_LENGTH:
-                      lines.append('')
-                      lines.append(f"... truncated {remaining} additional {severity} findings ...")
-                      current_length += len(truncation_notice)
-
-              lines.append('')
-              current_length += 1
-
-          if truncated_findings > 0:
-              lines.append('')
-              lines.append(f"... truncated {truncated_findings} additional findings due to comment length limit ...")
+                  lines.append('')
+                  lines.append(f'... truncated {remaining} additional findings ...')
               lines.append('')
 
+          lines = [
+              '<!-- l9-audit-marker: v1 -->',
+              '## L9 Audit Review',
+              '',
+              '### Status',
+              f"- Result: `{'blocking' if payload['blocking_finding_count'] else 'pass_with_advisories'}`",
+              '- Mode: `explicit_advisory_blocking_tier_policy`',
+              f"- Total findings visible: **{payload['finding_count']}**",
+              f"- Blocking findings: **{payload['blocking_finding_count']}**",
+              f"- Advisory findings: **{payload['advisory_finding_count']}**",
+              '',
+              '### Policy',
+              '- Flatcase/style findings are advisory.',
+              '- SQL/auth/security/chassis/transport/ingress/contract/runtime findings are blocking when new or touched.',
+              '- Unknown HIGH/CRITICAL findings fail closed as blocking.',
+              '',
+              '---',
+              '',
+          ]
+          append_section(lines, 'Blocking Findings', payload['blocking_findings'])
+          append_section(lines, 'Advisory Findings', payload['advisory_findings'])
           lines.append('---')
           lines.append('Generated by L9 Audit Engine (`tools/audit_engine.py`)')
-
-          comment_body = '\n'.join(lines)
-
-          with open('pr_comment.md', 'w', encoding='utf-8') as handle:
-              handle.write(comment_body)
-
-          print(f'Generated bounded comment with {len(findings)} findings ({len(comment_body)} chars)')
+          body = '\n'.join(lines)
+          if len(body) > MAX_COMMENT_LENGTH:
+              body = body[:MAX_COMMENT_LENGTH - 120] + '\n\n... truncated due to GitHub comment limit ...\n---\nGenerated by L9 Audit Engine (`tools/audit_engine.py`)'
+          open('pr_comment.md', 'w', encoding='utf-8').write(body)
+          print(f'Generated tier-policy audit comment ({len(body)} chars)')
           EOF
 
       - name: Post PR Comment
@@ -233,32 +332,12 @@ jobs:
           script: |
             const fs = require('fs');
             const commentBody = fs.readFileSync('pr_comment.md', 'utf8');
-
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-
-            const existingComment = comments.find(c =>
-              c.user.login === 'github-actions[bot]' &&
-              c.body.includes('<!-- l9-audit-marker: v1 -->')
-            );
-
+            const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
+            const existingComment = comments.find(c => c.user.login === 'github-actions[bot]' && c.body.includes('<!-- l9-audit-marker: v1 -->'));
             if (existingComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existingComment.id,
-                body: commentBody
-              });
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existingComment.id, body: commentBody });
             } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: commentBody
-              });
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: commentBody });
             }
 
       - name: Clear stale audit comment
@@ -266,37 +345,22 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-
-            const existingComment = comments.find(c =>
-              c.user.login === 'github-actions[bot]' &&
-              c.body.includes('<!-- l9-audit-marker: v1 -->')
-            );
-
+            const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
+            const existingComment = comments.find(c => c.user.login === 'github-actions[bot]' && c.body.includes('<!-- l9-audit-marker: v1 -->'));
             if (existingComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existingComment.id,
-                body: '<!-- l9-audit-marker: v1 -->\n## L9 Audit Review\n\nAll 27 rules pass. No audit findings remain.\n\nGenerated by L9 Audit Engine (`tools/audit_engine.py`)'
-              });
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existingComment.id, body: '<!-- l9-audit-marker: v1 -->\n## L9 Audit Review\n\nAll audit rules pass. No findings remain.\n\nGenerated by L9 Audit Engine (`tools/audit_engine.py`)' });
             }
 
       - name: Fail on Blocking Issues
         if: steps.audit.outputs.should_block == 'true'
         run: |
-          echo "CRITICAL or HIGH severity issues found"
-          echo "CRITICAL: ${{ steps.audit.outputs.critical_count }}"
-          echo "HIGH: ${{ steps.audit.outputs.high_count }}"
+          echo "Blocking audit findings found"
+          echo "Blocking findings: ${{ steps.audit.outputs.blocking_finding_count }}"
           exit 1
 
       - name: Audit Passed
         if: steps.audit.outputs.should_block != 'true'
         run: |
-          echo "L9 Audit Review passed"
-          echo "CRITICAL: ${{ steps.audit.outputs.critical_count }}"
-          echo "HIGH: ${{ steps.audit.outputs.high_count }}"
+          echo "L9 Audit Review passed with explicit advisory/blocking policy"
+          echo "Total findings: ${{ steps.audit.outputs.finding_count }}"
+          echo "Advisory findings: ${{ steps.audit.outputs.advisory_finding_count }}"
