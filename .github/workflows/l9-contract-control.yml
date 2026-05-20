@@ -20,9 +20,13 @@ jobs:
 
       - name: Install control dependencies
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
-          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/cryptoxdog/".insteadOf "https://github.com/cryptoxdog/"
+          if [ -z "${SDK_TOKEN}" ]; then
+            echo "SDK_TOKEN is required to install private SDK dependencies"
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/cryptoxdog/".insteadOf "https://github.com/cryptoxdog/"
           python -m pip install --upgrade pip
           python -m pip install pyyaml pytest pytest-cov fastapi
           if [ -f requirements-ci.txt ]; then
@@ -91,9 +95,13 @@ jobs:
 
       - name: Install gate dependencies
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
-          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/cryptoxdog/".insteadOf "https://github.com/cryptoxdog/"
+          if [ -z "${SDK_TOKEN}" ]; then
+            echo "SDK_TOKEN is required to install private SDK dependencies"
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/cryptoxdog/".insteadOf "https://github.com/cryptoxdog/"
           python -m pip install --upgrade pip
           python -m pip install pyyaml pytest pytest-cov fastapi
           if [ -f requirements-ci.txt ]; then
