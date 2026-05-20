@@ -1,22 +1,3 @@
-# --- L9_META ---
-# l9_schema: 1
-# origin: l9-template
-# engine: enrichment
-# layer: [ci]
-# tags: [L9_TEMPLATE, ci, pipeline]
-# owner: platform
-# status: active
-# --- /L9_META ---
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Universal CI/CD Pack — Main CI Pipeline
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# VERSION: 1.0.0
-# PURPOSE: Production-grade CI for Enrichment.Inference.Engine
-# ZERO-CONFIG: Works immediately with sensible defaults
-# CONFIGURABLE: Customize via Repository Variables (see env.template)
-# SIBLING PARITY: Cognitive.Engine.Graphs/ci.yml
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 name: CI Pipeline
 
 on:
@@ -45,39 +26,31 @@ env:
   SOURCE_DIR: ${{ vars.SOURCE_DIR || 'app' }}
 
 jobs:
-# ────────────────────────────────────────────────────────────────────────
-# PHASE 1: VALIDATION
-# ────────────────────────────────────────────────────────────────────────
   validate:
     name: Validate Structure
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
+          cache: pip
           cache-dependency-path: |
             requirements-ci.txt
             pyproject.toml
-
       - name: Install Validation Tools
         run: |
           python -m pip install --upgrade pip
           pip install pyyaml
-
       - name: Check Python Syntax
         run: |
-          echo "Checking Python syntax..."
           find . -name "*.py" \
             -not -path "./venv/*" \
             -not -path "./.venv/*" \
@@ -85,103 +58,66 @@ jobs:
             -not -path "./build/*" \
             -not -path "./dist/*" \
             -exec python -m py_compile {} +
-          echo "✅ All Python files have valid syntax"
-
       - name: Validate YAML Files
         run: |
-          python3 -c "
-          import yaml
+          python3 - <<'PY'
+          import sys
           from pathlib import Path
-          errors = []
-          for f in Path('.github/workflows').glob('*.yml'):
-              try:
-                  with open(f) as fh:
-                      yaml.safe_load(fh)
-              except yaml.YAMLError as e:
-                  errors.append(f'{f}: {e}')
-          if errors:
-              for e in errors:
-                  print(f'❌ {e}')
-              raise SystemExit(1)
-          print('✅ All YAML workflow files are valid')
-          "
-
-      - name: Validate KB YAML Files
-        run: |
-          python3 -c "
           import yaml
-          from pathlib import Path
           errors = []
-          for f in Path('kb/').glob('*.yaml'):
+          for path in Path('.github/workflows').glob('*.yml'):
               try:
-                  with open(f) as fh:
-                      data = yaml.safe_load(fh)
+                  yaml.safe_load(path.read_text())
+              except yaml.YAMLError as exc:
+                  errors.append(f'{path}: {exc}')
+          for path in Path('kb').glob('*.yaml') if Path('kb').exists() else []:
+              try:
+                  data = yaml.safe_load(path.read_text())
                   if not isinstance(data, dict):
-                      errors.append(f'{f}: Not a valid YAML mapping')
-              except yaml.YAMLError as e:
-                  errors.append(f'{f}: {e}')
+                      errors.append(f'{path}: not a YAML mapping')
+              except yaml.YAMLError as exc:
+                  errors.append(f'{path}: {exc}')
           if errors:
-              for e in errors:
-                  print(f'❌ {e}')
-              raise SystemExit(1)
-          print('✅ All KB YAML files are valid')
-          "
+              print('\n'.join(errors))
+              sys.exit(1)
+          PY
 
-# ────────────────────────────────────────────────────────────────────────
-# PHASE 2: LINT & TYPE CHECK
-# ────────────────────────────────────────────────────────────────────────
   lint:
-    name: Lint & Type Check
+    name: Lint and Type Check
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: validate
     permissions:
       contents: read
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
+          cache: pip
           cache-dependency-path: |
             requirements-ci.txt
             pyproject.toml
-
       - name: Install Linting Tools
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
-
       - name: Run Ruff Linter
-        run: |
-          echo "Running Ruff linter..."
-          ruff check . --output-format=github
-          echo "✅ Ruff checks passed"
-
+        run: ruff check . --output-format=github
       - name: Run Ruff Formatter Check
-        run: |
-          echo "Checking code formatting..."
-          ruff format --check .
-          echo "✅ Code formatting is consistent"
-
+        run: ruff format --check .
       - name: Run Mypy Type Checker
         run: |
-          echo "Running type checks..."
           mypy ${{ env.SOURCE_DIR }} \
             --show-error-codes \
             --pretty \
             --install-types \
             --non-interactive \
             --ignore-missing-imports \
-            || echo "⚠️  Type check warnings (non-blocking)"
+            || echo "Type check warnings are non-blocking"
 
-# ────────────────────────────────────────────────────────────────────────
-# PHASE 2.5: SEMGREP POLICY CHECK
-# ────────────────────────────────────────────────────────────────────────
   semgrep:
     name: Semgrep Policy Check
     runs-on: ubuntu-latest
@@ -189,29 +125,32 @@ jobs:
     needs: validate
     permissions:
       contents: read
-
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Install Semgrep
         run: pip install semgrep
-
       - name: Run Semgrep
         run: semgrep --config .semgrep/ --error --quiet
 
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: validate
+    permissions:
+      contents: read
+    steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
+          cache: pip
           cache-dependency-path: |
             requirements-ci.txt
             pyproject.toml
-
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -220,14 +159,10 @@ jobs:
           if [ -f "${{ env.REQUIREMENTS_FILE }}" ]; then
             pip install -r ${{ env.REQUIREMENTS_FILE }}
           fi
-
       - name: Run Tests with Coverage
         env:
-          DATABASE_URL: postgresql://${{ vars.POSTGRES_USER || 'test_user' }}:test_password@localhost:5432/${{ vars.POSTGRES_DB || 'test_db' }}
-          REDIS_URL: redis://localhost:6379/0
           TESTING: "true"
         run: |
-          echo "Running test suite..."
           PYTHONPATH=. pytest ${{ env.TEST_DIR }} \
             -n auto \
             --cov=${{ env.SOURCE_DIR }} \
@@ -237,8 +172,6 @@ jobs:
             --timeout=300 \
             --tb=short \
             -v
-          echo "✅ All tests passed with coverage >=${{ env.COVERAGE_THRESHOLD }}%"
-
       - name: Upload Coverage to Codecov
         uses: codecov/codecov-action@v6
         with:
@@ -246,9 +179,6 @@ jobs:
           flags: unittests
           fail_ci_if_error: false
 
-# ────────────────────────────────────────────────────────────────────────
-# PHASE 4: SECURITY SCANNING
-# ────────────────────────────────────────────────────────────────────────
   security:
     name: Security Scanning
     runs-on: ubuntu-latest
@@ -258,58 +188,42 @@ jobs:
       contents: read
       security-events: write
       pull-requests: read
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-
+          cache: pip
       - name: Install Security Tools
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
-
-      - name: Run Gitleaks (Secret Detection)
+      - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
-
-      - name: Run pip-audit (Dependency Vulnerabilities)
-        run: |
-          echo "Scanning dependencies for known vulnerabilities..."
-          pip-audit --desc 
-
+      - name: Run pip-audit
+        run: pip-audit --desc
       - name: Run Safety Check
+        run: safety check || echo "Safety warnings are non-blocking"
+      - name: Run Bandit
         run: |
-          echo "Running Safety vulnerability scanner..."
-          safety check || echo "⚠️  Safety check warnings (non-blocking)"
-
-      - name: Run Bandit (SAST)
-        run: |
-          echo "Running Bandit static security analysis..."
           bandit -r ${{ env.SOURCE_DIR }} \
             -ll \
             -f screen \
             --exclude ./venv,./.venv,./tests,./build,./dist \
-            || echo "⚠️  Security warnings found (non-blocking)"
-
-      - name: Dependency Review (PR only)
+            || echo "Bandit warnings are non-blocking"
+      - name: Dependency Review
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
 
-# ────────────────────────────────────────────────────────────────────────
-# PHASE 5: SBOM GENERATION
-# ────────────────────────────────────────────────────────────────────────
   sbom:
     name: Generate SBOM
     runs-on: ubuntu-latest
@@ -318,11 +232,9 @@ jobs:
     permissions:
       contents: write
       id-token: write
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Generate Software Bill of Materials
         uses: anchore/sbom-action@v0
         with:
@@ -331,9 +243,6 @@ jobs:
           upload-artifact: true
           upload-release-assets: false
 
-# ────────────────────────────────────────────────────────────────────────
-# PHASE 6: OPENSSF SCORECARD
-# ────────────────────────────────────────────────────────────────────────
   scorecard:
     name: OpenSSF Scorecard
     runs-on: ubuntu-latest
@@ -343,28 +252,22 @@ jobs:
       id-token: write
       contents: read
       actions: read
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-
       - name: Run OpenSSF Scorecard
         uses: ossf/scorecard-action@v2
         with:
           results_file: scorecard.sarif
           results_format: sarif
           publish_results: true
-
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: scorecard.sarif
 
-# ────────────────────────────────────────────────────────────────────────
-# PHASE 7: CI GATE (Fan-In)
-# ────────────────────────────────────────────────────────────────────────
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-latest
@@ -380,45 +283,23 @@ jobs:
       - scorecard
     permissions:
       contents: read
-
     steps:
       - name: Evaluate All Results
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "CI Pipeline Results"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "Job Results:"
-          echo "  validate:  ${{ needs.validate.result }}"
-          echo "  lint:      ${{ needs.lint.result }}"
-          echo "  semgrep:   ${{ needs.semgrep.result }}"
-          echo "  test:      ${{ needs.test.result }}"
-          echo "  security:  ${{ needs.security.result }}"
-          echo "  sbom:      ${{ needs.sbom.result }}"
-          echo "  scorecard: ${{ needs.scorecard.result }}"
-          echo ""
-
-          # Check for failures in required jobs
+          echo "validate:  ${{ needs.validate.result }}"
+          echo "lint:      ${{ needs.lint.result }}"
+          echo "semgrep:   ${{ needs.semgrep.result }}"
+          echo "test:      ${{ needs.test.result }}"
+          echo "security:  ${{ needs.security.result }}"
+          echo "sbom:      ${{ needs.sbom.result }}"
+          echo "scorecard: ${{ needs.scorecard.result }}"
           if [[ "${{ needs.validate.result }}" == "failure" ]] || \
              [[ "${{ needs.lint.result }}" == "failure" ]] || \
              [[ "${{ needs.semgrep.result }}" == "failure" ]] || \
              [[ "${{ needs.test.result }}" == "failure" ]] || \
-          [[ "${{ needs.security.result }}" == "failure" ]]; then
-            echo "❌ CI GATE FAILED — Critical job(s) failed"
-            echo ""
-            echo "Required jobs must pass:"
-            echo "  • validate: syntax and structure checks"
-            echo "  • lint: code quality and formatting"
-            echo "  • semgrep: policy rule checks"
-            echo "  • test: test suite with coverage"
+             [[ "${{ needs.security.result }}" == "failure" ]]; then
+            echo "CI gate failed"
             exit 1
           fi
-
-          echo "✅ CI GATE PASSED"
-          echo "   All required checks completed successfully"
-          echo "   Ready for code review and merge"
-          echo ""
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# END OF CI PIPELINE
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          echo "CI gate passed"
