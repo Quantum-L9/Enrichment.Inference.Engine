@@ -19,12 +19,17 @@ jobs:
           python-version: "3.12"
 
       - name: Install control dependencies
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/cryptoxdog/".insteadOf "https://github.com/cryptoxdog/"
           python -m pip install --upgrade pip
           python -m pip install pyyaml pytest pytest-cov fastapi
-          # Install app package for attestation verification
+          if [ -f requirements-ci.txt ]; then
+            python -m pip install -r requirements-ci.txt
+          fi
           if [ -f "pyproject.toml" ]; then
-            python -m pip install -e . --no-deps 2>/dev/null || true
+            python -m pip install -e . --no-deps
           fi
 
       - name: Verify constitution
@@ -33,13 +38,12 @@ jobs:
 
       - name: Verify attestation
         run: |
-          # Skip attestation if app module not available (e.g., minimal CI)
           python scripts/l9_contract_control.py verify-attestation || {
             if python -c "import app" 2>/dev/null; then
-              exit 1  # App exists but attestation failed — real error
+              exit 1
             else
               echo "[l9-control] SKIP: app module not installed, attestation verification skipped"
-              exit 0  # App not installed — skip gracefully
+              exit 0
             fi
           }
 
@@ -86,9 +90,18 @@ jobs:
           python-version: "3.12"
 
       - name: Install gate dependencies
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/cryptoxdog/".insteadOf "https://github.com/cryptoxdog/"
           python -m pip install --upgrade pip
           python -m pip install pyyaml pytest pytest-cov fastapi
+          if [ -f requirements-ci.txt ]; then
+            python -m pip install -r requirements-ci.txt
+          fi
+          if [ -f "pyproject.toml" ]; then
+            python -m pip install -e . --no-deps
+          fi
 
       - name: Compute changed files
         id: changed
