@@ -56,6 +56,13 @@ jobs:
           fi
           python -m pip install -e . --no-deps 2>/dev/null || true
 
+      - name: Verify required imports
+        run: |
+          python - <<'PY'
+          import structlog
+          print(f"structlog import ok: {structlog.__version__}")
+          PY
+
       - name: Run Tier 2 constitution tests
         run: |
           PYTHONPATH=. pytest tests/contracts/tier2/test_node_constitution_contract.py \
