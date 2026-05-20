@@ -7,7 +7,7 @@
 # owner: platform
 # status: active
 # --- /L9_META ---
-# Audit PR Review - touched-file scoped blocking with repo-wide advisory visibility.
+# Audit PR Review - baseline-aware touched-file scoped blocking with repo-wide advisory visibility.
 
 name: Audit PR Review
 
@@ -36,6 +36,7 @@ env:
   PYTHON_VERSION: '3.12'
   MAX_COMMENT_FINDINGS_PER_SEVERITY: '25'
   MAX_COMMENT_LENGTH: '65536'
+  AUDIT_BASELINE_PATH: '.github/governance/audit-baseline.json'
 
 jobs:
   classify:
@@ -99,6 +100,7 @@ jobs:
           TRANSPORT_SENSITIVE_CHANGED: ${{ needs.classify.outputs.transport_sensitive_changed }}
           INGRESS_SENSITIVE_CHANGED: ${{ needs.classify.outputs.ingress_sensitive_changed }}
           ALL_CHANGED_FILES: ${{ needs.classify.outputs.all_changed_files }}
+          AUDIT_BASELINE_PATH: ${{ env.AUDIT_BASELINE_PATH }}
         run: |
           if [ ! -f "tools/audit_engine.py" ]; then
             echo "audit_engine.py not found, skipping"
@@ -113,6 +115,7 @@ jobs:
           python3 << 'PY'
           import json
           import os
+          import re
           import sys
           from pathlib import PurePosixPath
 
@@ -121,6 +124,9 @@ jobs:
               while text.startswith('./'):
                   text = text[2:]
               return str(PurePosixPath(text)) if text else ''
+
+          def normalize_text(value: object) -> str:
+              return re.sub(r'\s+', ' ', str(value or '').strip().lower())
 
           def parse_changed_files(raw: str) -> set[str]:
               try:
@@ -133,9 +139,31 @@ jobs:
                   raise SystemExit(2)
               return {normalize_path(path) for path in parsed if normalize_path(path)}
 
+          def finding_rule(finding: dict) -> str:
+              explicit_rule = normalize_text(finding.get('rule'))
+              if explicit_rule:
+                  return explicit_rule
+              message = normalize_text(finding.get('message'))
+              if 'f-string sql' in message or 'sql query' in message:
+                  return 'f_string_sql'
+              if 'fastapi import' in message or 'chassis isolation' in message:
+                  return 'fastapi_import_engine'
+              if 'flatcase field' in message:
+                  return 'flatcase_field'
+              return 'unknown_rule'
+
+          def finding_key(finding: dict) -> str:
+              return '|'.join(
+                  (
+                      normalize_path(finding.get('file')),
+                      finding_rule(finding),
+                      normalize_text(finding.get('message')),
+                  )
+              )
+
           def is_security_or_chassis_finding(finding: dict) -> bool:
-              message = str(finding.get('message', '')).lower()
-              rule = str(finding.get('rule', '')).lower()
+              message = normalize_text(finding.get('message'))
+              rule = finding_rule(finding)
               joined = f'{rule} {message}'
               return any(
                   token in joined
@@ -152,6 +180,37 @@ jobs:
                   )
               )
 
+          def load_baseline(path: str) -> set[str]:
+              if not path:
+                  print('ERROR: AUDIT_BASELINE_PATH is empty', file=sys.stderr)
+                  raise SystemExit(2)
+              try:
+                  baseline = json.load(open(path, encoding='utf-8'))
+              except Exception as exc:
+                  print(f'ERROR: Failed to parse audit baseline {path}: {exc}', file=sys.stderr)
+                  raise SystemExit(2)
+              if not isinstance(baseline, dict):
+                  print('ERROR: audit baseline must be a JSON object', file=sys.stderr)
+                  raise SystemExit(2)
+              if baseline.get('schema_version') != 1:
+                  print('ERROR: audit baseline schema_version must be 1', file=sys.stderr)
+                  raise SystemExit(2)
+              findings = baseline.get('findings')
+              if not isinstance(findings, list):
+                  print('ERROR: audit baseline findings must be a list', file=sys.stderr)
+                  raise SystemExit(2)
+              keys = set()
+              for index, finding in enumerate(findings):
+                  if not isinstance(finding, dict):
+                      print(f'ERROR: audit baseline finding at index {index} must be an object', file=sys.stderr)
+                      raise SystemExit(2)
+                  key = finding_key(finding)
+                  if key.startswith('|') or key.endswith('|'):
+                      print(f'ERROR: audit baseline finding at index {index} has incomplete key fields', file=sys.stderr)
+                      raise SystemExit(2)
+                  keys.add(key)
+              return keys
+
           try:
               findings = json.load(open('audit_results.json', encoding='utf-8'))
           except Exception as exc:
@@ -162,6 +221,7 @@ jobs:
               print('ERROR: audit_results.json must be a list', file=sys.stderr)
               raise SystemExit(2)
 
+          baseline_keys = load_baseline(os.environ.get('AUDIT_BASELINE_PATH', ''))
           changed = parse_changed_files(os.environ.get('ALL_CHANGED_FILES') or '[]')
           pr_class = os.environ.get('PR_CLASS', 'unknown')
           app_changed = os.environ.get('APP_CHANGED') == 'true'
@@ -169,53 +229,87 @@ jobs:
           transport_changed = os.environ.get('TRANSPORT_SENSITIVE_CHANGED') == 'true'
           ingress_changed = os.environ.get('INGRESS_SENSITIVE_CHANGED') == 'true'
 
+          enriched_findings = []
           for finding in findings:
-              finding['_normalized_file'] = normalize_path(finding.get('file'))
+              if not isinstance(finding, dict):
+                  print('ERROR: each audit finding must be an object', file=sys.stderr)
+                  raise SystemExit(2)
+              enriched = dict(finding)
+              normalized_file = normalize_path(enriched.get('file'))
+              key = finding_key(enriched)
+              inherited = key in baseline_keys
+              touched = normalized_file in changed
+              dangerous = is_security_or_chassis_finding(enriched)
+              severity = str(enriched.get('severity', '')).upper()
+              new = not inherited
+              blocking = False
 
-          touched_findings = [finding for finding in findings if finding.get('_normalized_file') in changed]
-          inherited_findings = [finding for finding in findings if finding.get('_normalized_file') not in changed]
+              if new and severity in {'CRITICAL', 'HIGH'}:
+                  blocking = True
+              if touched and dangerous:
+                  blocking = True
+              if touched and new and severity in {'CRITICAL', 'HIGH'}:
+                  blocking = True
 
-          blocking_classes = {'app_code', 'security', 'compliance', 'unknown_diff'}
-          blocking_context = (
-              pr_class in blocking_classes
-              or app_changed
-              or security_changed
-              or transport_changed
-              or ingress_changed
-          )
+              enriched['_l9_key'] = key
+              enriched['_l9_inherited'] = inherited
+              enriched['_l9_new'] = new
+              enriched['_l9_touched'] = touched
+              enriched['_l9_dangerous'] = dangerous
+              enriched['_l9_blocking'] = blocking
+              enriched_findings.append(enriched)
 
-          blocking_findings = []
-          if blocking_context:
-              for finding in touched_findings:
-                  severity = str(finding.get('severity', '')).upper()
-                  if severity in {'CRITICAL', 'HIGH'} or is_security_or_chassis_finding(finding):
-                      blocking_findings.append(finding)
-
-          for finding in findings:
-              finding.pop('_normalized_file', None)
+          inherited_findings = [finding for finding in enriched_findings if finding['_l9_inherited']]
+          new_findings = [finding for finding in enriched_findings if finding['_l9_new']]
+          touched_findings = [finding for finding in enriched_findings if finding['_l9_touched']]
+          blocking_findings = [finding for finding in enriched_findings if finding['_l9_blocking']]
+          touched_baseline_blocking_findings = [
+              finding
+              for finding in enriched_findings
+              if finding['_l9_inherited'] and finding['_l9_touched'] and finding['_l9_dangerous']
+          ]
+          new_blocking_findings = [
+              finding
+              for finding in enriched_findings
+              if finding['_l9_new'] and finding['_l9_blocking']
+          ]
+          inherited_advisory_findings = [
+              finding
+              for finding in inherited_findings
+              if not finding['_l9_blocking']
+          ]
 
           payload = {
-              'schema_version': 1,
-              'mode': 'touched_file_scoped_blocking',
+              'schema_version': 2,
+              'mode': 'baseline_aware_touched_file_scoped_blocking',
               'pr_class': pr_class,
               'changed_files': sorted(changed),
-              'finding_count': len(findings),
-              'touched_finding_count': len(touched_findings),
+              'blocking_context': bool(app_changed or security_changed or transport_changed or ingress_changed or pr_class in {'app_code', 'security', 'compliance', 'unknown_diff'}),
+              'baseline_finding_count': len(baseline_keys),
+              'finding_count': len(enriched_findings),
+              'new_finding_count': len(new_findings),
               'inherited_finding_count': len(inherited_findings),
+              'touched_finding_count': len(touched_findings),
               'blocking_finding_count': len(blocking_findings),
-              'findings': findings,
-              'touched_findings': touched_findings,
+              'new_blocking_finding_count': len(new_blocking_findings),
+              'touched_baseline_blocking_finding_count': len(touched_baseline_blocking_findings),
+              'findings': enriched_findings,
+              'new_findings': new_findings,
               'inherited_findings': inherited_findings,
+              'touched_findings': touched_findings,
               'blocking_findings': blocking_findings,
-              'blocking_context': blocking_context,
+              'new_blocking_findings': new_blocking_findings,
+              'touched_baseline_blocking_findings': touched_baseline_blocking_findings,
+              'inherited_advisory_findings': inherited_advisory_findings,
           }
           json.dump(payload, open('audit_summary.json', 'w', encoding='utf-8'), indent=2)
 
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
-              handle.write(f"has_findings={'true' if findings else 'false'}\n")
-              handle.write(f"finding_count={len(findings)}\n")
-              handle.write(f"touched_finding_count={len(touched_findings)}\n")
+              handle.write(f"has_findings={'true' if enriched_findings else 'false'}\n")
+              handle.write(f"finding_count={len(enriched_findings)}\n")
+              handle.write(f"new_finding_count={len(new_findings)}\n")
               handle.write(f"inherited_finding_count={len(inherited_findings)}\n")
+              handle.write(f"touched_finding_count={len(touched_findings)}\n")
               handle.write(f"blocking_finding_count={len(blocking_findings)}\n")
               handle.write(f"should_block={'true' if blocking_findings else 'false'}\n")
           PY
@@ -234,10 +328,16 @@ jobs:
 
           payload = json.load(open('audit_summary.json', encoding='utf-8'))
           blocking_findings = payload['blocking_findings']
-          touched_findings = payload['touched_findings']
-          inherited_findings = payload['inherited_findings']
+          new_blocking_findings = payload['new_blocking_findings']
+          touched_baseline_blocking_findings = payload['touched_baseline_blocking_findings']
+          inherited_advisory_findings = payload['inherited_advisory_findings']
+          new_findings = payload['new_findings']
+
+          def public_finding(finding):
+              return {key: value for key, value in finding.items() if not key.startswith('_l9_')}
 
           def append_finding_section(lines, title, findings, current_length):
+              findings = [public_finding(finding) for finding in findings]
               if not findings:
                   lines.append(f'### {title}')
                   lines.append('')
@@ -294,26 +394,29 @@ jobs:
           lines.append('')
           lines.append('### Status')
           lines.append(f"- Result: `{'blocking' if blocking_findings else 'pass_with_advisories'}`")
-          lines.append('- Mode: `touched_file_scoped_blocking`')
+          lines.append('- Mode: `baseline_aware_touched_file_scoped_blocking`')
           lines.append(f"- PR class: `{payload['pr_class']}`")
+          lines.append(f"- Baseline findings registered: **{payload['baseline_finding_count']}**")
           lines.append(f"- Total repo findings visible: **{payload['finding_count']}**")
-          lines.append(f"- Touched findings: **{payload['touched_finding_count']}**")
+          lines.append(f"- New findings: **{payload['new_finding_count']}**")
           lines.append(f"- Inherited advisory findings: **{payload['inherited_finding_count']}**")
-          lines.append(f"- Blocking touched findings: **{payload['blocking_finding_count']}**")
+          lines.append(f"- Touched findings: **{payload['touched_finding_count']}**")
+          lines.append(f"- Blocking findings: **{payload['blocking_finding_count']}**")
           lines.append('')
 
           if blocking_findings:
-              lines.append('This PR is blocked because one or more touched files contain blocking audit findings.')
+              lines.append('This PR is blocked by new HIGH/CRITICAL findings or touched dangerous baseline findings.')
           else:
-              lines.append('No blocking audit findings were found in touched files. Repo-wide inherited findings remain visible but advisory for this PR.')
+              lines.append('No blocking baseline-aware audit findings were found. Inherited untouched findings remain visible but advisory.')
           lines.append('')
           lines.append('---')
           lines.append('')
 
           current_length = len('\n'.join(lines))
-          current_length = append_finding_section(lines, 'Blocking Touched Findings', blocking_findings, current_length)
-          current_length = append_finding_section(lines, 'Touched Advisory Findings', [f for f in touched_findings if f not in blocking_findings], current_length)
-          current_length = append_finding_section(lines, 'Inherited Repo-Wide Advisory Findings', inherited_findings, current_length)
+          current_length = append_finding_section(lines, 'Blocking New Findings', new_blocking_findings, current_length)
+          current_length = append_finding_section(lines, 'Blocking Touched Baseline Findings', touched_baseline_blocking_findings, current_length)
+          current_length = append_finding_section(lines, 'New Advisory Findings', [finding for finding in new_findings if finding not in new_blocking_findings], current_length)
+          current_length = append_finding_section(lines, 'Inherited Advisory Findings', inherited_advisory_findings, current_length)
 
           lines.append('---')
           lines.append('Generated by L9 Audit Engine (`tools/audit_engine.py`)')
@@ -323,7 +426,7 @@ jobs:
 
           with open('pr_comment.md', 'w', encoding='utf-8') as handle:
               handle.write(comment_body)
-          print(f'Generated scoped audit comment ({len(comment_body)} chars)')
+          print(f'Generated baseline-aware audit comment ({len(comment_body)} chars)')
           EOF
 
       - name: Post PR Comment
@@ -355,15 +458,15 @@ jobs:
       - name: Fail on Blocking Issues
         if: steps.audit.outputs.should_block == 'true'
         run: |
-          echo "Blocking touched audit findings found"
-          echo "Blocking touched findings: ${{ steps.audit.outputs.blocking_finding_count }}"
+          echo "Blocking baseline-aware audit findings found"
+          echo "Blocking findings: ${{ steps.audit.outputs.blocking_finding_count }}"
           exit 1
 
       - name: Audit Passed
         if: steps.audit.outputs.should_block != 'true'
         run: |
-          echo "L9 Audit Review passed for touched files"
-          echo "Repo-wide findings remain advisory"
+          echo "L9 Audit Review passed with baseline-aware enforcement"
           echo "Total findings: ${{ steps.audit.outputs.finding_count }}"
-          echo "Touched findings: ${{ steps.audit.outputs.touched_finding_count }}"
+          echo "New findings: ${{ steps.audit.outputs.new_finding_count }}"
           echo "Inherited advisory findings: ${{ steps.audit.outputs.inherited_finding_count }}"
+          echo "Touched findings: ${{ steps.audit.outputs.touched_finding_count }}"
