@@ -23,7 +23,8 @@ OPTIONAL_JOBS = [
     "scorecard",
 ]
 
-PASS_RESULTS = {"success"}
+# Explicit GitHub Actions conclusion handling.
+PASS_RESULTS = {"success", "neutral"}
 FAIL_RESULTS = {"failure", "cancelled", "timed_out", "action_required"}
 SKIP_RESULTS = {"skipped"}
 
