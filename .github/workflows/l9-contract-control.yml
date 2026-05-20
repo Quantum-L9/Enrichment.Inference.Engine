@@ -8,9 +8,32 @@ on:
       - master
 
 jobs:
+  classify:
+    name: Classify PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      pr_class: ${{ steps.classify.outputs.pr_class }}
+      app_changed: ${{ steps.classify.outputs.app_changed }}
+      workflows_changed: ${{ steps.classify.outputs.workflows_changed }}
+      contracts_changed: ${{ steps.classify.outputs.contracts_changed }}
+      security_sensitive_changed: ${{ steps.classify.outputs.security_sensitive_changed }}
+      transport_sensitive_changed: ${{ steps.classify.outputs.transport_sensitive_changed }}
+      ingress_sensitive_changed: ${{ steps.classify.outputs.ingress_sensitive_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify changed files
+        id: classify
+        run: python3 .github/scripts/classify_pr.py
+
   constitution-and-attestation:
     name: Constitution + Attestation
     runs-on: ubuntu-latest
+    needs:
+      - classify
+    if: needs.classify.outputs.pr_class != 'docs_only'
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +64,15 @@ jobs:
           python scripts/l9_contract_control.py verify-constitution
 
       - name: Verify attestation
+        if: >-
+          needs.classify.outputs.pr_class != 'ci_workflow' &&
+          (
+            needs.classify.outputs.app_changed == 'true' ||
+            needs.classify.outputs.contracts_changed == 'true' ||
+            needs.classify.outputs.security_sensitive_changed == 'true' ||
+            needs.classify.outputs.transport_sensitive_changed == 'true' ||
+            needs.classify.outputs.ingress_sensitive_changed == 'true'
+          )
         run: |
           python scripts/l9_contract_control.py verify-attestation || {
             if python -c "import app" 2>/dev/null; then
@@ -53,9 +85,12 @@ jobs:
 
   review-signal:
     name: Review Signal
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      needs.classify.outputs.pr_class != 'docs_only'
     runs-on: ubuntu-latest
     needs:
+      - classify
       - constitution-and-attestation
     steps:
       - uses: actions/checkout@v4
@@ -75,7 +110,9 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.sha }}
+          PR_CLASS: ${{ needs.classify.outputs.pr_class }}
         run: |
+          echo "PR class: ${PR_CLASS}"
           python scripts/l9_contract_control.py review-signal --base "$BASE_REF" --head "$HEAD_REF" | tee review_signal.md
           cat review_signal.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -83,7 +120,11 @@ jobs:
     name: Select and Run Gates
     runs-on: ubuntu-latest
     needs:
+      - classify
       - constitution-and-attestation
+    if: >-
+      needs.classify.outputs.pr_class != 'docs_only' &&
+      needs.classify.outputs.pr_class != 'ci_workflow'
     steps:
       - uses: actions/checkout@v4
         with:
