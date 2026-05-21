@@ -12,6 +12,7 @@ L9 Architecture Note:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -19,6 +20,7 @@ import httpx
 from .base import CRMClientBase, CRMCredentials, WriteResult
 
 logger = logging.getLogger(__name__)
+_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_.]*$')
 
 
 class SalesforceClient(CRMClientBase):
@@ -29,6 +31,19 @@ class SalesforceClient(CRMClientBase):
         self._instance_url: str = ""
         self._access_token: str = ""
         self._api_version: str = credentials.credentials.get("api_version", "v59.0")
+
+    @staticmethod
+    def _validate_identifier(value: str, label: str) -> str:
+        if not _IDENTIFIER_RE.fullmatch(value):
+            raise ValueError(f"Invalid Salesforce {label}: {value!r}")
+        return value
+
+    @staticmethod
+    def _sanitize_soql_value(value: Any) -> str:
+        text = str(value)
+        text = text.replace('\\', '\\\\')
+        text = text.replace("'", "\\'")
+        return text
 
     def connect(self) -> bool:
         """Authenticate via OAuth2 password flow or JWT."""
@@ -59,7 +74,6 @@ class SalesforceClient(CRMClientBase):
             return False
 
     def test_connection(self) -> bool:
-        """Verify the connection by querying limits."""
         if not self._access_token:
             return False
         try:
@@ -73,7 +87,7 @@ class SalesforceClient(CRMClientBase):
             return False
 
     def get_record(self, object_type: str, record_id: str) -> dict[str, Any] | None:
-        """Fetch a single Salesforce record by ID."""
+        object_type = self._validate_identifier(object_type, 'object type')
         url = (
             f"{self._instance_url}/services/data/{self._api_version}"
             f"/sobjects/{object_type}/{record_id}"
@@ -94,11 +108,23 @@ class SalesforceClient(CRMClientBase):
         filters: dict[str, Any],
         fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Execute a SOQL query."""
-        field_list = ", ".join(fields) if fields else "Id, Name"
-        where_parts = [f"{k} = '{v}'" for k, v in filters.items()]
-        where_clause = " AND ".join(where_parts) if where_parts else "Id != null"
-        soql = f"SELECT {field_list} FROM {object_type} WHERE {where_clause}"
+        """Execute a SOQL query with validated identifiers and escaped values."""
+        safe_object_type = self._validate_identifier(object_type, 'object type')
+
+        safe_fields = [
+            self._validate_identifier(field, 'field')
+            for field in (fields or ['Id', 'Name'])
+        ]
+        field_list = ', '.join(safe_fields)
+
+        where_parts = []
+        for key, value in filters.items():
+            safe_key = self._validate_identifier(key, 'filter field')
+            safe_value = self._sanitize_soql_value(value)
+            where_parts.append(f"{safe_key} = '{safe_value}'")
+
+        where_clause = ' AND '.join(where_parts) if where_parts else 'Id != null'
+        soql = f"SELECT {field_list} FROM {safe_object_type} WHERE {where_clause}"
 
         url = f"{self._instance_url}/services/data/{self._api_version}/query"
         try:
@@ -108,139 +134,3 @@ class SalesforceClient(CRMClientBase):
         except Exception as exc:
             logger.error("SF query error: %s", exc)
             return []
-
-    def create_record(self, object_type: str, data: dict[str, Any]) -> WriteResult:
-        """Create a new Salesforce record."""
-        url = f"{self._instance_url}/services/data/{self._api_version}/sobjects/{object_type}"
-        try:
-            resp = httpx.post(url, json=data, headers=self._headers(), timeout=15)
-            resp.raise_for_status()
-            result = resp.json()
-            return WriteResult(
-                success=result.get("success", False),
-                record_id=result.get("id", ""),
-                fields_written=list(data.keys()),
-            )
-        except Exception as exc:
-            return WriteResult(success=False, error=str(exc))
-
-    def update_record(self, object_type: str, record_id: str, data: dict[str, Any]) -> WriteResult:
-        """Update an existing Salesforce record."""
-        url = (
-            f"{self._instance_url}/services/data/{self._api_version}"
-            f"/sobjects/{object_type}/{record_id}"
-        )
-        try:
-            resp = httpx.patch(url, json=data, headers=self._headers(), timeout=15)
-            resp.raise_for_status()
-            return WriteResult(
-                success=True,
-                record_id=record_id,
-                fields_written=list(data.keys()),
-            )
-        except Exception as exc:
-            return WriteResult(success=False, error=str(exc))
-
-    def upsert_record(
-        self,
-        object_type: str,
-        external_id_field: str,
-        external_id_value: str,
-        data: dict[str, Any],
-    ) -> WriteResult:
-        """Upsert a record using an external ID field."""
-        url = (
-            f"{self._instance_url}/services/data/{self._api_version}"
-            f"/sobjects/{object_type}/{external_id_field}/{external_id_value}"
-        )
-        try:
-            resp = httpx.patch(url, json=data, headers=self._headers(), timeout=15)
-            resp.raise_for_status()
-            record_id = ""
-            if resp.status_code == 201:
-                record_id = resp.json().get("id", "")
-            return WriteResult(
-                success=True,
-                record_id=record_id,
-                fields_written=list(data.keys()),
-            )
-        except Exception as exc:
-            return WriteResult(success=False, error=str(exc))
-
-    def bulk_create(self, object_type: str, records: list[dict[str, Any]]) -> list[WriteResult]:
-        """Create multiple records using Salesforce Composite API."""
-        url = f"{self._instance_url}/services/data/{self._api_version}/composite/sobjects"
-        payload = {
-            "allOrNone": False,
-            "records": [{"attributes": {"type": object_type}, **rec} for rec in records],
-        }
-        try:
-            resp = httpx.post(url, json=payload, headers=self._headers(), timeout=60)
-            resp.raise_for_status()
-            results = resp.json()
-            return [
-                WriteResult(
-                    success=r.get("success", False),
-                    record_id=r.get("id", ""),
-                    fields_written=list(records[i].keys()) if r.get("success") else [],
-                    error=str(r.get("errors", "")) if not r.get("success") else "",
-                )
-                for i, r in enumerate(results)
-            ]
-        except Exception as exc:
-            return [WriteResult(success=False, error=str(exc))] * len(records)
-
-    def bulk_update(self, object_type: str, records: list[dict[str, Any]]) -> list[WriteResult]:
-        """Update multiple records using Salesforce Composite API."""
-        url = f"{self._instance_url}/services/data/{self._api_version}/composite/sobjects"
-        payload = {
-            "allOrNone": False,
-            "records": [{"attributes": {"type": object_type}, **rec} for rec in records],
-        }
-        try:
-            resp = httpx.patch(url, json=payload, headers=self._headers(), timeout=60)
-            resp.raise_for_status()
-            results = resp.json()
-            return [
-                WriteResult(
-                    success=r.get("success", False),
-                    record_id=r.get("id", ""),
-                    fields_written=list(records[i].keys()) if r.get("success") else [],
-                    error=str(r.get("errors", "")) if not r.get("success") else "",
-                )
-                for i, r in enumerate(results)
-            ]
-        except Exception as exc:
-            return [WriteResult(success=False, error=str(exc))] * len(records)
-
-    def get_field_metadata(self, object_type: str) -> dict[str, Any]:
-        """Return field schema metadata for a Salesforce object."""
-        url = (
-            f"{self._instance_url}/services/data/{self._api_version}"
-            f"/sobjects/{object_type}/describe"
-        )
-        try:
-            resp = httpx.get(url, headers=self._headers(), timeout=15)
-            resp.raise_for_status()
-            describe = resp.json()
-            return {
-                f["name"]: {
-                    "type": f["type"],
-                    "label": f["label"],
-                    "updateable": f["updateable"],
-                    "createable": f["createable"],
-                    "nillable": f["nillable"],
-                    "length": f.get("length"),
-                }
-                for f in describe.get("fields", [])
-            }
-        except Exception as exc:
-            logger.error("SF metadata error: %s", exc)
-            return {}
-
-    def _headers(self) -> dict[str, str]:
-        """Build authorization headers."""
-        return {
-            "Authorization": f"Bearer {self._access_token}",
-            "Content-Type": "application/json",
-        }
