@@ -1,3 +1,17 @@
+"""
+L9 runtime contract bootstrap orchestration.
+
+L9 Architecture Note:
+    ``app/bootstrap/l9_contract_runtime.py`` is a CHASSIS bootstrap/runtime
+    lifecycle module. FastAPI imports are permitted because this module owns
+    startup orchestration, route registration, and runtime attestation wiring
+    before engine execution begins.
+
+# L9-node: enrichment-inference-engine
+# L9-layer: chassis
+# L9-contract-version: 1.0.0
+"""
+
 from __future__ import annotations
 
 from typing import Any
