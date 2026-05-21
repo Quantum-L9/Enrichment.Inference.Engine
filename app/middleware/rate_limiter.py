@@ -1,6 +1,15 @@
 """
 Sliding-window rate limiter.
 In-memory for single worker; swap to Redis ZRANGEBYSCORE for multi-worker.
+
+L9 Architecture Note:
+    ``app/middleware/rate_limiter.py`` is a CHASSIS middleware surface.
+    FastAPI/Starlette imports are permitted here because this module owns
+    ingress traffic governance before execution enters engine logic.
+
+# L9-node: enrichment-inference-engine
+# L9-layer: chassis
+# L9-contract-version: 1.0.0
 """
 
 from __future__ import annotations
