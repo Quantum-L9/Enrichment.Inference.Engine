@@ -1,8 +1,8 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: Environment Variable Contract
 # Source:   app/core/config.py:Settings (pydantic-settings BaseSettings)
-# Version:  2.5.2
-# Updated:  2026-04-10
+# Version:  2.6.0
+# Updated:  2026-05-24
 # ═══════════════════════════════════════════════════════════════
 #
 # Scope: variables below map 1:1 to Settings fields. Env names follow Pydantic
@@ -455,9 +455,6 @@ variables:
     validation: "DEBUG | INFO | WARNING | ERROR | CRITICAL"
 
 # ── Operational checklists (not Pydantic "required") ─────────
-# Settings supplies defaults for every field; these lists are what you typically
-# set for a real deployment.
-
 required_for_startup:
   - API_KEY_HASH
   - PERPLEXITY_API_KEY
@@ -485,68 +482,60 @@ other_runtime_env:
 # ═══════════════════════════════════════════════════════════════
 # GitHub Actions — secrets & variables (CI / deploy / review bots)
 # ═══════════════════════════════════════════════════════════════
+#
+# Secret model:
+#   platform_wide  — org-level secrets, selected repositories.
+#                    Set once at org level; all constellation repos share them.
+#   repo_specific  — set only on this repository; runtime or deploy secrets
+#                    that differ per engine.
+#
 github_actions:
   secrets:
-    - name: PERPLEXITY_API_KEY
-      map_to_env: PERPLEXITY_API_KEY
+    # ── Platform-wide CI secrets (org-level, selected repositories) ──────
+    - name: GITGUARDIAN_API_KEY
+      map_to_env: null
       required: optional
-      workflows: [.github/workflows/perplexity-code-review.yml]
+      scope: platform_wide
+      workflows: [.github/workflows/gitguardian.yml]
       notes: |
-        PR advisory AI diff review. If unset, workflow skips. Same name as runtime Settings.
-
-    - name: TELEGRAM_BOT_TOKEN
-      map_to_env: TELEGRAM_BOT_TOKEN
-      required: optional
-      workflows:
-        - .github/workflows/coderabbit-notify.yml
-        - .github/workflows/telegram-pr-review-notify.yml
-      notes: Telegram notifications for CodeRabbit and other PR review activity.
-
-    - name: KUBECONFIG
-      map_to_env: null
-      required: optional
-      workflows: [.github/workflows/k8s-deploy.yml]
-      notes: Base64-encoded kubeconfig (not a Settings env var).
-
-    - name: SLACK_WEBHOOK_URL
-      map_to_env: null
-      required: optional
-      workflows: [.github/workflows/k8s-deploy.yml]
-      notes: Incoming webhook when SLACK_NOTIFICATIONS_ENABLED=true on k8s deploy.
-
-    - name: CODECOV_TOKEN
-      map_to_env: null
-      required: optional
-      workflows: [.github/workflows/ci.yml]
-      notes: Optional Codecov upload; ci.yml tolerates missing token.
+        GitGuardian ggshield secret scan. Set at org level and grant access to
+        this repo. Workflow skips gracefully if unset.
 
     - name: SONAR_TOKEN
       map_to_env: null
       required: optional
+      scope: platform_wide
       workflows: [.github/workflows/sonarcloud.yml]
+      notes: SonarCloud user token. Pair with SONAR_ORG_KEY + SONAR_PROJECT_KEY variables.
+
+    - name: CODECOV_TOKEN
+      map_to_env: null
+      required: optional
+      scope: platform_wide
+      workflows: [.github/workflows/ci.yml]
+      notes: Optional Codecov upload; ci.yml tolerates missing token.
+
+    - name: PERPLEXITY_API_KEY
+      map_to_env: PERPLEXITY_API_KEY
+      required: optional
+      scope: platform_wide
+      workflows: [.github/workflows/perplexity-code-review.yml]
       notes: |
-        SonarCloud user token with SONAR_ORG_KEY + SONAR_PROJECT_KEY variables.
+        PR advisory AI diff review. If unset, workflow skips. Same name as runtime Settings.
+
+    # ── Repo-specific deploy secrets ─────────────────────────────────────
+    # No active deploy secrets are required for standard CI operation.
+    # K8s deploy workflow (k8s-deploy.yml) is manual-dispatch only and
+    # requires out-of-band infrastructure configuration.
 
   variables_non_secret:
-    - name: TELEGRAM_CHAT_ID
-      workflows:
-        - .github/workflows/coderabbit-notify.yml
-        - .github/workflows/telegram-pr-review-notify.yml
-      notes: Repository variable; pair with TELEGRAM_BOT_TOKEN.
-
-    - name: TELEGRAM_REVIEW_NOTIFY_MODE
-      workflows: [.github/workflows/telegram-pr-review-notify.yml]
-      notes: bots (default) or all — see telegram-pr-review-notify.yml header.
-
-    - name: TELEGRAM_REVIEW_BOT_ALLOWLIST
-      workflows: [.github/workflows/telegram-pr-review-notify.yml]
-      notes: Optional comma-separated GitHub logins overriding default bot list.
-
     - name: SONAR_ORG_KEY
+      scope: repo_specific
       workflows: [.github/workflows/sonarcloud.yml]
       notes: SonarCloud organization key.
 
     - name: SONAR_PROJECT_KEY
+      scope: repo_specific
       workflows: [.github/workflows/sonarcloud.yml]
       notes: SonarCloud project key.
 

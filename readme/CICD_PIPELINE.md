@@ -1,7 +1,7 @@
 # CI/CD Pipeline — Enrichment.Inference.Engine
 
-**Version:** 1.3.0
-**Date:** 2026-04-07
+**Version:** 1.4.0
+**Date:** 2026-05-24
 **Status:** Active
 **Sibling Parity:** Cognitive.Engine.Graphs
 
@@ -20,7 +20,7 @@ This document describes the production-grade CI/CD pipeline for the Enrichment.I
 | `make pr` | `pr-pipeline.yml` | Full 8-phase gate (validate → lint → semgrep → test → security → compliance → L9 → docs) |
 | `make pr-quick` | `workflow_dispatch` with skip flags | Minimal checks (no integration tests, minimal L9) |
 
-Run **`make pr`** before opening a PR for local validation. The **`pr-pipeline.yml`** workflow runs the same checks in GitHub Actions with full parity.
+Run **`make pr`** before opening a PR for local validation. The **`pr-pipeline.yml`** is the **intended canonical merge gate** for this repository. Its enforcement in branch protection is **Unknown** — verify in Settings → Branches before relying on it as a hard block.
 
 **Environment variables (local):**
 - `PR_SKIP_INTEGRATION=1` — Skip pytest with Postgres/Redis
@@ -50,7 +50,7 @@ See `local_pr_pipeline/pr_pipeline.sh` for implementation details.
 
 | Workflow | Trigger | Purpose | Blocking |
 |----------|---------|---------|----------|
-| **`pr-pipeline.yml`** | **PR, Push, Manual** | **Full PR gate (8 phases) — parity with `make pr`** | **Yes** |
+| **`pr-pipeline.yml`** | **PR, Push, Manual** | **Full PR gate (8 phases) — parity with `make pr`** | **Intended yes; enforcement Unknown — see branch protection** |
 | `ci.yml` | Push, PR | Main pipeline (validate, lint, semgrep, test, security, SBOM, scorecard) | Yes |
 | `compliance.yml` | PR (Python changes) | Architecture compliance (terminology, chassis isolation, KB schema, L9 contracts) | Yes |
 | `supply-chain.yml` | PR, push, weekly | License compliance, dependency review | Partial |
@@ -66,10 +66,9 @@ See `local_pr_pipeline/pr_pipeline.sh` for implementation details.
 | `l9-contract-control.yml` | PR | `l9_contract_control.py` verify / select-gates | Yes (if required) |
 | `release.yml` | Tags / manual | Releases | Varies |
 | `perplexity-code-review.yml` | PR (optional) | Perplexity-assisted review | No |
-| `sonarcloud.yml` | Push, PR | SonarQube Cloud analysis + coverage; Telegram only if Sonar job fails | No (skips if unset) |
-| `gitguardian.yml` | Push, PR | ggshield secret scan; Telegram only if scan job fails | No (skips if no API key) |
+| `sonarcloud.yml` | Push, PR | SonarQube Cloud analysis + coverage | No (skips if unset) |
+| `gitguardian.yml` | Push, PR | GitGuardian ggshield secret scan | No (skips if no API key) |
 | `coderabbit-notify.yml` | PR review | CodeRabbit review notifications | No |
-| `telegram-pr-review-notify.yml` | PR comments / reviews | Telegram for Actions/Copilot/etc. — not CodeRabbit (`tools/telegram_review_webhook.py` skips `coderabbitai[bot]`) | No |
 
 ### PR Pipeline Phases (pr-pipeline.yml)
 
@@ -166,13 +165,17 @@ All workflows use **zero-config defaults** that work immediately. Customize via 
 | `PR_WARN_LINES` | `300` | PR size warning threshold |
 | `PR_BLOCK_LINES` | `1000` | PR size blocking threshold |
 
-### Required Secrets
+### Active CI Secrets
 
-| Secret | Required For |
-|--------|-------------|
-| `KUBECONFIG` | K8s deployment |
-| `SLACK_WEBHOOK_URL` | Deployment notifications |
-| `CODECOV_TOKEN` | Coverage upload |
+See `docs/contracts/config/env-contract.yaml` → `github_actions.secrets` for the authoritative contract.
+All active CI secrets are platform-wide (org-level) and require no per-repo secret configuration beyond granting repository access.
+
+| Secret | Scope | Required For |
+|--------|-------|-------------|
+| `GITGUARDIAN_API_KEY` | platform_wide | GitGuardian ggshield secret scan |
+| `SONAR_TOKEN` | platform_wide | SonarCloud analysis |
+| `CODECOV_TOKEN` | platform_wide | Coverage upload |
+| `PERPLEXITY_API_KEY` | platform_wide | Perplexity PR review |
 
 ---
 
