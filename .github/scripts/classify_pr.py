@@ -78,7 +78,6 @@ def _changed_files(event: dict[str, object]) -> tuple[list[str], bool]:
             print(f"classifier warning: push diff failed: {exc.output}", file=sys.stderr)
             return [], True
 
-    # Unknown/new branch push. Do not classify the entire repo as changed.
     return [], True
 
 
@@ -162,9 +161,11 @@ def main() -> int:
     )
     only_types_dependency = dependency_changed and any("types-" in f.lower() for f in files) and not app_changed
 
-    # Namespaced label matching — accepts both namespaced (type:ci) and legacy plain labels
-    # for backward compatibility during transition. Emitted outputs use namespaced keys only.
-    has_ci_label = LABEL_CI in labels or "ci" in labels or "github-actions" in labels
+    # Namespaced label matching — accepts both namespaced (type:ci, scope:github-actions)
+    # and legacy plain labels for backward compatibility during transition.
+    # FIX: has_ci_label now also checks LABEL_GITHUB_ACTIONS (scope:github-actions) so that
+    # scorecard_relevant and ci_workflow classification trigger correctly on the new namespaced label.
+    has_ci_label = LABEL_CI in labels or "ci" in labels or "github-actions" in labels or LABEL_GITHUB_ACTIONS in labels
     has_docker_label = LABEL_DOCKER in labels or "docker" in labels
     has_security_label = LABEL_SECURITY in labels or "security" in labels
     has_dependency_label = LABEL_DEPENDENCY in labels or "dependencies" in labels
