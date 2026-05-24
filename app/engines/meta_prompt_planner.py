@@ -60,7 +60,7 @@ class MetaPromptPlanner:
         domain_hints: dict[str, Any],
         _inference_rule_catalog: list[Any],
         pass_number: int,
-    ) -> "PromptPlan":
+    ) -> PromptPlan:
         """
         Simplified plan method for test compatibility.
 

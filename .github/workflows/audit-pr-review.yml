@@ -7,16 +7,7 @@
 # owner: platform
 # status: active
 # --- /L9_META ---
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Audit PR Review — Posts findings as PR comments
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# VERSION: 1.0.0
-# PURPOSE: Run 27-rule audit engine on PRs and post findings as comments
-#          so agents/developers can patch issues before merge.
-#
-# BLOCKING: CRITICAL and HIGH severity findings block merge.
-# COMMENT: All findings posted as a single PR comment with fix hints.
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Audit PR Review - posts bounded findings as PR comments.
 
 name: Audit PR Review
 
@@ -40,6 +31,8 @@ permissions:
 
 env:
   PYTHON_VERSION: '3.12'
+  MAX_COMMENT_FINDINGS_PER_SEVERITY: '25'
+  MAX_COMMENT_LENGTH: '65536'
 
 jobs:
   audit-review:
@@ -76,30 +69,40 @@ jobs:
           echo "Running L9 27-rule audit..."
           PYTHONPATH=. python tools/audit_engine.py --json > audit_results.json 2>&1 || true
 
-          # Check if we have findings
-          FINDING_COUNT=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(len(data))" 2>/dev/null || echo "0")
+          if ! FINDING_COUNT=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(len(data))" 2>&1); then
+            echo "ERROR: Failed to parse audit_results.json"
+            echo "$FINDING_COUNT"
+            echo "has_findings=true" >> $GITHUB_OUTPUT
+            echo "finding_count=PARSE_ERROR" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          if ! [[ "$FINDING_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Invalid finding count: $FINDING_COUNT"
+            echo "has_findings=true" >> $GITHUB_OUTPUT
+            echo "finding_count=PARSE_ERROR" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
           if [ "$FINDING_COUNT" = "0" ]; then
-            echo "✅ No audit findings"
+            echo "No audit findings"
             echo "has_findings=false" >> $GITHUB_OUTPUT
           else
-            echo "⚠️ Found $FINDING_COUNT audit findings"
+            echo "Found $FINDING_COUNT audit findings"
             echo "has_findings=true" >> $GITHUB_OUTPUT
             echo "finding_count=$FINDING_COUNT" >> $GITHUB_OUTPUT
           fi
 
-          # Count by severity
-          CRITICAL=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='CRITICAL'))" 2>/dev/null || echo "0")
-          HIGH=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='HIGH'))" 2>/dev/null || echo "0")
-          MEDIUM=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='MEDIUM'))" 2>/dev/null || echo "0")
-          INFO=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='INFO'))" 2>/dev/null || echo "0")
+          CRITICAL=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='CRITICAL'))")
+          HIGH=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='HIGH'))")
+          MEDIUM=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='MEDIUM'))")
+          INFO=$(python3 -c "import json; data=json.load(open('audit_results.json')); print(sum(1 for f in data if f['severity']=='INFO'))")
 
           echo "critical_count=$CRITICAL" >> $GITHUB_OUTPUT
           echo "high_count=$HIGH" >> $GITHUB_OUTPUT
           echo "medium_count=$MEDIUM" >> $GITHUB_OUTPUT
           echo "info_count=$INFO" >> $GITHUB_OUTPUT
 
-          # Determine if we should block
           if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
             echo "should_block=true" >> $GITHUB_OUTPUT
           else
@@ -114,22 +117,25 @@ jobs:
           import json
           import os
 
+          MAX_PER_SEVERITY = int(os.environ.get('MAX_COMMENT_FINDINGS_PER_SEVERITY', '25'))
+          MAX_COMMENT_LENGTH = int(os.environ.get('MAX_COMMENT_LENGTH', '65536'))
+          MAX_LINE_LENGTH = 500
+
           with open('audit_results.json') as f:
               findings = json.load(f)
 
           if not findings:
-              print("No findings to report")
-              exit(0)
+              print('No findings to report')
+              raise SystemExit(0)
 
-          # Group by severity
           by_severity = {'CRITICAL': [], 'HIGH': [], 'MEDIUM': [], 'INFO': []}
-          for f in findings:
-              by_severity[f['severity']].append(f)
+          for finding in findings:
+              by_severity[finding['severity']].append(finding)
 
-          # Build markdown comment
           lines = []
-          lines.append("## 🔍 L9 Audit Review")
-          lines.append("")
+          lines.append('<!-- l9-audit-marker: v1 -->')
+          lines.append('## L9 Audit Review')
+          lines.append('')
 
           critical = len(by_severity['CRITICAL'])
           high = len(by_severity['HIGH'])
@@ -137,60 +143,87 @@ jobs:
           info = len(by_severity['INFO'])
 
           if critical > 0 or high > 0:
-              lines.append("### ❌ Blocking Issues Found")
-              lines.append("")
-              lines.append(f"**{critical} CRITICAL** | **{high} HIGH** | {medium} MEDIUM | {info} INFO")
-              lines.append("")
-              lines.append("> This PR cannot be merged until CRITICAL and HIGH issues are resolved.")
+              lines.append('### Blocking Issues Found')
+              lines.append('')
+              lines.append(f'**{critical} CRITICAL** | **{high} HIGH** | {medium} MEDIUM | {info} INFO')
+              lines.append('')
+              lines.append('This PR cannot merge until CRITICAL and HIGH findings are resolved.')
           else:
-              lines.append("### ⚠️ Non-Blocking Issues Found")
-              lines.append("")
-              lines.append(f"{medium} MEDIUM | {info} INFO")
-              lines.append("")
-              lines.append("> These issues are warnings and do not block merge.")
+              lines.append('### Non-Blocking Issues Found')
+              lines.append('')
+              lines.append(f'{medium} MEDIUM | {info} INFO')
 
-          lines.append("")
-          lines.append("---")
-          lines.append("")
+          lines.append('')
+          lines.append('---')
+          lines.append('')
 
-          # Detail each severity level
           severity_icons = {
-              'CRITICAL': '🔴',
-              'HIGH': '🟠',
-              'MEDIUM': '🟡',
-              'INFO': '🔵'
+              'CRITICAL': '[CRITICAL]',
+              'HIGH': '[HIGH]',
+              'MEDIUM': '[MEDIUM]',
+              'INFO': '[INFO]',
           }
 
-          for sev in ['CRITICAL', 'HIGH', 'MEDIUM', 'INFO']:
-              if not by_severity[sev]:
+          current_length = len('\n'.join(lines))
+          footer = '\n---\nGenerated by L9 Audit Engine (`tools/audit_engine.py`)'
+          reserve_for_footer = len(footer) + 200
+          truncated_findings = 0
+
+          for severity in ['CRITICAL', 'HIGH', 'MEDIUM', 'INFO']:
+              current = by_severity[severity]
+              if not current:
                   continue
 
-              lines.append(f"### {severity_icons[sev]} {sev} ({len(by_severity[sev])})")
-              lines.append("")
+              header = f"### {severity_icons[severity]} {severity} ({len(current)})\n\n"
+              if current_length + len(header) + reserve_for_footer > MAX_COMMENT_LENGTH:
+                  truncated_findings += len(current)
+                  continue
 
-              for f in by_severity[sev]:
-                  lines.append(f"<details>")
-                  lines.append(f"<summary><code>{f['file']}:{f['line']}</code> — {f['message']}</summary>")
-                  lines.append("")
-                  lines.append(f"- **Rule**: {f['group'].upper()}-{f['rule']}")
-                  lines.append(f"- **Code**: `{f['code']}`")
-                  if f.get('fix_hint'):
-                      lines.append(f"- **Fix**: {f['fix_hint']}")
-                  lines.append("")
-                  lines.append("</details>")
-                  lines.append("")
+              lines.append(f"### {severity_icons[severity]} {severity} ({len(current)})")
+              lines.append('')
+              current_length += len(header)
 
-          lines.append("---")
-          lines.append("")
-          lines.append("<sub>Generated by L9 Audit Engine (`tools/audit_engine.py`)</sub>")
+              included_in_severity = 0
+              for finding in current[:MAX_PER_SEVERITY]:
+                  finding_msg = finding['message']
+                  if len(finding_msg) > MAX_LINE_LENGTH:
+                      finding_msg = finding_msg[:MAX_LINE_LENGTH] + '...'
+
+                  finding_line = f"- `{finding['file']}:{finding['line']}` {finding_msg}\n"
+
+                  if current_length + len(finding_line) + reserve_for_footer > MAX_COMMENT_LENGTH:
+                      truncated_findings += len(current) - included_in_severity
+                      break
+
+                  lines.append(finding_line.rstrip())
+                  current_length += len(finding_line)
+                  included_in_severity += 1
+
+              remaining = len(current) - min(MAX_PER_SEVERITY, included_in_severity)
+              if remaining > 0:
+                  truncation_notice = f"\n... truncated {remaining} additional {severity} findings ...\n"
+                  if current_length + len(truncation_notice) + reserve_for_footer <= MAX_COMMENT_LENGTH:
+                      lines.append('')
+                      lines.append(f"... truncated {remaining} additional {severity} findings ...")
+                      current_length += len(truncation_notice)
+
+              lines.append('')
+              current_length += 1
+
+          if truncated_findings > 0:
+              lines.append('')
+              lines.append(f"... truncated {truncated_findings} additional findings due to comment length limit ...")
+              lines.append('')
+
+          lines.append('---')
+          lines.append('Generated by L9 Audit Engine (`tools/audit_engine.py`)')
 
           comment_body = '\n'.join(lines)
 
-          # Write to file for the next step
-          with open('pr_comment.md', 'w') as f:
-              f.write(comment_body)
+          with open('pr_comment.md', 'w', encoding='utf-8') as handle:
+              handle.write(comment_body)
 
-          print(f"Generated comment with {len(findings)} findings")
+          print(f'Generated bounded comment with {len(findings)} findings ({len(comment_body)} chars)')
           EOF
 
       - name: Post PR Comment
@@ -201,7 +234,6 @@ jobs:
             const fs = require('fs');
             const commentBody = fs.readFileSync('pr_comment.md', 'utf8');
 
-            // Find existing audit comment to update (avoid spam)
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -209,36 +241,31 @@ jobs:
             });
 
             const existingComment = comments.find(c =>
-              c.user.type === 'Bot' &&
-              c.body.includes('## 🔍 L9 Audit Review')
+              c.user.login === 'github-actions[bot]' &&
+              c.body.includes('<!-- l9-audit-marker: v1 -->')
             );
 
             if (existingComment) {
-              // Update existing comment
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 comment_id: existingComment.id,
                 body: commentBody
               });
-              console.log('Updated existing audit comment');
             } else {
-              // Create new comment
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
                 body: commentBody
               });
-              console.log('Created new audit comment');
             }
 
-      - name: Post Success Comment
+      - name: Clear stale audit comment
         if: steps.audit.outputs.has_findings == 'false'
         uses: actions/github-script@v7
         with:
           script: |
-            // Find and delete any existing audit comment (clean state)
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -246,42 +273,30 @@ jobs:
             });
 
             const existingComment = comments.find(c =>
-              c.user.type === 'Bot' &&
-              c.body.includes('## 🔍 L9 Audit Review')
+              c.user.login === 'github-actions[bot]' &&
+              c.body.includes('<!-- l9-audit-marker: v1 -->')
             );
 
             if (existingComment) {
-              // Update to success message
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 comment_id: existingComment.id,
-                body: '## 🔍 L9 Audit Review\n\n✅ **All 27 rules pass.** No issues found.\n\n<sub>Generated by L9 Audit Engine</sub>'
+                body: '<!-- l9-audit-marker: v1 -->\n## L9 Audit Review\n\nAll 27 rules pass. No audit findings remain.\n\nGenerated by L9 Audit Engine (`tools/audit_engine.py`)'
               });
-              console.log('Updated comment to success state');
             }
 
       - name: Fail on Blocking Issues
         if: steps.audit.outputs.should_block == 'true'
         run: |
-          echo "❌ CRITICAL or HIGH severity issues found"
-          echo ""
-          echo "Summary:"
-          echo "  CRITICAL: ${{ steps.audit.outputs.critical_count }}"
-          echo "  HIGH:     ${{ steps.audit.outputs.high_count }}"
-          echo "  MEDIUM:   ${{ steps.audit.outputs.medium_count }}"
-          echo "  INFO:     ${{ steps.audit.outputs.info_count }}"
-          echo ""
-          echo "Please fix the issues listed in the PR comment before merging."
+          echo "CRITICAL or HIGH severity issues found"
+          echo "CRITICAL: ${{ steps.audit.outputs.critical_count }}"
+          echo "HIGH: ${{ steps.audit.outputs.high_count }}"
           exit 1
 
       - name: Audit Passed
         if: steps.audit.outputs.should_block != 'true'
         run: |
-          echo "✅ L9 Audit Review passed"
-          echo ""
-          echo "Summary:"
-          echo "  CRITICAL: ${{ steps.audit.outputs.critical_count }}"
-          echo "  HIGH:     ${{ steps.audit.outputs.high_count }}"
-          echo "  MEDIUM:   ${{ steps.audit.outputs.medium_count }}"
-          echo "  INFO:     ${{ steps.audit.outputs.info_count }}"
+          echo "L9 Audit Review passed"
+          echo "CRITICAL: ${{ steps.audit.outputs.critical_count }}"
+          echo "HIGH: ${{ steps.audit.outputs.high_count }}"

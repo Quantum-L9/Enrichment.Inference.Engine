@@ -8,7 +8,6 @@ from app.services.inference_rule_registry import (
     get_rule,
     list_registered_rules,
     load_domain_rules,
-    register_inference_rule,
 )
 
 
