@@ -3,7 +3,7 @@
 # origin: l9-template
 # engine: enrichment
 # layer: [ci, security]
-# tags: [gitguardian, secrets, telegram]
+# tags: [gitguardian, secrets]
 # owner: platform
 # status: active
 # --- /L9_META ---
@@ -11,9 +11,8 @@
 #
 # Configure:
 #   Repository secret: GITGUARDIAN_API_KEY (service account or PAT with scan scope).
-# Optional Telegram on scan failure only (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID).
 #
-# If the API key is unset, the workflow succeeds without scanning (same pattern as SonarCloud gate).
+# If the API key is unset, the workflow succeeds without scanning.
 
 name: GitGuardian
 
@@ -33,8 +32,6 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    outputs:
-      did_run: ${{ steps.gate.outputs.run }}
 
     steps:
       - name: Decide whether to run GitGuardian
@@ -51,7 +48,7 @@ jobs:
 
       - name: Checkout
         if: steps.gate.outputs.run == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -69,28 +66,3 @@ jobs:
           GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
           GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
           GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-
-  telegram-notify:
-    name: Telegram (GitGuardian)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: scan
-    if: always() && needs.scan.outputs.did_run == 'true' && needs.scan.result == 'failure'
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout (tools only)
-        uses: actions/checkout@v4
-
-      - name: Send Telegram summary
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
-          REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          TELEGRAM_CI_MESSAGE=$(printf '🛡 GitGuardian: failure\n\nRepo: %s\n%s' "$REPO" "$RUN_URL")
-          export TELEGRAM_CI_MESSAGE
-          python3 tools/telegram_send_message.py

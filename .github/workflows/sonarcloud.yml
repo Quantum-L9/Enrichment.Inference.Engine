@@ -15,8 +15,6 @@
 #   3. Repository variables: SONAR_ORG_KEY, SONAR_PROJECT_KEY (Project → Information).
 #
 # Until all three are set, this workflow skips with a notice (does not fail CI).
-#
-# Optional Telegram on Sonar job failure only (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID).
 
 name: SonarCloud
 
@@ -36,8 +34,6 @@ jobs:
     name: SonarCloud Scan
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    outputs:
-      did_run: ${{ steps.gate.outputs.run }}
 
     env:
       PYTHON_VERSION: ${{ vars.PYTHON_VERSION || '3.12' }}
@@ -55,12 +51,12 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::SonarCloud skipped — add Actions secret SONAR_TOKEN and variables SONAR_ORG_KEY, SONAR_PROJECT_KEY (see sonar-project.properties header)."
+            echo "::notice::SonarCloud skipped — add Actions secret SONAR_TOKEN and variables SONAR_ORG_KEY, SONAR_PROJECT_KEY."
           fi
 
       - name: Checkout
         if: steps.gate.outputs.run == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -104,28 +100,3 @@ jobs:
           args: >
             -Dsonar.organization=${{ vars.SONAR_ORG_KEY }}
             -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
-
-  telegram-notify:
-    name: Telegram (SonarCloud)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: sonarqube
-    if: always() && needs.sonarqube.outputs.did_run == 'true' && needs.sonarqube.result == 'failure'
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout (tools only)
-        uses: actions/checkout@v4
-
-      - name: Send Telegram summary
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
-          REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          TELEGRAM_CI_MESSAGE=$(printf '📊 SonarCloud: failure\n\nRepo: %s\n%s' "$REPO" "$RUN_URL")
-          export TELEGRAM_CI_MESSAGE
-          python3 tools/telegram_send_message.py

@@ -2,7 +2,7 @@
 """Classify a GitHub Actions run by changed files and PR labels.
 
 Primary signal: changed files.
-Secondary signal: labels.
+Secondary signal: labels (namespaced: type:<name>, scope:<name>).
 No broad whole-repo fallback is used because that creates false positives.
 """
 from __future__ import annotations
@@ -16,6 +16,19 @@ from collections.abc import Iterable
 from pathlib import PurePosixPath
 
 ZERO_SHA = "0000000000000000000000000000000000000000"
+
+# Canonical namespaced label names emitted and consumed by this classifier.
+# Format: type:<domain> or scope:<domain>
+LABEL_CI = "type:ci"
+LABEL_DOCKER = "type:docker"
+LABEL_DOCS = "type:docs"
+LABEL_TESTS = "type:tests"
+LABEL_COMPLIANCE = "type:compliance"
+LABEL_SECURITY = "type:security"
+LABEL_DEPENDENCY = "type:dependency"
+LABEL_TYPING = "type:typing"
+LABEL_PYTHON = "scope:python"
+LABEL_GITHUB_ACTIONS = "scope:github-actions"
 
 
 def _run(cmd: list[str]) -> str:
@@ -65,7 +78,6 @@ def _changed_files(event: dict[str, object]) -> tuple[list[str], bool]:
             print(f"classifier warning: push diff failed: {exc.output}", file=sys.stderr)
             return [], True
 
-    # Unknown/new branch push. Do not classify the entire repo as changed.
     return [], True
 
 
@@ -149,16 +161,29 @@ def main() -> int:
     )
     only_types_dependency = dependency_changed and any("types-" in f.lower() for f in files) and not app_changed
 
-    semgrep_relevant = app_changed or python_changed or security_sensitive_changed or "security" in labels
-    sbom_relevant = dependency_changed or docker_changed or "dependencies" in labels or "security" in labels
-    scorecard_relevant = workflows_changed or security_sensitive_changed or "security" in labels or "ci" in labels
+    # Namespaced label matching — accepts both namespaced (type:ci, scope:github-actions)
+    # and legacy plain labels for backward compatibility during transition.
+    # FIX: has_ci_label now also checks LABEL_GITHUB_ACTIONS (scope:github-actions) so that
+    # scorecard_relevant and ci_workflow classification trigger correctly on the new namespaced label.
+    has_ci_label = LABEL_CI in labels or "ci" in labels or "github-actions" in labels or LABEL_GITHUB_ACTIONS in labels
+    has_docker_label = LABEL_DOCKER in labels or "docker" in labels
+    has_security_label = LABEL_SECURITY in labels or "security" in labels
+    has_dependency_label = LABEL_DEPENDENCY in labels or "dependencies" in labels
+    has_python_label = LABEL_PYTHON in labels or "python" in labels
+    has_github_actions_label = LABEL_GITHUB_ACTIONS in labels or "github-actions" in labels
+    has_testing_label = LABEL_TESTS in labels or "testing" in labels
+    has_typing_label = LABEL_TYPING in labels or "typing" in labels
+
+    semgrep_relevant = app_changed or python_changed or security_sensitive_changed or has_security_label
+    sbom_relevant = dependency_changed or docker_changed or has_dependency_label or has_security_label
+    scorecard_relevant = workflows_changed or security_sensitive_changed or has_security_label or has_ci_label
 
     pr_class = "unknown"
     if diff_unknown:
         pr_class = "unknown_diff"
-    elif workflows_changed or scripts_changed or "github-actions" in labels or "ci" in labels:
+    elif workflows_changed or scripts_changed or has_github_actions_label or has_ci_label:
         pr_class = "ci_workflow"
-    elif docker_changed or "docker" in labels:
+    elif docker_changed or has_docker_label:
         pr_class = "docker"
     elif only_docs:
         pr_class = "docs_only"
@@ -166,12 +191,12 @@ def main() -> int:
         pr_class = "tests_only"
     elif spec_changed or adr_changed or contracts_changed:
         pr_class = "compliance"
-    elif security_sensitive_changed or "security" in labels:
+    elif security_sensitive_changed or has_security_label:
         pr_class = "security"
-    elif only_types_dependency or "typing" in labels:
+    elif only_types_dependency or has_typing_label:
         pr_class = "dependency_types"
-    elif dependency_changed or "dependencies" in labels:
-        pr_class = "dependency_python" if "python" in labels else "dependency"
+    elif dependency_changed or has_dependency_label:
+        pr_class = "dependency_python" if has_python_label else "dependency"
     elif app_changed:
         pr_class = "app_code"
 
@@ -201,14 +226,15 @@ def main() -> int:
         "sbom_relevant": sbom_relevant,
         "scorecard_relevant": scorecard_relevant,
         "only_types_dependency": only_types_dependency,
-        "has_dependencies_label": "dependencies" in labels,
-        "has_python_label": "python" in labels,
-        "has_github_actions_label": "github-actions" in labels,
-        "has_ci_label": "ci" in labels,
-        "has_docker_label": "docker" in labels,
-        "has_security_label": "security" in labels,
-        "has_testing_label": "testing" in labels,
-        "has_typing_label": "typing" in labels,
+        # namespaced label outputs
+        "has_dependencies_label": has_dependency_label,
+        "has_python_label": has_python_label,
+        "has_github_actions_label": has_github_actions_label,
+        "has_ci_label": has_ci_label,
+        "has_docker_label": has_docker_label,
+        "has_security_label": has_security_label,
+        "has_testing_label": has_testing_label,
+        "has_typing_label": has_typing_label,
     }
     _write_output(outputs)
     print(json.dumps(outputs, indent=2, sort_keys=True))
