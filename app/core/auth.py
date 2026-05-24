@@ -42,11 +42,15 @@ _header = APIKeyHeader(name="X-API-Key", auto_error=False)
 def verify_api_key(
     api_key: Annotated[str | None, Security(_header)],
 ) -> str:
-    """Validate API key via constant-time hash comparison.
-
-    Returns the raw API key string on success so downstream chassis code
-    can use it for tenant resolution (INV-ARCH-05: tenant resolution is
-    chassis-only).
+    """
+    Validate the X-API-Key header and return the provided key for downstream tenant resolution.
+    
+    Raises:
+        HTTPException: 401 UNAUTHORIZED if the header is missing.
+        HTTPException: 403 FORBIDDEN if the provided key is invalid.
+    
+    Returns:
+        str: The raw API key string for use by downstream chassis tenant resolution.
     """
     if not api_key:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing X-API-Key header")
