@@ -231,8 +231,7 @@ DEFAULT_DECAY_CONFIGS: list[DecayConfig] = [
     DecayConfig(dimension=ScoreDimension.GRAPH_AFFINITY, half_life_days=90.0),
 ]
 
-DEFAULT_TIER_THRESHOLDS: dict[ScoreTier, float]:
-DEFAULT_TIER_THRESHOLDS = {
+DEFAULT_TIER_THRESHOLDS: dict[ScoreTier, float] = {
     ScoreTier.HOT: 0.80,
     ScoreTier.WARM: 0.60,
     ScoreTier.COOL: 0.40,
