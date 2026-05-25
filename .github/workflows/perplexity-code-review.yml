@@ -189,7 +189,7 @@ jobs:
 
       - name: Post PR Comment
         if: steps.diff.outputs.empty != 'true' && steps.diff.outputs.pr_number != ''
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
