@@ -12,11 +12,13 @@ Security Note (SEC-SQL fix — L9-AUDIT-2026-05-20):
     SOQL WHERE clauses are now built with escaped/parameterized values.
     Field names are validated against the SOQL identifier allowlist
     before interpolation. See _soql_escape() and _soql_literal().
+    object_type is also validated before interpolation into SELECT...FROM.
 
 # L9-fix: SEC-SQL
 # L9-file: app/services/crm/salesforce_client.py
 # L9-violation: SOQL injection — user-supplied filter values interpolated directly into query string
 # L9-fix-summary: _soql_escape() + _soql_literal() + field-name allowlist validation in query_records()
+#   + backslash-first escaping in _soql_escape() + object_type validation in query_records()
 # L9-layer: engine/service
 # L9-node: enrichment-inference-engine
 # L9-contract-version: 1.0.0
@@ -34,20 +36,25 @@ from .base import CRMClientBase, CRMCredentials, WriteResult
 
 logger = logging.getLogger(__name__)
 
-# SOQL field names may only contain alphanumerics, underscores, and dots
-# (for relationship traversal e.g. Account.Name).
+# SOQL field names and object types may only contain alphanumerics, underscores,
+# and dots (for relationship traversal e.g. Account.Name).
 _SOQL_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
 
 def _soql_escape(value: str) -> str:
     """Escape a string value for safe interpolation inside a SOQL string literal.
 
-    Single quotes are the only character that can break out of a SOQL string
-    literal. Escape them by doubling, then wrap in single quotes.
+    SOQL treats both backslash and single-quote as reserved characters inside
+    string literals. Backslashes MUST be escaped first; escaping quotes first
+    would cause the backslash escape to be misinterpreted and defeat injection
+    protection (e.g. input `\\'` would produce `\\\'` where the backslash is
+    literal and the quote is still unescaped).
+
+    Escape order: `\\` → `\\\\`, then `'` → `\\'`, then wrap in single quotes.
 
     SOQL spec: https://developer.salesforce.com/docs/atlas.en-us.soql_sosl.meta
     """
-    escaped = value.replace("'", "\\'")  # escape embedded single quotes
+    escaped = value.replace("\\", "\\\\").replace("'", "\\'")  # escape backslashes then quotes
     return f"'{escaped}'"
 
 
@@ -147,9 +154,17 @@ class SalesforceClient(CRMClientBase):
         Filter values are converted to safe SOQL literals via _soql_literal().
         Filter field names are validated against the SOQL identifier allowlist
         (_SOQL_FIELD_RE) before interpolation.
+        object_type is validated against _SOQL_FIELD_RE before interpolation
+        into the SELECT...FROM clause.
 
-        Raises ValueError if any filter field name contains non-SOQL characters.
+        Raises ValueError if object_type or any filter field name contains
+        non-SOQL characters.
         """
+        if not _SOQL_FIELD_RE.match(object_type):
+            raise ValueError(
+                f"Invalid SOQL object type '{object_type}': must match [A-Za-z_][A-Za-z0-9_.]*"
+            )
+
         field_list = ", ".join(fields) if fields else "Id, Name"
 
         where_parts: list[str] = []
