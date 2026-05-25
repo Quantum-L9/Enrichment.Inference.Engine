@@ -10,8 +10,11 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Universal CI/CD Pack — Supply Chain Security
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# VERSION: 1.1.0
+# VERSION: 1.1.1
 # CHANGES v1.1.0: Added CycloneDX SBOM generation job (SOC 2 CC9.2)
+# CHANGES v1.1.1: Exact SPDX token matching in GPL/AGPL audit
+#   - P1 fix: substring 'gpl' falsely matched 'lgpl' — use exact SPDX token set
+#   - P2 fix: also inspect licenses[].license.name (not just id/expression)
 # PURPOSE: License compliance, dependency review, SBOM generation
 # SIBLING PARITY: Cognitive.Engine.Graphs/supply-chain.yml
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -172,27 +175,59 @@ jobs:
           echo "Component count: $(python3 -c "import json; d=json.load(open('artifacts/sbom-eie.json')); print(len(d.get('components', [])))" 2>/dev/null || echo 'unknown')"
 
       - name: GPL/AGPL license audit (hard fail)
+        # P1 fix: use exact SPDX token set — 'lgpl' no longer triggers the gate
+        # P2 fix: inspect all three CycloneDX license fields:
+        #   licenses[].expression, licenses[].license.id, licenses[].license.name
         run: |
-          echo "Scanning SBOM for GPL/AGPL licenses..."
-          # Check both the licenses array and the expression string
-          VIOLATIONS=$(python3 -c "
-          import json, sys
+          echo "Scanning SBOM for GPL/AGPL licenses (exact SPDX tokens)..."
+          python3 - <<'PYEOF'
+          import json, sys, re
+
+          # Exact SPDX identifiers that are banned — LGPL is explicitly excluded
+          BANNED_SPDX = {
+              "GPL-2.0", "GPL-2.0-only", "GPL-2.0-or-later",
+              "GPL-3.0", "GPL-3.0-only", "GPL-3.0-or-later",
+              "AGPL-1.0", "AGPL-1.0-only", "AGPL-1.0-or-later",
+              "AGPL-3.0", "AGPL-3.0-only", "AGPL-3.0-or-later",
+          }
+
+          # Token-based pattern for expression strings (e.g. "GPL-3.0 OR MIT")
+          # Matches exact SPDX tokens; does NOT match LGPL-2.0 etc.
+          BANNED_PATTERN = re.compile(
+              r'(?<![A-Za-z-])(' + '|'.join(re.escape(t) for t in BANNED_SPDX) + r')(?![A-Za-z0-9.-])'
+          )
+
           with open('artifacts/sbom-eie.json') as f:
               sbom = json.load(f)
-          banned = ['gpl', 'agpl']
+
           hits = []
           for comp in sbom.get('components', []):
+              name = comp.get('name', '?')
               for lic in comp.get('licenses', []):
-                  expr = lic.get('expression', '') or lic.get('license', {}).get('id', '') or ''
-                  if any(b in expr.lower() for b in banned):
-                      hits.append(f\"{comp.get('name','?')} — {expr}\")
+                  # Field 1: expression (e.g. "GPL-3.0 OR MIT")
+                  expr = lic.get('expression', '') or ''
+                  if BANNED_PATTERN.search(expr):
+                      hits.append(f"{name} — expression: {expr}")
+                      continue
+                  inner = lic.get('license', {})
+                  # Field 2: license.id (SPDX identifier)
+                  lic_id = inner.get('id', '') or ''
+                  if lic_id in BANNED_SPDX:
+                      hits.append(f"{name} — id: {lic_id}")
+                      continue
+                  # Field 3: license.name (free-form; use pattern match)
+                  lic_name = inner.get('name', '') or ''
+                  if BANNED_PATTERN.search(lic_name):
+                      hits.append(f"{name} — name: {lic_name}")
+
           if hits:
-              print('VIOLATIONS FOUND:')
-              for h in hits: print(f'  {h}')
+              print("VIOLATIONS FOUND:")
+              for h in hits:
+                  print(f"  {h}")
               sys.exit(1)
-          print('PASS: no GPL/AGPL detected')
-          ")
-          echo "$VIOLATIONS"
+
+          print(f"PASS: no GPL/AGPL detected ({len(sbom.get('components', []))} components scanned)")
+          PYEOF
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v7
