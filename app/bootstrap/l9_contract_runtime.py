@@ -41,7 +41,20 @@ def _route_exists(app: FastAPI, path: str) -> bool:
 
 
 def install_l9_contract_controls(app: FastAPI) -> FastAPI:
-    """Register attestation router and wire constitution/attestation startup gates."""
+    """
+    Install L9 contract attestation routes and register startup validation that enforces constitution and runtime attestation.
+    
+    Registers the attestation router at "/v1/attestation" if not already present, and adds a startup event that runs constitution and attestation verifications. On successful startup verification, stores the runtime attestation state on app.state.l9_contract_control.
+    
+    Parameters:
+        app (FastAPI): The FastAPI application to modify.
+    
+    Returns:
+        FastAPI: The same FastAPI application with L9 contract controls installed.
+    
+    Raises:
+        RuntimeError: If constitution verification or runtime attestation verification fails during startup.
+    """
     if not _route_exists(app, "/v1/attestation"):
         app.include_router(attestation_router)
 
@@ -74,10 +87,14 @@ def install_l9_contract_controls(app: FastAPI) -> FastAPI:
 
 
 def get_l9_contract_runtime_state(app: FastAPI) -> dict[str, Any]:
-    """Return the contract runtime state dict installed by ``install_l9_contract_controls``.
-
-    Raises ``RuntimeError`` if the controls have not been installed or the
-    startup hook has not yet fired.
+    """
+    Retrieve the L9 contract runtime state dictionary stored on the FastAPI application's state.
+    
+    Returns:
+        dict[str, Any]: Runtime state containing L9 contract metadata (e.g. node_id, node_version, contract_version, contract_digest, policy_mode, degraded_modes).
+    
+    Raises:
+        RuntimeError: If the L9 contract runtime controls are not installed or not yet initialized.
     """
     state = getattr(app.state, "l9_contract_control", None)
     if not isinstance(state, dict):
