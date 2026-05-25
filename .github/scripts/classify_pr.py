@@ -5,6 +5,7 @@ Primary signal: changed files.
 Secondary signal: labels (namespaced: type:<name>, scope:<name>).
 No broad whole-repo fallback is used because that creates false positives.
 """
+
 from __future__ import annotations
 
 import fnmatch
@@ -136,36 +137,79 @@ def main() -> int:
     app_changed = _any(files, ["app/**/*.py"])
     tests_changed = _any(files, ["tests/**"])
     docs_changed = _any(files, ["README*", "docs/**", "*.md", "**/*.md"])
-    workflows_changed = _any(files, [".github/workflows/**", ".github/dependabot.yml", ".github/actions/**"])
+    workflows_changed = _any(
+        files, [".github/workflows/**", ".github/dependabot.yml", ".github/actions/**"]
+    )
     scripts_changed = _any(files, [".github/scripts/**"])
-    docker_changed = _any(files, ["Dockerfile", "Dockerfile.*", "docker/**", "docker-compose*.yml", ".dockerignore"])
-    dependency_changed = _any(files, ["pyproject.toml", "requirements*.txt", "poetry.lock", "uv.lock", "Pipfile.lock"])
+    docker_changed = _any(
+        files, ["Dockerfile", "Dockerfile.*", "docker/**", "docker-compose*.yml", ".dockerignore"]
+    )
+    dependency_changed = _any(
+        files, ["pyproject.toml", "requirements*.txt", "poetry.lock", "uv.lock", "Pipfile.lock"]
+    )
     spec_changed = _any(files, ["domains/**/spec.yaml", "spec.yaml", "**/*spec*.yaml"])
     adr_changed = _any(files, ["readme/adr/**", "docs/adr/**", "ADR/**"])
-    contracts_changed = _any(files, ["config/contracts/**", "contracts/**", "tools/l9_template_manifest.yaml"])
+    contracts_changed = _any(
+        files, ["config/contracts/**", "contracts/**", "tools/l9_template_manifest.yaml"]
+    )
     hooks_changed = _any(files, ["scripts/hooks/**", ".pre-commit-config.yaml"])
 
-    security_sensitive_changed = workflows_changed or dependency_changed or docker_changed or _any(
-        files,
-        ["app/**/auth*.py", "app/**/security*.py", "app/**/gate*.py", "app/**/transport*.py"],
+    security_sensitive_changed = (
+        workflows_changed
+        or dependency_changed
+        or docker_changed
+        or _any(
+            files,
+            ["app/**/auth*.py", "app/**/security*.py", "app/**/gate*.py", "app/**/transport*.py"],
+        )
     )
     typing_sensitive_changed = app_changed or _any(
         files,
-        ["**/models.py", "**/schemas.py", "**/transport*.py", "**/handlers.py", "requirements-ci.txt", "pyproject.toml"],
+        [
+            "**/models.py",
+            "**/schemas.py",
+            "**/transport*.py",
+            "**/handlers.py",
+            "requirements-ci.txt",
+            "pyproject.toml",
+        ],
     )
-    transport_sensitive_changed = _any(files, ["app/**/transport*.py", "app/**/packet*.py", "app/**/graph_return*.py"])
-    ingress_sensitive_changed = _any(files, ["app/**/handlers.py", "app/**/chassis_handlers.py", "app/**/boot.py"])
+    transport_sensitive_changed = _any(
+        files, ["app/**/transport*.py", "app/**/packet*.py", "app/**/graph_return*.py"]
+    )
+    ingress_sensitive_changed = _any(
+        files, ["app/**/handlers.py", "app/**/chassis_handlers.py", "app/**/boot.py"]
+    )
 
-    only_docs = bool(files) and docs_changed and not any(
-        [python_changed, workflows_changed, scripts_changed, docker_changed, dependency_changed, spec_changed, contracts_changed]
+    only_docs = (
+        bool(files)
+        and docs_changed
+        and not any(
+            [
+                python_changed,
+                workflows_changed,
+                scripts_changed,
+                docker_changed,
+                dependency_changed,
+                spec_changed,
+                contracts_changed,
+            ]
+        )
     )
-    only_types_dependency = dependency_changed and any("types-" in f.lower() for f in files) and not app_changed
+    only_types_dependency = (
+        dependency_changed and any("types-" in f.lower() for f in files) and not app_changed
+    )
 
     # Namespaced label matching — accepts both namespaced (type:ci, scope:github-actions)
     # and legacy plain labels for backward compatibility during transition.
     # FIX: has_ci_label now also checks LABEL_GITHUB_ACTIONS (scope:github-actions) so that
     # scorecard_relevant and ci_workflow classification trigger correctly on the new namespaced label.
-    has_ci_label = LABEL_CI in labels or "ci" in labels or "github-actions" in labels or LABEL_GITHUB_ACTIONS in labels
+    has_ci_label = (
+        LABEL_CI in labels
+        or "ci" in labels
+        or "github-actions" in labels
+        or LABEL_GITHUB_ACTIONS in labels
+    )
     has_docker_label = LABEL_DOCKER in labels or "docker" in labels
     has_security_label = LABEL_SECURITY in labels or "security" in labels
     has_dependency_label = LABEL_DEPENDENCY in labels or "dependencies" in labels
@@ -174,9 +218,15 @@ def main() -> int:
     has_testing_label = LABEL_TESTS in labels or "testing" in labels
     has_typing_label = LABEL_TYPING in labels or "typing" in labels
 
-    semgrep_relevant = app_changed or python_changed or security_sensitive_changed or has_security_label
-    sbom_relevant = dependency_changed or docker_changed or has_dependency_label or has_security_label
-    scorecard_relevant = workflows_changed or security_sensitive_changed or has_security_label or has_ci_label
+    semgrep_relevant = (
+        app_changed or python_changed or security_sensitive_changed or has_security_label
+    )
+    sbom_relevant = (
+        dependency_changed or docker_changed or has_dependency_label or has_security_label
+    )
+    scorecard_relevant = (
+        workflows_changed or security_sensitive_changed or has_security_label or has_ci_label
+    )
 
     pr_class = "unknown"
     if diff_unknown:
