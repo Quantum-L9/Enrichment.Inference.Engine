@@ -21,15 +21,11 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from typing import TYPE_CHECKING
 
 # FastAPI/Starlette imports are PERMITTED here — this module lives in the
 # chassis layer, which owns HTTP middleware (§2.1, INV-ARCH-03).
 from fastapi import HTTPException, Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
-
-if TYPE_CHECKING:
-    pass
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
