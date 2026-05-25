@@ -6,6 +6,15 @@ enrichment completeness, engagement signals, and historical patterns.
 
 L9 Architecture Note:
     Chassis-agnostic. Receives deal data, returns risk assessment.
+
+# L9-fix: NAME-FLAT (FALSE_POSITIVE)
+# L9-file: app/agents/deal_risk.py
+# L9-violation: NAME-FLAT fired on `recommendations: list[str]`
+# L9-fix-summary: `recommendations` is a standard English word in valid snake_case.
+#   Added # l9:flatcase-ok annotation per audit FP suppression protocol.
+# L9-layer: engine/agent
+# L9-node: enrichment-inference-engine
+# L9-contract-version: 1.0.0
 """
 
 from __future__ import annotations
@@ -24,7 +33,7 @@ class RiskAssessment:
     risk_score: float  # 0.0 = no risk, 1.0 = critical risk
     risk_level: str  # low, medium, high, critical
     risk_factors: list[str] = field(default_factory=list)
-    recommendations: list[str] = field(default_factory=list)
+    recommendations: list[str] = field(default_factory=list)  # l9:flatcase-ok -- single English word
     dimension_scores: dict[str, float] = field(default_factory=dict)
 
 
@@ -49,7 +58,7 @@ class DealRiskAgent:
         """
         historical_context = historical_context or {}
         risk_factors: list[str] = []
-        recommendations: list[str] = []
+        recommendations: list[str] = []  # l9:flatcase-ok -- single English word
         dimension_scores: dict[str, float] = {}
 
         # 1. Data completeness risk

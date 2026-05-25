@@ -4,6 +4,15 @@ revopsos-score-engine models
 
 Canonical types for multi-dimensional lead/deal scoring.
 Consumed by score_engine.py, score_decay.py, score_explainer.py, score_api.py.
+
+# L9-fix: NAME-FLAT (FALSE_POSITIVE)
+# L9-file: app/score/score_models.py
+# L9-violation: NAME-FLAT fired on `recommendation: RecommendationType`
+# L9-fix-summary: `recommendation` is a standard English word in valid snake_case.
+#   Added # l9:flatcase-ok annotation per audit FP suppression protocol.
+# L9-layer: engine/model
+# L9-node: enrichment-inference-engine
+# L9-contract-version: 1.0.0
 """
 
 from __future__ import annotations
@@ -16,7 +25,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-# ── Enums ─────────────────────────────────────────────────────
+# ── Enums ──────────────────────────────────────────────────
 
 
 class ScoreDimension(StrEnum):
@@ -59,7 +68,7 @@ class RecommendationType(StrEnum):
     MANUAL_REVIEW = "manual_review"
 
 
-# ── Field Contribution ────────────────────────────────────────
+# ── Field Contribution ──────────────────────────────────────────
 
 
 class FieldContribution(BaseModel):
@@ -84,10 +93,10 @@ class MissingField(BaseModel):
         ge=0.0, le=1.0, description="Estimated score improvement if this field were present"
     )
     is_gate_critical: bool = False
-    recommendation: RecommendationType = RecommendationType.ENRICH_FIELD
+    recommendation: RecommendationType = RecommendationType.ENRICH_FIELD  # l9:flatcase-ok -- single English word
 
 
-# ── Dimension Score ───────────────────────────────────────────
+# ── Dimension Score ────────────────────────────────────────────
 
 
 class DimensionScore(BaseModel):
@@ -108,7 +117,7 @@ class DimensionScore(BaseModel):
     decay_factor: float = 1.0
 
 
-# ── Score Record ──────────────────────────────────────────────
+# ── Score Record ─────────────────────────────────────────────
 
 
 class ScoreProvenance(BaseModel):
@@ -153,7 +162,7 @@ class ScoreRecord(BaseModel):
         return [m.field_name for m in self.missing_fields if m.impact_estimate >= 0.10]
 
 
-# ── ICP Definition ────────────────────────────────────────────
+# ── ICP Definition ─────────────────────────────────────────────
 
 
 class ICPFieldCriterion(BaseModel):
@@ -194,7 +203,7 @@ class ICPDefinition(BaseModel):
         return result
 
 
-# ── Scoring Profile ───────────────────────────────────────────
+# ── Scoring Profile ─────────────────────────────────────────────
 
 
 class DecayConfig(BaseModel):
