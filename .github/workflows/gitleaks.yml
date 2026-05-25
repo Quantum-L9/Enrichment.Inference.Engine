@@ -15,6 +15,11 @@
 #   - This workflow is a hard gate: always runs, no soft-skip path
 #   - Uses repo-local .gitleaks.toml (10 L9-specific rules)
 #
+# Action pin: gitleaks/gitleaks-action@v2.3.6
+#   SHA: f6d28b60c0e56e48b77e6e05ae47c3fc9b22e77f
+#   Pinned 2026-05-25 per supply-chain hardening (mutable tags can be overwritten)
+#   To update: verify new SHA at https://github.com/gitleaks/gitleaks-action/releases
+#
 # Pre-condition: Set GITLEAKS_LICENSE in Settings → Secrets → Actions
 #   Free org license: https://gitleaks.io/products.html
 
@@ -45,7 +50,7 @@ jobs:
           fetch-depth: 0  # full history required for gitleaks --log-opts
 
       - name: Gitleaks scan
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@f6d28b60c0e56e48b77e6e05ae47c3fc9b22e77f  # v2.3.6
         with:
           config-path: .gitleaks.toml
         env:
