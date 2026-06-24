@@ -28,8 +28,7 @@ name: Gitleaks Secret Scan
 on:
   push:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
-      - ${{ vars.DEVELOP_BRANCH || 'develop' }}
+      - main
   pull_request:
     types: [opened, synchronize, reopened]
 
