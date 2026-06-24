@@ -1,4 +1,5 @@
 """Tests for inference rule registry."""
+
 import pytest
 
 from app.services.inference_rule_registry import (
@@ -138,9 +139,7 @@ def test_load_domain_rules():
             {
                 "name": "test_custom_rule",
                 "field": "custom_field",
-                "conditions": [
-                    {"source_field": "industry", "operator": "eq", "value": "plastics"}
-                ],
+                "conditions": [{"source_field": "industry", "operator": "eq", "value": "plastics"}],
                 "output_value": "matched",
                 "confidence": 0.75,
             }

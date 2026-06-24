@@ -28,8 +28,7 @@ name: Architecture Compliance
 on:
   pull_request:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
-      - ${{ vars.DEVELOP_BRANCH || 'develop' }}
+      - main
     paths:
       - '**/*.py'
       - 'kb/**'
@@ -37,7 +36,7 @@ on:
       - 'pyproject.toml'
   push:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
+      - main
     paths:
       - '**/*.py'
       - 'kb/**'

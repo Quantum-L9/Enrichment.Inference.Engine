@@ -2,9 +2,10 @@
 """Classify a GitHub Actions run by changed files and PR labels.
 
 Primary signal: changed files.
-Secondary signal: labels (namespaced: type:<name>, scope:<name>).
+Secondary signal: labels (namespaced: type:<name>, area:<name>, risk:<name>).
 No broad whole-repo fallback is used because that creates false positives.
 """
+
 from __future__ import annotations
 
 import fnmatch
@@ -18,17 +19,50 @@ from pathlib import PurePosixPath
 ZERO_SHA = "0000000000000000000000000000000000000000"
 
 # Canonical namespaced label names emitted and consumed by this classifier.
-# Format: type:<domain> or scope:<domain>
 LABEL_CI = "type:ci"
-LABEL_DOCKER = "type:docker"
 LABEL_DOCS = "type:docs"
-LABEL_TESTS = "type:tests"
-LABEL_COMPLIANCE = "type:compliance"
+LABEL_TESTS = "type:test"  # was type:tests
+LABEL_COMPLIANCE = "type:governance"  # was type:compliance — GH Kernel S2 class stays "compliance"
 LABEL_SECURITY = "type:security"
-LABEL_DEPENDENCY = "type:dependency"
-LABEL_TYPING = "type:typing"
-LABEL_PYTHON = "scope:python"
-LABEL_GITHUB_ACTIONS = "scope:github-actions"
+LABEL_DEPENDENCY = "type:deps"  # was type:dependency
+LABEL_REFACTOR = "type:refactor"
+LABEL_DOCKER = "area:docker"  # was type:docker
+LABEL_PYTHON = "area:python"  # was scope:python
+LABEL_GITHUB_ACTIONS = "area:workflows"  # was scope:github-actions
+LABEL_L9 = "area:l9"
+LABEL_CONTRACTS = "area:contracts"
+LABEL_TYPING = "area:typing"
+LABEL_RISK_BLOCKING = "risk:blocking"  # routing signal, not classification
+LABEL_RISK_ADVISORY = "risk:advisory"  # routing signal, not classification
+
+# Automation labels (read-only signal, not emitted by classifier):
+# automation:dependabot, automation:coderabbit, automation:perplexity,
+# automation:github-actions, automation:gitguardian, automation:sonarcloud
+
+# Legacy label aliases accepted during transition.
+_LEGACY_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
+    LABEL_CI: ("ci",),
+    LABEL_DOCKER: ("docker", "type:docker"),
+    LABEL_DOCS: ("docs",),
+    LABEL_TESTS: ("testing", "type:tests"),
+    LABEL_COMPLIANCE: ("compliance", "type:compliance"),
+    LABEL_SECURITY: ("security",),
+    LABEL_DEPENDENCY: ("dependencies", "type:dependency"),
+    LABEL_REFACTOR: ("refactor",),
+    LABEL_PYTHON: ("python", "scope:python"),
+    LABEL_GITHUB_ACTIONS: ("github-actions", "scope:github-actions"),
+    LABEL_L9: ("l9",),
+    LABEL_CONTRACTS: ("contracts",),
+    LABEL_TYPING: ("typing", "type:typing"),
+    LABEL_RISK_BLOCKING: ("blocking",),
+    LABEL_RISK_ADVISORY: ("advisory",),
+}
+
+
+def _has_label(labels: set[str], canonical: str) -> bool:
+    if canonical in labels:
+        return True
+    return any(alias in labels for alias in _LEGACY_LABEL_ALIASES.get(canonical, ()))
 
 
 def _run(cmd: list[str]) -> str:
@@ -136,68 +170,126 @@ def main() -> int:
     app_changed = _any(files, ["app/**/*.py"])
     tests_changed = _any(files, ["tests/**"])
     docs_changed = _any(files, ["README*", "docs/**", "*.md", "**/*.md"])
-    workflows_changed = _any(files, [".github/workflows/**", ".github/dependabot.yml", ".github/actions/**"])
+    workflows_changed = _any(
+        files, [".github/workflows/**", ".github/dependabot.yml", ".github/actions/**"]
+    )
     scripts_changed = _any(files, [".github/scripts/**"])
-    docker_changed = _any(files, ["Dockerfile", "Dockerfile.*", "docker/**", "docker-compose*.yml", ".dockerignore"])
-    dependency_changed = _any(files, ["pyproject.toml", "requirements*.txt", "poetry.lock", "uv.lock", "Pipfile.lock"])
+    docker_changed = _any(
+        files, ["Dockerfile", "Dockerfile.*", "docker/**", "docker-compose*.yml", ".dockerignore"]
+    )
+    dependency_changed = _any(
+        files, ["pyproject.toml", "requirements*.txt", "poetry.lock", "uv.lock", "Pipfile.lock"]
+    )
     spec_changed = _any(files, ["domains/**/spec.yaml", "spec.yaml", "**/*spec*.yaml"])
     adr_changed = _any(files, ["readme/adr/**", "docs/adr/**", "ADR/**"])
-    contracts_changed = _any(files, ["config/contracts/**", "contracts/**", "tools/l9_template_manifest.yaml"])
+    contracts_changed = _any(
+        files, ["config/contracts/**", "contracts/**", "tools/l9_template_manifest.yaml"]
+    )
     hooks_changed = _any(files, ["scripts/hooks/**", ".pre-commit-config.yaml"])
 
-    security_sensitive_changed = workflows_changed or dependency_changed or docker_changed or _any(
-        files,
-        ["app/**/auth*.py", "app/**/security*.py", "app/**/gate*.py", "app/**/transport*.py"],
+    security_sensitive_changed = (
+        workflows_changed
+        or dependency_changed
+        or docker_changed
+        or _any(
+            files,
+            ["app/**/auth*.py", "app/**/security*.py", "app/**/gate*.py", "app/**/transport*.py"],
+        )
     )
     typing_sensitive_changed = app_changed or _any(
         files,
-        ["**/models.py", "**/schemas.py", "**/transport*.py", "**/handlers.py", "requirements-ci.txt", "pyproject.toml"],
+        [
+            "**/models.py",
+            "**/schemas.py",
+            "**/transport*.py",
+            "**/handlers.py",
+            "requirements-ci.txt",
+            "pyproject.toml",
+        ],
     )
-    transport_sensitive_changed = _any(files, ["app/**/transport*.py", "app/**/packet*.py", "app/**/graph_return*.py"])
-    ingress_sensitive_changed = _any(files, ["app/**/handlers.py", "app/**/chassis_handlers.py", "app/**/boot.py"])
-
-    only_docs = bool(files) and docs_changed and not any(
-        [python_changed, workflows_changed, scripts_changed, docker_changed, dependency_changed, spec_changed, contracts_changed]
+    transport_sensitive_changed = _any(
+        files, ["app/**/transport*.py", "app/**/packet*.py", "app/**/graph_return*.py"]
     )
-    only_types_dependency = dependency_changed and any("types-" in f.lower() for f in files) and not app_changed
+    ingress_sensitive_changed = _any(
+        files, ["app/**/handlers.py", "app/**/chassis_handlers.py", "app/**/boot.py"]
+    )
 
-    # Namespaced label matching — accepts both namespaced (type:ci, scope:github-actions)
-    # and legacy plain labels for backward compatibility during transition.
-    # FIX: has_ci_label now also checks LABEL_GITHUB_ACTIONS (scope:github-actions) so that
-    # scorecard_relevant and ci_workflow classification trigger correctly on the new namespaced label.
-    has_ci_label = LABEL_CI in labels or "ci" in labels or "github-actions" in labels or LABEL_GITHUB_ACTIONS in labels
-    has_docker_label = LABEL_DOCKER in labels or "docker" in labels
-    has_security_label = LABEL_SECURITY in labels or "security" in labels
-    has_dependency_label = LABEL_DEPENDENCY in labels or "dependencies" in labels
-    has_python_label = LABEL_PYTHON in labels or "python" in labels
-    has_github_actions_label = LABEL_GITHUB_ACTIONS in labels or "github-actions" in labels
-    has_testing_label = LABEL_TESTS in labels or "testing" in labels
-    has_typing_label = LABEL_TYPING in labels or "typing" in labels
+    only_docs = (
+        bool(files)
+        and docs_changed
+        and not any(
+            [
+                python_changed,
+                workflows_changed,
+                scripts_changed,
+                docker_changed,
+                dependency_changed,
+                spec_changed,
+                contracts_changed,
+            ]
+        )
+    )
+    only_types_dependency = (
+        dependency_changed and any("types-" in f.lower() for f in files) and not app_changed
+    )
 
-    semgrep_relevant = app_changed or python_changed or security_sensitive_changed or has_security_label
-    sbom_relevant = dependency_changed or docker_changed or has_dependency_label or has_security_label
-    scorecard_relevant = workflows_changed or security_sensitive_changed or has_security_label or has_ci_label
+    # Namespaced label matching (canonical + legacy aliases during transition).
+    has_ci_label = _has_label(labels, LABEL_CI) or _has_label(labels, LABEL_GITHUB_ACTIONS)
+    has_docker_label = _has_label(labels, LABEL_DOCKER)
+    has_security_label = _has_label(labels, LABEL_SECURITY)
+    has_dependency_label = _has_label(labels, LABEL_DEPENDENCY)
+    has_python_label = _has_label(labels, LABEL_PYTHON)
+    has_github_actions_label = _has_label(labels, LABEL_GITHUB_ACTIONS)
+    has_testing_label = _has_label(labels, LABEL_TESTS)
+    has_typing_label = _has_label(labels, LABEL_TYPING)
+    has_compliance_label = _has_label(labels, LABEL_COMPLIANCE)
+    has_refactor_label = _has_label(labels, LABEL_REFACTOR)
+    has_l9_label = _has_label(labels, LABEL_L9)
+    has_contracts_label = _has_label(labels, LABEL_CONTRACTS)
+    has_risk_blocking_label = _has_label(labels, LABEL_RISK_BLOCKING)
+    has_risk_advisory_label = _has_label(labels, LABEL_RISK_ADVISORY)
 
-    pr_class = "unknown"
+    semgrep_relevant = (
+        app_changed or python_changed or security_sensitive_changed or has_security_label
+    )
+    sbom_relevant = (
+        dependency_changed or docker_changed or has_dependency_label or has_security_label
+    )
+    scorecard_relevant = (
+        workflows_changed or security_sensitive_changed or has_security_label or has_ci_label
+    )
+
+    pr_class = "unknown_diff"
     if diff_unknown:
         pr_class = "unknown_diff"
-    elif workflows_changed or scripts_changed or has_github_actions_label or has_ci_label:
+    elif (
+        workflows_changed
+        or scripts_changed
+        or docker_changed
+        or has_github_actions_label
+        or has_ci_label
+        or has_docker_label
+    ):
+        # Docker file changes are CI surface (was pr_class "docker").
         pr_class = "ci_workflow"
-    elif docker_changed or has_docker_label:
-        pr_class = "docker"
     elif only_docs:
         pr_class = "docs_only"
     elif tests_changed and not app_changed:
-        pr_class = "tests_only"
-    elif spec_changed or adr_changed or contracts_changed:
+        pr_class = "app_code"
+    elif (
+        spec_changed
+        or adr_changed
+        or contracts_changed
+        or has_compliance_label
+        or has_l9_label
+        or has_contracts_label
+    ):
         pr_class = "compliance"
     elif security_sensitive_changed or has_security_label:
         pr_class = "security"
-    elif only_types_dependency or has_typing_label:
-        pr_class = "dependency_types"
-    elif dependency_changed or has_dependency_label:
-        pr_class = "dependency_python" if has_python_label else "dependency"
-    elif app_changed:
+    elif only_types_dependency or has_typing_label or dependency_changed or has_dependency_label:
+        pr_class = "dependency_python"
+    elif app_changed or has_refactor_label:
         pr_class = "app_code"
 
     outputs: dict[str, object] = {
@@ -235,6 +327,12 @@ def main() -> int:
         "has_security_label": has_security_label,
         "has_testing_label": has_testing_label,
         "has_typing_label": has_typing_label,
+        "has_compliance_label": has_compliance_label,
+        "has_refactor_label": has_refactor_label,
+        "has_l9_label": has_l9_label,
+        "has_contracts_label": has_contracts_label,
+        "has_risk_blocking_label": has_risk_blocking_label,
+        "has_risk_advisory_label": has_risk_advisory_label,
     }
     _write_output(outputs)
     print(json.dumps(outputs, indent=2, sort_keys=True))

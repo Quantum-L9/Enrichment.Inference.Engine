@@ -1,0 +1,83 @@
+version: "1.0.0"
+
+truths:
+  repo_truth:
+    required_files:
+      - docs/contracts/node.constitution.yaml
+      - docs/contracts/runtime-attestation.schema.json
+      - docs/contracts/enforcement/ci-gate.yaml
+      - docs/contracts/enforcement/review-policy.yaml
+      - docs/contracts/enforcement/agent-policy.yaml
+      - scripts/verify_node_constitution.py
+      - scripts/l9_contract_control.py
+      - app/services/runtime_attestation.py
+      - app/api/v1/attestation.py
+      - app/services/packet_enforcement.py
+      - app/services/dependency_enforcement.py
+      - app/services/action_authority.py
+      - app/services/event_contract_guard.py
+      - app/bootstrap/l9_contract_runtime.py
+      - .github/workflows/l9-constitution-gate.yml
+      - .github/workflows/l9-contract-control.yml
+      - .github/copilot-instructions.md
+      - tests/contracts/tier2/test_node_constitution_contract.py
+      - tests/contracts/tier2/test_runtime_attestation_contract.py
+      - tests/contracts/tier2/test_l9_contract_control.py
+      - tests/contracts/tier2/test_packet_enforcement_module.py
+      - tests/contracts/tier2/test_action_dependency_authority_module.py
+      - tests/contracts/tier2/test_event_contract_guard_module.py
+      - tests/contracts/tier2/test_l9_contract_runtime_bootstrap.py
+      - tests/contracts/tier2/test_enforcement_behavior.py
+      - tests/contracts/tier2/test_enforcement_authority.py
+      - tests/contracts/tier2/test_enforcement_packet_runtime.py
+      - tests/contracts/tier2/test_enforcement_replay_idempotency.py
+      - tests/contracts/tier2/test_enforcement_dependency_failures.py
+      - tests/contracts/tier2/test_enforcement_events.py
+      - tests/contracts/tier2/test_enforcement_provenance.py
+      - tests/contracts/fixtures/minimal_enrich_request.json
+      - tests/contracts/fixtures/full_enrich_request.json
+      - tests/contracts/fixtures/enrich_response_example.json
+      - tests/contracts/fixtures/minimal_packet_envelope.json
+      - tests/contracts/fixtures/packet_writeback.json
+      - tests/contracts/fixtures/writeback_valid.json
+      - tests/contracts/fixtures/event_enrichment_completed.json
+      - tests/contracts/fixtures/convergence_run_resume_state.json
+      - tests/contracts/fixtures/schema_proposal_pending.json
+      - tests/contracts/fixtures/dependency_status_redis_down.json
+    pytest_files:
+      - tests/contracts/tier2/test_node_constitution_contract.py
+      - tests/contracts/tier2/test_runtime_attestation_contract.py
+      - tests/contracts/tier2/test_l9_contract_control.py
+      - tests/contracts/tier2/test_packet_enforcement_module.py
+      - tests/contracts/tier2/test_action_dependency_authority_module.py
+      - tests/contracts/tier2/test_event_contract_guard_module.py
+      - tests/contracts/tier2/test_l9_contract_runtime_bootstrap.py
+
+  runtime_truth:
+    required_files:
+      - app/services/packet_enforcement.py
+      - app/services/dependency_enforcement.py
+      - app/services/action_authority.py
+      - app/services/event_contract_guard.py
+      - app/bootstrap/l9_contract_runtime.py
+
+  governance_truth:
+    required_files:
+      - docs/contracts/node.constitution.yaml
+      - app/services/action_authority.py
+      - app/services/dependency_enforcement.py
+      - docs/contracts/agents/tool-schemas/writeback.schema.json
+
+  operational_truth:
+    required_files:
+      - app/services/runtime_attestation.py
+      - app/api/v1/attestation.py
+      - docs/contracts/runtime-attestation.schema.json
+
+  agent_truth:
+    required_files:
+      - docs/contracts/enforcement/agent-policy.yaml
+      - docs/contracts/enforcement/review-policy.yaml
+      - docs/contracts/enforcement/ci-gate.yaml
+      - scripts/l9_contract_control.py
+      - .github/copilot-instructions.md

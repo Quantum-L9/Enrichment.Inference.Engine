@@ -25,7 +25,7 @@ on:
       - '*.md'
   push:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
+      - main
     paths:
       - 'readme/**'
       - 'docs/**'
