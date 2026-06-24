@@ -1,0 +1,48 @@
+# === SUITE 5 GOVERNANCE RULES ===
+# Auto-loaded by Cursor for governance compliance
+
+## Core Governance Principles
+- Always use Suite 5 canonical headers for governance files
+- Follow kebab-case naming convention for files
+- Integrate with formal logic system for rule validation
+- Maintain audit trails for all governance decisions
+- Use cross-layer integration patterns
+
+## File Standards
+- Governance files must have canonical headers with complete metadata
+- Component IDs must follow pattern: [LAYER-DOMAIN-###]
+- All files should be self-documenting with clear purpose statements
+- Integration points must be explicitly documented
+
+## Development Workflow
+- Use @.cursor-commands/ to access governance components
+- Validate compliance before commits
+- Follow 10-step reasoning framework for technical decisions
+- Integrate with meta-learning system for continuous improvement
+
+## API Integration
+- Use governance API endpoints for programmatic access
+- Follow REST conventions with proper error handling
+- Include governance metadata in API responses
+- Maintain performance targets (<200ms response time)
+
+## Security and Compliance
+- All governance files require audit trails
+- Never expose credentials in code or logs
+- Use encrypted storage for sensitive configurations
+- Regular security audits via integrity layer
+
+## 🚫 REPEATED MISTAKES - NEVER DO THESE AGAIN
+
+**Source:** `~/Library/Application Support/Cursor/GlobalCommands/learning/failures/repeated-mistakes.md`
+
+[This section will be auto-populated by the learning system]
+
+---
+
+*These rules apply GLOBALLY to every Cursor workspace*
+*Last Updated: 2025-10-28*
+
+# Dynamic Context - Generated Sun May 24 20:20:45 EDT 2026
+# Total Learnings: 36
+# Recent Learnings (24h): 

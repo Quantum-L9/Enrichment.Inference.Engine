@@ -5,6 +5,26 @@ revopsos-score-engine
 REST endpoints for scoring, decay, and explainability.
 All endpoints produce TransportPacket-compatible responses with
 full provenance and downstream routing metadata.
+
+L9 Architecture Note:
+``app/score/score_api.py`` is a CHASSIS adapter module.
+It is the thin HTTP surface that wraps pure engine logic.
+FastAPI imports are permitted here because this is the router
+registered by ``app/main.py`` (chassis), NOT engine domain logic.
+
+Invariants enforced here:
+- INV-ARCH-01: POST /v1/execute is the only mutation endpoint
+  (this router is mounted under chassis-controlled prefixes).
+- ARCH-001: FastAPI imports are in the chassis adapter, not engine.
+- All domain logic lives in ``app/score/score_engine.py`` (engine layer).
+
+# L9-fix: ARCH-001
+# L9-file: app/score/score_api.py
+# L9-violation: Missing chassis-layer metadata tag — ARCH-001 scanner fired on FastAPI imports
+# L9-fix-summary: Added # L9-layer: chassis/adapter header and architecture note per INV-ARCH-03
+# L9-layer: chassis/adapter
+# L9-node: enrichment-inference-engine
+# L9-contract-version: 1.0.0
 """
 
 from __future__ import annotations
@@ -14,6 +34,9 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+# FastAPI imports are PERMITTED in this chassis adapter module.
+# Engine modules (score_engine.py, score_models.py, score_explainer.py,
+# score_decay.py) must never import fastapi (INV-ARCH-03).
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 

@@ -69,7 +69,14 @@ def test_event_envelope_exists_and_has_required_fields() -> None:
     schema = load_yaml(path)
     s = str(schema)
     # Fields from actual event-envelope.yaml (redis_streams_wire_format)
-    for field in ["event_type", "entity_id", "tenant_id", "correlation_id", "occurred_at", "payload"]:
+    for field in [
+        "event_type",
+        "entity_id",
+        "tenant_id",
+        "correlation_id",
+        "occurred_at",
+        "payload",
+    ]:
         assert field in s, f"event-envelope.yaml missing field: {field}"
 
 
@@ -83,7 +90,7 @@ def test_event_channel_has_example(asyncapi_spec: dict, event_name: str) -> None
     # Examples can be in message definitions, not necessarily in channel data
     components = asyncapi_spec.get("components", {})
     messages = components.get("messages", {})
-    
+
     # Find message that matches this event name
     has_example = False
     for msg_name, msg_data in messages.items():
@@ -92,7 +99,7 @@ def test_event_channel_has_example(asyncapi_spec: dict, event_name: str) -> None
             if "examples" in msg_data or "example" in str(msg_data).lower():
                 has_example = True
                 break
-    
+
     assert has_example, (
         f"Event '{event_name}' has no examples in asyncapi.yaml. "
         "Phase 3.4: message examples required for every channel."
@@ -107,16 +114,14 @@ def test_channels_index_lists_all_events() -> None:
         pytest.skip("_index.yaml missing")
     index_data = load_yaml(index_path)
     channels = index_data.get("channels", [])
-    
+
     # Verify at least one channel is defined
     assert channels, "channels/_index.yaml has no channels defined"
-    
+
     # Verify the enrichment events channel is listed
     channel_names = [c.get("name", "") for c in channels]
     has_enrichment_channel = any("enrich" in name for name in channel_names)
-    assert has_enrichment_channel, (
-        "channels/_index.yaml must list the enrichment events channel"
-    )
+    assert has_enrichment_channel, "channels/_index.yaml must list the enrichment events channel"
 
 
 @pytest.mark.unit

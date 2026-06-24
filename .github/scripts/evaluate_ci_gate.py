@@ -5,6 +5,7 @@ Relevant failures block.
 Irrelevant failures become advisory.
 Required jobs may never be skipped.
 """
+
 from __future__ import annotations
 
 import json
@@ -44,11 +45,15 @@ def _is_failure(result: str) -> bool:
 def main() -> int:
     relevance = {
         "lint": _env_bool("PYTHON_CHANGED") or _env_bool("APP_CHANGED"),
-        "test": _env_bool("APP_CHANGED") or _env_bool("TESTS_CHANGED") or _env_bool("HAS_TESTING_LABEL"),
+        "test": _env_bool("APP_CHANGED")
+        or _env_bool("TESTS_CHANGED")
+        or _env_bool("HAS_TESTING_LABEL"),
         "typing": _env_bool("TYPING_SENSITIVE_CHANGED") or _env_bool("HAS_TYPING_LABEL"),
         "audit": _env_bool("APP_CHANGED") or _env_bool("SECURITY_SENSITIVE_CHANGED"),
         "docker": _env_bool("DOCKER_CHANGED") or _env_bool("HAS_DOCKER_LABEL"),
-        "compliance": _env_bool("SPEC_CHANGED") or _env_bool("ADR_CHANGED") or _env_bool("CONTRACTS_CHANGED"),
+        "compliance": _env_bool("SPEC_CHANGED")
+        or _env_bool("ADR_CHANGED")
+        or _env_bool("CONTRACTS_CHANGED"),
         "sbom": _env_bool("SBOM_RELEVANT") or _env_bool("DEPENDENCY_CHANGED"),
         "scorecard": _env_bool("SCORECARD_RELEVANT") or _env_bool("WORKFLOWS_CHANGED"),
     }

@@ -2,8 +2,6 @@
 2GP-domain-enrichment-engine/
 Odoo-side client module/
 
-# Documentation (separate)
-docs/
 
 # Cursor IDE
 .cursor/

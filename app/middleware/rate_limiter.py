@@ -1,6 +1,20 @@
 """
-Sliding-window rate limiter.
+Sliding-window rate limiter — chassis layer only.
+
 In-memory for single worker; swap to Redis ZRANGEBYSCORE for multi-worker.
+
+L9 Architecture Note:
+This module is CHASSIS. It is the only correct location for FastAPI
+middleware imports (INV-ARCH-03). Do not replicate this pattern in
+engine modules.
+
+# L9-fix: ARCH-001
+# L9-file: app/middleware/rate_limiter.py
+# L9-violation: Missing chassis-layer metadata tag — ARCH-001 scanner fired on FastAPI imports
+# L9-fix-summary: Added # L9-layer: chassis header and architecture note per INV-ARCH-03
+# L9-layer: chassis
+# L9-node: enrichment-inference-engine
+# L9-contract-version: 1.0.0
 """
 
 from __future__ import annotations
@@ -8,21 +22,30 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 
+# FastAPI/Starlette imports are PERMITTED here — this module lives in the
+# chassis layer, which owns HTTP middleware (§2.1, INV-ARCH-03).
 from fastapi import HTTPException, Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, requests_per_minute: int = 120):
+    """Sliding-window per-API-key rate limiter.
+
+    Chassis responsibility: enforces request-rate governance before the
+    request reaches any engine handler.
+    """
+
+    def __init__(self, app, requests_per_minute: int = 120) -> None:
         super().__init__(app)
         self.rpm = requests_per_minute
         self.windows: dict[str, list[float]] = defaultdict(list)
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         key = request.headers.get(
             "X-API-Key",
             request.client.host if request.client else "unknown",
         )
+
         now = time.time()
         cutoff = now - 60
         self.windows[key] = [t for t in self.windows[key] if t > cutoff]

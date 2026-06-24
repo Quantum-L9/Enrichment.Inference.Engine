@@ -43,7 +43,7 @@ async def configure_audit_pool(pool) -> None:
     """
     Configure the audit persistence pool.
     Call once at startup after asyncpg.create_pool().
-    
+
     Args:
         pool: asyncpg.Pool instance
     """
@@ -58,7 +58,7 @@ async def flush_audit_entries(entries: list[dict[str, Any]]) -> int:
     """
     Persist audit entries to PostgreSQL.
     Returns count of rows inserted.
-    
+
     Args:
         entries: List of audit entry dicts with keys:
             - tenant_id: str
@@ -106,37 +106,37 @@ async def query_audit_log(
 ) -> list[dict[str, Any]]:
     """
     Query audit log entries for a tenant.
-    
+
     Args:
         tenant_id: Tenant to query
         action: Filter by action type (optional)
         since: Unix timestamp to filter entries after (optional)
         limit: Maximum entries to return
-    
+
     Returns:
         List of audit entry dicts
     """
     if _POOL is None:
         logger.error("query_audit_log called but db_pool is None")
         return []
-    
+
     query = "SELECT id, tenant_id, actor, action, detail, created_at FROM audit_log WHERE tenant_id = $1"
     params: list[Any] = [tenant_id]
-    
+
     if action:
         query += " AND action = $2"
         params.append(action)
-    
+
     if since:
         query += f" AND created_at >= ${len(params) + 1}"
         params.append(since)
-    
+
     query += f" ORDER BY created_at DESC LIMIT ${len(params) + 1}"
     params.append(limit)
-    
+
     async with _POOL.acquire() as conn:
         rows = await conn.fetch(query, *params)
-    
+
     return [
         {
             "id": row["id"],

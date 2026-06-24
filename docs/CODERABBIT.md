@@ -14,7 +14,7 @@
 
 # CODERABBIT.md — CodeRabbit-Specific Delta
 
-**VERSION**: 1.1.0 | **SHA_BASELINE**: 358d15d | **LAST_REVIEWED**: 2026-04-11
+**VERSION**: 1.2.0 | **SHA_BASELINE**: 358d15d | **LAST_REVIEWED**: 2026-05-24
 
 > Delta-only file. Load [AGENTS.md](AGENTS.md) first. This file contains ONLY CodeRabbit-specific overrides.
 
@@ -27,8 +27,7 @@ This file provides governance-layer context that supplements it.
 
 1. **GitHub App** — [coderabbit.ai](https://coderabbit.ai) → install the CodeRabbit app on your org or this repository.
 2. **Dashboard** — Grant repo access, pick plan, enable PR reviews (automatic reviews are driven by `.coderabbit.yaml`).
-3. **Optional Telegram** — Repository secret `TELEGRAM_BOT_TOKEN` + variable `TELEGRAM_CHAT_ID` for [`.github/workflows/coderabbit-notify.yml`](.github/workflows/coderabbit-notify.yml).
-4. **Tune behavior** — Edit [`.coderabbit.yaml`](.coderabbit.yaml) (`reviews.profile`, `auto_review`, `path_filters`, `chat`). Schema: [CodeRabbit configuration reference](https://docs.coderabbit.ai/reference/configuration).
+3. **Tune behavior** — Edit [`.coderabbit.yaml`](.coderabbit.yaml) (`reviews.profile`, `auto_review`, `path_filters`, `chat`). Schema: [CodeRabbit configuration reference](https://docs.coderabbit.ai/reference/configuration).
 
 ## Review Behavior
 
