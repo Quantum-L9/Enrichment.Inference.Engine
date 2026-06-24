@@ -22,8 +22,7 @@ name: Refactoring Safety Gate
 on:
   pull_request:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
-      - ${{ vars.DEVELOP_BRANCH || 'develop' }}
+      - main
     paths:
       - '**/*.py'
   push:

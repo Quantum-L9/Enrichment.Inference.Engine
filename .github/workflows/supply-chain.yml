@@ -20,11 +20,10 @@ name: Supply Chain Security
 on:
   pull_request:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
-      - ${{ vars.DEVELOP_BRANCH || 'develop' }}
+      - main
   push:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
+      - main
   schedule:
     - cron: '0 3 * * 1'  # Weekly on Monday at 3 AM UTC
   workflow_dispatch:

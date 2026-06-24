@@ -20,12 +20,12 @@ name: Docker Build & Push
 on:
   push:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
+      - main
     tags:
       - 'v*'
   pull_request:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
+      - main
   workflow_dispatch:
 
 concurrency:
