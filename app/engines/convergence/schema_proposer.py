@@ -7,6 +7,7 @@ on a batch, the system proposes schema changes based on what it found.
 from __future__ import annotations
 
 import copy
+import re
 import statistics
 from typing import Any
 
@@ -18,6 +19,41 @@ logger = structlog.get_logger(__name__)
 MIN_FILL_RATE = 0.60
 MIN_AVG_CONFIDENCE = 0.70
 MAX_SAMPLE_VALUES = 10
+
+# L9 Master Kernel §3.1 + §5.1 + §5.2 — banned non-canonical field name forms.
+# Single source of truth derived from the kernel. NOT per-domain or per-tenant.
+BANNED_FIELD_NAMES_L9_KERNEL: frozenset[str] = frozenset(
+    {
+        # §5.1 — TransportPacket / shared contract drift forms
+        "packetid",
+        "packetID",
+        "packettype",
+        "packetType",
+        "contentHash",
+        "content_hash_sha256",
+        "threadId",
+        "threadID",
+        "traceId",
+        "traceID",
+        "parentIds",
+        "sourceNode",
+        "onBehalfOf",
+        "orgId",
+        "orgID",
+        # §5.2 — spec.yaml drift forms (incl. valid-snake_case-but-wrong synonyms)
+        "matchentities",
+        "nodelabels",
+        "matchdirections",
+        "candidateprop",
+        "null_semantics",
+        "computation_type",
+        "targetnode",
+        "idproperty",
+    }
+)
+
+# L9 Master Kernel §3.1 — canonical snake_case form for any proposed field name.
+_SNAKE_CASE_RE: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 class FieldProposal(BaseModel):
@@ -133,6 +169,13 @@ def apply(
     return updated
 
 
+def _is_canonical_field_name(name: str) -> bool:
+    """Per L9 Master Kernel §3.1 + §5.1 + §5.2: snake_case form, not in drift list."""
+    if name in BANNED_FIELD_NAMES_L9_KERNEL:
+        return False
+    return bool(_SNAKE_CASE_RE.fullmatch(name))
+
+
 def _build_confidence_map(confidences_raw: Any) -> dict[str, float]:
     """Extract a {field_name: confidence} map from various confidences_raw formats."""
     if hasattr(confidences_raw, "entries"):
@@ -187,6 +230,15 @@ def _build_field_proposals(
         avg_conf = statistics.mean(acc.confidences) if acc.confidences else 0.0
         if fill_rate < MIN_FILL_RATE or avg_conf < MIN_AVG_CONFIDENCE:
             continue
+        if not _is_canonical_field_name(field_name):
+            logger.warning(
+                "schema_proposer.kernel_name_invariant_violation",
+                field_name=field_name,
+                entity_count=acc.non_null,
+                stage="propose",
+                kernel_section="L9 §3.1/§5.1/§5.2",
+            )
+            continue
         field_type = _infer_type(acc.values)
         distribution = _compute_distribution(acc.values, field_type)
         source = next(iter(acc.sources)) if acc.sources else "enrichment"
@@ -218,6 +270,14 @@ def _apply_node_properties(
             props = node_def.setdefault("properties", {})
             for fp in proposed_fields:
                 if fp.field_name in approved_fields:
+                    if not _is_canonical_field_name(fp.field_name):
+                        logger.warning(
+                            "schema_proposer.kernel_name_invariant_violation",
+                            field_name=fp.field_name,
+                            stage="apply",
+                            kernel_section="L9 §3.1/§5.1/§5.2",
+                        )
+                        continue
                     props[fp.field_name] = {"type": fp.field_type, "source": fp.source}
 
 
@@ -229,6 +289,14 @@ def _apply_gate_proposals(
     """Append approved gate proposals to the gates list."""
     for gp in proposed_gates:
         if gp.field_name in approved_fields:
+            if not _is_canonical_field_name(gp.field_name):
+                logger.warning(
+                    "schema_proposer.kernel_name_invariant_violation",
+                    field_name=gp.field_name,
+                    stage="apply",
+                    kernel_section="L9 §3.1/§5.1/§5.2",
+                )
+                continue
             gates.append({"field": gp.field_name, "type": gp.gate_type, "auto_proposed": True})
 
 
@@ -240,6 +308,14 @@ def _apply_scoring_proposals(
     """Append approved scoring dimension proposals to the scoring list."""
     for sp in proposed_dims:
         if sp.field_name in approved_fields:
+            if not _is_canonical_field_name(sp.field_name):
+                logger.warning(
+                    "schema_proposer.kernel_name_invariant_violation",
+                    field_name=sp.field_name,
+                    stage="apply",
+                    kernel_section="L9 §3.1/§5.1/§5.2",
+                )
+                continue
             scoring.append(
                 {"field": sp.field_name, "type": sp.dimension_type, "auto_proposed": True}
             )
