@@ -24,7 +24,8 @@ from collections import defaultdict
 
 # FastAPI/Starlette imports are PERMITTED here — this module lives in the
 # chassis layer, which owns HTTP middleware (§2.1, INV-ARCH-03).
-from fastapi import HTTPException, Request, status
+from fastapi import Request, status
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 
@@ -51,9 +52,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.windows[key] = [t for t in self.windows[key] if t > cutoff]
 
         if len(self.windows[key]) >= self.rpm:
-            raise HTTPException(
+            # Return the response directly. Raising HTTPException inside a
+            # BaseHTTPMiddleware.dispatch does NOT pass through FastAPI's
+            # exception handlers — it propagates to ServerErrorMiddleware and
+            # surfaces as a 500. JSONResponse gives the client the real 429.
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Rate limit: {self.rpm} requests/minute",
+                content={"detail": f"Rate limit: {self.rpm} requests/minute"},
             )
 
         self.windows[key].append(now)
