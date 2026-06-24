@@ -20,7 +20,7 @@ name: Release Drafter
 on:
   push:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
+      - main
   pull_request_target:
     types: [opened, reopened, synchronize]
 

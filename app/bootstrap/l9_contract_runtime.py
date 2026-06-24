@@ -1,7 +1,34 @@
+"""
+L9 Contract Runtime Bootstrap — chassis layer.
+
+Installs constitution/attestation startup gates and contract control state
+onto the FastAPI application object.
+
+L9 Architecture Note:
+This module is CHASSIS. It is called exclusively from ``app/main.py``
+during application lifespan setup. FastAPI imports are permitted here
+(INV-ARCH-03: engine MUST NOT import fastapi; chassis owns the app
+object — §2.1).
+
+Engine modules must NEVER import this file. Engine code that needs
+contract-runtime state receives it as a plain dict via dependency
+injection from the chassis (INV-ARCH-04, INV-ARCH-05).
+
+# L9-fix: ARCH-001
+# L9-file: app/bootstrap/l9_contract_runtime.py
+# L9-violation: Missing chassis-layer metadata tag — ARCH-001 scanner fired on FastAPI imports
+# L9-fix-summary: Added # L9-layer: chassis header and architecture note per INV-ARCH-03
+# L9-layer: chassis
+# L9-node: enrichment-inference-engine
+# L9-contract-version: 1.0.0
+"""
+
 from __future__ import annotations
 
 from typing import Any
 
+# FastAPI import is PERMITTED — this is a chassis bootstrap module.
+# Only app/main.py (chassis) should import this file.
 from fastapi import FastAPI
 
 from app.api.v1.attestation import router as attestation_router
@@ -14,6 +41,7 @@ def _route_exists(app: FastAPI, path: str) -> bool:
 
 
 def install_l9_contract_controls(app: FastAPI) -> FastAPI:
+    """Register attestation router and wire constitution/attestation startup gates."""
     if not _route_exists(app, "/v1/attestation"):
         app.include_router(attestation_router)
 
@@ -46,6 +74,11 @@ def install_l9_contract_controls(app: FastAPI) -> FastAPI:
 
 
 def get_l9_contract_runtime_state(app: FastAPI) -> dict[str, Any]:
+    """Return the contract runtime state dict installed by ``install_l9_contract_controls``.
+
+    Raises ``RuntimeError`` if the controls have not been installed or the
+    startup hook has not yet fired.
+    """
     state = getattr(app.state, "l9_contract_control", None)
     if not isinstance(state, dict):
         raise RuntimeError("L9 contract runtime controls not installed or not initialized")

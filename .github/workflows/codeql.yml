@@ -20,10 +20,10 @@ name: CodeQL Analysis
 on:
   push:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
+      - main
   pull_request:
     branches:
-      - ${{ vars.PRIMARY_BRANCH || 'main' }}
+      - main
   schedule:
     - cron: '0 4 * * 1'  # Weekly on Monday at 4 AM UTC
 
@@ -36,7 +36,6 @@ jobs:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Required to upload SARIF / security findings (workflow-level read-only is not enough on some repos).
     permissions:
       contents: read
       security-events: write
@@ -49,7 +48,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

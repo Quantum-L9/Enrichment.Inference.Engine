@@ -3,22 +3,19 @@
 # origin: l9-template
 # engine: enrichment
 # layer: [ci, integrations]
-# tags: [coderabbit, telegram]
+# tags: [coderabbit]
 # owner: platform
 # status: active
 # --- /L9_META ---
-# Telegram ping when CodeRabbit submits a PR review with state "changes_requested".
+# CodeRabbit Review Notify
 #
-# Requires CodeRabbit to use the Request changes workflow (this repo sets
-# reviews.request_changes_workflow: true in .coderabbit.yaml). Default CodeRabbit
-# without that flag often posts comments only — then this job does not run.
+# Notification stub — Telegram integration has been removed (phase-1 platform
+# contract cleanup). Replace this job body with an alternative notification
+# channel (e.g. GitHub comment, Slack, webhook) if desired.
 #
-# Configure:
-#   Secret:  TELEGRAM_BOT_TOKEN  (same value as in .env.local)
-#   Variable: TELEGRAM_CHAT_ID   (numeric chat id, e.g. from @userinfobot)
-# Messages prefix @QuantumAI_IgorBot (same as tools/telegram_visibility.py).
-#
-# Manual test: Actions → CodeRabbit Review Notify → Run workflow
+# To enable CodeRabbit request-changes alerts:
+#   1. Add a notification step below.
+#   2. Configure secrets/variables as needed.
 
 name: CodeRabbit Review Notify
 
@@ -26,66 +23,23 @@ on:
   pull_request_review:
     types: [submitted]
   workflow_dispatch:
-    inputs:
-      test_body:
-        description: "Message sent to Telegram (manual wiring test)"
-        required: false
-        default: "Telegram notify workflow: manual test from GitHub Actions"
 
 permissions:
   contents: read
 
 jobs:
-  notify-telegram:
-    name: Telegram notify
+  notify:
+    name: Review notify
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    if: >
+      github.event_name == 'pull_request_review'
+      && github.event.review.user.login == 'coderabbitai[bot]'
+      && github.event.review.state == 'changes_requested'
 
     steps:
-      - name: Check Telegram configuration
-        id: gate
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
+      - name: Log review event
         run: |
-          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Telegram skipped — set Actions secret TELEGRAM_BOT_TOKEN and variable TELEGRAM_CHAT_ID (same as .env.local)."
-          else
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Notify — CodeRabbit requested changes
-        if: >
-          steps.gate.outputs.ok == 'true'
-          && github.event_name == 'pull_request_review'
-          && github.event.review.user.login == 'coderabbitai[bot]'
-          && github.event.review.state == 'changes_requested'
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          REPO: ${{ github.repository }}
-          PR_NUM: ${{ github.event.pull_request.number }}
-        run: |
-          MESSAGE=$'@QuantumAI_IgorBot\n\n🐰 CodeRabbit review ready\n\nRepo: '"${REPO}"$'\nPR #'"${PR_NUM}"$': '"${PR_TITLE}"$'\n'"${PR_URL}"$'\n\nImplement fixes, verify CI, merge.'
-          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${MESSAGE}" \
-            --fail-with-body
-
-      - name: Notify — manual workflow test
-        if: steps.gate.outputs.ok == 'true' && github.event_name == 'workflow_dispatch'
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
-          REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          MSG="${{ github.event.inputs.test_body }}"
-          TEXT=$'@QuantumAI_IgorBot\n\n🔧 '"${REPO}"$'\n'"${MSG}"$'\n\n'"${RUN_URL}"
-          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${TEXT}" \
-            --fail-with-body
+          echo "CodeRabbit requested changes on PR #${{ github.event.pull_request.number }}"
+          echo "PR: ${{ github.event.pull_request.html_url }}"
+          echo "Add a notification step here to alert your team."

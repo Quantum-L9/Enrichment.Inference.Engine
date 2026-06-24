@@ -69,7 +69,14 @@ def test_event_envelope_exists_and_has_required_fields() -> None:
     schema = load_yaml(path)
     s = str(schema)
     # Fields from actual event-envelope.yaml (redis_streams_wire_format)
-    for field in ["event_type", "entity_id", "tenant_id", "correlation_id", "occurred_at", "payload"]:
+    for field in [
+        "event_type",
+        "entity_id",
+        "tenant_id",
+        "correlation_id",
+        "occurred_at",
+        "payload",
+    ]:
         assert field in s, f"event-envelope.yaml missing field: {field}"
 
 
@@ -114,9 +121,7 @@ def test_channels_index_lists_all_events() -> None:
     # Verify the enrichment events channel is listed
     channel_names = [c.get("name", "") for c in channels]
     has_enrichment_channel = any("enrich" in name for name in channel_names)
-    assert has_enrichment_channel, (
-        "channels/_index.yaml must list the enrichment events channel"
-    )
+    assert has_enrichment_channel, "channels/_index.yaml must list the enrichment events channel"
 
 
 @pytest.mark.unit
