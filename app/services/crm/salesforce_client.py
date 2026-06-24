@@ -7,11 +7,27 @@ bulk operations, and OAuth2 authentication.
 L9 Architecture Note:
     Chassis-agnostic. Implements CRMClientBase contract.
     Never imports FastAPI. Used by WriteBackOrchestrator.
+
+Security Note (SEC-SQL fix — L9-AUDIT-2026-05-20):
+    SOQL WHERE clauses are now built with escaped/parameterized values.
+    Field names are validated against the SOQL identifier allowlist
+    before interpolation. See _soql_escape() and _soql_literal().
+    object_type is also validated before interpolation into SELECT...FROM.
+
+# L9-fix: SEC-SQL
+# L9-file: app/services/crm/salesforce_client.py
+# L9-violation: SOQL injection — user-supplied filter values interpolated directly into query string
+# L9-fix-summary: _soql_escape() + _soql_literal() + field-name allowlist validation in query_records()
+#   + backslash-first escaping in _soql_escape() + object_type validation in query_records()
+# L9-layer: engine/service
+# L9-node: enrichment-inference-engine
+# L9-contract-version: 1.0.0
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -19,6 +35,45 @@ import httpx
 from .base import CRMClientBase, CRMCredentials, WriteResult
 
 logger = logging.getLogger(__name__)
+
+# SOQL field names and object types may only contain alphanumerics, underscores,
+# and dots (for relationship traversal e.g. Account.Name).
+_SOQL_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+
+
+def _soql_escape(value: str) -> str:
+    """Escape a string value for safe interpolation inside a SOQL string literal.
+
+    SOQL treats both backslash and single-quote as reserved characters inside
+    string literals. Backslashes MUST be escaped first; escaping quotes first
+    would cause the backslash escape to be misinterpreted and defeat injection
+    protection (e.g. input `\\'` would produce `\\\'` where the backslash is
+    literal and the quote is still unescaped).
+
+    Escape order: `\\` → `\\\\`, then `'` → `\\'`, then wrap in single quotes.
+
+    SOQL spec: https://developer.salesforce.com/docs/atlas.en-us.soql_sosl.meta
+    """
+    escaped = value.replace("\\", "\\\\").replace("'", "\\'")  # escape backslashes then quotes
+    return f"'{escaped}'"
+
+
+def _soql_literal(value: Any) -> str:
+    """Return the SOQL canonical string representation for a filter value.
+
+    - str  → escaped quoted string literal
+    - bool → 'true' / 'false'  (must be checked before int; bool subclasses int)
+    - int / float → bare numeric literal
+    - None → 'null'
+    - Anything else → escaped quoted str() coercion
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if value is None:
+        return "null"
+    return _soql_escape(str(value))
 
 
 class SalesforceClient(CRMClientBase):
@@ -94,9 +149,32 @@ class SalesforceClient(CRMClientBase):
         filters: dict[str, Any],
         fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Execute a SOQL query."""
+        """Execute a SOQL query with injection-safe WHERE clause construction.
+
+        Filter values are converted to safe SOQL literals via _soql_literal().
+        Filter field names are validated against the SOQL identifier allowlist
+        (_SOQL_FIELD_RE) before interpolation.
+        object_type is validated against _SOQL_FIELD_RE before interpolation
+        into the SELECT...FROM clause.
+
+        Raises ValueError if object_type or any filter field name contains
+        non-SOQL characters.
+        """
+        if not _SOQL_FIELD_RE.match(object_type):
+            raise ValueError(
+                f"Invalid SOQL object type '{object_type}': must match [A-Za-z_][A-Za-z0-9_.]*"
+            )
+
         field_list = ", ".join(fields) if fields else "Id, Name"
-        where_parts = [f"{k} = '{v}'" for k, v in filters.items()]
+
+        where_parts: list[str] = []
+        for k, v in filters.items():
+            if not _SOQL_FIELD_RE.match(k):
+                raise ValueError(
+                    f"Invalid SOQL field name '{k}': must match [A-Za-z_][A-Za-z0-9_.]*"
+                )
+            where_parts.append(f"{k} = {_soql_literal(v)}")
+
         where_clause = " AND ".join(where_parts) if where_parts else "Id != null"
         soql = f"SELECT {field_list} FROM {object_type} WHERE {where_clause}"
 

@@ -1,4 +1,4 @@
-.PHONY: setup dev dev-build dev-down dev-clean test test-unit test-integration test-compliance test-ci test-contracts test-all test-watch lint lint-fix audit audit-strict audit-json verify agent-check agent-fix agent-full build prod prod-build prod-down prod-logs deploy clean pr pr-validate pr-lint pr-semgrep pr-test pr-security pr-compliance pr-l9 pr-docs pr-quick pr-services-up pr-services-down
+.PHONY: setup dev dev-build dev-down dev-clean test test-unit test-integration test-compliance test-ci test-contracts test-all test-watch lint lint-fix audit audit-strict audit-json verify agent-check agent-fix agent-full build prod prod-build prod-down prod-logs deploy clean push pr pr-validate pr-lint pr-semgrep pr-test pr-security pr-compliance pr-l9 pr-docs pr-quick pr-services-up pr-services-down pr-evaluate pr-merge pr-merge-dry pr-ship pr-rerun
 
 IMAGE_NAME ?= enrichment-api
 SERVICE_NAME ?= enrichment-api
@@ -105,6 +105,17 @@ agent-full:  ## Full agent workflow: fix → check → coverage
 	$(PYTEST) tests/ -v --tb=short --cov=app --cov-report=term-missing
 
 # ============================================================
+# PUSH — agent-check then git push (no force)
+# PUSH_SKIP_CHECK=1 make push  — skip agent-check
+# ============================================================
+push:  ## Run agent-check, then push current branch to origin
+	@if [ "$(PUSH_SKIP_CHECK)" != "1" ]; then $(MAKE) agent-check; fi
+	@if ! git diff-index --quiet HEAD -- 2>/dev/null; then \
+		echo "WARN: uncommitted changes — only existing commits will be pushed"; \
+	fi
+	git push -u origin HEAD
+
+# ============================================================
 # PR PIPELINE — local parity with GitHub CI + L9 + docs
 # See: readme/CICD_PIPELINE.md, local_pr_pipeline/pr_pipeline.sh
 # Env: ORDER=gate|failfast, COVERAGE_THRESHOLD, PR_MYPY_STRICT, PR_SKIP_SEMGREP,
@@ -148,6 +159,33 @@ pr-services-up:
 
 pr-services-down:
 	docker compose -f local_pr_pipeline/docker-compose.pr.yml -p enrich_pr down -v
+
+# ============================================================
+# PR EVALUATE & MERGE — pr-pipeline.yml + agent review gate (gh CLI)
+# merge: wait for CI on HEAD → agent comments resolved → required checks → merge
+# Does NOT merge until CLEAN. Watches for new commits after you push fixes (default).
+# Requires: gh auth login
+# Usage:
+#   make pr-evaluate              # pipeline + review gate, no merge
+#   make pr-merge PR=42           # loop until CLEAN, then merge
+#   make pr-ship PR=42            # alias
+#   PR_MERGE_DRY_RUN=1 make pr-merge PR=42
+#   PR_MERGE_WATCH=0 make pr-merge PR=42   # fail fast (no wait for fix push)
+# Env: PR, PR_MERGE_WATCH, PR_MERGE_POLL_TIMEOUT, PR_SKIP_REVIEW_GATE, PR_AGENT_LOGINS
+# ============================================================
+pr-evaluate:  ## pr-pipeline + agent review gate; no merge
+	bash scripts/pr_evaluate_and_merge.sh evaluate
+
+pr-merge:  ## Until CLEAN: CI + review comments + required checks, then merge
+	bash scripts/pr_evaluate_and_merge.sh merge $(PR)
+
+pr-merge-dry:  ## Full gate, no merge (PR_MERGE_DRY_RUN=1)
+	PR_MERGE_DRY_RUN=1 bash scripts/pr_evaluate_and_merge.sh merge $(PR)
+
+pr-ship: pr-merge  ## Alias: evaluate until CLEAN then merge
+
+pr-rerun:  ## Re-dispatch pr-pipeline.yml on PR head, then evaluate (no merge)
+	PR_RERUN=1 bash scripts/pr_evaluate_and_merge.sh evaluate
 
 # ============================================================
 # BUILD / DEPLOY

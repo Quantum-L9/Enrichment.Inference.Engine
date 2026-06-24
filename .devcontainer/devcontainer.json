@@ -1,0 +1,35 @@
+{
+  "name": "L9 Python Devcontainer",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "IMAGE_VARIANT": "ubuntu-22.04",
+      "PYTHON_VERSION": "3.12"
+    }
+  },
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "postCreateCommand": "python --version && pdm --version && pdm install -G dev",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "donjayamanne.python-environment-manager",
+        "charliermarsh.ruff",
+        "ms-python.mypy-type-checker",
+        "tamasfe.even-better-toml",
+        "redhat.vscode-yaml"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/home/vscode/.pyenv/shims/python",
+        "python.terminal.activateEnvironment": false,
+        "ruff.path": [
+          "/home/vscode/.local/bin/ruff"
+        ],
+        "mypy-type-checker.path": [
+          "/home/vscode/.local/bin/mypy"
+        ]
+      }
+    }
+  },
+  "remoteUser": "vscode"
+}

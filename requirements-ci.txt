@@ -37,19 +37,19 @@ types-PyYAML>=6.0.12.20260518
 types-redis>=4.6.0
 
 # ── Testing ──────────────────────────────────────────────────────────────────
-pytest==9.0.3
+pytest==9.1.0
 pytest-asyncio>=1.0.0,<2.0.0
 pytest-cov==7.1.0
 pytest-xdist>=3.8.0
 pytest-timeout>=2.4.0
 pytest-httpx>=0.34.0
 respx>=0.22.0
-coverage==7.14.0
+coverage==7.14.1
 
 # ── Security scanning ────────────────────────────────────────────────────────
 bandit>=1.9.4
-pip-audit>=2.10.0
-safety>=3.7.0
+pip-audit>=2.10.1
+safety>=3.8.1
 
 # ── License compliance ───────────────────────────────────────────────────────
 pip-licenses>=5.5.5
