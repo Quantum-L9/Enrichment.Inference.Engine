@@ -1,0 +1,62 @@
+# --- L9_META ---
+# l9_schema: 1
+# origin: l9-implementer
+# engine: enrichment
+# layer: [ci, security]
+# tags: [gitleaks, secrets, soc2-cc6.1]
+# owner: platform
+# status: active
+# --- /L9_META ---
+#
+# Gitleaks secret scanning — hard CI gate (SOC 2 CC6.1)
+#
+# Distinct from gitguardian.yml:
+#   - gitguardian.yml uses ggshield but SOFT-SKIPS when GITGUARDIAN_API_KEY is unset
+#   - This workflow is a hard gate: always runs, no soft-skip path
+#   - Uses repo-local .gitleaks.toml (10 L9-specific rules)
+#
+# Action pin: gitleaks/gitleaks-action@v2.3.6
+#   SHA: f6d28b60c0e56e48b77e6e05ae47c3fc9b22e77f
+#   Pinned 2026-05-25 per supply-chain hardening (mutable tags can be overwritten)
+#   To update: verify new SHA at https://github.com/gitleaks/gitleaks-action/releases
+#
+# Pre-condition: Set GITLEAKS_LICENSE in Settings → Secrets → Actions
+#   Free org license: https://gitleaks.io/products.html
+
+name: Gitleaks Secret Scan
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  gitleaks:
+    name: Secret scanning (SOC 2 CC6.1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # full history required for gitleaks --log-opts
+          persist-credentials: false  # scan-only job — do not retain git push credentials
+
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@f6d28b60c0e56e48b77e6e05ae47c3fc9b22e77f  # v2.3.6
+        with:
+          config-path: .gitleaks.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        # Hard fail — no soft-skip path. SOC 2 CC6.1 requires blocking gate.
+        # If GITLEAKS_LICENSE is unset on a private repo, this step will fail
+        # with a license error, which is intentional — add the secret first.
