@@ -10,11 +10,17 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Universal CI/CD Pack — Supply Chain Security
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# VERSION: 1.1.1
+# VERSION: 1.1.2
 # CHANGES v1.1.0: Added CycloneDX SBOM generation job (SOC 2 CC9.2)
 # CHANGES v1.1.1: Exact SPDX token matching in GPL/AGPL audit
 #   - P1 fix: substring 'gpl' falsely matched 'lgpl' — use exact SPDX token set
 #   - P2 fix: also inspect licenses[].license.name (not just id/expression)
+# CHANGES v1.1.2: PR #94 review remediation
+#   - SBOM install no longer fails open (removed `|| true`)
+#   - Pinned cyclonedx-bom to a reviewed version for reproducible SBOMs
+#   - SBOM audit also catches spelled-out GPL/AGPL license names
+#   - persist-credentials:false on the SBOM checkout (scan-only job)
+#   - Fixed pip-licenses `--format=table` (dropped upstream) -> `plain`
 # PURPOSE: License compliance, dependency review, SBOM generation
 # SIBLING PARITY: Cognitive.Engine.Graphs/supply-chain.yml
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -79,7 +85,7 @@ jobs:
           ALLOWED="${{ vars.ALLOWED_LICENSES || 'MIT;BSD;Apache;ISC;PSF;MPL;LGPL;Unlicense;Public Domain' }}"
           DENIED="${{ vars.DENIED_LICENSES || 'GPL-3.0;AGPL;SSPL;EUPL' }}"
 
-          pip-licenses --format=table --with-urls --order=license
+          pip-licenses --format=plain --with-urls --order=license
 
           echo ""
           echo "Checking for denied licenses..."
@@ -89,7 +95,7 @@ jobs:
           for license in "${DENY_LIST[@]}"; do
             if pip-licenses --format=csv | grep -qi "$license"; then
               echo "❌ Found denied license: $license"
-              pip-licenses --format=table | grep -i "$license"
+              pip-licenses --format=plain | grep -i "$license"
               VIOLATIONS=$((VIOLATIONS + 1))
             fi
           done
@@ -105,7 +111,7 @@ jobs:
       - name: Generate License Report
         run: |
           pip-licenses --format=json --with-urls --order=license > license-report.json
-          pip-licenses --format=table --with-urls --order=license > license-report.txt
+          pip-licenses --format=plain --with-urls --order=license > license-report.txt
 
       - name: Upload License Report
         uses: actions/upload-artifact@v7
@@ -153,6 +159,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false  # scan-only job — do not retain git push credentials
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -161,10 +169,13 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies + cyclonedx-bom
+        # Do NOT fail open: a failed project install must fail the job, otherwise
+        # the SBOM/audit would only reflect the bare runner environment.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true
-          pip install cyclonedx-bom
+          pip install -e ".[dev]" || pip install -e .
+          # Pinned for reproducible SBOMs (matches current CI default; bump deliberately)
+          pip install 'cyclonedx-bom==7.3.0'
 
       - name: Generate CycloneDX SBOM
         run: |
@@ -214,9 +225,19 @@ jobs:
                   if lic_id in BANNED_SPDX:
                       hits.append(f"{name} — id: {lic_id}")
                       continue
-                  # Field 3: license.name (free-form; use pattern match)
+                  # Field 3: license.name (free-form). Catch both SPDX tokens and
+                  # spelled-out names ("GNU General Public License v3.0", "GNU
+                  # Affero General Public License"), while excluding LGPL / Lesser.
                   lic_name = inner.get('name', '') or ''
-                  if BANNED_PATTERN.search(lic_name):
+                  banned_name = re.search(
+                      r'\b(?:GNU\s+)?(?:Affero\s+)?General\s+Public\s+License\b',
+                      lic_name, re.IGNORECASE,
+                  )
+                  lesser_name = re.search(
+                      r'\b(?:LGPL|Lesser\s+General\s+Public\s+License)\b',
+                      lic_name, re.IGNORECASE,
+                  )
+                  if BANNED_PATTERN.search(lic_name) or (banned_name and not lesser_name):
                       hits.append(f"{name} — name: {lic_name}")
 
           if hits:
