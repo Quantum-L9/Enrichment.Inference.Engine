@@ -45,7 +45,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history required for gitleaks --log-opts
           persist-credentials: false  # scan-only job — do not retain git push credentials
