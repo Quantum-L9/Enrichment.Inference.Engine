@@ -267,6 +267,56 @@ variables:
     sensitive: false
     source: env
 
+  # ── Salesforce CRM (legacy/transitional direct integration) ──
+  - name: SALESFORCE_CLIENT_ID
+    type: secret
+    required: false
+    default: ""
+    description: Salesforce connected-app OAuth client ID.
+    sensitive: true
+    source: env
+
+  - name: SALESFORCE_CLIENT_SECRET
+    type: secret
+    required: false
+    default: ""
+    description: Salesforce connected-app OAuth client secret.
+    sensitive: true
+    source: env
+
+  - name: SALESFORCE_USERNAME
+    type: string
+    required: false
+    default: ""
+    description: Salesforce API login username.
+    sensitive: false
+    source: env
+
+  - name: SALESFORCE_PASSWORD
+    type: secret
+    required: false
+    default: ""
+    description: Salesforce API login password.
+    sensitive: true
+    source: env
+
+  - name: SALESFORCE_SECURITY_TOKEN
+    type: secret
+    required: false
+    default: ""
+    description: Salesforce security token appended to the password for API auth.
+    sensitive: true
+    source: env
+
+  # ── HubSpot CRM (legacy/transitional direct integration) ─────
+  - name: HUBSPOT_ACCESS_TOKEN
+    type: secret
+    required: false
+    default: ""
+    description: HubSpot private-app access token.
+    sensitive: true
+    source: env
+
   # ── Enrichment sources (waterfall) ─────────────────────────
   - name: CLEARBIT_API_KEY
     type: secret
