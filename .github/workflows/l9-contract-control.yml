@@ -26,7 +26,7 @@ jobs:
             echo "SDK_TOKEN is required to install private SDK dependencies"
             exit 1
           fi
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/Quantum-L9/".insteadOf "https://github.com/Quantum-L9/"
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           python -m pip install pyyaml pytest pytest-cov fastapi
           if [ -f requirements-ci.txt ]; then
@@ -101,7 +101,7 @@ jobs:
             echo "SDK_TOKEN is required to install private SDK dependencies"
             exit 1
           fi
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/Quantum-L9/".insteadOf "https://github.com/Quantum-L9/"
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           python -m pip install pyyaml pytest pytest-cov fastapi
           if [ -f requirements-ci.txt ]; then
