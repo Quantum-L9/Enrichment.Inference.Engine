@@ -71,7 +71,10 @@ jobs:
           cache: 'pip'
 
       - name: Install Dependencies
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true
           pip install pip-licenses
@@ -171,7 +174,10 @@ jobs:
       - name: Install dependencies + cyclonedx-bom
         # Do NOT fail open: a failed project install must fail the job, otherwise
         # the SBOM/audit would only reflect the bare runner environment.
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           pip install -e ".[dev]" || pip install -e .
           # Pinned for reproducible SBOMs (matches current CI default; bump deliberately)
