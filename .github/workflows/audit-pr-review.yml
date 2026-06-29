@@ -151,6 +151,15 @@ jobs:
                       mapped = NUMERIC_RULE_NAMES.get(token)
                       if mapped:
                           return mapped
+                      # Numeric rule the engine emitted but we don't map to a
+                      # dangerous/advisory category. Trust it as a benign rule
+                      # instead of inferring a category from the message below:
+                      # message-keyword inference matches identifier substrings
+                      # (e.g. 'authorize_tool' -> 'auth', 'validate_ingress_*' ->
+                      # 'ingress', 'build_runtime_attestation' -> 'runtime'),
+                      # which falsely promotes INFO docstring/complexity findings
+                      # to blocking dangerous findings.
+                      return f'rule_{token}'
                   elif token:
                       return token
               message = normalize_text(finding.get('message'))
@@ -181,10 +190,14 @@ jobs:
               return rule in ADVISORY_RULES or any(token in message for token in ADVISORY_TOKENS)
 
           def is_dangerous_category(finding: dict) -> bool:
-              rule = finding_rule(finding)
-              message = normalize_text(finding.get('message'))
-              joined = f'{rule} {message}'
-              return rule in DANGEROUS_RULES or any(token in joined for token in DANGEROUS_TOKENS)
+              # Classify by resolved rule only. The previous implementation also
+              # OR'd in `any(token in message ...)` against DANGEROUS_TOKENS,
+              # which matched identifier substrings in benign messages (e.g.
+              # 'auth' inside "Public function 'authorize_tool' missing
+              # docstring") and promoted INFO findings to blocking. Real
+              # dangerous rules (f_string_sql, fastapi_import_engine, ...) resolve
+              # via finding_rule(); unknown CRITICAL/HIGH still fail closed below.
+              return finding_rule(finding) in DANGEROUS_RULES
 
           try:
               raw_findings = json.load(open('audit_results.json', encoding='utf-8'))
