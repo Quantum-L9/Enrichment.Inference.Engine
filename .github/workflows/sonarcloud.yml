@@ -69,7 +69,10 @@ jobs:
 
       - name: Install dependencies
         if: steps.gate.outputs.run == 'true'
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/Quantum-L9/".insteadOf "https://github.com/Quantum-L9/"
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
 

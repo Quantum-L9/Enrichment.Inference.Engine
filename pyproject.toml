@@ -11,7 +11,7 @@ dependencies = [
     "aiofiles>=23.0.0",
     "asyncpg",
     "neo4j>=5.0,<7.0",
-    "constellation-node-sdk @ git+https://github.com/cryptoxdog/Gate_SDK.git@ab9df5f15c1ba433c3f072a1ca01052584682758",
+    "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@ab9df5f15c1ba433c3f072a1ca01052584682758",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "httpx>=0.27.0",
