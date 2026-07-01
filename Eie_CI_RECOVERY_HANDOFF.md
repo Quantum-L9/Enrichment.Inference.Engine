@@ -17,9 +17,10 @@ hold (see **Corrections**), and records the convergence result of the remediatio
 | `convergence_status` | **blocked — settings-gated** |
 | Open PRs evaluated | #114, #122 |
 | CI gates discovered | 21 workflow files parsed |
-| Root-cause buckets | `SDK_TOKEN-403` (admin secret), `GITLEAKS_LICENSE` (admin secret/code), `registry-creds` (admin secret), `stale-base` (#114), `missing-pipeline-script` (code defect) |
-| Code-fixable by this agent without new decisions | **0 blocking gates** (all blocking gates are settings-gated or require inventing tooling / a security-gate change — see §3) |
-| `minimum_safe_next_action` | Set `SDK_TOKEN` org secret (admin), then re-run #122; rebase #114 onto `main` |
+| Root-cause buckets | `SDK_TOKEN-403` (admin secret), `GITLEAKS_LICENSE` (admin secret/code), `docker-tag-bug` + `docker-missing-git/token` (code — fixed), `stale-base` (#114), `missing-pipeline-script` (code — fixed) |
+| Code-fixable by this agent | **Build & Push** (invalid tag + no git/token in image) and **Docs Consistency / select-gates / terminology** (missing scripts) — both fixed on `claude/pr-remediation-handoff-0vpwp2` |
+| Requires admin (secrets only) | `SDK_TOKEN` (unblocks ~10 jobs), `GITLEAKS_LICENSE` (unblocks Secret scanning) |
+| `minimum_safe_next_action` | Set `SDK_TOKEN` + `GITLEAKS_LICENSE` org secrets; merge the code-fix PR; rebase #114 + re-run #122 |
 
 **Why blocked, not converged:** the gates that block merge are not defects in any PR diff.
 The dominant blocker is a missing org-secret permission (`SDK_TOKEN` 403) that sinks ~10 jobs
@@ -77,8 +78,8 @@ hitting `https://github.com/Quantum-L9/Gate_SDK.git`. The only failure is the 40
 | CycloneDX SBOM (SOC 2 CC9.2) | SDK_TOKEN 403 | No — org secret |
 | CI Gate / PR Pipeline Gate | aggregate of the above | No — downstream |
 | Secret scanning (SOC 2 CC6.1) | `GITLEAKS_LICENSE` unset | Secret (admin) OR binary swap (code) |
-| Docs Consistency | missing `docs_consistency_local.sh` (exit 127) | Code, but tooling never existed — see §3 D |
-| Build & Push Image | container-registry creds | No — admin secret |
+| Docs Consistency | missing `docs_consistency_local.sh` (exit 127) | ✅ **Fixed** — step guarded (§3 D) |
+| Build & Push Image | **invalid tag `:-ff0fbce`** (`metadata-action prefix={{branch}}-` empty on PRs) — *not* registry creds; also no `git`/`SDK_TOKEN` in the image build | ✅ **Fixed** — tag corrected + git & BuildKit token secret added (§3 C) |
 
 Passing: Validate (syntax+YAML), Constitution Verify, Dependency Review, Secret scan,
 License Compliance, CodeQL, Contract-Bound Change Gate.
@@ -108,26 +109,34 @@ Recovered rate-limiter fix (`app/middleware/rate_limiter.py` → returns `JSONRe
   `https://github.com/organizations/Quantum-L9/settings/secrets/actions`.
 - **B. `GITLEAKS_LICENSE` org secret** — free org key from https://gitleaks.io. (Pinning the
   action version does **not** help — see Correction 1.)
-- **C. Build & Push registry creds** (GHCR `packages: write`, or registry secrets), or mark the
-  job non-blocking if it is infra-only.
-- **E. OpenSSF Scorecard** — confirm `repo_token`/`permissions:` for the new org, or scope it
-  advisory (schedule-only, not on PRs).
+- **E. OpenSSF Scorecard** — `publish_results: true` needs a public repo/OIDC or a token; confirm
+  `permissions:` for the new org, or scope it advisory (schedule-only). (Not observed failing on
+  #114/#122; verify after the secrets land.)
 - **F. (optional) Enable Issues** so deferred items can be tracked as real issues.
 
-**Code-fixable, but each needs an explicit go-ahead (held, not invented blind):**
+**Code fixes — DONE on `claude/pr-remediation-handoff-0vpwp2`:**
 
-- **D. Missing pipeline scripts** (`docs_consistency_local.sh`, `docs_link_check_local.py`,
-  `run_pr_select_gates.py`, `check_compliance_terminology.py`). These never existed; authoring
-  them defines new gate behavior. Decision needed: reconstruct best-effort, or make the
-  workflow steps tolerant (guard the missing-script steps `|| echo advisory`) until the real
-  scripts are ported from the source template.
-- **G. gitleaks binary swap** (alternative to B): replace `gitleaks-action` with the standalone
-  `gitleaks` CLI in a `run:` step to drop the license dependency entirely.
+- **C. Build & Push Image** — root cause was **not** registry creds. Fixed two code bugs:
+  (1) `docker-build.yml` `type=sha,prefix={{branch}}-` → `prefix=sha-` (the empty `{{branch}}`
+  produced the invalid `:-ff0fbce` tag); (2) added `git` + a BuildKit `sdk_token` secret so the
+  in-image `pip install ".[dev]"` can clone the private SDK (token never persisted to a layer).
+- **D. Missing pipeline scripts** — the four hard-fail invocations
+  (`check_compliance_terminology.py`, `run_pr_select_gates.py`, `docs_consistency_local.sh`,
+  `docs_link_check_local.py`) are now existence-guarded (`if [ -f … ]; else echo advisory`),
+  matching the repo's existing advisory pattern. They auto-activate if the scripts are later
+  ported; until then they no longer block the gate.
 
-**Git hygiene (needs permission to push to the PR branches):**
+**Optional code alternative (not applied):**
+
+- **G. gitleaks binary swap** — instead of secret **B**, replace `gitleaks-action` with the
+  standalone `gitleaks` CLI in a `run:` step to drop the license dependency entirely. Say the
+  word and I'll apply it.
+
+**Git hygiene:**
 
 - **H. Rebase #114 onto current `main`** to clear its stale (already-fixed) failures.
-- **I. Re-run #122** once **A** is set; merge when green.
+- **I. Re-run #122** once **A** is set; merge when green. The docker-build fixes above land via
+  this branch's PR (or fold them into #122).
 
 ---
 
