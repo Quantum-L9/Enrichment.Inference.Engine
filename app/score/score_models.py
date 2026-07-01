@@ -93,9 +93,7 @@ class MissingField(BaseModel):
         ge=0.0, le=1.0, description="Estimated score improvement if this field were present"
     )
     is_gate_critical: bool = False
-    recommendation: RecommendationType = (
-        RecommendationType.ENRICH_FIELD
-    )  # l9:flatcase-ok -- single English word
+    recommendation: RecommendationType = RecommendationType.ENRICH_FIELD  # l9:flatcase-ok -- single English word
 
 
 # ── Dimension Score ────────────────────────────────────────────
