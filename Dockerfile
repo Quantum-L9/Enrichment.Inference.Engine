@@ -2,9 +2,11 @@ FROM python:3.14-slim AS base
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
+# constellation-node-sdk is a public git+https dependency (Quantum-L9/Gate_SDK);
+# pip clones it anonymously — git is required for the git+https install.
 RUN pip install --no-cache-dir ".[dev]"
 
 COPY . .
