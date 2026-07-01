@@ -94,10 +94,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
-          # Private SDK (constellation-node-sdk) is a git+https dependency; pass the
-          # org token as a BuildKit secret so pip can authenticate the clone in-image.
-          secrets: |
-            sdk_token=${{ secrets.SDK_TOKEN }}
 
 # ────────────────────────────────────────────────────────────────────────
 # SCAN — Trivy vulnerability scan

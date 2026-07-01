@@ -19,7 +19,8 @@ hold (see **Corrections**), and records the convergence result of the remediatio
 | CI gates discovered | 21 workflow files parsed |
 | Root-cause buckets | `SDK_TOKEN-403` (admin secret), `GITLEAKS_LICENSE` (admin secret/code), `docker-tag-bug` + `docker-missing-git/token` (code — fixed), `stale-base` (#114), `missing-pipeline-script` (code — fixed) |
 | Code-fixable by this agent | **Build & Push** (invalid tag + no git/token in image) and **Docs Consistency / select-gates / terminology** (missing scripts) — both fixed on `claude/pr-remediation-handoff-0vpwp2` |
-| Requires admin (secrets only) | `SDK_TOKEN` (unblocks ~10 jobs). `GITLEAKS_LICENSE` no longer needed — Secret scanning swapped to the free binary CLI. |
+| SDK access | **`Gate_SDK` made public (2026-07-01)** → SDK cloned anonymously; `SDK_TOKEN` no longer needed anywhere. SDK repointed `cryptoxdog` → `Quantum-L9`; token guards/rewrites removed from `l9-*.yml` + Dockerfile. The `SDK_TOKEN` org secret can be deleted. |
+| Secret scanning | `GITLEAKS_LICENSE` no longer needed — swapped to the free binary CLI. |
 | `minimum_safe_next_action` | Set `SDK_TOKEN` + `GITLEAKS_LICENSE` org secrets; merge the code-fix PR; rebase #114 + re-run #122 |
 
 **Why blocked, not converged:** the gates that block merge are not defects in any PR diff.

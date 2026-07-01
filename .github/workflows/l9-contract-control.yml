@@ -19,14 +19,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install control dependencies
-        env:
-          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
-          if [ -z "${SDK_TOKEN}" ]; then
-            echo "SDK_TOKEN is required to install private SDK dependencies"
-            exit 1
-          fi
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/cryptoxdog/".insteadOf "https://github.com/cryptoxdog/"
+          # Gate_SDK is a public repo — pip clones it anonymously; no SDK_TOKEN required.
           python -m pip install --upgrade pip
           python -m pip install pyyaml pytest pytest-cov fastapi
           if [ -f requirements-ci.txt ]; then
@@ -94,14 +88,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install gate dependencies
-        env:
-          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
-          if [ -z "${SDK_TOKEN}" ]; then
-            echo "SDK_TOKEN is required to install private SDK dependencies"
-            exit 1
-          fi
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/cryptoxdog/".insteadOf "https://github.com/cryptoxdog/"
+          # Gate_SDK is a public repo — pip clones it anonymously; no SDK_TOKEN required.
           python -m pip install --upgrade pip
           python -m pip install pyyaml pytest pytest-cov fastapi
           if [ -f requirements-ci.txt ]; then
