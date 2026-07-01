@@ -19,7 +19,7 @@ hold (see **Corrections**), and records the convergence result of the remediatio
 | CI gates discovered | 21 workflow files parsed |
 | Root-cause buckets | `SDK_TOKEN-403` (admin secret), `GITLEAKS_LICENSE` (admin secret/code), `docker-tag-bug` + `docker-missing-git/token` (code — fixed), `stale-base` (#114), `missing-pipeline-script` (code — fixed) |
 | Code-fixable by this agent | **Build & Push** (invalid tag + no git/token in image) and **Docs Consistency / select-gates / terminology** (missing scripts) — both fixed on `claude/pr-remediation-handoff-0vpwp2` |
-| Requires admin (secrets only) | `SDK_TOKEN` (unblocks ~10 jobs), `GITLEAKS_LICENSE` (unblocks Secret scanning) |
+| Requires admin (secrets only) | `SDK_TOKEN` (unblocks ~10 jobs). `GITLEAKS_LICENSE` no longer needed — Secret scanning swapped to the free binary CLI. |
 | `minimum_safe_next_action` | Set `SDK_TOKEN` + `GITLEAKS_LICENSE` org secrets; merge the code-fix PR; rebase #114 + re-run #122 |
 
 **Why blocked, not converged:** the gates that block merge are not defects in any PR diff.
@@ -126,11 +126,12 @@ Recovered rate-limiter fix (`app/middleware/rate_limiter.py` → returns `JSONRe
   matching the repo's existing advisory pattern. They auto-activate if the scripts are later
   ported; until then they no longer block the gate.
 
-**Optional code alternative (not applied):**
+**Applied:**
 
-- **G. gitleaks binary swap** — instead of secret **B**, replace `gitleaks-action` with the
-  standalone `gitleaks` CLI in a `run:` step to drop the license dependency entirely. Say the
-  word and I'll apply it.
+- **G. gitleaks binary swap (DONE)** — `gitleaks-action` (which requires a `GITLEAKS_LICENSE`
+  for org accounts, verified against the action README) replaced with the standalone `gitleaks`
+  binary CLI, pinned to v8.21.2, `gitleaks git … --exit-code 1`. Secret scanning stays a hard
+  blocking gate, free, no secret. **Action B (`GITLEAKS_LICENSE`) is no longer required.**
 
 **Git hygiene:**
 
