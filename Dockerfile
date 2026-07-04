@@ -5,8 +5,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
-# constellation-node-sdk is a public git+https dependency (Quantum-L9/Gate_SDK);
-# pip clones it anonymously — git is required for the git+https install.
+# constellation-node-sdk is a git+https dependency (Quantum-L9/Gate_SDK); git is
+# required for the install. Gate_SDK is currently public, so pip clones it
+# anonymously with no credentials; if it is ever made private again, add a
+# BuildKit secret (--mount=type=secret,id=sdk_token) + git insteadOf rewrite here.
 RUN pip install --no-cache-dir ".[dev]"
 
 COPY . .

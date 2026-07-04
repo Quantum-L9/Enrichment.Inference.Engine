@@ -21,11 +21,16 @@ hold (see **Corrections**), and records the convergence result of the remediatio
 | Code-fixable by this agent | **Build & Push** (invalid tag + no git/token in image) and **Docs Consistency / select-gates / terminology** (missing scripts) — both fixed on `claude/pr-remediation-handoff-0vpwp2` |
 | SDK access | **`Gate_SDK` made public (2026-07-01)** → SDK cloned anonymously; `SDK_TOKEN` no longer needed anywhere. SDK repointed `cryptoxdog` → `Quantum-L9`; token guards/rewrites removed from `l9-*.yml` + Dockerfile. The `SDK_TOKEN` org secret can be deleted. |
 | Secret scanning | `GITLEAKS_LICENSE` no longer needed — swapped to the free binary CLI. |
-| `minimum_safe_next_action` | Set `SDK_TOKEN` + `GITLEAKS_LICENSE` org secrets; merge the code-fix PR; rebase #114 + re-run #122 |
+| `minimum_safe_next_action` | Merge #123 as the CI-recovery PR (no secrets required — SDK is public, gitleaks uses the binary); triage the pre-existing content-gate violations in follow-up PRs; rebase #114 onto `main`. |
 
-**Why blocked, not converged:** the gates that block merge are not defects in any PR diff.
-The dominant blocker is a missing org-secret permission (`SDK_TOKEN` 403) that sinks ~10 jobs
-on every PR. None of it is reachable from code in this repository.
+**Current blocker (updated 2026-07-01):** the original dominant blocker — the `SDK_TOKEN` 403 —
+is **resolved**: `Gate_SDK` was made public and the SDK was repointed to `Quantum-L9`, so the
+~10 SDK-dependent jobs now clone anonymously and run. No org secret is required anywhere
+(`SDK_TOKEN` and `GITLEAKS_LICENSE` are both obsolete). The remaining red gates are **not** this
+PR's diff and **not** admin secrets — they are *pre-existing code/content violations* (chassis
+isolation, constitution/attestation, `pytest.ini` marker config + coverage, `kb/*.yaml`
+structure, unpinned actions) that the now-healthy pipeline correctly surfaces. Those belong in
+dedicated follow-up PRs, not this CI-recovery change.
 
 ---
 
