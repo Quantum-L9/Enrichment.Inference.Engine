@@ -117,7 +117,9 @@ def _sync_call(payload: dict[str, Any], api_key: str, timeout: int) -> SonarResp
                 continue
             raise
 
-    raise last_err  # unreachable but satisfies type checker
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("perplexity query failed without a captured error")  # unreachable
 
 
 # ── Async interface (unchanged signature from v1) ──────────

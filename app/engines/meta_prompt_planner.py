@@ -38,7 +38,7 @@ class MetaPromptPlanner:
 
     def __init__(
         self,
-        domain_spec: DomainSpec | None = None,
+        domain_spec: DomainSpec | dict[str, Any] | None = None,
         rule_registry: Any = None,  # RuleRegistry from inference.rule_loader
         unlock_index: dict[str, list[str]] | None = None,
     ):
@@ -266,7 +266,9 @@ class MetaPromptPlanner:
 
     def _is_gate_critical(self, field_name: str) -> bool:
         """Check if field is gate-critical in domain spec."""
-        if not hasattr(self.domain_spec, "ontology"):
+        if not isinstance(self.domain_spec, DomainSpec) or not hasattr(
+            self.domain_spec, "ontology"
+        ):
             return False
 
         for node in self.domain_spec.ontology.nodes:
@@ -283,7 +285,9 @@ class MetaPromptPlanner:
 
     def _get_scoring_weight(self, field_name: str) -> float:
         """Get scoring weight for field from domain spec."""
-        if not hasattr(self.domain_spec, "ontology"):
+        if not isinstance(self.domain_spec, DomainSpec) or not hasattr(
+            self.domain_spec, "ontology"
+        ):
             return 0.0
 
         for node in self.domain_spec.ontology.nodes:
