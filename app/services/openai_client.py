@@ -59,14 +59,15 @@ class OpenAIClient:
         response = await self._call(
             prompt=prompt, max_tokens=max_tokens, temperature=temperature, json_mode=False
         )
-        return response["choices"][0]["message"]["content"]
+        return str(response["choices"][0]["message"]["content"])
 
     async def complete_json(self, prompt: str, schema: dict | None = None) -> dict[str, Any]:
         """Return parsed JSON from the model. Raises LLMResponseError if not valid JSON."""
         response = await self._call(prompt=prompt, max_tokens=2000, temperature=0.1, json_mode=True)
         content = response["choices"][0]["message"]["content"]
         try:
-            return json.loads(content)
+            parsed: dict[str, Any] = json.loads(content)
+            return parsed
         except json.JSONDecodeError as exc:
             raise LLMResponseError(f"OpenAI returned non-JSON content: {content[:200]}") from exc
 
@@ -121,7 +122,7 @@ class OpenAIClient:
                     continue
 
                 resp.raise_for_status()
-                data = resp.json()
+                data: dict[str, Any] = resp.json()
                 usage = data.get("usage", {})
                 self._failure_count = 0
                 logger.info(

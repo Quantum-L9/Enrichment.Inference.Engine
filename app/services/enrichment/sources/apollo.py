@@ -70,7 +70,7 @@ class ApolloSource(BaseSource):
 
         url = f"{self.config.api_endpoint}/organizations/enrich"
         headers = {
-            "X-Api-Key": self.config.api_key,
+            "X-Api-Key": self.config.api_key or "",
             "Content-Type": "application/json",
         }
         body = {"domain": company_domain}
@@ -139,7 +139,7 @@ class ApolloSource(BaseSource):
 
         url = f"{self.config.api_endpoint}/people/match"
         headers = {
-            "X-Api-Key": self.config.api_key,
+            "X-Api-Key": self.config.api_key or "",
             "Content-Type": "application/json",
         }
 

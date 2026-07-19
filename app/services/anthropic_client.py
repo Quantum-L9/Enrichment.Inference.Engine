@@ -66,14 +66,15 @@ class AnthropicClient:
         content_blocks = data.get("content", [])
         if not content_blocks:
             raise LLMResponseError("Anthropic returned empty content blocks")
-        return content_blocks[0].get("text", "")
+        return str(content_blocks[0].get("text", ""))
 
     async def complete_json(self, prompt: str) -> dict[str, Any]:
         """Return parsed JSON. Raises LLMResponseError if not valid JSON."""
         json_prompt = prompt + _JSON_INSTRUCTION
         text = await self.complete(json_prompt, max_tokens=2000)
         try:
-            return json.loads(text)
+            parsed: dict[str, Any] = json.loads(text)
+            return parsed
         except json.JSONDecodeError as exc:
             raise LLMResponseError(f"Anthropic returned non-JSON content: {text[:200]}") from exc
 
@@ -123,7 +124,7 @@ class AnthropicClient:
                     continue
 
                 resp.raise_for_status()
-                data = resp.json()
+                data: dict[str, Any] = resp.json()
                 usage = data.get("usage", {})
                 self._failure_count = 0
                 logger.info(

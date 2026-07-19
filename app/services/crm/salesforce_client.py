@@ -138,7 +138,8 @@ class SalesforceClient(CRMClientBase):
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
-            return resp.json()
+            record: dict[str, Any] = resp.json()
+            return record
         except Exception as exc:
             logger.error("SF get_record error: %s", exc)
             return None
@@ -182,7 +183,8 @@ class SalesforceClient(CRMClientBase):
         try:
             resp = httpx.get(url, params={"q": soql}, headers=self._headers(), timeout=30)
             resp.raise_for_status()
-            return resp.json().get("records", [])
+            records: list[dict[str, Any]] = resp.json().get("records", [])
+            return records
         except Exception as exc:
             logger.error("SF query error: %s", exc)
             return []

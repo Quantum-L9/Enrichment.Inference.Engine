@@ -47,7 +47,11 @@ class OdooClient(CRMClientBase):
     def connect(self) -> bool:
         """Authenticate with Odoo and cache the UID."""
         try:
-            self._uid = self._common.authenticate(self.db, self.username, self.password, {})
+            raw_uid = self._common.authenticate(self.db, self.username, self.password, {})
+            # Odoo returns an int uid on success or False on failure; normalize to int | None.
+            self._uid = (
+                raw_uid if isinstance(raw_uid, int) and not isinstance(raw_uid, bool) else None
+            )
             if not self._uid:
                 logger.error("odoo_auth_failed", reason="falsy_uid")
                 return False
@@ -98,7 +102,8 @@ class OdooClient(CRMClientBase):
             kwargs: dict[str, Any] = {}
             if fields:
                 kwargs["fields"] = fields
-            return self._execute(object_type, "read", [ids], **kwargs)
+            records: list[dict[str, Any]] = self._execute(object_type, "read", [ids], **kwargs)
+            return records
         except Exception as exc:
             logger.error(
                 "odoo_query_failed",

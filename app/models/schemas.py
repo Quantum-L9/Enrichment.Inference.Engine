@@ -82,7 +82,8 @@ class EnrichRequest(BaseModel):
                 return parsed if isinstance(parsed, dict) else None
             except json.JSONDecodeError:
                 return None
-        return v
+        passthrough: dict[str, str] | None = v
+        return passthrough
 
 
 class BatchEnrichRequest(BaseModel):

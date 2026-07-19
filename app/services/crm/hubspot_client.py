@@ -79,7 +79,8 @@ class HubSpotClient(CRMClientBase):
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
-            return resp.json().get("properties", {})
+            properties: dict[str, Any] = resp.json().get("properties", {})
+            return properties
         except Exception as exc:
             logger.error("HS get_record error: %s", exc)
             return None

@@ -181,10 +181,12 @@ class ConvergeRequest(BaseModel):
     def parse_schema_string(cls, v: Any) -> dict[str, Any] | None:
         if isinstance(v, str):
             try:
-                return json.loads(v)
+                parsed: dict[str, Any] | None = json.loads(v)
+                return parsed
             except json.JSONDecodeError:
                 return None
-        return v
+        passthrough: dict[str, Any] | None = v
+        return passthrough
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -60,7 +60,7 @@ class DataHygieneAgent:
         action_counts: dict[str, int] = {}
 
         required_fields = self._get_required_fields(domain)
-        total_complete = 0
+        total_complete = 0.0
 
         for record in records:
             record_id = record.get("id", record.get("record_id", "unknown"))

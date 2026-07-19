@@ -129,9 +129,9 @@ class InferenceBridge:
 
     def _check_single_condition(self, condition: dict, entity: dict[str, Any]) -> bool:
         """Return False if this condition fails, True if it passes."""
-        field_name = condition.get("field")
+        field_name: Any = condition.get("field")
         operator = condition.get("operator", "exists")
-        value = condition.get("value")
+        value: Any = condition.get("value")
         entity_val = entity.get(field_name)
 
         if entity_val is None:
@@ -139,7 +139,7 @@ class InferenceBridge:
         if operator == "exists":
             return True
         if operator == "eq":
-            return entity_val == value
+            return bool(entity_val == value)
         if operator == "in":
             return entity_val in (value or [])
         if operator == "gte":
@@ -186,13 +186,13 @@ class InferenceBridge:
 
         elif method == "lookup":
             table = computation.get("table", {})
-            key_field = computation.get("key_field")
+            key_field: Any = computation.get("key_field")
             key_val = str(entity.get(key_field, ""))
             return table.get(key_val, computation.get("default"))
 
         elif method == "threshold":
-            source = computation.get("source_field")
-            val = entity.get(source)
+            source: Any = computation.get("source_field")
+            val: Any = entity.get(source)
             try:
                 val = float(val)
             except (ValueError, TypeError):

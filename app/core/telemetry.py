@@ -18,6 +18,7 @@ Environment Variables:
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import structlog
 from opentelemetry import metrics, trace
@@ -35,14 +36,14 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 logger = structlog.get_logger(__name__)
 
 
-def setup_telemetry(app: object, service_name: str | None = None) -> None:
+def setup_telemetry(app: Any, service_name: str | None = None) -> None:
     """
     Configure OpenTelemetry auto-instrumentation for FastAPI.
 
     Sets up distributed tracing, metrics collection, and context propagation
     across service boundaries. Instruments httpx and Redis clients automatically.
     """
-    resolved_name = service_name or os.getenv("OTEL_SERVICE_NAME", "enrichment-engine")
+    resolved_name = service_name or os.getenv("OTEL_SERVICE_NAME") or "enrichment-engine"
     environment = os.getenv("ENVIRONMENT", "development")
 
     resource = Resource.create(

@@ -47,19 +47,19 @@ def _eval_in(value: Any, target: Any) -> bool:
     """Check if value is a member of the target collection."""
     if isinstance(target, (list, tuple, set, frozenset)):
         return _normalise(value) in {_normalise(t) for t in target}
-    return _normalise(value) == _normalise(target)
+    return bool(_normalise(value) == _normalise(target))
 
 
 def _eval_not_in(value: Any, target: Any) -> bool:
     """Check if value is absent from the target collection."""
     if isinstance(target, (list, tuple, set, frozenset)):
         return _normalise(value) not in {_normalise(t) for t in target}
-    return _normalise(value) != _normalise(target)
+    return bool(_normalise(value) != _normalise(target))
 
 
 def _evaluate_condition(condition: RuleCondition, value: Any) -> bool:
     op = condition.operator
-    target = condition.value
+    target: Any = condition.value
 
     if op is Operator.EXISTS:
         return value is not None
@@ -70,7 +70,7 @@ def _evaluate_condition(condition: RuleCondition, value: Any) -> bool:
     if value is None:
         return False
     if op is Operator.EQUALS:
-        return _normalise(value) == _normalise(target)
+        return bool(_normalise(value) == _normalise(target))
     if op is Operator.GT:
         return float(value) > float(target)
     if op is Operator.LT:

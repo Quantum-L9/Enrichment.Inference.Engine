@@ -18,7 +18,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import redis.asyncio as aioredis
 import yaml
@@ -161,7 +161,14 @@ class SchemaPromotionWorker:
                         }
                     )
                 }
-                await self._redis.xadd(PROMOTED_STREAM, event, maxlen=10000, approximate=True)
+                # cast: `event` is dict[str, str], a valid xadd field mapping at
+                # runtime; the cast only bridges redis-py's invariant typing.
+                await self._redis.xadd(
+                    PROMOTED_STREAM,
+                    cast("dict[Any, Any]", event),
+                    maxlen=10000,
+                    approximate=True,
+                )
                 logger.info(
                     "schema_field_promoted",
                     extra={"field": field_name, "domain": domain, "confidence": avg_confidence},

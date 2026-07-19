@@ -87,4 +87,5 @@ class FieldMapper:
 
     def get_custom_fields(self, model: str) -> list[dict[str, str]]:
         """Return custom field definitions for a CRM model."""
-        return self.custom_fields.get(model, [])
+        custom: list[dict[str, str]] = self.custom_fields.get(model, [])
+        return custom

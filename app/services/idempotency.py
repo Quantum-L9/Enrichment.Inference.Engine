@@ -26,7 +26,8 @@ class IdempotencyStore:
         raw = await self.client.get(f"{self.prefix}{key}")
         if raw:
             logger.info("idempotency_hit", key=key)
-            return json.loads(raw)
+            cached: dict[str, Any] = json.loads(raw)
+            return cached
         return None
 
     async def set(self, key: str, response: dict[str, Any]) -> None:

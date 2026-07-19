@@ -19,7 +19,7 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from pydantic import BaseModel, Field
@@ -69,9 +69,12 @@ class RedisStreamsBackend:
 
     async def publish(self, event: EnrichmentEvent) -> None:
         stream_key = f"enrich:events:{event.tenant_id}"
+        # cast: to_stream_dict() returns dict[str, str], which is a valid xadd
+        # field mapping at runtime; the cast only bridges redis-py's invariant
+        # key/value union typing.
         await self._client.xadd(
             stream_key,
-            event.to_stream_dict(),
+            cast("dict[Any, Any]", event.to_stream_dict()),
             maxlen=_REDIS_STREAM_MAXLEN,
             approximate=True,
         )

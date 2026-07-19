@@ -53,7 +53,7 @@ def compute_readiness_from_enrichment(
     (graph_affinity, intent, engagement) are wired in from the GRAPH node.
     """
     avg_conf = confidence_map.avg_confidence()
-    coverage = confidence_map.coverage_ratio(expected_fields or [])
+    coverage = confidence_map.coverage_ratio(len(expected_fields or []))
     readiness = round(avg_conf * 0.6 + coverage * 0.4, 4)
 
     if readiness >= 0.85:
