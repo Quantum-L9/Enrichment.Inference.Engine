@@ -394,6 +394,7 @@ jobs:
           VIOLATIONS=$(find app/ -name "*.py" \
             -not -path "app/api/*" \
             -not -path "app/middleware/*" \
+            -not -path "app/bootstrap/*" \
             -not -path "app/main.py" \
             -not -path "app/core/auth.py" \
             -not -path "app/score/score_api.py" \

@@ -30,6 +30,152 @@ REPO_ROOT = Path(__file__).parent.parent
 ENGINE_DIR = REPO_ROOT / "app"
 
 
+# ------------------------------------------------------------------
+# Shared detection helpers
+# ------------------------------------------------------------------
+# Modules where `from fastapi import ...` is permitted per the C-01 contract
+# (AGENTS.md): "only in app/api/, app/main.py, and transport-adjacent modules
+# explicitly intended for HTTP routes." This mirrors the chassis-isolation
+# allowlist in .github/workflows/compliance.yml and pr-pipeline.yml so the audit
+# engine and the CI gate agree on exactly one source of truth.
+def _fastapi_import_allowed(rel_path: str) -> bool:
+    """Return True when a module is on the C-01 FastAPI import allowlist."""
+    return (
+        "api/" in rel_path
+        or rel_path.endswith("main.py")
+        or "handlers.py" in rel_path
+        or rel_path.startswith("app/middleware/")
+        or rel_path.startswith("app/bootstrap/")  # chassis bootstrap (INV-ARCH-03)
+        or rel_path == "app/core/auth.py"
+        or rel_path == "app/score/score_api.py"
+    )
+
+
+# Whole-word tokens that commonly concatenate into genuine flatcase field names
+# (e.g. "accountnumber" -> account + number). Used to distinguish real flatcase
+# from valid long single words (e.g. "recommendation", "configuration"), which
+# do NOT decompose into two or more known word tokens.
+_FLATCASE_WORD_TOKENS = frozenset(
+    {
+        "account",
+        "action",
+        "address",
+        "amount",
+        "attribute",
+        "batch",
+        "billing",
+        "category",
+        "client",
+        "code",
+        "company",
+        "contact",
+        "contract",
+        "count",
+        "customer",
+        "data",
+        "date",
+        "deal",
+        "description",
+        "domain",
+        "edge",
+        "email",
+        "engine",
+        "entity",
+        "error",
+        "event",
+        "field",
+        "file",
+        "first",
+        "flag",
+        "gate",
+        "graph",
+        "group",
+        "handler",
+        "host",
+        "index",
+        "input",
+        "item",
+        "label",
+        "last",
+        "lead",
+        "level",
+        "list",
+        "message",
+        "meta",
+        "metadata",
+        "mode",
+        "model",
+        "name",
+        "node",
+        "number",
+        "output",
+        "packet",
+        "page",
+        "param",
+        "password",
+        "path",
+        "phase",
+        "phone",
+        "price",
+        "priority",
+        "profile",
+        "prop",
+        "props",
+        "queue",
+        "record",
+        "request",
+        "response",
+        "result",
+        "rule",
+        "runtime",
+        "schema",
+        "score",
+        "secret",
+        "server",
+        "service",
+        "session",
+        "size",
+        "source",
+        "state",
+        "status",
+        "step",
+        "store",
+        "target",
+        "tenant",
+        "tier",
+        "time",
+        "title",
+        "token",
+        "total",
+        "transport",
+        "type",
+        "user",
+        "value",
+        "worker",
+    }
+)
+
+
+def _looks_like_flatcase(name: str) -> bool:
+    """Return True if ``name`` decomposes into two or more known word tokens.
+
+    A word-break over ``_FLATCASE_WORD_TOKENS`` separates genuine flatcase
+    concatenations (``accountnumber`` -> ``account`` + ``number``) from valid
+    long single words (``recommendation``, ``configuration``), which cannot be
+    segmented into known tokens.
+    """
+    n = len(name)
+    reachable = [False] * (n + 1)
+    reachable[0] = True
+    for i in range(1, n + 1):
+        for j in range(i):
+            if reachable[j] and name[j:i] in _FLATCASE_WORD_TOKENS:
+                reachable[i] = True
+                break
+    # Segmentable AND not a single standalone token (i.e. >= 2 concatenated words).
+    return reachable[n] and name not in _FLATCASE_WORD_TOKENS
+
+
 @dataclass
 class Finding:
     severity: str  # CRITICAL, HIGH, MEDIUM, INFO
@@ -106,8 +252,13 @@ def check_naming(files: list[Path], result: AuditResult):
                                 line=item.lineno,
                                 fix_hint="Rename to " + re.sub(r"([A-Z])", r"_\1", name).lower(),
                             )
-                        # Rule 2: flatcase detection (long single-word fields)
-                        elif len(name) > 12 and "_" not in name and name.islower():
+                        # Rule 2: flatcase detection (concatenated multi-word fields)
+                        elif (
+                            len(name) > 12
+                            and "_" not in name
+                            and name.islower()
+                            and _looks_like_flatcase(name)
+                        ):
                             counter += 1
                             result.add(
                                 severity="CRITICAL",
@@ -296,9 +447,14 @@ def check_security(files: list[Path], result: AuditResult):
                     fix_hint="Use json or msgpack instead",
                 )
 
-        # Rule 10: SQL injection patterns (raw string formatting in queries)
+        # Rule 10: SQL injection patterns (raw string formatting in queries).
+        # Require the SQL verb at the START of the f-string literal so that
+        # ordinary prose containing words like "drop out" is not misflagged;
+        # real query strings begin with the verb (optionally after whitespace).
         for i, line in enumerate(lines, 1):
-            if re.search(r'f["\'].*(?:SELECT|INSERT|UPDATE|DELETE|DROP)\s', line, re.IGNORECASE):
+            if re.search(
+                r'f["\']{1,3}\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b', line, re.IGNORECASE
+            ):
                 counter += 1
                 result.add(
                     severity="CRITICAL",
@@ -325,9 +481,8 @@ def check_imports(files: list[Path], result: AuditResult):
             continue
         rel = py_file.relative_to(REPO_ROOT)
 
-        # Rule 11: FastAPI imports outside api/ and main.py (chassis isolation)
-        is_api = "api/" in str(rel) or str(rel).endswith("main.py") or "handlers.py" in str(rel)
-        if not is_api:
+        # Rule 11: FastAPI imports outside the C-01 allowlist (chassis isolation)
+        if not _fastapi_import_allowed(str(rel)):
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom) and node.module:
                     if node.module.startswith("fastapi"):

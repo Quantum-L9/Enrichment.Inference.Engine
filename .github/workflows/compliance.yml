@@ -18,7 +18,8 @@
 #   Triggers when Python, kb/, engine/, or pyproject.toml change.
 #
 # FastAPI allowlist (imports from fastapi / import fastapi allowed only here):
-#   app/api/**, app/middleware/**, app/main.py, app/core/auth.py,
+#   app/api/**, app/middleware/**, app/bootstrap/** (chassis bootstrap, INV-ARCH-03),
+#   app/main.py, app/core/auth.py,
 #   app/score/score_api.py (router not mounted in main — still API surface),
 #   any **/handlers.py. All other app/*.py and engine/*.py must stay FastAPI-free.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -116,6 +117,7 @@ jobs:
           VIOLATIONS=$(find app/ engine/ -name "*.py" \
             -not -path "app/api/*" \
             -not -path "app/middleware/*" \
+            -not -path "app/bootstrap/*" \
             -not -path "app/main.py" \
             -not -path "app/core/auth.py" \
             -not -path "app/score/score_api.py" \
