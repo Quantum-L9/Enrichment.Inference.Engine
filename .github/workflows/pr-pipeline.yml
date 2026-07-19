@@ -320,10 +320,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
 
-      - name: Run Gitleaks CLI (secret detection)
+      - name: Run Gitleaks (secret detection)
+        uses: gitleaks/gitleaks-action@v3
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
           GITLEAKS_CONFIG: .gitleaks.toml
-        run: bash scripts/run_gitleaks_cli.sh
 
       - name: Run pip-audit (dependency vulnerabilities)
         run: |

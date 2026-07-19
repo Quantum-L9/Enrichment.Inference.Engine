@@ -9,9 +9,9 @@
 # status: active
 # --- /L9_META ---
 #
-# Install and run the open-source gitleaks CLI (no Gitleaks-Action org license).
-# Used by gitleaks.yml, ci.yml, and pr-pipeline.yml so secret scanning stays a
-# hard gate without depending on secrets.GITLEAKS_LICENSE.
+# Local/offline gitleaks CLI (no Action license required).
+# CI workflows use gitleaks/gitleaks-action@v3 with secrets.GITLEAKS_LICENSE;
+# this script remains for local scans and as a fallback if the Action is unavailable.
 
 set -euo pipefail
 

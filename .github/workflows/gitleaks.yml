@@ -15,9 +15,9 @@
 #   - This workflow is a hard gate: always runs, no soft-skip path
 #   - Uses repo-local .gitleaks.toml (10 L9-specific rules)
 #
-# Implementation: open-source gitleaks CLI via scripts/run_gitleaks_cli.sh
-#   (no Gitleaks-Action org license / GITLEAKS_LICENSE required).
-#   Pin: GITLEAKS_VERSION default 8.30.1 in the install script.
+# Action: gitleaks/gitleaks-action@v3
+# Pre-condition: org/repo secret GITLEAKS_LICENSE (Settings → Secrets → Actions)
+# Local/offline fallback: bash scripts/run_gitleaks_cli.sh
 
 name: Gitleaks Secret Scan
 
@@ -43,11 +43,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0  # full history required for gitleaks detect
+          fetch-depth: 0  # full history required for gitleaks --log-opts
           persist-credentials: false  # scan-only job — do not retain git push credentials
 
-      - name: Gitleaks CLI scan
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@v3
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
           GITLEAKS_CONFIG: .gitleaks.toml
-        run: bash scripts/run_gitleaks_cli.sh
         # Hard fail — no soft-skip path. SOC 2 CC6.1 requires blocking gate.
