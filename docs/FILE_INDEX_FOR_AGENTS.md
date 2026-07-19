@@ -24,9 +24,9 @@
 |---|---|---:|---|
 | 1 | [AGENTS.md](AGENTS.md) | ~2,800 | Contracts, tiers, active transport bundle, forbidden patterns |
 | 2 | [GUARDRAILS.md](GUARDRAILS.md) | ~900 | Hard prohibitions and safety constraints |
-| 3 | [ARCHITECTURE.md](ARCHITECTURE.md) | ~1,200 | Live SDK runtime topology |
-| 4 | [REPO_MAP.md](REPO_MAP.md) | ~1,400 | Directory ownership and module boundaries |
-| 5 | [EXECUTION_FLOWS.md](EXECUTION_FLOWS.md) | ~1,000 | Initialization and runtime execution paths |
+| 3 | [ARCHITECTURE.md](../ARCHITECTURE.md) | ~1,200 | Live SDK runtime topology |
+| 4 | [REPO_MAP.md](../REPO_MAP.md) | ~1,400 | Directory ownership and module boundaries |
+| 5 | [EXECUTION_FLOWS.md](../EXECUTION_FLOWS.md) | ~1,000 | Initialization and runtime execution paths |
 | Total | | ~7,300 | First-pass budget |
 
 ---
