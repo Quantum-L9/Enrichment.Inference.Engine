@@ -95,6 +95,10 @@ markers = [
     "unit: Unit tests (fast, no external deps)",
     "integration: Integration tests (may need services)",
     "slow: Slow tests (enrichment, convergence)",
+    "enforcement: Tier-2 constitution / contract enforcement tests",
+    "authority: Authority and ownership contract tests",
+    "provenance: Provenance / attestation contract tests",
+    "replay: Replay and idempotency contract tests",
 ]
 testpaths = ["tests"]
 

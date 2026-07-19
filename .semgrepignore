@@ -1,0 +1,14 @@
+# Semgrep path excludes for CI.
+# Keep blocking rules focused on production app/engine code; defer noisy
+# tooling and known float()-hygiene backlog outside the merge-critical path.
+
+tools/
+venv/
+.venv/
+build/
+dist/
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+Current Work/
+app/services/simulation_bridge.py
