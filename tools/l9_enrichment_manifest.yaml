@@ -61,7 +61,7 @@ contracts:
         - AGENTS.md
       description: "Field confidence schema contract"
     - path: app/score/score_models.py
-      sha256: 14df007b8beb5c698b54948c9476df40c68e8ac705e4ae96cf409c89b2327f4c
+      sha256: 46c4831a8cc16412ad2362e7ae8f0ee6fc374213d5069fef14b79d930621c118
       required_refs:
         - AGENTS.md
       description: "Score schema contract"
