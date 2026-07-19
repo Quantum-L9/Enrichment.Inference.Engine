@@ -66,7 +66,7 @@ ACTION_AUTHORITY = {
     "enrichbatch": {"mutation_class": "enrich_only", "approval": "autonomous"},
     "converge": {"mutation_class": "internal_state", "approval": "autonomous"},
     "discover": {"mutation_class": "propose_only", "approval": "autonomous"},
-    "enrich_and_sync": {
+    "enrich-and-sync": {
         "mutation_class": "internal_plus_graph_sync",
         "approval": "autonomous",
     },
