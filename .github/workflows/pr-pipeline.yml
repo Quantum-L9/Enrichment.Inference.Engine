@@ -22,6 +22,16 @@
 #   • Manual: Actions → "PR Pipeline (Full Gate)" → Run workflow (with optional skip flags).
 # It is a normal GitHub Actions workflow: it runs whenever those events occur; whether it
 # blocks merge depends on branch protection "required checks" in repo settings.
+#
+# DIAGNOSTIC MODE (fail_open):
+#   By default this pipeline is fail-closed within each job: a step failure stops the
+#   remaining steps in that job, so a single run only ever surfaces the FIRST problem per
+#   job. Dispatch this workflow manually with `fail_open: true` to instead run every step
+#   in every job regardless of earlier failures ("continue-on-error" per step) and print a
+#   full pass/fail table per job at the end, so you can see ALL pre-existing issues in one
+#   pass instead of discovering them one round trip at a time. It never changes whether the
+#   job/pipeline ends red — only how much information you get out of a single red run.
+#   Local equivalent: `make agent-audit` (see tools/agent_audit.sh).
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 name: PR Pipeline (Full Gate)
@@ -56,6 +66,10 @@ on:
         default: false
       security_strict:
         description: 'Fail on security warnings (PR_SECURITY_STRICT)'
+        type: boolean
+        default: false
+      fail_open:
+        description: 'Diagnostic mode: run every step in every job even after earlier steps fail, and report ALL findings instead of stopping at the first one. Does not change pass/fail — jobs still end red if anything failed.'
         type: boolean
         default: false
 
@@ -165,18 +179,23 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Run Ruff linter
+        id: ruff_check
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           echo "Running Ruff linter..."
           ruff check . --output-format=github
           echo "✅ Ruff checks passed"
 
       - name: Run Ruff formatter check
+        id: ruff_format
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           echo "Checking code formatting..."
           ruff format --check .
           echo "✅ Code formatting is consistent"
 
       - name: Run Mypy type checker
+        id: mypy
         env:
           PR_MYPY_STRICT: ${{ inputs.mypy_strict && '1' || '' }}
         run: |
@@ -186,6 +205,16 @@ jobs:
             $MYPY_CMD
           else
             $MYPY_CMD || echo "⚠️ Type check warnings (non-blocking)"
+          fi
+
+      - name: Lint gate (fail-open evaluation)
+        if: ${{ always() && inputs.fail_open == true }}
+        run: |
+          echo "ruff-check:  ${{ steps.ruff_check.outcome }}"
+          echo "ruff-format: ${{ steps.ruff_format.outcome }}"
+          if [[ "${{ steps.ruff_check.outcome }}" == "failure" ]] || [[ "${{ steps.ruff_format.outcome }}" == "failure" ]]; then
+            echo "::error::Lint job had failing steps (fail-open mode ran all of them; see logs above)."
+            exit 1
           fi
 
   # ────────────────────────────────────────────────────────────────────────
@@ -218,7 +247,7 @@ jobs:
     name: Test (pytest + coverage)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [validate, lint]
+    needs: validate
     if: ${{ !inputs.skip_integration }}
 
     services:
@@ -320,12 +349,16 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Run Gitleaks (secret detection)
+        id: gitleaks
+        continue-on-error: ${{ inputs.fail_open == true }}
         uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
 
       - name: Run pip-audit (dependency vulnerabilities)
+        id: pip_audit
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           echo "Scanning dependencies for known vulnerabilities..."
           pip-audit --desc
@@ -353,10 +386,25 @@ jobs:
           fi
 
       - name: Dependency Review (PR only)
+        id: dependency_review
         if: github.event_name == 'pull_request'
+        continue-on-error: ${{ inputs.fail_open == true }}
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
+
+      - name: Security gate (fail-open evaluation)
+        if: ${{ always() && inputs.fail_open == true }}
+        run: |
+          echo "gitleaks:           ${{ steps.gitleaks.outcome }}"
+          echo "pip-audit:          ${{ steps.pip_audit.outcome }}"
+          echo "dependency-review:  ${{ steps.dependency_review.outcome }}"
+          if [[ "${{ steps.gitleaks.outcome }}" == "failure" ]] || \
+             [[ "${{ steps.pip_audit.outcome }}" == "failure" ]] || \
+             [[ "${{ steps.dependency_review.outcome }}" == "failure" ]]; then
+            echo "::error::Security job had failing steps (fail-open mode ran all of them; see logs above)."
+            exit 1
+          fi
 
   # ────────────────────────────────────────────────────────────────────────
   # PHASE 6: COMPLIANCE
@@ -385,10 +433,14 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Terminology Guard
+        id: terminology_guard
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           python3 local_pr_pipeline/check_compliance_terminology.py
 
       - name: Chassis Isolation Check
+        id: chassis_isolation
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           echo "Checking chassis isolation..."
           VIOLATIONS=$(find app/ -name "*.py" \
@@ -408,6 +460,8 @@ jobs:
           echo "✅ Chassis isolation is maintained"
 
       - name: KB YAML Schema Validation
+        id: kb_yaml
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           python3 local_pr_pipeline/compliance_kb_validate.py
 
@@ -419,10 +473,27 @@ jobs:
           fi
 
       - name: L9 Contract Verification (merge-blocking)
+        id: contract_verify
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           if [ -f "tools/verify_contracts.py" ]; then
             echo "Running L9 contract verification..."
             PYTHONPATH=. python tools/verify_contracts.py
+          fi
+
+      - name: Compliance gate (fail-open evaluation)
+        if: ${{ always() && inputs.fail_open == true }}
+        run: |
+          echo "terminology-guard:  ${{ steps.terminology_guard.outcome }}"
+          echo "chassis-isolation:  ${{ steps.chassis_isolation.outcome }}"
+          echo "kb-yaml-validate:   ${{ steps.kb_yaml.outcome }}"
+          echo "contract-verify:    ${{ steps.contract_verify.outcome }}"
+          if [[ "${{ steps.terminology_guard.outcome }}" == "failure" ]] || \
+             [[ "${{ steps.chassis_isolation.outcome }}" == "failure" ]] || \
+             [[ "${{ steps.kb_yaml.outcome }}" == "failure" ]] || \
+             [[ "${{ steps.contract_verify.outcome }}" == "failure" ]]; then
+            echo "::error::Compliance job had failing steps (fail-open mode ran all of them; see logs above)."
+            exit 1
           fi
 
   # ────────────────────────────────────────────────────────────────────────
@@ -454,20 +525,28 @@ jobs:
           pip install -e . --no-deps 2>/dev/null || true
 
       - name: Verify node constitution
+        id: node_constitution
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           python scripts/verify_node_constitution.py
 
       - name: Run Tier 2 constitution tests
+        id: tier2_tests
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           pytest tests/contracts/tier2/test_node_constitution_contract.py \
             tests/contracts/tier2/test_runtime_attestation_contract.py \
             -q --disable-warnings --maxfail=1 -o addopts=""
 
       - name: Verify constitution (l9_contract_control)
+        id: l9cc_constitution
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           python scripts/l9_contract_control.py verify-constitution
 
       - name: Verify attestation (l9_contract_control)
+        id: l9cc_attestation
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           python scripts/l9_contract_control.py verify-attestation || {
             if python -c "import app" 2>/dev/null; then
@@ -477,7 +556,9 @@ jobs:
           }
 
       - name: Select and run gates (PR only)
+        id: select_gates
         if: github.event_name == 'pull_request' && !inputs.l9_minimal
+        continue-on-error: ${{ inputs.fail_open == true }}
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.sha }}
@@ -493,6 +574,23 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.sha }}
         run: |
           python3 local_pr_pipeline/contract_bound_local.py --base "$BASE_REF" --head "$HEAD_REF" || echo "⚠️ Contract-bound check (advisory)"
+
+      - name: L9 gate (fail-open evaluation)
+        if: ${{ always() && inputs.fail_open == true }}
+        run: |
+          echo "node-constitution:  ${{ steps.node_constitution.outcome }}"
+          echo "tier2-tests:        ${{ steps.tier2_tests.outcome }}"
+          echo "l9cc-constitution:  ${{ steps.l9cc_constitution.outcome }}"
+          echo "l9cc-attestation:   ${{ steps.l9cc_attestation.outcome }}"
+          echo "select-gates:       ${{ steps.select_gates.outcome }}"
+          if [[ "${{ steps.node_constitution.outcome }}" == "failure" ]] || \
+             [[ "${{ steps.tier2_tests.outcome }}" == "failure" ]] || \
+             [[ "${{ steps.l9cc_constitution.outcome }}" == "failure" ]] || \
+             [[ "${{ steps.l9cc_attestation.outcome }}" == "failure" ]] || \
+             [[ "${{ steps.select_gates.outcome }}" == "failure" ]]; then
+            echo "::error::L9 job had failing steps (fail-open mode ran all of them; see logs above)."
+            exit 1
+          fi
 
   # ────────────────────────────────────────────────────────────────────────
   # PHASE 8: DOCS CONSISTENCY
@@ -513,12 +611,27 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Run docs consistency checks
+        id: docs_consistency
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           bash local_pr_pipeline/docs_consistency_local.sh
 
       - name: Run markdown link check
+        id: docs_link_check
+        continue-on-error: ${{ inputs.fail_open == true }}
         run: |
           python3 local_pr_pipeline/docs_link_check_local.py
+
+      - name: Docs gate (fail-open evaluation)
+        if: ${{ always() && inputs.fail_open == true }}
+        run: |
+          echo "docs-consistency:  ${{ steps.docs_consistency.outcome }}"
+          echo "docs-link-check:   ${{ steps.docs_link_check.outcome }}"
+          if [[ "${{ steps.docs_consistency.outcome }}" == "failure" ]] || \
+             [[ "${{ steps.docs_link_check.outcome }}" == "failure" ]]; then
+            echo "::error::Docs job had failing steps (fail-open mode ran all of them; see logs above)."
+            exit 1
+          fi
 
   # ────────────────────────────────────────────────────────────────────────
   # FINAL GATE: PR Pipeline Summary
