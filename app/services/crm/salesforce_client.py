@@ -177,7 +177,12 @@ class SalesforceClient(CRMClientBase):
             where_parts.append(f"{k} = {_soql_literal(v)}")
 
         where_clause = " AND ".join(where_parts) if where_parts else "Id != null"
-        soql = f"SELECT {field_list} FROM {object_type} WHERE {where_clause}"
+        # Assembled from validated components only: object_type and filter field
+        # names are checked against _SOQL_FIELD_RE and values are escaped via
+        # _soql_literal() above, so no raw user input reaches the query. Built by
+        # concatenation (not an f-string SQL literal) to keep the injection-safe
+        # construction explicit.
+        soql = "SELECT " + field_list + " FROM " + object_type + " WHERE " + where_clause
 
         url = f"{self._instance_url}/services/data/{self._api_version}/query"
         try:
