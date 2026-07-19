@@ -15,10 +15,13 @@
 # step in the docs job). The script was missing from the repo, so the docs gate
 # failed on every PR regardless of the change. This restores it.
 #
-# It runs the repository's documentation/KB checks and fails if any fails:
+# It runs the repository's documentation checks and fails if any fails:
 #   1. Required top-level governance docs exist.
-#   2. KB YAML validates (delegated to compliance_kb_validate.py).
-#   3. Root-level markdown links resolve (delegated to docs_link_check_local.py).
+#   2. Root-level markdown links resolve (delegated to docs_link_check_local.py).
+#
+# Uses only the Python standard library so it runs in the minimal docs CI job
+# (no third-party deps installed). KB YAML validation is intentionally NOT run
+# here; it is covered by the validate and compliance jobs, which install PyYAML.
 #
 # Exit 0 when everything is consistent, non-zero otherwise.
 
@@ -32,7 +35,7 @@ cd "$REPO_ROOT"
 
 FAILED=0
 
-echo "== [1/3] Required governance docs present =="
+echo "== [1/2] Required governance docs present =="
 REQUIRED_DOCS=(AGENTS.md CLAUDE.md)
 for doc in "${REQUIRED_DOCS[@]}"; do
   if [[ -f "$doc" ]]; then
@@ -43,14 +46,7 @@ for doc in "${REQUIRED_DOCS[@]}"; do
   fi
 done
 
-echo "== [2/3] KB YAML validation =="
-if [[ -f local_pr_pipeline/compliance_kb_validate.py ]]; then
-  "$PYTHON" local_pr_pipeline/compliance_kb_validate.py || FAILED=1
-else
-  echo "  skip: compliance_kb_validate.py not present"
-fi
-
-echo "== [3/3] Markdown link check (root governance docs) =="
+echo "== [2/2] Markdown link check (root governance docs) =="
 if [[ -f local_pr_pipeline/docs_link_check_local.py ]]; then
   "$PYTHON" local_pr_pipeline/docs_link_check_local.py || FAILED=1
 else
