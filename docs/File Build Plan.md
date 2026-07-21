@@ -277,7 +277,7 @@ After these 12 files, the enrichment-inference engine is a complete, closed-loop
 
 ## References (in-repo)
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — topology and entrypoints
+- [ARCHITECTURE.md](../ARCHITECTURE.md) — topology and entrypoints
 - [ROADMAP.CONTRACTS.md](ROADMAP.CONTRACTS.md) — contract enforcement roadmap
 - [docs/contracts/config/env-contract.yaml](docs/contracts/config/env-contract.yaml) — environment SSOT
 - [app/main.py](app/main.py) — mounted routers and public routes
