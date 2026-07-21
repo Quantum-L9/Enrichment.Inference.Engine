@@ -20,6 +20,7 @@
 # FastAPI allowlist (imports from fastapi / import fastapi allowed only here):
 #   app/api/**, app/middleware/**, app/main.py, app/core/auth.py,
 #   app/score/score_api.py (router not mounted in main — still API surface),
+#   app/bootstrap/l9_contract_runtime.py (documented chassis bootstrap),
 #   any **/handlers.py. All other app/*.py and engine/*.py must stay FastAPI-free.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -119,6 +120,7 @@ jobs:
             -not -path "app/main.py" \
             -not -path "app/core/auth.py" \
             -not -path "app/score/score_api.py" \
+            -not -path "app/bootstrap/l9_contract_runtime.py" \
             -not -name "handlers.py" \
             -exec grep -l "from fastapi import\|import fastapi" {} + 2>/dev/null || true)
 
@@ -127,7 +129,8 @@ jobs:
             echo "$VIOLATIONS"
             echo ""
             echo "Allowlist: app/api/, app/middleware/, app/main.py, app/core/auth.py,"
-            echo "  app/score/score_api.py, **/handlers.py — see Architecture Compliance workflow header."
+            echo "  app/score/score_api.py, app/bootstrap/l9_contract_runtime.py, **/handlers.py"
+            echo "  — see Architecture Compliance workflow header."
             exit 1
           fi
 
@@ -152,11 +155,15 @@ jobs:
               try:
                   with open(f) as fh:
                       data = yaml.safe_load(fh)
-                  if not isinstance(data, dict):
-                      errors.append(f'{f}: Root must be a YAML mapping')
+                  if data is None:
+                      errors.append(f'{f}: empty YAML document')
                       continue
-                  # Check for required top-level keys in rule files
-                  if 'rules' in data:
+                  # Domain packs are mappings; some KB files are top-level rule lists.
+                  if not isinstance(data, (dict, list)):
+                      errors.append(f'{f}: Root must be a YAML mapping or list')
+                      continue
+                  # Check for required top-level keys in mapping rule files
+                  if isinstance(data, dict) and 'rules' in data:
                       for i, rule in enumerate(data['rules']):
                           if 'field' not in rule:
                               errors.append(f'{f}: Rule {i} missing required key: field')

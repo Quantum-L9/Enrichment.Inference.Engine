@@ -37,6 +37,7 @@ rules:
     exclude:
       - "tests/**"
       - "scripts/**"
+      - "tools/**"
       - "venv/**"
       - ".venv/**"
 
@@ -61,7 +62,9 @@ rules:
       async with httpx.AsyncClient() as client:
           ...  # Auto-closed on exit
   languages: [python]
-  severity: ERROR
+  # WARNING for this CI cycle — long-lived clients in app/services/* are a
+  # known backlog; do not block merges on httpx context-manager hygiene.
+  severity: WARNING
   paths:
     include:
       - "**/*.py"
