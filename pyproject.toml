@@ -99,6 +99,8 @@ markers = [
     "authority: Authority and ownership contract tests",
     "provenance: Provenance / attestation contract tests",
     "replay: Replay and idempotency contract tests",
+    "failure: Dependency-failure / fail-path enforcement tests",
+    "degraded: Degraded-mode (partial dependency availability) tests",
 ]
 testpaths = ["tests"]
 
