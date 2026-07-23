@@ -1,0 +1,126 @@
+# L9 Consumer Lint + Test — Python Preset (LOCKED STRUCTURE)
+#
+# DO NOT EDIT workflow structure — only the env: block is consumer-configurable.
+# Managed by l9-ci-core presets/python.
+#
+# Conventions:
+#   - Immutable event-revision checkout (no floating action ref)
+#   - SHA-pinned external actions
+#   - Least privilege (contents: read only)
+name: L9 Lint and Test
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# ── CONFIGURABLE: agent sets these during activation ───────────────────────────
+env:
+  PYTHON_VERSION: "3.12"
+  SOURCE_DIR: "."
+  TEST_DIR: "tests/"
+  COVERAGE_THRESHOLD: "0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l9-lint-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and Type Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout immutable event revision
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin \
+            "https://x-access-token:${TOKEN}@github.com/${REPOSITORY}.git"
+          git -c protocol.version=2 fetch --depth=1 origin "${REVISION}"
+          git checkout --detach FETCH_HEAD
+          git remote set-url origin "https://github.com/${REPOSITORY}.git"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install lint tools
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f requirements-ci.txt ]; then pip install -r requirements-ci.txt; fi
+          command -v ruff >/dev/null 2>&1 || pip install ruff
+          command -v mypy >/dev/null 2>&1 || pip install mypy
+
+      - name: ruff check
+        run: ruff check . --output-format=github
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+      - name: mypy
+        run: |
+          mypy "${SOURCE_DIR}" \
+            --show-error-codes --pretty \
+            --install-types --non-interactive --ignore-missing-imports
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout immutable event revision
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin \
+            "https://x-access-token:${TOKEN}@github.com/${REPOSITORY}.git"
+          git -c protocol.version=2 fetch --depth=1 origin "${REVISION}"
+          git checkout --detach FETCH_HEAD
+          git remote set-url origin "https://github.com/${REPOSITORY}.git"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install test tools
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f requirements-ci.txt ]; then pip install -r requirements-ci.txt; fi
+          pip install -e ".[dev]" || pip install -e . || \
+            echo "::notice::no local editable package to install"
+          command -v pytest >/dev/null 2>&1 || pip install pytest
+          python -c "import pytest_cov" 2>/dev/null || pip install pytest-cov
+          python -c "import xdist" 2>/dev/null || pip install pytest-xdist
+          python -c "import pytest_timeout" 2>/dev/null || pip install pytest-timeout
+
+      - name: pytest with coverage
+        env:
+          TESTING: "true"
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. pytest "${TEST_DIR}" \
+            -n auto \
+            --cov="${SOURCE_DIR}" \
+            --cov-report=xml --cov-report=term-missing \
+            --cov-fail-under="${COVERAGE_THRESHOLD}" \
+            --timeout=300 --tb=short -v

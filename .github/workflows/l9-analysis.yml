@@ -1,0 +1,182 @@
+# L9 Governed Analysis Pipeline — Python Preset (LOCKED)
+#
+# DO NOT EDIT — this file is managed by l9-ci-core presets/python.
+# To update, pull the latest preset from Quantum-L9/l9-ci-core.
+#
+# This workflow runs the full L9 analysis pipeline:
+#   1. Resolve governance config from .github/governance/
+#   2. Run semgrep with Python rulesets
+#   3. Provision the SDK (immutable, pinned)
+#   4. Normalize → Validate → Project → Route → Manifest → Upload
+#   5. Publish results as GitHub Checks
+name: L9 Analysis
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  L9_CORE_REF: "f88116503430aa18992b70d8d31063e34ff97ef1"
+  L9_PROFILE: "pr_fast"
+  L9_MATRIX_ID: "pr-semgrep"
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: l9-analysis-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Governed Semgrep Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      enabled: ${{ steps.gov.outputs.enabled }}
+      mode: ${{ steps.gov.outputs.mode }}
+      governance-digest: ${{ steps.gov.outputs.governance-digest }}
+      artifact-name: ${{ steps.names.outputs.artifact-name }}
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - name: Checkout immutable event revision
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin \
+            "https://x-access-token:${TOKEN}@github.com/${REPOSITORY}.git"
+          git -c protocol.version=2 fetch --depth=1 origin "${REVISION}"
+          git checkout --detach FETCH_HEAD
+          git remote set-url origin "https://github.com/${REPOSITORY}.git"
+
+      - id: gov
+        name: Resolve governance
+        uses: Quantum-L9/l9-ci-core/.github/actions/resolve-governance@f88116503430aa18992b70d8d31063e34ff97ef1
+        with:
+          profile: ${{ env.L9_PROFILE }}
+          provider: semgrep
+          event-name: ${{ github.event_name }}
+          repository: ${{ github.repository }}
+          ref: ${{ github.ref }}
+
+      - id: names
+        name: Compute artifact names
+        env:
+          MATRIX_ID: ${{ env.L9_MATRIX_ID }}
+        run: |
+          set -euo pipefail
+          echo "artifact-name=l9-semgrep-${MATRIX_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Run semgrep
+        if: steps.gov.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          pip install --upgrade pip semgrep
+          mkdir -p "artifacts/raw/semgrep/${L9_MATRIX_ID}"
+          semgrep scan \
+            --config p/python \
+            --json \
+            --output "artifacts/raw/semgrep/${L9_MATRIX_ID}/report.json" \
+            --error --quiet || true
+        env:
+          L9_MATRIX_ID: ${{ env.L9_MATRIX_ID }}
+
+      - id: sdk
+        name: Provision immutable SDK
+        if: steps.gov.outputs.enabled == 'true'
+        uses: Quantum-L9/l9-ci-core/.github/actions/provision-sdk@f88116503430aa18992b70d8d31063e34ff97ef1
+
+      - name: Normalize provider report
+        if: steps.gov.outputs.enabled == 'true'
+        uses: Quantum-L9/l9-ci-core/.github/actions/invoke-sdk@f88116503430aa18992b70d8d31063e34ff97ef1
+        with:
+          executable: ${{ steps.sdk.outputs.executable }}
+          operation: semgrep-normalize
+          input: artifacts/raw/semgrep/${{ env.L9_MATRIX_ID }}/report.json
+          output: .l9/runtime/${{ env.L9_MATRIX_ID }}/finding-bundle.json
+          root: .
+          snapshot-id: ${{ github.sha }}
+          revision: ${{ github.sha }}
+          strict: ${{ steps.gov.outputs.strict }}
+          required: ${{ steps.gov.outputs.required-provider }}
+          policy: ${{ steps.gov.outputs.sdk-policy }}
+
+      - name: Validate canonical bundle
+        if: steps.gov.outputs.enabled == 'true'
+        uses: Quantum-L9/l9-ci-core/.github/actions/validate-bundle@f88116503430aa18992b70d8d31063e34ff97ef1
+        with:
+          executable: ${{ steps.sdk.outputs.executable }}
+          bundle: .l9/runtime/${{ env.L9_MATRIX_ID }}/finding-bundle.json
+
+      - name: Project agent-review payload
+        if: steps.gov.outputs.enabled == 'true'
+        uses: Quantum-L9/l9-ci-core/.github/actions/invoke-sdk@f88116503430aa18992b70d8d31063e34ff97ef1
+        with:
+          executable: ${{ steps.sdk.outputs.executable }}
+          operation: bundle-project-agent-payload
+          input: .l9/runtime/${{ env.L9_MATRIX_ID }}/finding-bundle.json
+          output: .l9/runtime/${{ env.L9_MATRIX_ID }}/agent-review-payload.json
+          strict: ${{ steps.gov.outputs.strict }}
+
+      - id: route
+        name: Route artifacts
+        if: steps.gov.outputs.enabled == 'true'
+        uses: Quantum-L9/l9-ci-core/.github/actions/route-artifacts@f88116503430aa18992b70d8d31063e34ff97ef1
+        with:
+          provider: semgrep
+          matrix-id: ${{ env.L9_MATRIX_ID }}
+          raw-report: artifacts/raw/semgrep/${{ env.L9_MATRIX_ID }}/report.json
+          bundle: .l9/runtime/${{ env.L9_MATRIX_ID }}/finding-bundle.json
+          agent-payload: .l9/runtime/${{ env.L9_MATRIX_ID }}/agent-review-payload.json
+          destination-root: artifacts
+
+      - name: Build artifact manifest
+        if: steps.gov.outputs.enabled == 'true'
+        uses: Quantum-L9/l9-ci-core/.github/actions/build-artifact-manifest@f88116503430aa18992b70d8d31063e34ff97ef1
+        with:
+          provider: semgrep
+          matrix-id: ${{ env.L9_MATRIX_ID }}
+          sdk-revision: ${{ steps.sdk.outputs.sdk-revision }}
+          bundle: ${{ steps.route.outputs.bundle }}
+          agent-payload: ${{ steps.route.outputs.agent-payload }}
+          raw-directory: ${{ steps.route.outputs.raw-directory }}
+          output: artifacts/metadata/${{ env.L9_MATRIX_ID }}/artifact-manifest.json
+
+      - name: Upload analysis artifact set
+        if: steps.gov.outputs.enabled == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: ${{ steps.names.outputs.artifact-name }}
+          path: |
+            artifacts/raw/semgrep/${{ env.L9_MATRIX_ID }}/
+            artifacts/l9/${{ env.L9_MATRIX_ID }}/
+            artifacts/metadata/${{ env.L9_MATRIX_ID }}/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish analysis (Core)
+    needs: analyze
+    if: needs.analyze.outputs.enabled == 'true'
+    uses: Quantum-L9/l9-ci-core/.github/workflows/publish-analysis.yml@f88116503430aa18992b70d8d31063e34ff97ef1
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+    with:
+      artifact-name: ${{ needs.analyze.outputs.artifact-name }}
+      profile: pr_fast
+      mode: ${{ needs.analyze.outputs.mode }}
+      provider: semgrep
+      matrix-id: pr-semgrep
+      governance-digest: ${{ needs.analyze.outputs.governance-digest }}
+      repository-revision: ${{ github.sha }}
+      workflow-result: ${{ needs.analyze.result }}
