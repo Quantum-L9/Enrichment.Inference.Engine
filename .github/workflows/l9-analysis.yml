@@ -108,6 +108,7 @@ jobs:
           strict: ${{ steps.gov.outputs.strict }}
           required: ${{ steps.gov.outputs.required-provider }}
           policy: ${{ steps.gov.outputs.sdk-policy }}
+          identity-map: .github/governance/semgrep-identity-map.yaml
 
       - name: Validate canonical bundle
         if: steps.gov.outputs.enabled == 'true'

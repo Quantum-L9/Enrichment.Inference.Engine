@@ -1,0 +1,11 @@
+{
+  "schema": "l9.finding-policy/v1",
+  "metadata": {
+    "version": "1"
+  },
+  "defaults": {
+    "mode": "advisory"
+  },
+  "rules": {},
+  "note": "All findings default to advisory (visible, non-blocking) until a specific provider_rule_id is promoted to blocking here after org review. This is deliberate: identity-map + strict mode being wired should not silently convert every existing semgrep finding into a merge-blocker on first activation."
+}

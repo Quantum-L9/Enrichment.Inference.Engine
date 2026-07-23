@@ -2,19 +2,19 @@
   "schema": "l9.quality-threshold-selection/v1",
   "profiles": {
     "pr_fast": {
-      "sdk_policy": ""
+      "sdk_policy": ".github/governance/semgrep-policy.yaml"
     },
     "merge": {
-      "sdk_policy": ""
+      "sdk_policy": ".github/governance/semgrep-policy.yaml"
     },
     "nightly": {
-      "sdk_policy": ""
+      "sdk_policy": ".github/governance/semgrep-policy.yaml"
     },
     "release": {
-      "sdk_policy": ""
+      "sdk_policy": ".github/governance/semgrep-policy.yaml"
     },
     "supply_chain": {
-      "sdk_policy": ""
+      "sdk_policy": ".github/governance/semgrep-policy.yaml"
     }
   },
   "note": "Core selects an SDK policy file but never evaluates finding thresholds itself. Point sdk_policy at a policy file the pinned SDK understands to raise/lower gates."
