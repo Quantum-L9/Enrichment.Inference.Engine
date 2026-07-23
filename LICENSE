@@ -1,21 +1,104 @@
-MIT License
+QUANTUM AI PARTNERS — L9 PROPRIETARY SOFTWARE LICENSE
+Version 1.0 — 2026
 
-Copyright (c) 2026 Igor Beylin / Quantum AI Partners
+Copyright (c) 2026 Quantum AI Partners ("Licensor"). All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software and associated documentation files (the "Software") are the
+proprietary and confidential property of Quantum AI Partners. The Software
+is made source-available on this repository for transparency, audit, and
+evaluation purposes only, under the terms below. NO OPEN-SOURCE LICENSE IS
+GRANTED. No prior license grant by Licensor (if any) shall be construed as
+a waiver of these terms.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. DEFINITIONS
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+   "Software" means the source code, object code, documentation, domain
+   specs, configuration, and all other files contained in this repository,
+   and any modifications or derivative works thereof.
+
+   "Commercial Use" means any use of the Software, in whole or in part,
+   directly or indirectly, from which any person or entity derives revenue,
+   profit, cost savings, competitive advantage, or other commercial benefit.
+   This includes, without limitation: selling, sublicensing, or hosting the
+   Software or a derivative work; incorporating the Software into a product
+   or service offered to third parties (including as part of a SaaS,
+   managed service, or consulting engagement); and internal use by a
+   for-profit entity in its business operations beyond internal evaluation.
+
+   "You" / "Licensee" means any individual or entity that accesses, clones,
+   copies, or otherwise makes use of the Software.
+
+2. LIMITED GRANT
+
+   Subject to Your compliance with this License, Licensor grants You a
+   limited, non-exclusive, non-transferable, revocable license to view,
+   clone, and use the Software solely for personal, academic, or internal
+   evaluation purposes that do NOT constitute Commercial Use.
+
+3. COMMERCIAL USE REQUIRES A PAID LICENSE
+
+   Any Commercial Use of the Software requires a separate written commercial
+   license agreement with Quantum AI Partners, negotiated in advance, which
+   may include license fees, royalties, or a revenue/profit share. Engaging
+   in Commercial Use without such an agreement is a material breach of this
+   License and constitutes copyright infringement.
+
+   To request a commercial license, contact: eng@l9.dev
+
+4. RESTRICTIONS
+
+   Except as expressly permitted under Section 2, You may NOT, without prior
+   written consent from Licensor:
+
+   a. Copy, reproduce, or redistribute the Software, in source or object
+      form, to any third party;
+   b. Modify, create derivative works of, reverse-engineer, or decompile
+      the Software, except as necessary for permitted evaluation;
+   c. Sublicense, sell, rent, lease, or otherwise transfer any rights in
+      the Software;
+   d. Host, deploy, or offer the Software (or a derivative work) as a
+      hosted or managed service to any third party;
+   e. Remove, obscure, or alter any copyright, trademark, or proprietary
+      notice contained in the Software;
+   f. Use the Software to build, train, or benchmark a directly competing
+      product or service.
+
+5. OWNERSHIP
+
+   The Software is licensed, not sold. Licensor retains all right, title,
+   and interest in and to the Software, including all intellectual property
+   rights therein. No rights are granted to You other than as expressly set
+   forth in this License.
+
+6. TERMINATION
+
+   This License terminates automatically, without notice, if You breach any
+   term of this License. Upon termination, You must cease all use of the
+   Software and destroy all copies in Your possession or control. Sections
+   3, 5, 7, and 8 survive termination.
+
+7. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+8. LIMITATION OF LIABILITY
+
+   IN NO EVENT SHALL LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+   FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+9. GOVERNING LAW
+
+   This License shall be governed by the laws of the jurisdiction in which
+   Quantum AI Partners is organized, without regard to conflict-of-law
+   principles. [Confirm jurisdiction/venue with counsel before relying on
+   this in a dispute.]
+
+---
+NOTE: This template was drafted to match your stated intent (restrict
+copying, require payment for commercial/profit-driven use) but has not been
+reviewed by an attorney. Have counsel review before relying on it in an
+actual dispute or before this repository accepts external contributions.
