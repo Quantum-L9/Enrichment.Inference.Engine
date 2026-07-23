@@ -72,6 +72,11 @@ jobs:
 
       - name: mypy
         run: |
+          set -euo pipefail
+          # mkdir required before --install-types on a cold cache, else mypy
+          # fails with the misleading "no mypy cache directory" error and
+          # masks any real type errors underneath it (python/mypy#10768).
+          mkdir -p .mypy_cache
           mypy "${SOURCE_DIR}" \
             --show-error-codes --pretty \
             --install-types --non-interactive --ignore-missing-imports
