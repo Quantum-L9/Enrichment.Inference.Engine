@@ -73,7 +73,9 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true
+          if ! pip install -e ".[dev]" 2>/dev/null && ! pip install -e . 2>/dev/null; then
+            echo "editable install unavailable; proceeding with explicit deps" >&2
+          fi
           pip install pip-licenses
 
       - name: Check License Compliance

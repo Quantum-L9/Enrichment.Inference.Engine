@@ -31,6 +31,10 @@ jobs:
       sdk-revision: 0779fca8238011f8abea551895f96584676e9d17
       python-version: "3.12"
       pytest-paths: tests
+      # EIE has one known collection error (test_outcome_delegator.py, ledgered
+      # in the quarantine); without this flag pytest aborts collection and the
+      # comparator sees 0 observed tests → 112 false stale-entry violations.
+      pytest-args: --continue-on-collection-errors
       test-quarantine-ledger: .l9/baselines/test-quarantine.yml
       packet-envelope-ledger: .l9/baselines/packet-envelope.yml
       # EIE declares no PacketEnvelope symbol and has zero deprecated
