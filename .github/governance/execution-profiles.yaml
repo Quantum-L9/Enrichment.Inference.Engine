@@ -3,43 +3,68 @@
   "profiles": {
     "pr_fast": {
       "sdk_profile": "ci_fast",
-      "strict": false,
+      "strict": true,
       "default_mode": "blocking",
-      "providers": ["semgrep"],
+      "providers": [
+        "semgrep"
+      ],
       "policy": "",
-      "allowed_events": ["pull_request", "workflow_dispatch"]
+      "allowed_events": [
+        "pull_request",
+        "workflow_dispatch"
+      ]
     },
     "merge": {
       "sdk_profile": "ci_fast",
-      "strict": false,
+      "strict": true,
       "default_mode": "blocking",
-      "providers": ["semgrep"],
+      "providers": [
+        "semgrep"
+      ],
       "policy": "",
-      "allowed_events": ["push", "workflow_dispatch"]
+      "allowed_events": [
+        "push",
+        "workflow_dispatch"
+      ]
     },
     "nightly": {
       "sdk_profile": "ci_deep",
-      "strict": false,
+      "strict": true,
       "default_mode": "advisory",
-      "providers": ["semgrep"],
+      "providers": [
+        "semgrep"
+      ],
       "policy": "",
-      "allowed_events": ["schedule", "workflow_dispatch"]
+      "allowed_events": [
+        "schedule",
+        "workflow_dispatch"
+      ]
     },
     "release": {
       "sdk_profile": "ci_deep",
-      "strict": false,
+      "strict": true,
       "default_mode": "blocking",
-      "providers": ["semgrep"],
+      "providers": [
+        "semgrep"
+      ],
       "policy": "",
-      "allowed_events": ["push", "workflow_dispatch"]
+      "allowed_events": [
+        "push",
+        "workflow_dispatch"
+      ]
     },
     "supply_chain": {
       "sdk_profile": "ci_deep",
-      "strict": false,
+      "strict": true,
       "default_mode": "blocking",
-      "providers": ["semgrep"],
+      "providers": [
+        "semgrep"
+      ],
       "policy": "",
-      "allowed_events": ["schedule", "workflow_dispatch"]
+      "allowed_events": [
+        "schedule",
+        "workflow_dispatch"
+      ]
     }
   }
 }

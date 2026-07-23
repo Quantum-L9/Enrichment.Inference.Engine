@@ -21,6 +21,7 @@ env:
   TEST_DIR: "tests/"
   COVERAGE_THRESHOLD: "0"
   PYTEST_PARALLEL: "false"
+  MYPY_EXCLUDE: ""
 
 permissions:
   contents: read
@@ -77,7 +78,12 @@ jobs:
           # fails with the misleading "no mypy cache directory" error and
           # masks any real type errors underneath it (python/mypy#10768).
           mkdir -p .mypy_cache
+          MYPY_EXCLUDE_ARGS=()
+          if [ -n "${MYPY_EXCLUDE}" ]; then
+            MYPY_EXCLUDE_ARGS=(--exclude "${MYPY_EXCLUDE}")
+          fi
           mypy "${SOURCE_DIR}" \
+            "${MYPY_EXCLUDE_ARGS[@]}" \
             --show-error-codes --pretty \
             --install-types --non-interactive --ignore-missing-imports
 
