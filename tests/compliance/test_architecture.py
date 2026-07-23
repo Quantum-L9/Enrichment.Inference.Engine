@@ -121,8 +121,9 @@ def test_active_runtime_bundle_does_not_import_deprecated_router_or_registry() -
 def test_deprecated_compatibility_artifacts_are_not_treated_as_active_runtime_requirements() -> (
     None
 ):
-    repo_map = (REPO_ROOT / "REPO_MAP.md").read_text(encoding="utf-8")
-    architecture = (REPO_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    # REPO_MAP.md and ARCHITECTURE.md live under docs/; AGENTS.md at repo root.
+    repo_map = (REPO_ROOT / "docs" / "REPO_MAP.md").read_text(encoding="utf-8")
+    architecture = (REPO_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
     for rel_path in DEPRECATED_COMPAT_ARTIFACTS:
