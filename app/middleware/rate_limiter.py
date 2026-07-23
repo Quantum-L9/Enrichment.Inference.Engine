@@ -19,6 +19,7 @@ engine modules.
 
 from __future__ import annotations
 
+import math
 import time
 from collections import defaultdict
 
@@ -51,28 +52,29 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         now = time.time()
         cutoff = now - 60
-        pruned = [t for t in self.windows[key] if t > cutoff]
-        if pruned:
-            self.windows[key] = pruned
+        # Prune expired timestamps; evict the key entirely when its window
+        # empties. Without eviction, self.windows accumulates one entry per
+        # distinct X-API-Key / client IP for the life of the process — an
+        # unbounded-growth vector under high key cardinality or rotating /
+        # spoofed keys. `window` is used for all reads below so the evicted
+        # key is not immediately re-created by defaultdict access.
+        window = [t for t in self.windows[key] if t > cutoff]
+        if window:
+            self.windows[key] = window
         else:
-            # Evict keys whose window emptied out. Without this, self.windows
-            # accumulates one entry per distinct X-API-Key / client IP for the
-            # life of the process — an unbounded-growth / memory-leak vector
-            # under high key cardinality or rotating/spoofed keys. defaultdict
-            # re-creates the entry below if a new request arrives.
             self.windows.pop(key, None)
 
-        if len(self.windows[key]) >= self.rpm:
+        if len(window) >= self.rpm:
             # Return the response directly. Raising HTTPException inside a
             # BaseHTTPMiddleware.dispatch does NOT pass through FastAPI's
             # exception handlers — it propagates to ServerErrorMiddleware and
             # surfaces as a 500. JSONResponse gives the client the real 429.
             #
-            # Per RFC 6585/9110, advertise Retry-After so clients know when the
-            # sliding window will admit them again: the oldest in-window
-            # timestamp + 60s, floored at 1s.
-            window = self.windows[key]
-            retry_after = max(1, int(window[0] + 60 - now)) if window else 60
+            # Per RFC 6585/9110, advertise Retry-After so clients know when
+            # the sliding window will admit them again: the oldest in-window
+            # timestamp + 60s, rounded up (ceil) so clients never retry early,
+            # floored at 1s.
+            retry_after = max(1, math.ceil(window[0] + 60 - now)) if window else 60
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 content={"detail": f"Rate limit: {self.rpm} requests/minute"},
