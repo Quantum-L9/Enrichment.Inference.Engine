@@ -283,7 +283,7 @@ entries:
   root_cause_group: engine-mock-api-drift
 - id: test-quarantine/test-enrichment-orchestrator-py-testenrichmentorchestrator-test-idempotency-key-caching
   test_node_id: tests/test_enrichment_orchestrator.py::TestEnrichmentOrchestrator::test_idempotency_key_caching
-  fingerprint: b4702dc78f097c635a20ea67882661c54bfb6dc09c53f924935b3c66642c9c05
+  fingerprint: 2bf1eb06d5a33719286cce7cd08840d2e578b96da54e525aac29abb0aa422d39
   exception_type: AttributeError
   failure_signature: 'AttributeError: <module ''app.engines.enrichment_orchestrator'' from ''/HOMEPATH/work/eie/app/engines/enrichment_orchestrator.py''> does not have the attribute ''call_perplexity'''
   owner: '@cryptoxdog'
@@ -294,7 +294,7 @@ entries:
   root_cause_group: orchestrator-drift
 - id: test-quarantine/test-enrichment-orchestrator-py-testenrichmentorchestrator-test-response-has-confidence
   test_node_id: tests/test_enrichment_orchestrator.py::TestEnrichmentOrchestrator::test_response_has_confidence
-  fingerprint: e770a8f04d0476f4d9c386b5694529fb4a732d89c23e8643f06362545a812f53
+  fingerprint: a00206963e3fa2b883fcf31400f2d7d6d9f473875331ea2cb6326086f07dccb9
   exception_type: AttributeError
   failure_signature: 'AttributeError: <module ''app.engines.enrichment_orchestrator'' from ''/HOMEPATH/work/eie/app/engines/enrichment_orchestrator.py''> does not have the attribute ''call_perplexity'''
   owner: '@cryptoxdog'
@@ -305,7 +305,7 @@ entries:
   root_cause_group: orchestrator-drift
 - id: test-quarantine/test-enrichment-orchestrator-py-testenrichmentorchestrator-test-response-has-fields
   test_node_id: tests/test_enrichment_orchestrator.py::TestEnrichmentOrchestrator::test_response_has_fields
-  fingerprint: c4f860b21b7f1d785358d996f28b917a026747653653dca4029bee3f9e52a10f
+  fingerprint: 4d57a6d9cd18345cc788f3e757746e949fd4140575076c964c44d584a0520fbe
   exception_type: AttributeError
   failure_signature: 'AttributeError: <module ''app.engines.enrichment_orchestrator'' from ''/HOMEPATH/work/eie/app/engines/enrichment_orchestrator.py''> does not have the attribute ''call_perplexity'''
   owner: '@cryptoxdog'
@@ -316,7 +316,7 @@ entries:
   root_cause_group: orchestrator-drift
 - id: test-quarantine/test-enrichment-orchestrator-py-testenrichmentorchestrator-test-response-has-processing-time
   test_node_id: tests/test_enrichment_orchestrator.py::TestEnrichmentOrchestrator::test_response_has_processing_time
-  fingerprint: 0a0c06e8f86e2b0c1ce885bf7eb177ab8bfbda42254fb71c0d2f8ed1d622d156
+  fingerprint: 69a99e8ce67e45fc18040d154f8e8249fff4fa55e885943b7dc35043672b7148
   exception_type: AttributeError
   failure_signature: 'AttributeError: <module ''app.engines.enrichment_orchestrator'' from ''/HOMEPATH/work/eie/app/engines/enrichment_orchestrator.py''> does not have the attribute ''call_perplexity'''
   owner: '@cryptoxdog'
@@ -327,7 +327,7 @@ entries:
   root_cause_group: orchestrator-drift
 - id: test-quarantine/test-enrichment-orchestrator-py-testenrichmentorchestrator-test-returns-enrich-response
   test_node_id: tests/test_enrichment_orchestrator.py::TestEnrichmentOrchestrator::test_returns_enrich_response
-  fingerprint: 8eefb076f00c5c543510cd3aa354848719a02dd94fe5624867c857dbeb701ab4
+  fingerprint: bb35aee23657deab52d0afc3b6432a7323346fd99525060642b07542466c9670
   exception_type: AttributeError
   failure_signature: 'AttributeError: <module ''app.engines.enrichment_orchestrator'' from ''/HOMEPATH/work/eie/app/engines/enrichment_orchestrator.py''> does not have the attribute ''call_perplexity'''
   owner: '@cryptoxdog'
@@ -855,7 +855,7 @@ entries:
   root_cause_group: pr22-convergence-drift
 - id: test-quarantine/test-pr22-converge-endpoint-py-test-converge-batch-processes-inline-entities
   test_node_id: tests/test_pr22_converge_endpoint.py::test_converge_batch_processes_inline_entities
-  fingerprint: e7317d1f9d32a6d8b3293657873def979c9c3df85d7112298bf753e2c12336c4
+  fingerprint: a34ab278412abe9c51087f93e49075c9b73e79b6e577c8ec253960797225844f
   exception_type: AttributeError
   failure_signature: 'AttributeError: <module ''app.api.v1.converge'' from ''/HOMEPATH/work/eie/app/api/v1/converge.py''> does not have the attribute ''run_convergence_loop'''
   owner: '@cryptoxdog'
@@ -866,7 +866,7 @@ entries:
   root_cause_group: pr22-convergence-drift
 - id: test-quarantine/test-pr22-converge-endpoint-py-test-converge-calls-run-convergence-loop
   test_node_id: tests/test_pr22_converge_endpoint.py::test_converge_calls_run_convergence_loop
-  fingerprint: 71ae3976e217dfca1e05204610a48fa4f46293f535579bce999b905880fc02ab
+  fingerprint: 2f329783544f684dbf30cc98a9c1e3b43f3d40424d9031a09cc6138ccdf1ee72
   exception_type: AttributeError
   failure_signature: 'AttributeError: <module ''app.api.v1.converge'' from ''/HOMEPATH/work/eie/app/api/v1/converge.py''> does not have the attribute ''run_convergence_loop'''
   owner: '@cryptoxdog'
