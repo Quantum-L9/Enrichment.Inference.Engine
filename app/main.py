@@ -148,6 +148,13 @@ def _build_runtime_config() -> NodeRuntimeConfig:
             "writeback",
         ),
         max_attachments=0,
+        # The SDK's field defaults are mutually inconsistent (attachment
+        # default 10 MiB > packet default 256 KiB), so building the config
+        # without explicit sizes raises a ValidationError at import time.
+        # EIE disables attachments (max_attachments=0), so pin the
+        # attachment ceiling to zero and keep the packet default explicit.
+        max_packet_bytes=262_144,
+        max_attachment_size_bytes=0,
     )
 
 
