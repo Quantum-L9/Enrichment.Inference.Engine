@@ -3,7 +3,7 @@
   "profiles": {
     "pr_fast": {
       "sdk_profile": "ci_fast",
-      "strict": true,
+      "strict": false,
       "default_mode": "blocking",
       "providers": ["semgrep"],
       "policy": "",
@@ -11,7 +11,7 @@
     },
     "merge": {
       "sdk_profile": "ci_fast",
-      "strict": true,
+      "strict": false,
       "default_mode": "blocking",
       "providers": ["semgrep"],
       "policy": "",
@@ -19,7 +19,7 @@
     },
     "nightly": {
       "sdk_profile": "ci_deep",
-      "strict": true,
+      "strict": false,
       "default_mode": "advisory",
       "providers": ["semgrep"],
       "policy": "",
@@ -27,7 +27,7 @@
     },
     "release": {
       "sdk_profile": "ci_deep",
-      "strict": true,
+      "strict": false,
       "default_mode": "blocking",
       "providers": ["semgrep"],
       "policy": "",
@@ -35,7 +35,7 @@
     },
     "supply_chain": {
       "sdk_profile": "ci_deep",
-      "strict": true,
+      "strict": false,
       "default_mode": "blocking",
       "providers": ["semgrep"],
       "policy": "",

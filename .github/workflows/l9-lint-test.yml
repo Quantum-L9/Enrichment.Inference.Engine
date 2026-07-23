@@ -20,6 +20,7 @@ env:
   SOURCE_DIR: "."
   TEST_DIR: "tests/"
   COVERAGE_THRESHOLD: "0"
+  PYTEST_PARALLEL: "false"
 
 permissions:
   contents: read
@@ -64,10 +65,10 @@ jobs:
           command -v mypy >/dev/null 2>&1 || pip install mypy
 
       - name: ruff check
-        run: ruff check . --output-format=github
+        run: ruff check "${SOURCE_DIR}" --output-format=github
 
       - name: ruff format --check
-        run: ruff format --check .
+        run: ruff format --check "${SOURCE_DIR}"
 
       - name: mypy
         run: |
@@ -118,8 +119,12 @@ jobs:
           TESTING: "true"
         run: |
           set -euo pipefail
+          XDIST_ARGS=()
+          if [ "${PYTEST_PARALLEL}" = "true" ]; then
+            XDIST_ARGS=(-n auto)
+          fi
           PYTHONPATH=. pytest "${TEST_DIR}" \
-            -n auto \
+            "${XDIST_ARGS[@]}" \
             --cov="${SOURCE_DIR}" \
             --cov-report=xml --cov-report=term-missing \
             --cov-fail-under="${COVERAGE_THRESHOLD}" \
