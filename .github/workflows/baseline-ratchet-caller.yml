@@ -1,0 +1,38 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Baseline Ratchet — thin caller (EIE adoption)
+#
+# All ratchet logic lives in the reusable workflow pinned below by immutable
+# commit SHA (Quantum-L9/l9-ci-core). This caller only supplies repository-
+# specific inputs. CI never writes ledgers — only humans do, in reviewed PRs
+# (see .github/CODEOWNERS: .l9/baselines/** requires owner review).
+#
+# Sibling parity: Cognitive.Engine.Graphs/.github/workflows/baseline-ratchet-caller.yml
+#
+# Branch-protection check names exposed by the reusable workflow:
+#   Baseline Ratchet / Required Tests
+#   Baseline Ratchet / Quarantined Debt
+#   Baseline Ratchet / Workflow Integrity
+#   Baseline Ratchet / Ratchet Verdict
+# ═══════════════════════════════════════════════════════════════════════════
+name: Baseline Ratchet
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  ratchet:
+    name: Baseline Ratchet
+    uses: Quantum-L9/l9-ci-core/.github/workflows/baseline-ratchet.yml@d81a06ed821106a487df2e5ad06d93e347392af6
+    with:
+      core-revision: d81a06ed821106a487df2e5ad06d93e347392af6
+      sdk-revision: 0779fca8238011f8abea551895f96584676e9d17
+      python-version: "3.12"
+      pytest-paths: tests
+      test-quarantine-ledger: .l9/baselines/test-quarantine.yml
+      packet-envelope-ledger: .l9/baselines/packet-envelope.yml
+      # EIE declares no PacketEnvelope symbol and has zero deprecated
+      # references (empty-but-valid ledger); leave declaration paths empty.
+      requirements-files: requirements-ci.txt
