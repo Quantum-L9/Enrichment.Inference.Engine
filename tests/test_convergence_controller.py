@@ -371,6 +371,121 @@ class TestDomainClassificationWiring:
         assert "domain_classification" in response.feature_vector
 
 
+class TestInferenceUnlockPrioritization:
+    """Wiring: the v2 inference unlock_map prioritizes Pass 2+ search targets.
+
+    The derivation engine already produces an unlock_map every pass
+    (state.unlock_map). This suite proves the convergence loop now CONSUMES it
+    via prioritize_search_targets so the highest-leverage missing fields are
+    searched first, instead of discarding the signal.
+    """
+
+    UNLOCK_DOMAIN_SPEC = {
+        "domain": "unlock_test",
+        "ontology": {
+            "nodes": {
+                "Facility": {
+                    "properties": {
+                        "polymers_handled": {"type": "list"},
+                        "certifications": {"type": "list"},
+                        "equipment_types": {"type": "list"},
+                        # material_grade needs 2 inputs → each missing input
+                        # earns partial unlock credit (0.5).
+                        "material_grade": {
+                            "type": "string",
+                            "managed_by": "inference",
+                            "derived_from": ["polymers_handled", "certifications"],
+                            "confidence_floor": 0.6,
+                        },
+                        # recyclability_score needs only polymers_handled → that
+                        # sole-blocker input earns full unlock credit (1.0),
+                        # making polymers_handled the top target (1.5 total).
+                        "recyclability_score": {
+                            "type": "string",
+                            "managed_by": "inference",
+                            "derived_from": ["polymers_handled"],
+                            "confidence_floor": 0.6,
+                        },
+                    }
+                }
+            }
+        },
+    }
+
+    @pytest.fixture
+    def mock_settings(self):
+        settings = MagicMock()
+        settings.perplexity_api_key = "test-key"
+        settings.perplexity_model = "sonar"
+        settings.max_concurrent_variations = 3
+        settings.default_timeout_seconds = 30
+        settings.max_budget_tokens = 30000
+        return settings
+
+    @pytest.mark.asyncio
+    async def test_pass2_targets_ordered_by_unlock_value(self, mock_settings):
+        """Pass 2 target order must reflect inference unlock values.
+
+        polymers_handled (unlock 1.5) precedes certifications (0.5), and both
+        unlock-positive fields precede the zero-unlock fields (name,
+        equipment_types).
+        """
+        seen_orders: list[list[str]] = []
+
+        async def enricher(request, settings, kb_resolver, idem_store, sonar_config=None):
+            # The pass-specific schema keys mirror plan.priority_fields order.
+            seen_orders.append(list((request.schema_ or {}).keys()))
+            low = 0.5  # below the 0.6 inference floor and 0.7 gap threshold
+            return EnrichResponse(
+                fields={
+                    "polymers_handled": ["HDPE"],
+                    "certifications": ["ISO 9001"],
+                    "equipment_types": ["shredder"],
+                },
+                confidence=low,
+                variation_count=2,
+                pass_count=1,
+                inference_version="test",
+                processing_time_ms=50,
+                tokens_used=100,
+                state="completed",
+                feature_vector={
+                    "per_field_confidence": {
+                        "polymers_handled": low,
+                        "certifications": low,
+                        "equipment_types": low,
+                    }
+                },
+            )
+
+        _classification_cache.clear()
+        request = EnrichRequest(
+            entity={"name": "Acme Recycling", "website": None},
+            object_type="Facility",
+            objective="Enrich facility profile",
+        )
+        await run_convergence_loop(
+            request=request,
+            settings=mock_settings,
+            kb_resolver=MagicMock(),
+            enricher=enricher,
+            inference_rules=[],
+            domain_spec=self.UNLOCK_DOMAIN_SPEC,
+        )
+
+        assert len(seen_orders) >= 2, "convergence loop must run at least two passes"
+        pass2 = seen_orders[1]
+        for f in ("polymers_handled", "certifications"):
+            assert f in pass2, f"expected {f} among Pass 2 targets: {pass2}"
+        # Highest-unlock field leads.
+        assert pass2.index("polymers_handled") < pass2.index("certifications")
+        # Unlock-positive fields precede zero-unlock fields.
+        last_positive = max(pass2.index("polymers_handled"), pass2.index("certifications"))
+        for zero_field in ("name", "equipment_types"):
+            if zero_field in pass2:
+                assert last_positive < pass2.index(zero_field)
+
+
 class TestSonarConfigSerialization:
     """Test SonarConfig.to_dict for TransportPacket compliance."""
 
