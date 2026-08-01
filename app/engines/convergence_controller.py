@@ -30,6 +30,7 @@ from .convergence.convergence_config import ConvergenceConfig  # NEW
 from .convergence.cost_tracker import CostTracker
 from .field_classifier import DomainClassification, auto_classify_domain
 from .inference_bridge_adapter import InferenceBridge
+from .inference_bridge_v2 import prioritize_search_targets
 from .meta_prompt_planner import MetaPromptPlanner, PromptPlan
 from .search_optimizer import (
     EntitySignals,
@@ -199,6 +200,23 @@ async def run_convergence_loop(
             field_confidences=confidence_tracker.get_all_confidences(),
             uncertainty_score=state.uncertainty_score,
         )
+
+        # ── Inference-unlock target prioritization ─────────
+        # Prefer the unlock_map from the *previous* pass's inference (stored on
+        # state after that pass). Empty on Pass 1. Reorders existing priority
+        # fields only — never adds or drops targets.
+        if state.unlock_map and search_plan.priority_fields:
+            field_map = domain_classification.field_map if domain_classification else None
+            search_plan.priority_fields = prioritize_search_targets(
+                search_plan.priority_fields,
+                state.unlock_map,
+                field_map,
+            )
+            logger.info(
+                "search_targets_prioritized_by_unlock",
+                pass_number=pass_num,
+                top_targets=search_plan.priority_fields[:3],
+            )
 
         # ── Resolve optimal Sonar config for this pass ────
         sonar_config: SonarConfig | None = None
