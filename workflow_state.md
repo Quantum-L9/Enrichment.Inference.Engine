@@ -1,6 +1,6 @@
 # Workflow State — Enrichment.Inference.Engine
 
-**Last Updated:** 2026-04-11
+**Last Updated:** 2026-06-24
 **Current Phase:** PHASE 4 — Validation (L9_CANON Gap Closure)
 
 ---
@@ -16,6 +16,20 @@ The Enrichment.Inference.Engine is the Layer 2 ENRICH service in the L9 constell
 - Graph sync for pushing enriched entities to Neo4j
 
 **Recent Major Milestone:** Transport SDK cutover completed for the live node runtime — SDK now owns `/v1/execute`, handlers register through the SDK registry, and Gate-only egress replaces direct peer transport in the active runtime path.
+
+### Standalone Test Harness (No Gate)
+
+`plastics_enrichment_client.py` at repo root is **intentionally kept** as a manual integration-test script — not production code.
+
+| Item | Detail |
+| ---- | ------ |
+| **Purpose** | Exercise enrichment against [Enrichment.Inference.Engine](https://github.com/cryptoxdog/Enrichment.Inference.Engine) + [IB-Odoo_19](https://github.com/cryptoxdog/IB-Odoo_19) without routing through Gate |
+| **When to use** | Local/dev smoke tests, Odoo-side validation, plastics multi-pass Perplexity prompt experiments |
+| **Not for** | Production dispatch, CI, SDK `/v1/execute`, or Gate-authored transport |
+| **How it runs** | Direct `perplexity-sdk` calls + YAML super-prompt config (`plastics_recycling_super_prompt.yaml`); `python plastics_enrichment_client.py` from repo root |
+| **Production path** | `app/services/enrichment/waterfall_engine.py`, `app/engines/enrichment_orchestrator.py`, SDK runtime + Gate egress |
+
+Do not delete this file without confirming Odoo-side test workflows no longer depend on it.
 
 ---
 
@@ -74,6 +88,7 @@ The repo now runs on the `constellation-node-sdk` transport surface:
 | 2026-03-30 | Merge Enrichment-Deployment-pack into WaterfallEngine | L9 architecture compliance — single chassis ingress |
 | 2026-03-30 | Add consensus-mode enrichment via `handle_enrich_consensus` | Enables multi-variation LLM synthesis with field-level voting |
 | 2026-03-30 | Create `KBContext` dataclass for KB resolution | Structured context injection for domain-specific prompts |
+| 2026-06-24 | Retain `plastics_enrichment_client.py` at repo root | Standalone Gate-bypass harness for Engine + IB-Odoo_19 integration testing only |
 
 ---
 
@@ -130,6 +145,7 @@ Last run: 2026-04-11
 
 ## Recent Sessions (7-day window)
 
+- 2026-06-24: Documented `plastics_enrichment_client.py` as intentional Gate-bypass test harness for Engine ↔ IB-Odoo_19 integration (not production path)
 - 2026-04-11: L9_CANON gap closure — structlog conversion (9 files), async timeouts + error handling (event_emitter, handlers, pg_store), typing tightened, 4 new test files (39 tests), test_gap_fixes.py rewritten to match current APIs, chassis_handlers structlog bug fixed
 - ✅ 2026-04-11: Transport SDK cutover — SDK runtime adopted in `app/main.py`, Gate-only egress wired, local `chassis/` files removed, targeted transport slice green, broader transport-adjacent slice at 126 passing with 8 legacy `test_gap_fixes` failures remaining
 - 2026-04-07: Gap analysis of `gap-fixes/` vs `app/` — 10 gap fixes identified as NOT integrated, blocked on SDK chassis
