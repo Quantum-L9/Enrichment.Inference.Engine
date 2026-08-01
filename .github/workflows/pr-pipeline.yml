@@ -492,6 +492,7 @@ jobs:
             "pydantic==2.13.4" \
             "pydantic-settings==2.14.2" \
             "pytest==9.1.1" \
+            "pytest-asyncio==1.4.0" \
             "pytest-cov==7.1.0" \
             "pyyaml==6.0.3" \
             "redis==8.1.0" \
