@@ -14,6 +14,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.utils.safe_convert import safe_float
+
 logger = logging.getLogger(__name__)
 
 
@@ -82,7 +84,7 @@ class LeadRouterAgent:
 
             # Deal size fit
             min_deal = rep.get("min_deal_size", 0)
-            max_deal = rep.get("max_deal_size", float("inf"))
+            max_deal = rep.get("max_deal_size", safe_float("inf"))
             deal_size = lead_data.get("estimated_deal_size", 0)
             if min_deal <= deal_size <= max_deal:
                 score += 0.2

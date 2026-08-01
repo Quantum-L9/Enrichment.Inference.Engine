@@ -14,6 +14,8 @@ import structlog
 from constellation_node_sdk.gate import GateClient, GateClientConfig
 from constellation_node_sdk.transport import TransportPacket, create_transport_packet
 
+from app.utils.safe_convert import safe_float
+
 logger = structlog.get_logger("graph_sync_client")
 
 
@@ -35,7 +37,7 @@ class GraphSyncClient:
             GateClientConfig(
                 gate_url=gate_url,
                 local_node=source_node,
-                timeout_seconds=float(timeout),
+                timeout_seconds=safe_float(timeout),
             )
         )
         self._source = source_node

@@ -7,7 +7,7 @@ Requires: pip install perplexityai
 
 import json
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from perplexity import Perplexity
@@ -53,7 +53,7 @@ def deep_research(
         "search_results": getattr(completion, "search_results", []),
         "usage": completion.usage.model_dump() if completion.usage else {},
         "elapsed_seconds": elapsed,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "product_name": product_name,
     }
 
@@ -87,7 +87,7 @@ def targeted_research(question: str, domains: list = None, project_name: str = "
         "citations": getattr(completion, "citations", []),
         "search_results": getattr(completion, "search_results", []),
         "usage": completion.usage.model_dump() if completion.usage else {},
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "question": question,
     }
 
