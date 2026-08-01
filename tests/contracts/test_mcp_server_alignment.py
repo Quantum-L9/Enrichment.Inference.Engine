@@ -42,7 +42,7 @@ mcp_required = pytest.mark.skipif(
 # TOOL_REGISTRY live checks
 # ---------------------------------------------------------------------------
 
-CONTRACTED_TOOLS = {"enrich_contact", "lead_router", "deal_risk", "data_hygiene", "writeback"}
+CONTRACTED_TOOLS = ("data_hygiene", "deal_risk", "enrich_contact", "lead_router", "writeback")
 
 
 @mcp_required
@@ -50,7 +50,7 @@ CONTRACTED_TOOLS = {"enrich_contact", "lead_router", "deal_risk", "data_hygiene"
 def test_tool_registry_contains_all_contracted_tools() -> None:
     """Live TOOL_REGISTRY must contain all 5 contracted tools."""
     live_tools = set(TOOL_REGISTRY.keys())
-    missing = CONTRACTED_TOOLS - live_tools
+    missing = set(CONTRACTED_TOOLS) - live_tools
     assert not missing, (
         f"TOOL_REGISTRY missing contracted tools: {missing}.\n"
         "Contract: docs/contracts/agents/tool-schemas/_index.yaml\n"
@@ -82,7 +82,7 @@ def test_no_undocumented_tools_in_registry() -> None:
 
 @mcp_required
 @pytest.mark.unit
-@pytest.mark.parametrize("tool_name", list(CONTRACTED_TOOLS))
+@pytest.mark.parametrize("tool_name", CONTRACTED_TOOLS)
 def test_tool_parameters_match_contract(tool_name: str) -> None:
     """
     Live MCPTool parameters must match documented parameters in contract schema.
@@ -202,20 +202,19 @@ def test_mcp_server_no_dispatch_returns_error_not_exception() -> None:
 
 @mcp_required
 @pytest.mark.unit
-@pytest.mark.parametrize("tool_name", list(CONTRACTED_TOOLS))
+@pytest.mark.parametrize("tool_name", CONTRACTED_TOOLS)
 def test_tool_description_not_empty_in_live_registry(tool_name: str) -> None:
     """Live tool descriptions must be non-empty."""
     if tool_name not in TOOL_REGISTRY:
         pytest.skip(f"{tool_name} not in TOOL_REGISTRY")
     live_desc = TOOL_REGISTRY[tool_name].description
-    assert live_desc and len(live_desc) > 10, (
-        f"{tool_name}: TOOL_REGISTRY description is empty or too short"
-    )
+    assert live_desc, f"{tool_name}: TOOL_REGISTRY description is empty"
+    assert len(live_desc) > 10, f"{tool_name}: TOOL_REGISTRY description is too short"
 
 
 @mcp_required
 @pytest.mark.unit
-@pytest.mark.parametrize("tool_name", list(CONTRACTED_TOOLS))
+@pytest.mark.parametrize("tool_name", CONTRACTED_TOOLS)
 def test_tool_required_params_not_empty(tool_name: str) -> None:
     """Each tool must have at least one required parameter."""
     if tool_name not in TOOL_REGISTRY:

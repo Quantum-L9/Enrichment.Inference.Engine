@@ -35,3 +35,7 @@
 4. No invalid OpenAPI: `#/components/...` refs resolve (e.g. `components.responses`).
 
 When you fix a row, bump **Last reviewed** and narrow the **Follow-up** cell.
+
+## Shared CI unblock (2026-08-01)
+
+Re-stamped `tools/l9_enrichment_manifest.yaml` hashes and root governance symlinks after shared Semgrep/format/loader fixes on protected contract files.
