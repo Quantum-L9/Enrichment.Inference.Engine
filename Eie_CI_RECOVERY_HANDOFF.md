@@ -67,7 +67,13 @@ dedicated follow-up PRs, not this CI-recovery change.
 
 ## 2. Per-job classification (the actual remediation triage)
 
-### PR #122 — `claude/enrichment-inference-remediation-hmq0as` (head `5965f34`)
+### PR #122 —
+
+> **Superseded (2026-07-01):** The SDK_TOKEN-403 rows below are historical.
+> `Gate_SDK` is public; `SDK_TOKEN` and `GITLEAKS_LICENSE` are obsolete.
+> Do **not** set those secrets as a next action. See §0 `minimum_safe_next_action`.
+
+ `claude/enrichment-inference-remediation-hmq0as` (head `5965f34`)
 
 The SDK wiring in this PR is **correct** — logs show `SDK_TOKEN: ***` injected and the clone
 hitting `https://github.com/Quantum-L9/Gate_SDK.git`. The only failure is the 403 (permission).
@@ -109,12 +115,10 @@ Recovered rate-limiter fix (`app/middleware/rate_limiter.py` → returns `JSONRe
 
 **Admin / settings (cannot be done in code — same as original handoff):**
 
-- **A. `SDK_TOKEN` org secret with `Contents:Read` on `Quantum-L9/Gate_SDK`** — highest
-  priority; unblocks ~10 jobs on every PR. Fine-grained PAT (resource owner `Quantum-L9`,
-  `Gate_SDK`, Contents: Read-only) or org GitHub-App token, stored at
-  `https://github.com/organizations/Quantum-L9/settings/secrets/actions`.
-- **B. `GITLEAKS_LICENSE` org secret** — free org key from https://gitleaks.io. (Pinning the
-  action version does **not** help — see Correction 1.)
+- **A. `SDK_TOKEN` org secret** — **OBSOLETE (2026-07-01).** `Gate_SDK` is public;
+  delete the org secret if present. Do not recreate it for this repo.
+- **B. `GITLEAKS_LICENSE` org secret** — **OBSOLETE** after the binary CLI swap (action G).
+  Do not set this secret for the current gitleaks workflow.
 - **E. OpenSSF Scorecard** — `publish_results: true` needs a public repo/OIDC or a token; confirm
   `permissions:` for the new org, or scope it advisory (schedule-only). (Not observed failing on
   #114/#122; verify after the secrets land.)
@@ -125,7 +129,8 @@ Recovered rate-limiter fix (`app/middleware/rate_limiter.py` → returns `JSONRe
 - **C. Build & Push Image** — root cause was **not** registry creds. Fixed two code bugs:
   (1) `docker-build.yml` `type=sha,prefix={{branch}}-` → `prefix=sha-` (the empty `{{branch}}`
   produced the invalid `:-ff0fbce` tag); (2) added `git` + a BuildKit `sdk_token` secret so the
-  in-image `pip install ".[dev]"` can clone the private SDK (token never persisted to a layer).
+  in-image `pip install ".[dev]"` can clone Gate_SDK. Repo is public now, so the BuildKit
+  token secret is optional/legacy; anonymous clone works (see Dockerfile comments).
 - **D. Missing pipeline scripts** — the four hard-fail invocations
   (`check_compliance_terminology.py`, `run_pr_select_gates.py`, `docs_consistency_local.sh`,
   `docs_link_check_local.py`) are now existence-guarded (`if [ -f … ]; else echo advisory`),
@@ -149,8 +154,8 @@ Recovered rate-limiter fix (`app/middleware/rate_limiter.py` → returns `JSONRe
 
 ## 4. Definition of done
 
-- [ ] **A** — `SDK_TOKEN` grants `Contents:Read` on `Quantum-L9/Gate_SDK`; #122 re-run green → merge #122
-- [ ] **B/G** — `GITLEAKS_LICENSE` set, **or** gitleaks swapped to the binary CLI (v2-pin is not an option)
+- [x] **A** — `SDK_TOKEN` obsolete (`Gate_SDK` public); no secret required
+- [x] **B/G** — gitleaks binary CLI swap done; `GITLEAKS_LICENSE` not required
 - [ ] **C** — Build & Push green or scoped infra-only
 - [ ] **D** — missing pipeline scripts reconstructed or their steps guarded
 - [ ] **E** — Scorecard green or scoped advisory
