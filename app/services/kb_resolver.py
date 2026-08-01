@@ -15,7 +15,6 @@ Audit fixes applied:
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import hashlib
 import logging
 from dataclasses import dataclass, field
@@ -23,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from app.utils.safe_convert import safe_float
 
 logger = logging.getLogger("kb_resolver")
 

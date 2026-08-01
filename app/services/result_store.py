@@ -10,11 +10,12 @@ and field confidence extraction automatically.
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import uuid
 from typing import Any
 
 import structlog
+
+from app.utils.safe_convert import safe_float
 
 from ..models.schemas import EnrichResponse
 from . import pg_store

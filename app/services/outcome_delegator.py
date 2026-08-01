@@ -23,13 +23,13 @@ L9 Compliance:
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import hashlib
 import logging
 from typing import Any
 
 from app.models.enrichment import EnrichRequest
 from app.models.events import OutcomeEvent, OutcomeVerdict
+from app.utils.safe_convert import safe_float
 
 logger = logging.getLogger(__name__)
 

@@ -6,13 +6,14 @@ on a batch, the system proposes schema changes based on what it found.
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import copy
 import statistics
 from typing import Any
 
 import structlog
 from pydantic import BaseModel, Field
+
+from app.utils.safe_convert import safe_float
 
 logger = structlog.get_logger(__name__)
 

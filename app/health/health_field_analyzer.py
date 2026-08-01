@@ -9,11 +9,12 @@ integration.
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import math
 import statistics
 from collections import defaultdict
 from typing import Any
+
+from app.utils.safe_convert import safe_float
 
 from .health_models import (
     FieldHealth,

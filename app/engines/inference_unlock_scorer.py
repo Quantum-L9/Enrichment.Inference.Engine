@@ -13,11 +13,12 @@ Used by meta_prompt_planner.py to rank Pass 2+ enrichment targets.
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import structlog
+
+from app.utils.safe_convert import safe_float
 
 if TYPE_CHECKING:
     from .inference.rule_loader import RuleRegistry

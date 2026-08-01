@@ -9,10 +9,11 @@ re-enriched or re-engaged.
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, runtime_checkable
+
+from app.utils.safe_convert import safe_float
 
 from .score_models import (
     ScoreDimension,

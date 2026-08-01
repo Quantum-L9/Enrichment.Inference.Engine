@@ -14,7 +14,6 @@ Exports:
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import statistics
 from collections import defaultdict
 from collections.abc import Sequence
@@ -22,6 +21,8 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
+
+from app.utils.safe_convert import safe_float
 
 # ---------------------------------------------------------------------------
 # Enums

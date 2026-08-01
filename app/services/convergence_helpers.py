@@ -12,9 +12,10 @@ These helpers are called by the convergence controller during enrichment passes.
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import logging
 from typing import Any, cast
+
+from app.utils.safe_convert import safe_float
 
 logger = logging.getLogger(__name__)
 

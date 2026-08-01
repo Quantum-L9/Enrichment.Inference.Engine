@@ -9,13 +9,14 @@ GET  /api/v1/fields/{entity_id}/{field_name}/history — confidence time-series
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 from datetime import datetime
 from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+
+from app.utils.safe_convert import safe_float
 
 from ...core.auth import verify_api_key
 from ...core.config import Settings, get_settings

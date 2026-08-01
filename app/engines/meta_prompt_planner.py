@@ -13,10 +13,11 @@ derived-field output per Sonar token spent.
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 from typing import Any, Literal
 
 import structlog
+
+from app.utils.safe_convert import safe_float
 
 from ..models.loop_schemas import PassContext
 from ..services.domain_yaml_reader import DomainSpec

@@ -54,16 +54,11 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # Gate_SDK is public; optional SDK_TOKEN rewrite for private fallbacks.
           if [ -n "${SDK_TOKEN:-}" ]; then
             git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
-          if [ -f requirements-ci.txt ]; then
-            python -m pip install -r requirements-ci.txt
-          fi
-          python -m pip install -e . --no-deps || python -m pip install -e ".[dev]" || true
-          python -m pip install structlog pyyaml pytest fastapi
-
+          python -m pip install -r requirements-ci.txt
+          python -m pip install pyyaml pytest fastapi structlog pydantic pydantic-settings httpx aiofiles
       - name: Verify required imports
         run: |
           python - <<'PY'

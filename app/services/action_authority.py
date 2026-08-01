@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -9,6 +8,7 @@ from typing import Any
 import yaml
 
 from app.services.dependency_enforcement import assert_action_dependencies
+from app.utils.safe_convert import safe_float
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONSTITUTION_PATH = REPO_ROOT / "docs/contracts/node.constitution.yaml"

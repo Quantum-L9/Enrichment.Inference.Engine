@@ -23,7 +23,6 @@ L9 Compliance:
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import hashlib
 import json
 import logging
@@ -32,6 +31,7 @@ from dataclasses import dataclass, field, replace
 from app.engines.convergence.convergence_config import ConvergenceConfig
 from app.models.common import FieldStatus, FieldTrace
 from app.models.enrichment import ConvergenceState, InferenceResult
+from app.utils.safe_convert import safe_float
 
 logger = logging.getLogger(__name__)
 

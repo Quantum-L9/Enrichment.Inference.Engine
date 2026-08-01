@@ -21,7 +21,6 @@ against the customer's actual field schema + domain YAML.
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import asyncio
 import concurrent.futures
 import hashlib
@@ -33,6 +32,8 @@ from enum import StrEnum
 from typing import Any
 
 import structlog
+
+from app.utils.safe_convert import safe_float
 
 logger = structlog.get_logger("simulation_bridge")
 

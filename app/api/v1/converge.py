@@ -10,12 +10,13 @@ Integration fixes applied (PR#22 merge pass):
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from app.utils.safe_convert import safe_float
 
 from ...core.auth import verify_api_key
 from ...core.config import Settings, get_settings

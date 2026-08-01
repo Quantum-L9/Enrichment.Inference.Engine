@@ -8,12 +8,13 @@ removing direct peer `/v1/execute` calls from ENRICH.
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 from typing import Any
 
 import structlog
 from constellation_node_sdk.gate import GateClient, GateClientConfig
 from constellation_node_sdk.transport import TransportPacket, create_transport_packet
+
+from app.utils.safe_convert import safe_float
 
 logger = structlog.get_logger("graph_sync_client")
 

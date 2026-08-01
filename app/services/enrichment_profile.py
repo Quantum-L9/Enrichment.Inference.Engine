@@ -7,12 +7,13 @@ allocates budget proportionally.
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 from enum import StrEnum
 from typing import Any, Protocol
 
 import structlog
 from pydantic import BaseModel, Field
+
+from app.utils.safe_convert import safe_float
 
 logger = structlog.get_logger(__name__)
 

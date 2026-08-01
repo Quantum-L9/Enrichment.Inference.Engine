@@ -18,9 +18,10 @@ Aligned with graph repo's DomainSpec field metadata:
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 from dataclasses import dataclass, field
 from typing import Any
+
+from app.utils.safe_convert import safe_float
 
 
 @dataclass

@@ -30,13 +30,14 @@ Integration:
 
 from __future__ import annotations
 
-from app.utils.safe_convert import safe_float
 import logging
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+from app.utils.safe_convert import safe_float
 
 logger = logging.getLogger(__name__)
 
