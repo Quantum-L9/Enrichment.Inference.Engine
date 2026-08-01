@@ -838,9 +838,23 @@ def _eval_range_gate(entity_val: Any, gate: dict[str, Any]) -> tuple[GateVerdict
         val = float(entity_val)
     except (ValueError, TypeError):
         return GateVerdict.FAIL, "Non-numeric value for range gate"
-    if min_val is not None and val < safe_float(min_val):
+
+    def _bound(raw: Any, label: str) -> float | None:
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(label) from None
+
+    try:
+        min_f = _bound(min_val, "min")
+        max_f = _bound(max_val, "max")
+    except ValueError as err:
+        return GateVerdict.FAIL, f"Non-numeric {err} bound for range gate"
+    if min_f is not None and val < min_f:
         return GateVerdict.FAIL, f"{val} < min {min_val}"
-    if max_val is not None and val > safe_float(max_val):
+    if max_f is not None and val > max_f:
         return GateVerdict.FAIL, f"{val} > max {max_val}"
     return GateVerdict.PASS, f"{val} in range [{min_val}, {max_val}]"
 

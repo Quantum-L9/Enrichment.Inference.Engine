@@ -7,7 +7,6 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, Field
 
-from app.utils.safe_convert import safe_float
 
 from .rule_loader import Operator, RuleCondition, RuleDefinition, RuleRegistry
 
@@ -59,6 +58,13 @@ def _eval_not_in(value: Any, target: Any) -> bool:
     return _normalise(value) != _normalise(target)
 
 
+def _finite_floats(left: Any, right: Any) -> tuple[float, float] | None:
+    try:
+        return float(left), float(right)
+    except (TypeError, ValueError):
+        return None
+
+
 def _evaluate_condition(condition: RuleCondition, value: Any) -> bool:
     op = condition.operator
     target = condition.value
@@ -73,14 +79,18 @@ def _evaluate_condition(condition: RuleCondition, value: Any) -> bool:
         return False
     if op is Operator.EQUALS:
         return _normalise(value) == _normalise(target)
-    if op is Operator.GT:
-        return safe_float(value) > safe_float(target)
-    if op is Operator.LT:
-        return safe_float(value) < safe_float(target)
-    if op is Operator.GTE:
-        return safe_float(value) >= safe_float(target)
-    if op is Operator.LTE:
-        return safe_float(value) <= safe_float(target)
+    if op in {Operator.GT, Operator.LT, Operator.GTE, Operator.LTE}:
+        pair = _finite_floats(value, target)
+        if pair is None:
+            return False
+        left, right = pair
+        if op is Operator.GT:
+            return left > right
+        if op is Operator.LT:
+            return left < right
+        if op is Operator.GTE:
+            return left >= right
+        return left <= right
     if op is Operator.CONTAINS:
         return _eval_contains(value, target)
     if op is Operator.IN:
