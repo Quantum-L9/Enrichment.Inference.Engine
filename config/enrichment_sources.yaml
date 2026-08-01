@@ -44,7 +44,7 @@ sources:
     quality_tier: standard
 
   linkedin:
-    enabled: false
+    enabled: true
     api_endpoint: https://api.linkedin.com/v2
     auth_type: oauth2
     rate_limit: 100/day
