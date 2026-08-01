@@ -155,7 +155,10 @@ def extract_corrective_targets(
         if status not in _TRIGGER_STATUSES:
             continue
 
-        trace = rule_trace.get(field_name) or FieldTrace(field_name=field_name, status=status)
+        trace: FieldTrace | None = rule_trace.get(field_name)
+        if trace is None:
+            # Synthesise a minimal trace so we still create a target
+            trace = FieldTrace(field_name=field_name, status=status)
 
         unlock_score = _extract_unlock_score(field_name, trace)
         if unlock_score < _MIN_UNLOCK_SCORE and status != FieldStatus.INPUTS_MISSING:
