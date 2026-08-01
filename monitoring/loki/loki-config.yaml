@@ -4,7 +4,7 @@
 # Impact: Observability 85% -> 90%
 # ============================================================
 
-auth_enabled: true
+auth_enabled: false
 
 server:
   http_listen_port: 3100
