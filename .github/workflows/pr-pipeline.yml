@@ -525,8 +525,15 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.sha }}
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          set -euo pipefail
           echo "L9 select-gates: base=$BASE_REF head=$HEAD_REF"
+          if [ -n "${SDK_TOKEN:-}" ]; then
+            git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+          # Packet/envelope gates need the SDK transport types.
+          python -m pip install             "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@0779fca8238011f8abea551895f96584676e9d17"
           python scripts/l9_contract_control.py select-gates --base "$BASE_REF" --head "$HEAD_REF" > gates.json
           python3 local_pr_pipeline/run_pr_select_gates.py gates.json
 
