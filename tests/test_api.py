@@ -36,7 +36,7 @@ class TestHealth:
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "ok"
-        assert body["version"] == "2.2.0"
+        assert body["version"] == "2.3.0"
         assert "circuit_breaker_state" in body
 
     def test_kb_status_fields_present(self):

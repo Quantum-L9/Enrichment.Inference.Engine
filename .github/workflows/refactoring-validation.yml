@@ -53,16 +53,21 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
       - name: Install Dependencies
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
-          pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true
+          if ! pip install -e ".[dev]" 2>/dev/null && ! pip install -e . 2>/dev/null; then
+            echo "editable install unavailable; proceeding with requirements-ci.txt deps" >&2
+          fi
 
       - name: Run Ruff Linter (BLOCKING)
         run: |
