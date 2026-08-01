@@ -282,3 +282,28 @@ print("debug")                               # C-04: always structlog
 | What are the 7 gates?               | Mandatory Pre-Commit Command           |
 | What are the contracts?             | Architectural Contracts (C-01 to C-21) |
 | What owns `/v1/execute`?            | C-21 + Protected Files                 |
+
+---
+
+## Cursor Cloud specific instructions
+
+Durable, non-obvious notes for running this service in the Cursor Cloud VM. The startup update script already provisions a `.venv` and installs `pip install -e ".[dev]"`, so do not repeat dependency installation here.
+
+### Runtime facts
+- Python 3.12 only (`.python-version` = 3.12). The dev virtualenv lives at `.venv/`; run tools as `.venv/bin/<tool>` (the `Makefile` auto-selects `.venv/bin/python` when present).
+- `constellation-node-sdk` is a pinned **git** dependency from the private `Quantum-L9/Gate_SDK` repo. Installs rely on authenticated git (the cloud VM's `gh`/git credentials). If `pip install` fails on that line, it is a git-auth/network issue, not a code issue.
+- The system package `python3.12-venv` is required to create the venv and is baked into the VM snapshot. If `python3 -m venv` ever fails on a fresh pod, run `sudo apt-get update && sudo apt-get install -y python3.12-venv`.
+
+### Running the app (dev)
+- No Docker is needed to run the API. Start it directly: `.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000` (add `--reload` for hot reload). `make dev` uses Docker Compose and is not required in the VM.
+- The ASGI object is `app.main:app` (built via the SDK's `create_node_app`).
+- Startup **degrades gracefully**: Redis and Postgres are lazy/optional (the app logs `redis_connected` even with no Redis running because the client connects lazily), and no external API keys are required to boot. `GET /api/v1/health` is unauthenticated and returns `{"status":"ok","version":"2.3.0",...}`.
+
+### Auth + enrichment testing
+- `/api/v1/enrich` and `/api/v1/enrich/batch` require an `X-API-Key` header whose SHA-256 hash matches `API_KEY_HASH`. Create a gitignored `.env.local` (loaded via `.env`/`.env.local`) with a dev key, e.g. raw key `dev-local-key` and `API_KEY_HASH=3700285e3c8496a57e45eb1ccd43f2424852788576961320fbb31f86f17edb61`. This file is gitignored and persists in the VM snapshot; recreate it if missing.
+- A live enrich call returns HTTP 200 with a structured `EnrichResponse`, but `state` will be `"failed"` (`no_valid_responses ... APIConnectionError`) unless a valid `PERPLEXITY_API_KEY` is set — the LLM call is the only piece that needs an external secret. The successful-enrichment path (mocked LLM) is covered by the unit tests.
+
+### Lint / test gotchas
+- Lint is `ruff` only in practice; `mypy` is non-blocking per `WAIVER-001`. `ruff format --check .` currently flags two pre-existing files on `main` (`app/agents/deal_risk.py`, `app/score/score_models.py`) — not introduced by env setup; do not "fix" `score_models.py` (T5-protected).
+- Do not run the whole suite blindly: `tests/services/test_outcome_delegator.py` fails at **collection** on `main` (references `OutcomeVerdict.GRAPH_REJECTED`, which does not exist). The canonical gate suites (`tests/unit`, `tests/compliance`, `tests/ci`) pass — run those.
+- `pytest.ini` hard-codes `--cov-fail-under=60`, computed against all of `app`. Running a narrow subset will report low coverage and exit non-zero even when every test passes; that is a coverage-gate artifact, not a test failure. Running tests regenerates the gitignored `coverage.xml`/`htmlcov` — discard those.
