@@ -19,7 +19,7 @@ from app.services.outcome_delegator import (
 )
 
 
-def _event(verdict=OutcomeVerdict.GRAPH_REJECTED, failed_gates=None, deltas=None):
+def _event(verdict=OutcomeVerdict.REJECTED, failed_gates=None, deltas=None):
     ev = MagicMock(spec=OutcomeEvent)
     ev.entity_id = "ent-001"
     ev.run_id = "run-abc"
@@ -38,11 +38,11 @@ def test_parse_valid_payload():
     payload = {
         "entity_id": "e1",
         "run_id": "r1",
-        "verdict": "graph_rejected",
+        "verdict": "rejected",
         "failed_gates": [],
     }
     event = parse_outcome_payload(payload)
-    assert event.verdict == OutcomeVerdict.GRAPH_REJECTED
+    assert event.verdict == OutcomeVerdict.REJECTED
 
 
 def test_parse_missing_key_raises():
@@ -116,7 +116,7 @@ def test_no_duplicates():
 
 
 def test_rejected_produces_request():
-    ev = _event(OutcomeVerdict.GRAPH_REJECTED)
+    ev = _event(OutcomeVerdict.REJECTED)
     req = build_corrective_request(ev)
     assert req is not None
 

@@ -1506,7 +1506,7 @@ def generate_executive_brief(
     revops_impact = {
         "lead_qualification": (
             f"Gate pass rate moves from {seed_stats.gate_pass_rate}% → {enriched_stats.gate_pass_rate}%. "
-            f"Unqualified leads drop out automatically — no human review needed for gate failures."
+            f"Unqualified leads are filtered automatically — no human review needed for gate failures."
         ),
         "pipeline_prioritization": (
             f"Composite scoring active on {enriched_stats.scoring_dimensions_active}/"

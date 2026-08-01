@@ -476,12 +476,13 @@ jobs:
         env:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install pyyaml pytest pytest-cov fastapi
-          if ! pip install -e . --no-deps 2>/dev/null; then
-            echo "editable install unavailable; proceeding with explicit deps" >&2
+          if [ -n "${SDK_TOKEN:-}" ]; then
+            git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
+          pip install -r requirements-ci.txt
+          pip install pyyaml pytest pytest-cov fastapi structlog
 
       - name: Verify node constitution
         run: |
