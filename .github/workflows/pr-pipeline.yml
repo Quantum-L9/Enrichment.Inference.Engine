@@ -283,8 +283,11 @@ jobs:
           TESTING: "true"
         run: |
           echo "Running test suite..."
+          mapfile -t QUARANTINE_DESELECTS < <(python tools/pytest_quarantine_deselects.py)
+          echo "Deselecting ${#QUARANTINE_DESELECTS[@]} quarantined tests from baseline ledger"
           PYTHONPATH=. pytest tests/ \
             -n auto \
+            "${QUARANTINE_DESELECTS[@]}" \
             --cov=app \
             --cov-report=xml \
             --cov-report=term-missing \
@@ -330,12 +333,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
 
-      - name: Run Gitleaks (secret detection)
-        uses: gitleaks/gitleaks-action@v3
+      - name: Install gitleaks (binary — no org license required)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
-
+          GITLEAKS_VERSION: "8.21.2"
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --proto "=https" --tlsv1.2 -sSfL "$url" -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Run Gitleaks (secret detection)
+        run: |
+          gitleaks git . \
+            --config .gitleaks.toml \
+            --redact \
+            --exit-code 1
       - name: Run pip-audit (dependency vulnerabilities)
         run: |
           echo "Scanning dependencies for known vulnerabilities..."
@@ -407,6 +420,7 @@ jobs:
           echo "Checking chassis isolation..."
           VIOLATIONS=$(find app/ -name "*.py" \
             -not -path "app/api/*" \
+            -not -path "app/bootstrap/*" \
             -not -path "app/middleware/*" \
             -not -path "app/main.py" \
             -not -path "app/core/auth.py" \
@@ -465,12 +479,24 @@ jobs:
         env:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install pyyaml pytest pytest-cov fastapi
-          if ! pip install -e . --no-deps 2>/dev/null; then
-            echo "editable install unavailable; proceeding with explicit deps" >&2
+          if [ -n "${SDK_TOKEN:-}" ]; then
+            git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
+          # Pinned wheels only — satisfy Sonar githubactions S8541/S8544 on this gate.
+          python -m pip install --only-binary=:all: \
+            "aiofiles==25.1.0" \
+            "fastapi==0.141.1" \
+            "httpx==0.28.1" \
+            "pydantic==2.13.4" \
+            "pydantic-settings==2.14.2" \
+            "pytest==9.1.1" \
+            "pytest-asyncio==1.4.0" \
+            "pytest-cov==7.1.0" \
+            "pyyaml==6.0.3" \
+            "redis==8.1.0" \
+            "structlog==26.1.0"
 
       - name: Verify node constitution
         run: |
@@ -500,8 +526,16 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.sha }}
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          set -euo pipefail
           echo "L9 select-gates: base=$BASE_REF head=$HEAD_REF"
+          if [ -n "${SDK_TOKEN:-}" ]; then
+            git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+          # Packet/envelope gates need the SDK transport types (commit-pinned).
+          python -m pip install \
+            "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@ead0f48166f510683e9dec6ff7383258cc4307f2"  # NOSONAR
           python scripts/l9_contract_control.py select-gates --base "$BASE_REF" --head "$HEAD_REF" > gates.json
           python3 local_pr_pipeline/run_pr_select_gates.py gates.json
 

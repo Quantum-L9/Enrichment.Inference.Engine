@@ -31,6 +31,7 @@ from dataclasses import dataclass, field, replace
 from app.engines.convergence.convergence_config import ConvergenceConfig
 from app.models.common import FieldStatus, FieldTrace
 from app.models.enrichment import ConvergenceState, InferenceResult
+from app.utils.safe_convert import safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ def _extract_unlock_score(field_name: str, trace: FieldTrace) -> float:
     """
     unlock_map: dict = getattr(trace, "extra", {}).get("unlock_map", {})
     dependents = unlock_map.get(field_name, [])
-    return float(len(dependents))
+    return safe_float(len(dependents))
 
 
 def _extract_missing_inputs(trace: FieldTrace) -> tuple[str, ...]:
@@ -154,10 +155,13 @@ def extract_corrective_targets(
         if status not in _TRIGGER_STATUSES:
             continue
 
-        trace: FieldTrace | None = rule_trace.get(field_name)
-        if trace is None:
-            # Synthesise a minimal trace so we still create a target
-            trace = FieldTrace(field_name=field_name, status=status)
+        candidate = rule_trace.get(field_name)
+        # Prefer a real FieldTrace; synthesize when missing or mocked.
+        trace = (
+            candidate
+            if isinstance(candidate, FieldTrace)
+            else FieldTrace(field_name=field_name, status=status)
+        )
 
         unlock_score = _extract_unlock_score(field_name, trace)
         if unlock_score < _MIN_UNLOCK_SCORE and status != FieldStatus.INPUTS_MISSING:

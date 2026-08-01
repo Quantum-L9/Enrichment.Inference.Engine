@@ -33,7 +33,9 @@ class RiskAssessment:
     risk_score: float  # 0.0 = no risk, 1.0 = critical risk
     risk_level: str  # low, medium, high, critical
     risk_factors: list[str] = field(default_factory=list)
-    recommendations: list[str] = field(default_factory=list)  # l9:flatcase-ok -- single English word
+    recommendations: list[str] = field(
+        default_factory=list
+    )  # l9:flatcase-ok -- single English word
     dimension_scores: dict[str, float] = field(default_factory=dict)
 
 
