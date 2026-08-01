@@ -71,6 +71,36 @@ def sample_field_confidence_map():
             pass_discovered=1,
         )
     )
+    fcm.set(
+        FieldConfidence(
+            field_name="material_grade",
+            value="A",
+            confidence=0.88,
+            source=FieldSource.INFERENCE,
+            variation_agreement=None,
+            pass_discovered=1,
+        )
+    )
+    fcm.set(
+        FieldConfidence(
+            field_name="facility_tier",
+            value="tier_2",
+            confidence=0.45,
+            source=FieldSource.INFERENCE,
+            variation_agreement=None,
+            pass_discovered=2,
+        )
+    )
+    fcm.set(
+        FieldConfidence(
+            field_name="Name",
+            value="Acme Plastics",
+            confidence=1.0,
+            source=FieldSource.CRM,
+            variation_agreement=None,
+            pass_discovered=1,
+        )
+    )
     return fcm
 
 

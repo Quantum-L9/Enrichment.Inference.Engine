@@ -108,7 +108,7 @@ def test_notify_score_invalidate_is_fire_and_forget():
 
     import asyncio
 
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         router.notify_score_invalidate(tenant_id="tenant-x", entity_id="ent-007", domain="plastics")
     )
 

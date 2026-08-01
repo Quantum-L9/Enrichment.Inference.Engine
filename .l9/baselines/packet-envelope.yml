@@ -1,0 +1,9 @@
+# Baseline ledger: deprecated PacketEnvelope references (fail-closed debt).
+# Enforced by l9-ci-sdk baseline ratchet — see .github/workflows/baseline-ratchet-caller.yml.
+# EIE has ZERO deprecated PacketEnvelope findings (verified by
+# `l9-ci baseline scan-packet-envelope` at baseline commit f056a01), so this
+# ledger is intentionally empty. Any future PacketEnvelope reference fails CI.
+# Changes to this file require CODEOWNERS review (.github/CODEOWNERS).
+schema_version: 1.0.0
+gate: pre-commit/packet-envelope-prohibited
+entries: []

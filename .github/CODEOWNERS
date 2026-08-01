@@ -14,6 +14,11 @@
 # Default owner for everything
 * @cryptoxdog
 
+# Baseline-ratchet debt ledgers — human-reviewed only.
+# CI never writes these files; every entry is owned, expiring debt.
+# Any PR that touches a ledger requires explicit owner review.
+/.l9/baselines/             @cryptoxdog
+
 # Infrastructure & Configuration
 /.github/                   @cryptoxdog
 /docker-compose*.yml        @cryptoxdog

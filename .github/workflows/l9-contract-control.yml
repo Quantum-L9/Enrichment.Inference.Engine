@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -26,7 +26,7 @@ jobs:
             echo "SDK_TOKEN is required to install private SDK dependencies"
             exit 1
           fi
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/cryptoxdog/".insteadOf "https://github.com/cryptoxdog/"
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           python -m pip install pyyaml pytest pytest-cov fastapi
           if [ -f requirements-ci.txt ]; then
@@ -62,7 +62,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -89,7 +89,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -101,7 +101,7 @@ jobs:
             echo "SDK_TOKEN is required to install private SDK dependencies"
             exit 1
           fi
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/cryptoxdog/".insteadOf "https://github.com/cryptoxdog/"
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           python -m pip install pyyaml pytest pytest-cov fastapi
           if [ -f requirements-ci.txt ]; then

@@ -88,7 +88,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
@@ -151,7 +151,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
@@ -160,7 +160,10 @@ jobs:
             pyproject.toml
 
       - name: Install linting tools
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
 
@@ -251,7 +254,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
@@ -260,10 +263,15 @@ jobs:
             pyproject.toml
 
       - name: Install dependencies
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
-          pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true
+          if ! pip install -e ".[dev]" 2>/dev/null && ! pip install -e . 2>/dev/null; then
+            echo "editable install unavailable; proceeding with requirements-ci.txt deps" >&2
+          fi
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
@@ -309,13 +317,16 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
       - name: Install security tools
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
 
@@ -374,13 +385,16 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
       - name: Install compliance tools
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
 
@@ -442,16 +456,21 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
       - name: Install L9 dependencies
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
           pip install pyyaml pytest pytest-cov fastapi
-          pip install -e . --no-deps 2>/dev/null || true
+          if ! pip install -e . --no-deps 2>/dev/null; then
+            echo "editable install unavailable; proceeding with explicit deps" >&2
+          fi
 
       - name: Verify node constitution
         run: |
@@ -508,7 +527,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
