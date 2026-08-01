@@ -149,17 +149,6 @@ entries:
   expires: '2026-09-21'
   removal_condition: test-passes
   root_cause_group: inference-registry-drift
-- id: test-quarantine/test-outcome-delegator-py
-  test_node_id: tests/services/test_outcome_delegator.py
-  fingerprint: b71e9f6cd008ce08edd800a4317b24812d1e3c47dc643e9d8be2d1625057f893
-  exception_type: AttributeError
-  failure_signature: 'AttributeError: type object ''OutcomeVerdict'' has no attribute ''GRAPH_REJECTED'''
-  owner: '@cryptoxdog'
-  issue: Quantum-L9/Enrichment.Inference.Engine#139
-  introduced_before: f056a01
-  expires: '2026-09-21'
-  removal_condition: test-passes
-  root_cause_group: outcome-verdict-enum-drift
 - id: test-quarantine/test-api-py-testconsensusengine-test-perfect-agreement
   test_node_id: tests/test_api.py::TestConsensusEngine::test_perfect_agreement
   fingerprint: c98c01afd0d82f76b2db290d2772aa9d8572fb38ace12da5689e58928e797168

@@ -14,6 +14,8 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, Field
 
+from app.utils.safe_convert import safe_float
+
 logger = structlog.get_logger(__name__)
 
 MIN_FILL_RATE = 0.60
@@ -185,9 +187,9 @@ def _build_confidence_map(confidences_raw: Any) -> dict[str, float]:
         conf_map: dict[str, float] = {}
         for k, v in entries.items():
             if isinstance(v, dict):
-                conf_map[k] = float(v.get("confidence", 0.0))
+                conf_map[k] = safe_float(v.get("confidence", 0.0))
             else:
-                conf_map[k] = float(v) if isinstance(v, (int, float)) else 0.0
+                conf_map[k] = safe_float(v) if isinstance(v, (int, float)) else 0.0
         return conf_map
     return {}
 
@@ -363,7 +365,7 @@ def _compute_distribution(values: list[Any], field_type: str) -> dict[str, Any]:
     if not values:
         return {}
     if field_type == "float":
-        nums = [float(v) for v in values if isinstance(v, (int, float))]
+        nums = [safe_float(v) for v in values if isinstance(v, (int, float))]
         if not nums:
             return {}
         return {

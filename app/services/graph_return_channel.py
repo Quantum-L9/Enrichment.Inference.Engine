@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from constellation_node_sdk.transport import TransportPacket, create_transport_packet
 from constellation_node_sdk.transport.errors import TransportValidationError
+
+from app.utils.safe_convert import safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +70,7 @@ def extract_targets_from_packet(packet: TransportPacket) -> list[EnrichmentTarge
     tenant_id = packet.tenant.org_id
     packet_id = str(packet.header.packet_id)
     for output in packet.payload.get("inference_outputs", []):
-        confidence = float(output.get("confidence", 0.0))
+        confidence = safe_float(output.get("confidence", 0.0))
         if confidence < CONFIDENCE_FLOOR:
             logger.debug(
                 "Skipping low-confidence inference output (%.3f < %.3f) for entity=%s field=%s",
@@ -113,10 +116,14 @@ class GraphReturnChannel:
         self._drained: int = 0
         self._rejected: int = 0
 
+    _lock = threading.Lock()
+
     @classmethod
     def get_instance(cls) -> GraphReturnChannel:
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     @classmethod

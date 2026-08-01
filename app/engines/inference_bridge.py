@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.utils.safe_convert import safe_float
+
 
 @dataclass
 class InferenceResult:
@@ -199,7 +201,7 @@ class InferenceBridge:
                 return computation.get("default")
             thresholds = computation.get("thresholds", [])
             for t in thresholds:
-                if val <= t.get("max", float("inf")):
+                if val <= t.get("max", safe_float("inf")):
                     return t.get("label")
             return computation.get("default")
 
