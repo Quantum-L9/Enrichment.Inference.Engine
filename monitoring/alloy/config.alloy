@@ -78,6 +78,11 @@ loki.write "local" {
   endpoint {
     url = "http://loki:3100/loki/api/v1/push"
 
+    // Required when monitoring/loki/loki-config.yaml has auth_enabled: true
+    headers = {
+      "X-Scope-OrgID" = "eie",
+    }
+
     // Retry on failure
     retry_on_http_429 = true
   }

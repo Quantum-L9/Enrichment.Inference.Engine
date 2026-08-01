@@ -58,4 +58,4 @@ table_manager:
   retention_period: 720h               # 30-day retention
 
 analytics:
-  reporting_enabled: false
+  reporting_enabled: true
