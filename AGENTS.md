@@ -300,7 +300,20 @@ Durable, non-obvious notes for running this service in the Cursor Cloud VM. The 
 - Startup **degrades gracefully**: Redis and Postgres are lazy/optional (the app logs `redis_connected` even with no Redis running because the client connects lazily), and no external API keys are required to boot. `GET /api/v1/health` is unauthenticated and returns `{"status":"ok","version":"2.3.0",...}`.
 
 ### Auth + enrichment testing
-- `/api/v1/enrich` and `/api/v1/enrich/batch` require an `X-API-Key` header whose SHA-256 hash matches `API_KEY_HASH`. Create a gitignored `.env.local` (loaded via `.env`/`.env.local`) with a dev key, e.g. raw key `dev-local-key` and `API_KEY_HASH=3700285e3c8496a57e45eb1ccd43f2424852788576961320fbb31f86f17edb61`. This file is gitignored and persists in the VM snapshot; recreate it if missing.
+- `/api/v1/enrich` and `/api/v1/enrich/batch` require an `X-API-Key` header whose SHA-256 hex digest matches `API_KEY_HASH`. Create a gitignored `.env.local` (loaded via `.env`/`.env.local`) with a throwaway local key — generate the pair yourself and never commit either value:
+
+  ```bash
+  python3 - <<'PY'
+  import hashlib, pathlib, secrets
+  key = secrets.token_urlsafe(24)
+  digest = hashlib.sha256(key.encode()).hexdigest()
+  pathlib.Path(".env.local").write_text(f"API_KEY_HASH={digest}\n", encoding="utf-8")
+  print("Wrote .env.local with API_KEY_HASH")
+  print(f"X-API-Key (save once, do not commit): {key}")
+  PY
+  ```
+
+  For Kubernetes secret generation, prefer `infra/k8s/scripts/generate-secrets.sh`. `.env.local` is gitignored and persists in the VM snapshot; recreate it if missing.
 - A live enrich call returns HTTP 200 with a structured `EnrichResponse`, but `state` will be `"failed"` (`no_valid_responses ... APIConnectionError`) unless a valid `PERPLEXITY_API_KEY` is set — the LLM call is the only piece that needs an external secret. The successful-enrichment path (mocked LLM) is covered by the unit tests.
 
 ### Lint / test gotchas
