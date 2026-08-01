@@ -148,6 +148,8 @@ def _build_runtime_config() -> NodeRuntimeConfig:
             "writeback",
         ),
         max_attachments=0,
+        max_packet_bytes=1_048_576,
+        max_attachment_size_bytes=1_048_576,
     )
 
 

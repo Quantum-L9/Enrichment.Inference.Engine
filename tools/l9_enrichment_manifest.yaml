@@ -6,7 +6,7 @@ description: Active transport/runtime contract manifest for Enrichment.Inference
 contracts:
   active_transport_runtime:
     - path: app/main.py
-      sha256: 9330790cd7abea20824efb5038bb17f430837e67543e3eeadcaaa87293b4504a
+      sha256: e3c5a04db8d4e929a84b4bcfa612c14e7f8e6c9ecaa17637f87278700c8fe643
       required_refs:
         - AGENTS.md
         - ARCHITECTURE.md
@@ -61,7 +61,7 @@ contracts:
         - AGENTS.md
       description: "Field confidence schema contract"
     - path: app/score/score_models.py
-      sha256: 14df007b8beb5c698b54948c9476df40c68e8ac705e4ae96cf409c89b2327f4c
+      sha256: 46c4831a8cc16412ad2362e7ae8f0ee6fc374213d5069fef14b79d930621c118
       required_refs:
         - AGENTS.md
       description: "Score schema contract"
