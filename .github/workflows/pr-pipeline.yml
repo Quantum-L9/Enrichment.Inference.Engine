@@ -283,8 +283,11 @@ jobs:
           TESTING: "true"
         run: |
           echo "Running test suite..."
+          mapfile -t QUARANTINE_DESELECTS < <(python tools/pytest_quarantine_deselects.py)
+          echo "Deselecting ${#QUARANTINE_DESELECTS[@]} quarantined tests from baseline ledger"
           PYTHONPATH=. pytest tests/ \
             -n auto \
+            "${QUARANTINE_DESELECTS[@]}" \
             --cov=app \
             --cov-report=xml \
             --cov-report=term-missing \

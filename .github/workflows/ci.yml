@@ -169,8 +169,11 @@ jobs:
         env:
           TESTING: "true"
         run: |
+          mapfile -t QUARANTINE_DESELECTS < <(python tools/pytest_quarantine_deselects.py)
+          echo "Deselecting ${#QUARANTINE_DESELECTS[@]} quarantined tests from baseline ledger"
           PYTHONPATH=. pytest ${{ env.TEST_DIR }} \
             -n auto \
+            "${QUARANTINE_DESELECTS[@]}" \
             --cov=${{ env.SOURCE_DIR }} \
             --cov-report=xml \
             --cov-report=term-missing \

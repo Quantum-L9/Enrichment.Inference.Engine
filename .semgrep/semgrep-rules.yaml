@@ -40,7 +40,6 @@ rules:
       - "venv/**"
       - "Current Work/**"
       - ".venv/**"
-      - ".venv/**"
 
 # ---------------------------------------------------------------------------
 # RULE 2: httpx.AsyncClient must use async context manager

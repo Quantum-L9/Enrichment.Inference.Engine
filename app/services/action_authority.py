@@ -74,7 +74,7 @@ def evaluate_writeback_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(enriched_data, dict):
         raise ActionAuthorizationError("writeback enriched_data must be an object")
 
-    threshold = safe_float(payload.get("confidence_threshold", 0.70))
+    threshold = safe_float(payload.get("confidence_threshold"), 0.70)
     if threshold < 0.0 or threshold > 1.0:
         raise ActionAuthorizationError("writeback confidence_threshold must be within [0, 1]")
 
