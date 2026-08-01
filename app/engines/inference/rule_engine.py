@@ -7,7 +7,6 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, Field
 
-
 from .rule_loader import Operator, RuleCondition, RuleDefinition, RuleRegistry
 
 logger = structlog.get_logger(__name__)
