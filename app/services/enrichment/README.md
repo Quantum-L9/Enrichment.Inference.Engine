@@ -227,6 +227,20 @@ fallback_behavior:
   on_quality_below_threshold: use_inference_bridge
 ```
 
+### Source Enablement & Provider Gating
+
+A source's availability is decided at **three layers**, in order of authority:
+
+| Layer | File | Read at runtime? | Effect of `enabled: true` |
+|-------|------|------------------|---------------------------|
+| 1. Runtime gate | `config/provider_config.yaml` | **Yes** — `WaterfallEngine` (`waterfall_engine.py`) skips any provider whose `enabled` is not `true` | Provider is eligible for the waterfall **when its matching `*_API_KEY` env var is also set (e.g. `PERPLEXITY_API_KEY`)** |
+| 2. Dependency contract | `docs/contracts/dependencies/<provider>.yaml` | Loaded by `runtime_attestation.py` via `_index.yaml`; the `enabled` field itself is **descriptive** (not enforced) | Documents the provider as an intended-active dependency |
+| 3. Source catalog | `config/enrichment_sources.yaml` | **No** — not imported by any module; descriptive catalog only | Records catalog intent |
+
+> Enabling a source at layers 2–3 (this change) does **not** by itself cause a live billed API call. The effective gate is layer 1 (`provider_config.yaml`) **plus** a present API key. `zoominfo` and `clay` are already `enabled: true` at layer 1; the other external providers require both their key and a layer-1 flip before they call out.
+
+Activated in this change (documentation/intent flip; no runtime call turned on): `linkedin` (catalog) and the `apollo`, `clearbit`, `hunter`, `zoominfo` dependency contracts.
+
 ## Testing
 
 ```bash
