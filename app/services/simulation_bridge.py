@@ -33,6 +33,8 @@ from typing import Any
 
 import structlog
 
+from app.utils.safe_convert import safe_float
+
 logger = structlog.get_logger("simulation_bridge")
 
 _SONAR_CONCURRENCY_LIMIT = 5
@@ -836,9 +838,23 @@ def _eval_range_gate(entity_val: Any, gate: dict[str, Any]) -> tuple[GateVerdict
         val = float(entity_val)
     except (ValueError, TypeError):
         return GateVerdict.FAIL, "Non-numeric value for range gate"
-    if min_val is not None and val < float(min_val):
+
+    def _bound(raw: Any, label: str) -> float | None:
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(label) from None
+
+    try:
+        min_f = _bound(min_val, "min")
+        max_f = _bound(max_val, "max")
+    except ValueError as err:
+        return GateVerdict.FAIL, f"Non-numeric {err} bound for range gate"
+    if min_f is not None and val < min_f:
         return GateVerdict.FAIL, f"{val} < min {min_val}"
-    if max_val is not None and val > float(max_val):
+    if max_f is not None and val > max_f:
         return GateVerdict.FAIL, f"{val} > max {max_val}"
     return GateVerdict.PASS, f"{val} in range [{min_val}, {max_val}]"
 
@@ -899,6 +915,22 @@ def run_gates(
     return results
 
 
+def _normalize_scoring_value(raw_value: Any, spec: dict[str, Any]) -> float:
+    """Map a raw entity value to a 0..1 scoring dimension."""
+    if isinstance(raw_value, list):
+        return min(len(raw_value) / 4.0, 1.0)
+    if isinstance(raw_value, bool):
+        return 1.0 if raw_value else 0.0
+    if isinstance(raw_value, (int, float)):
+        max_val = safe_float(spec.get("max_value"), safe_float(raw_value) * 2 or 1.0)
+        if abs(max_val) < 1e-12:
+            max_val = 1.0
+        return min(safe_float(raw_value) / max_val, 1.0)
+    if isinstance(raw_value, str) and raw_value:
+        return 0.7
+    return 0.0
+
+
 def run_scoring(
     entity_fields: dict[str, Any],
     scoring_specs: list[dict[str, Any]],
@@ -912,7 +944,7 @@ def run_scoring(
     for spec in scoring_specs:
         prop = spec.get("candidate_property", spec.get("candidate_prop", spec.get("source", "")))
         norm_prop = _normalize_field(prop)
-        weight = float(spec.get("weight", 1.0))
+        weight = safe_float(spec.get("weight"), 1.0)
         raw_value = normalized.get(norm_prop)
 
         if raw_value is None:
@@ -929,17 +961,7 @@ def run_scoring(
             total_weight += weight
             continue
 
-        if isinstance(raw_value, list):
-            score = min(len(raw_value) / 4.0, 1.0)
-        elif isinstance(raw_value, (int, float)):
-            max_val = float(spec.get("max_value", raw_value * 2 or 1))
-            score = min(float(raw_value) / max_val, 1.0)
-        elif isinstance(raw_value, bool):
-            score = 1.0 if raw_value else 0.0
-        elif isinstance(raw_value, str) and raw_value:
-            score = 0.7
-        else:
-            score = 0.0
+        score = _normalize_scoring_value(raw_value, spec)
 
         ws = round(score * weight, 4)
         results.append(
@@ -1504,7 +1526,7 @@ def generate_executive_brief(
     revops_impact = {
         "lead_qualification": (
             f"Gate pass rate moves from {seed_stats.gate_pass_rate}% → {enriched_stats.gate_pass_rate}%. "
-            f"Unqualified leads drop out automatically — no human review needed for gate failures."
+            f"Unqualified leads are filtered automatically — no human review needed for gate failures."
         ),
         "pipeline_prioritization": (
             f"Composite scoring active on {enriched_stats.scoring_dimensions_active}/"

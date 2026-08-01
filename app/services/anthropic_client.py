@@ -47,18 +47,20 @@ class AnthropicClient:
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
-        self._http = httpx.AsyncClient(
-            base_url=_ANTHROPIC_BASE,
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": _ANTHROPIC_VERSION,
-                "Content-Type": "application/json",
-            },
-            timeout=httpx.Timeout(timeout),
-        )
         self._failure_count = 0
         self._circuit_open = False
         self._availability_cache: tuple[bool, float] | None = None
+
+    def _client_kwargs(self) -> dict[str, Any]:
+        return {
+            "base_url": _ANTHROPIC_BASE,
+            "headers": {
+                "x-api-key": self._api_key,
+                "anthropic-version": _ANTHROPIC_VERSION,
+                "Content-Type": "application/json",
+            },
+            "timeout": httpx.Timeout(self._timeout),
+        }
 
     async def complete(self, prompt: str, max_tokens: int = 2000) -> str:
         """Return the text content of the first response block."""
@@ -83,15 +85,16 @@ class AnthropicClient:
         if self._availability_cache and (now - self._availability_cache[1]) < 60:
             return self._availability_cache[0]
         try:
-            resp = await self._http.post(
-                "/v1/messages",
-                json={
-                    "model": self._model,
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "ping"}],
-                },
-                timeout=5,
-            )
+            async with httpx.AsyncClient(**self._client_kwargs()) as client:
+                resp = await client.post(
+                    "/v1/messages",
+                    json={
+                        "model": self._model,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "ping"}],
+                    },
+                    timeout=5,
+                )
             available = resp.status_code in (200, 400)
         except Exception:
             available = False
@@ -112,7 +115,8 @@ class AnthropicClient:
         for attempt, delay in enumerate(_RETRY_DELAYS, start=1):
             start = time.monotonic()
             try:
-                resp = await self._http.post("/v1/messages", json=body)
+                async with httpx.AsyncClient(**self._client_kwargs()) as client:
+                    resp = await client.post("/v1/messages", json=body)
                 latency_ms = int((time.monotonic() - start) * 1000)
 
                 if resp.status_code in _RETRYABLE_STATUS:

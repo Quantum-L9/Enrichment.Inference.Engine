@@ -18,6 +18,8 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app.utils.safe_convert import safe_float
+
 from ...core.auth import verify_api_key
 from ...core.config import Settings, get_settings
 from ...services import pg_store
@@ -136,8 +138,8 @@ async def get_proposals(
             "field_name": p.field_name,
             "field_type": p.field_type,
             "source": p.source,
-            "fill_rate": float(p.fill_rate),
-            "avg_confidence": float(p.avg_confidence),
+            "fill_rate": safe_float(p.fill_rate),
+            "avg_confidence": safe_float(p.avg_confidence),
             "sample_values": p.sample_values,
             "proposed_gate": p.proposed_gate,
             "proposed_scoring_dimension": p.proposed_scoring_dimension,
