@@ -210,9 +210,7 @@ async def run_convergence_loop(
         # empty on Pass 1 (no inference has run yet), so this is a no-op until
         # the signal exists and only reorders — never adds or drops — targets.
         if state.unlock_map and search_plan.priority_fields:
-            field_map = (
-                domain_classification.field_map if domain_classification else None
-            )
+            field_map = domain_classification.field_map if domain_classification else None
             search_plan.priority_fields = prioritize_search_targets(
                 search_plan.priority_fields,
                 state.unlock_map,
