@@ -11,5 +11,4 @@ protocol: http
 auth_method: API key (ZOOMINFO_API_KEY)
 role: Waterfall enrichment source — B2B company and contact data
 source_file: app/services/enrichment/sources/zoominfo.py
-enabled: false  # disabled unless ZOOMINFO_API_KEY is set
-
+enabled: true  # declared active in the dependency contract; runtime call still gated by ZOOMINFO_API_KEY + config/provider_config.yaml

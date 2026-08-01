@@ -65,3 +65,6 @@ coverage.xml
 coverage.json
 htmlcov/
 .coverage
+
+# Local agent session scratch (not project source)
+memory-bank/

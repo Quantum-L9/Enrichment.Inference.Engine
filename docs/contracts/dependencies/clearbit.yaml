@@ -12,6 +12,5 @@ auth_method: Bearer token (CLEARBIT_API_KEY)
 base_url_env: CLEARBIT_API_KEY  # key used for auth; base URL in clearbit.py
 role: Waterfall enrichment source — company data enrichment
 source_file: app/services/enrichment/sources/clearbit.py
-enabled: false  # disabled unless CLEARBIT_API_KEY is set and enabled in provider_config.yaml
+enabled: true  # declared active in the dependency contract; runtime call still gated by CLEARBIT_API_KEY + config/provider_config.yaml
 fallback: next source in waterfall chain
-
