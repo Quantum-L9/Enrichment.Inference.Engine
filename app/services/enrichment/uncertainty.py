@@ -71,8 +71,7 @@ def apply_uncertainty(
             - filtered_fields: Names of fields that were filtered
             - risk_level: "low", "medium", "high", or "critical"
     """
-    if config is None:
-        config = UncertaintyConfig()
+    config = config if config is not None else UncertaintyConfig()
 
     flags: list[str] = []
     filtered: list[str] = []

@@ -164,7 +164,11 @@ async def handle_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any
             if rules_path.exists():
                 async with aiofiles.open(rules_path) as f:
                     content = await f.read()
-                    inference_rules = yaml.safe_load(content) or []
+                    loaded = yaml.safe_load(content) or []
+                    if isinstance(loaded, dict):
+                        inference_rules = loaded.get("inference_rules") or loaded.get("rules") or []
+                    else:
+                        inference_rules = loaded
 
     response = await run_convergence_loop(
         request=request,

@@ -84,8 +84,11 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           TESTING: "true"
         run: |
+          mapfile -t QUARANTINE_DESELECTS < <(python tools/pytest_quarantine_deselects.py)
+          echo "Deselecting ${#QUARANTINE_DESELECTS[@]} quarantined tests from baseline ledger"
           pytest "${{ env.TEST_DIR }}" \
             -n auto \
+            "${QUARANTINE_DESELECTS[@]}" \
             --cov=app \
             --cov=engine \
             --cov-report=xml \

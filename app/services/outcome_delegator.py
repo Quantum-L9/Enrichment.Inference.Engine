@@ -29,6 +29,7 @@ from typing import Any
 
 from app.models.enrichment import EnrichRequest
 from app.models.events import OutcomeEvent, OutcomeVerdict
+from app.utils.safe_convert import safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ def parse_outcome_payload(payload: dict[str, Any]) -> OutcomeEvent:
         verdict=verdict,
         failed_gates=list(payload.get("failed_gates", [])),
         confidence_deltas=dict(payload.get("confidence_deltas", {})),
-        graph_score=float(payload.get("graph_score", 0.0)),
+        graph_score=safe_float(payload.get("graph_score", 0.0)),
         metadata=dict(payload.get("metadata", {})),
     )
 
