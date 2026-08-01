@@ -12,6 +12,7 @@ These helpers are called by the convergence controller during enrichment passes.
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 import logging
 from typing import Any, cast
 
@@ -36,11 +37,11 @@ def extract_per_field_confidence(feature_vector: dict[str, Any]) -> dict[str, fl
     """
     pfc = feature_vector.get("per_field_confidence")
     if isinstance(pfc, dict) and pfc:
-        return {str(k): float(v) for k, v in pfc.items()}
+        return {str(k): safe_float(v) for k, v in pfc.items()}
 
     fs = feature_vector.get("field_scores")
     if isinstance(fs, dict) and fs:
-        return {str(k): float(v) for k, v in fs.items()}
+        return {str(k): safe_float(v) for k, v in fs.items()}
 
     flat = feature_vector.get("confidence") or feature_vector.get("overall_confidence")
     if flat is not None:

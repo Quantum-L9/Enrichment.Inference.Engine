@@ -11,6 +11,7 @@ POST /api/v1/proposals/{proposal_id}/approve — human approval
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 import uuid
 from typing import Annotated, Any
 
@@ -136,8 +137,8 @@ async def get_proposals(
             "field_name": p.field_name,
             "field_type": p.field_type,
             "source": p.source,
-            "fill_rate": float(p.fill_rate),
-            "avg_confidence": float(p.avg_confidence),
+            "fill_rate": safe_float(p.fill_rate),
+            "avg_confidence": safe_float(p.avg_confidence),
             "sample_values": p.sample_values,
             "proposed_gate": p.proposed_gate,
             "proposed_scoring_dimension": p.proposed_scoring_dimension,

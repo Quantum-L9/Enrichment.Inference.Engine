@@ -10,6 +10,7 @@ and field confidence extraction automatically.
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 import uuid
 from typing import Any
 
@@ -207,11 +208,11 @@ class ResultStore:
             return [
                 {
                     "pass_number": r.pass_number,
-                    "confidence": float(r.confidence),
+                    "confidence": safe_float(r.confidence),
                     "source": r.source,
                     "field_value": r.field_value,
                     "variation_agreement": (
-                        float(r.variation_agreement) if r.variation_agreement else None
+                        safe_float(r.variation_agreement) if r.variation_agreement else None
                     ),
                     "recorded_at": r.recorded_at.isoformat(),
                 }

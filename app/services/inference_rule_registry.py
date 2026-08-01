@@ -16,6 +16,7 @@ Usage:
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 import logging
 import re
 from collections.abc import Callable
@@ -269,11 +270,11 @@ def infer_material_grade_from_mfi(entity: dict, ctx: InferenceContext) -> Infere
                 (0.5, "HD_pipe", 0.88),
                 (2.0, "HD_blow", 0.85),
                 (8.0, "HD_injection", 0.83),
-                (float("inf"), "HD_fiber", 0.80),
+                (safe_float("inf"), "HD_fiber", 0.80),
             ],
         )
     else:
-        grade_map = kb.get(material, [(float("inf"), "generic", 0.60)])
+        grade_map = kb.get(material, [(safe_float("inf"), "generic", 0.60)])
     for threshold, grade, conf in grade_map:
         if mfi_n <= threshold:
             return InferenceResult(
@@ -429,7 +430,7 @@ def _register_condition_rule(rule_name: str, spec: dict[str, Any]) -> None:
     target_field = spec["field"]
     conditions = spec.get("conditions", [])
     default_value = spec.get("value")
-    confidence = float(spec.get("confidence", 0.65))
+    confidence = safe_float(spec.get("confidence", 0.65))
 
     def _rule(entity: dict, ctx: InferenceContext) -> InferenceResult | None:
         for cond in conditions:

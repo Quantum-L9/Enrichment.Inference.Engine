@@ -13,6 +13,7 @@ derived-field output per Sonar token spent.
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 from typing import Any, Literal
 
 import structlog
@@ -295,7 +296,7 @@ class MetaPromptPlanner:
                     and hasattr(prop, "metadata")
                     and isinstance(prop.metadata, dict)
                 ):
-                    return float(prop.metadata.get("scoring_weight", 0.0))
+                    return safe_float(prop.metadata.get("scoring_weight", 0.0))
         return 0.0
 
     def _generate_reasoning(

@@ -23,6 +23,7 @@ L9 Compliance:
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 import hashlib
 import logging
 from typing import Any
@@ -72,7 +73,7 @@ def parse_outcome_payload(payload: dict[str, Any]) -> OutcomeEvent:
         verdict=verdict,
         failed_gates=list(payload.get("failed_gates", [])),
         confidence_deltas=dict(payload.get("confidence_deltas", {})),
-        graph_score=float(payload.get("graph_score", 0.0)),
+        graph_score=safe_float(payload.get("graph_score", 0.0)),
         metadata=dict(payload.get("metadata", {})),
     )
 

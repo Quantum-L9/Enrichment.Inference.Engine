@@ -30,6 +30,7 @@ Integration:
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 import logging
 from collections import deque
 from collections.abc import Callable
@@ -88,7 +89,7 @@ def _collect_edges_from_node(node_def: dict) -> list[DerivationEdge]:
                 target=prop_name,
                 inputs=tuple(derived_from),
                 inference_rule=prop_def.get("inference_rule"),
-                confidence_floor=float(prop_def.get("confidence_floor", 0.6)),
+                confidence_floor=safe_float(prop_def.get("confidence_floor", 0.6)),
                 managed_by=prop_def.get("managed_by", "computed"),
             )
         )

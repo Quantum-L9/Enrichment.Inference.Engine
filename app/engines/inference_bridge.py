@@ -18,6 +18,7 @@ Aligned with graph repo's DomainSpec field metadata:
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -199,7 +200,7 @@ class InferenceBridge:
                 return computation.get("default")
             thresholds = computation.get("thresholds", [])
             for t in thresholds:
-                if val <= t.get("max", float("inf")):
+                if val <= t.get("max", safe_float("inf")):
                     return t.get("label")
             return computation.get("default")
 

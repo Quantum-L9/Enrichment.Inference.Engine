@@ -13,6 +13,7 @@ Used by meta_prompt_planner.py to rank Pass 2+ enrichment targets.
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -178,7 +179,7 @@ def score_and_rank_fields(
     def priority_key(field_dict: dict) -> float:
         field_name = field_dict["field_name"]
         is_gate_critical = field_dict.get("is_gate_critical", False)
-        scoring_weight = float(field_dict.get("scoring_weight", 0.0))
+        scoring_weight = safe_float(field_dict.get("scoring_weight", 0.0))
         unlock_score_obj = unlock_scores.get(field_name)
 
         base = 1000 if is_gate_critical else 0

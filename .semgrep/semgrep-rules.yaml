@@ -38,6 +38,8 @@ rules:
       - "tests/**"
       - "scripts/**"
       - "venv/**"
+      - "Current Work/**"
+      - ".venv/**"
       - ".venv/**"
 
 # ---------------------------------------------------------------------------
@@ -68,6 +70,8 @@ rules:
     exclude:
       - "tests/**"
       - "venv/**"
+      - "Current Work/**"
+      - ".venv/**"
 
 # ---------------------------------------------------------------------------
 # RULE 3: Singleton pattern must use lock for thread safety
@@ -101,6 +105,8 @@ rules:
     exclude:
       - "tests/**"
       - "venv/**"
+      - "Current Work/**"
+      - ".venv/**"
 
 # ---------------------------------------------------------------------------
 # RULE 4: float() conversion should handle ValueError
@@ -133,6 +139,8 @@ rules:
     exclude:
       - "tests/**"
       - "venv/**"
+      - "Current Work/**"
+      - ".venv/**"
 
 # ---------------------------------------------------------------------------
 # RULE 5: No eval() — Security vulnerability
@@ -158,6 +166,8 @@ rules:
       - "tests/**"
       - "scripts/**"
       - "venv/**"
+      - "Current Work/**"
+      - ".venv/**"
 
 # ---------------------------------------------------------------------------
 # RULE 6: SQL queries must use parameterized queries
@@ -187,6 +197,8 @@ rules:
     exclude:
       - "tests/**"
       - "venv/**"
+      - "Current Work/**"
+      - ".venv/**"
 
 # ---------------------------------------------------------------------------
 # RULE 7: No pickle for deserialization — Security
@@ -209,6 +221,8 @@ rules:
     exclude:
       - "tests/**"
       - "venv/**"
+      - "Current Work/**"
+      - ".venv/**"
 
 # ---------------------------------------------------------------------------
 # RULE 8: No logger.getChild() with structlog
@@ -233,3 +247,5 @@ rules:
     exclude:
       - "tests/**"
       - "venv/**"
+      - "Current Work/**"
+      - ".venv/**"

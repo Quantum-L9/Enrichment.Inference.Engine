@@ -30,6 +30,7 @@ Consumes:
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 import hashlib
 import logging
 from dataclasses import dataclass, field
@@ -160,7 +161,7 @@ def _qualifier_alignment_score(
         if qv_str.lower() in fv_str.lower() or fv_str.lower() in qv_str.lower():
             matched += 0.5
 
-    return float(min(matched / len(query_qualifiers), 1.0))
+    return safe_float(min(matched / len(query_qualifiers), 1.0))
 
 
 class NAryInferenceEngine:
@@ -271,7 +272,7 @@ class NAryInferenceEngine:
                     continue
 
                 # Certainty factor model
-                cf = float(
+                cf = safe_float(
                     np.clip(
                         rule.certainty_factor * fact.confidence * (rule.hop_decay**hop_count),
                         0.0,
@@ -335,7 +336,7 @@ class NAryInferenceEngine:
             if f.confidence < min_confidence:
                 continue
             qa_score = _qualifier_alignment_score(query_quals, f.qualifiers)
-            relevance = float(np.clip(f.confidence * qa_score, 0.0, 1.0))
+            relevance = safe_float(np.clip(f.confidence * qa_score, 0.0, 1.0))
             scored.append((f, relevance))
         scored.sort(key=lambda x: -x[1])
         return scored[:top_k]
@@ -357,7 +358,7 @@ class NAryInferenceEngine:
         for result in nary_results:
             combined.append(result.to_rule_engine_format())
 
-        combined.sort(key=lambda x: -float(x.get("confidence", 0.0)))
+        combined.sort(key=lambda x: -safe_float(x.get("confidence", 0.0)))
         return combined
 
     def _match_antecedents(

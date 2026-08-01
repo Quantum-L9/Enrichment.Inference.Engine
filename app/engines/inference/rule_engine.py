@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 from typing import Any
 
 import structlog
@@ -72,13 +73,13 @@ def _evaluate_condition(condition: RuleCondition, value: Any) -> bool:
     if op is Operator.EQUALS:
         return _normalise(value) == _normalise(target)
     if op is Operator.GT:
-        return float(value) > float(target)
+        return safe_float(value) > safe_float(target)
     if op is Operator.LT:
-        return float(value) < float(target)
+        return safe_float(value) < safe_float(target)
     if op is Operator.GTE:
-        return float(value) >= float(target)
+        return safe_float(value) >= safe_float(target)
     if op is Operator.LTE:
-        return float(value) <= float(target)
+        return safe_float(value) <= safe_float(target)
     if op is Operator.CONTAINS:
         return _eval_contains(value, target)
     if op is Operator.IN:

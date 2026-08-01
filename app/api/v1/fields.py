@@ -9,6 +9,7 @@ GET  /api/v1/fields/{entity_id}/{field_name}/history — confidence time-series
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -69,7 +70,7 @@ async def get_field_confidence_map(
             source = latest_entry["source"]
             pass_num = latest_entry["pass_number"]
         else:
-            conf = float(latest.confidence)
+            conf = safe_float(latest.confidence)
             source = "enrichment"
             pass_num = latest.pass_count
 

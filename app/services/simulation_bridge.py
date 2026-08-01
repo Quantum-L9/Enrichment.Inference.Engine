@@ -21,6 +21,7 @@ against the customer's actual field schema + domain YAML.
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 import asyncio
 import concurrent.futures
 import hashlib
@@ -836,9 +837,9 @@ def _eval_range_gate(entity_val: Any, gate: dict[str, Any]) -> tuple[GateVerdict
         val = float(entity_val)
     except (ValueError, TypeError):
         return GateVerdict.FAIL, "Non-numeric value for range gate"
-    if min_val is not None and val < float(min_val):
+    if min_val is not None and val < safe_float(min_val):
         return GateVerdict.FAIL, f"{val} < min {min_val}"
-    if max_val is not None and val > float(max_val):
+    if max_val is not None and val > safe_float(max_val):
         return GateVerdict.FAIL, f"{val} > max {max_val}"
     return GateVerdict.PASS, f"{val} in range [{min_val}, {max_val}]"
 
@@ -912,7 +913,7 @@ def run_scoring(
     for spec in scoring_specs:
         prop = spec.get("candidate_property", spec.get("candidate_prop", spec.get("source", "")))
         norm_prop = _normalize_field(prop)
-        weight = float(spec.get("weight", 1.0))
+        weight = safe_float(spec.get("weight", 1.0))
         raw_value = normalized.get(norm_prop)
 
         if raw_value is None:
@@ -932,8 +933,8 @@ def run_scoring(
         if isinstance(raw_value, list):
             score = min(len(raw_value) / 4.0, 1.0)
         elif isinstance(raw_value, (int, float)):
-            max_val = float(spec.get("max_value", raw_value * 2 or 1))
-            score = min(float(raw_value) / max_val, 1.0)
+            max_val = safe_float(spec.get("max_value", raw_value * 2 or 1))
+            score = min(safe_float(raw_value) / max_val, 1.0)
         elif isinstance(raw_value, bool):
             score = 1.0 if raw_value else 0.0
         elif isinstance(raw_value, str) and raw_value:

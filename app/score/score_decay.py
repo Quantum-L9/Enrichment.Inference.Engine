@@ -9,6 +9,7 @@ re-enriched or re-engaged.
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, runtime_checkable
@@ -296,7 +297,7 @@ class DecayEngine:
             dimension_results: list[DimensionDecayResult] = []
             for dim, ds in snapshot.dimension_scores.items():
                 decay_config = profile.get_decay_config(dim)
-                days_elapsed = float(i * 7)
+                days_elapsed = safe_float(i * 7)
                 factor = compute_decay_factor(
                     days_elapsed=days_elapsed,
                     half_life_days=decay_config.half_life_days,

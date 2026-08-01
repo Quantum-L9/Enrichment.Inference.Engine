@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -73,7 +74,7 @@ def evaluate_writeback_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(enriched_data, dict):
         raise ActionAuthorizationError("writeback enriched_data must be an object")
 
-    threshold = float(payload.get("confidence_threshold", 0.70))
+    threshold = safe_float(payload.get("confidence_threshold", 0.70))
     if threshold < 0.0 or threshold > 1.0:
         raise ActionAuthorizationError("writeback confidence_threshold must be within [0, 1]")
 
@@ -90,7 +91,7 @@ def evaluate_writeback_payload(payload: dict[str, Any]) -> dict[str, Any]:
     skip_reasons: dict[str, str] = {}
 
     for field_name in enriched_data:
-        confidence = float(field_confidences.get(field_name, 0.0))
+        confidence = safe_float(field_confidences.get(field_name, 0.0))
         if confidence >= threshold:
             written_fields.append(field_name)
         else:

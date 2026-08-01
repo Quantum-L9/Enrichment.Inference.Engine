@@ -8,6 +8,7 @@ removing direct peer `/v1/execute` calls from ENRICH.
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 from typing import Any
 
 import structlog
@@ -35,7 +36,7 @@ class GraphSyncClient:
             GateClientConfig(
                 gate_url=gate_url,
                 local_node=source_node,
-                timeout_seconds=float(timeout),
+                timeout_seconds=safe_float(timeout),
             )
         )
         self._source = source_node

@@ -15,6 +15,7 @@ Audit fixes applied:
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 import hashlib
 import logging
 from dataclasses import dataclass, field
@@ -209,9 +210,9 @@ class KBResolver:
                 r
                 for r in self.index.inference_rules
                 if r.get("_polymer") == key
-                and float(r.get("confidence", 0)) >= confidence_threshold
+                and safe_float(r.get("confidence", 0)) >= confidence_threshold
             ]
-            rules.sort(key=lambda r: float(r.get("confidence", 0)), reverse=True)
+            rules.sort(key=lambda r: safe_float(r.get("confidence", 0)), reverse=True)
 
             added = 0
             for rule in rules:

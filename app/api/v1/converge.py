@@ -10,6 +10,7 @@ Integration fixes applied (PR#22 merge pass):
 
 from __future__ import annotations
 
+from app.utils.safe_convert import safe_float
 from typing import Any
 
 import structlog
@@ -173,7 +174,7 @@ async def converge_single(
     await store.save(state)
 
     convergence_reason = getattr(conv_response, "convergence_reason", "completed")
-    cost_usd = float(conv_response.tokens_used) * settings.token_rate_usd_per_1k / 1000.0
+    cost_usd = safe_float(conv_response.tokens_used) * settings.token_rate_usd_per_1k / 1000.0
 
     return ConvergeSingleResponse(
         run_id=state.run_id,

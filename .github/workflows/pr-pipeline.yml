@@ -330,12 +330,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
 
-      - name: Run Gitleaks (secret detection)
-        uses: gitleaks/gitleaks-action@v3
+      - name: Install gitleaks (binary — no org license required)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
-
+          GITLEAKS_VERSION: "8.21.2"
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "$url" -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Run Gitleaks (secret detection)
+        run: |
+          gitleaks git . \
+            --config .gitleaks.toml \
+            --redact \
+            --exit-code 1
       - name: Run pip-audit (dependency vulnerabilities)
         run: |
           echo "Scanning dependencies for known vulnerabilities..."
@@ -407,6 +417,7 @@ jobs:
           echo "Checking chassis isolation..."
           VIOLATIONS=$(find app/ -name "*.py" \
             -not -path "app/api/*" \
+            -not -path "app/bootstrap/*" \
             -not -path "app/middleware/*" \
             -not -path "app/main.py" \
             -not -path "app/core/auth.py" \
