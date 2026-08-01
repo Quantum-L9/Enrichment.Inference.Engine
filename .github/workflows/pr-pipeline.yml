@@ -339,7 +339,7 @@ jobs:
         run: |
           set -euo pipefail
           url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSfL "$url" -o gitleaks.tar.gz
+          curl --proto "=https" --tlsv1.2 -sSfL "$url" -o gitleaks.tar.gz
           tar -xzf gitleaks.tar.gz gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
           gitleaks version
@@ -485,7 +485,6 @@ jobs:
             git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
           pip install -r requirements-ci.txt
-          pip install pyyaml pytest pytest-cov fastapi structlog
 
       - name: Verify node constitution
         run: |

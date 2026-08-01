@@ -915,6 +915,22 @@ def run_gates(
     return results
 
 
+def _normalize_scoring_value(raw_value: Any, spec: dict[str, Any]) -> float:
+    """Map a raw entity value to a 0..1 scoring dimension."""
+    if isinstance(raw_value, list):
+        return min(len(raw_value) / 4.0, 1.0)
+    if isinstance(raw_value, bool):
+        return 1.0 if raw_value else 0.0
+    if isinstance(raw_value, (int, float)):
+        max_val = safe_float(spec.get("max_value"), safe_float(raw_value) * 2 or 1.0)
+        if abs(max_val) < 1e-12:
+            max_val = 1.0
+        return min(safe_float(raw_value) / max_val, 1.0)
+    if isinstance(raw_value, str) and raw_value:
+        return 0.7
+    return 0.0
+
+
 def run_scoring(
     entity_fields: dict[str, Any],
     scoring_specs: list[dict[str, Any]],
@@ -945,19 +961,7 @@ def run_scoring(
             total_weight += weight
             continue
 
-        if isinstance(raw_value, list):
-            score = min(len(raw_value) / 4.0, 1.0)
-        elif isinstance(raw_value, (int, float)):
-            max_val = safe_float(spec.get("max_value"), safe_float(raw_value) * 2 or 1.0)
-            if max_val == 0.0:
-                max_val = 1.0
-            score = min(safe_float(raw_value) / max_val, 1.0)
-        elif isinstance(raw_value, bool):
-            score = 1.0 if raw_value else 0.0
-        elif isinstance(raw_value, str) and raw_value:
-            score = 0.7
-        else:
-            score = 0.0
+        score = _normalize_scoring_value(raw_value, spec)
 
         ws = round(score * weight, 4)
         results.append(

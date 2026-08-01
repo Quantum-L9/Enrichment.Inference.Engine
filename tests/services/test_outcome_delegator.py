@@ -93,7 +93,8 @@ def test_gate_no_colon_ignored():
 def test_delta_negative_included():
     ev = _event(failed_gates=[], deltas={"a": -0.3, "b": 0.1, "c": -0.5})
     fields = _select_target_fields(ev)
-    assert "a" in fields and "c" in fields
+    assert "a" in fields
+    assert "c" in fields
     assert "b" not in fields
 
 

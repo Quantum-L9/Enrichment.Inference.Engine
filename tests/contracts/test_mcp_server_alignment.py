@@ -208,9 +208,8 @@ def test_tool_description_not_empty_in_live_registry(tool_name: str) -> None:
     if tool_name not in TOOL_REGISTRY:
         pytest.skip(f"{tool_name} not in TOOL_REGISTRY")
     live_desc = TOOL_REGISTRY[tool_name].description
-    assert live_desc and len(live_desc) > 10, (
-        f"{tool_name}: TOOL_REGISTRY description is empty or too short"
-    )
+    assert live_desc, f"{tool_name}: TOOL_REGISTRY description is empty"
+    assert len(live_desc) > 10, f"{tool_name}: TOOL_REGISTRY description is too short"
 
 
 @mcp_required
