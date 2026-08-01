@@ -19,13 +19,13 @@ from app.services.outcome_delegator import (
 )
 
 
-def _event(verdict=OutcomeVerdict.GRAPH_REJECTED, failed_gates=None, deltas=None):
+def _event(verdict=OutcomeVerdict.REJECTED, failed_gates=None, deltas=None):
     ev = MagicMock(spec=OutcomeEvent)
     ev.entity_id = "ent-001"
     ev.run_id = "run-abc"
     ev.verdict = verdict
-    ev.failed_gates = failed_gates or ["gate:material_grade"]
-    ev.confidence_deltas = deltas or {"material_grade": -0.30}
+    ev.failed_gates = ["gate:material_grade"] if failed_gates is None else failed_gates
+    ev.confidence_deltas = {"material_grade": -0.30} if deltas is None else deltas
     ev.graph_score = 0.42
     ev.metadata = {}
     return ev
@@ -38,11 +38,11 @@ def test_parse_valid_payload():
     payload = {
         "entity_id": "e1",
         "run_id": "r1",
-        "verdict": "graph_rejected",
+        "verdict": "rejected",
         "failed_gates": [],
     }
     event = parse_outcome_payload(payload)
-    assert event.verdict == OutcomeVerdict.GRAPH_REJECTED
+    assert event.verdict == OutcomeVerdict.REJECTED
 
 
 def test_parse_missing_key_raises():
@@ -93,7 +93,8 @@ def test_gate_no_colon_ignored():
 def test_delta_negative_included():
     ev = _event(failed_gates=[], deltas={"a": -0.3, "b": 0.1, "c": -0.5})
     fields = _select_target_fields(ev)
-    assert "a" in fields and "c" in fields
+    assert "a" in fields
+    assert "c" in fields
     assert "b" not in fields
 
 
@@ -116,7 +117,7 @@ def test_no_duplicates():
 
 
 def test_rejected_produces_request():
-    ev = _event(OutcomeVerdict.GRAPH_REJECTED)
+    ev = _event(OutcomeVerdict.REJECTED)
     req = build_corrective_request(ev)
     assert req is not None
 
@@ -143,7 +144,7 @@ def test_elevated_max_variations():
 
 def test_pass_label_set():
     req = build_corrective_request(_event())
-    assert req.pass_label == _CORRECTIVE_PASS_LABEL
+    assert req.entity["_pass_label"] == _CORRECTIVE_PASS_LABEL
 
 
 def test_idempotency_key_deterministic():
@@ -161,10 +162,10 @@ def test_idempotency_key_differs_by_run():
 
 def test_metadata_includes_graph_score():
     req = build_corrective_request(_event(deltas={"f": -0.2}))
-    assert "graph_score" in req.metadata
+    assert "graph_score" in req.entity["_outcome_metadata"]
 
 
 def test_source_run_id_propagated():
     ev = _event()
     req = build_corrective_request(ev)
-    assert req.source_run_id == ev.run_id
+    assert req.entity["_source_run_id"] == ev.run_id

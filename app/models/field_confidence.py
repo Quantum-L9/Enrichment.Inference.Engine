@@ -22,6 +22,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.utils.safe_convert import safe_float
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -67,7 +69,7 @@ class FieldConfidence(BaseModel):
     @field_validator("confidence", mode="before")
     @classmethod
     def clamp_confidence(cls, v: Any) -> float:
-        return max(0.0, min(1.0, float(v)))
+        return max(0.0, min(1.0, safe_float(v)))
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +210,7 @@ def compute_field_confidences(
     reserved = {"confidence", "tokens_used", "processing_time_ms"}
 
     for payload in validated_payloads:
-        payload_conf = float(payload.get("confidence", 0.0))
+        payload_conf = safe_float(payload.get("confidence", 0.0))
         for key, val in payload.items():
             if key in reserved:
                 continue

@@ -35,8 +35,7 @@ def evaluate_action_dependencies(
     if action_name not in constitution["actions"]:
         raise ActionDependencyError(f"unknown action: {action_name}")
 
-    if attestation is None:
-        attestation = build_runtime_attestation()
+    attestation = attestation if attestation is not None else build_runtime_attestation()
 
     action_policy = constitution["actions"][action_name]
     readiness = attestation["dependency_readiness"]
