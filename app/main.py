@@ -148,6 +148,10 @@ def _build_runtime_config() -> NodeRuntimeConfig:
             "writeback",
         ),
         max_attachments=0,
+        # SDK validates max_attachment_size_bytes <= max_packet_bytes; pin both
+        # explicitly so defaults cannot drift across SDK pins.
+        max_packet_bytes=1_048_576,
+        max_attachment_size_bytes=1_048_576,
     )
 
 

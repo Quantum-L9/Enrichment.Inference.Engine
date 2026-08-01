@@ -6,7 +6,7 @@ description: Active transport/runtime contract manifest for Enrichment.Inference
 contracts:
   active_transport_runtime:
     - path: app/main.py
-      sha256: 9330790cd7abea20824efb5038bb17f430837e67543e3eeadcaaa87293b4504a
+      sha256: 1ab388ef1440aac9d2f948ff16b7d430a4d99f78a0a605168c19cdedbd09e360
       required_refs:
         - AGENTS.md
         - ARCHITECTURE.md

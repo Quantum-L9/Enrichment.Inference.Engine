@@ -3,134 +3,137 @@
 # Each rule: requires → conditions → produces
 # Aligned with graph DomainSpec: managed_by: computed
 
+inference_rules:
 - name: material_grade_from_contamination
   requires:
-    - contamination_tolerance
-    - food_grade_certified
+  - contamination_tolerance
+  - food_grade_certified
   min_confidence: 0.6
   conditions:
-    - field: contamination_tolerance
-      operator: exists
-    - field: food_grade_certified
-      operator: exists
+  - field: contamination_tolerance
+    operator: exists
+  - field: food_grade_certified
+    operator: exists
   produces:
     material_grade:
       method: threshold
       source_field: contamination_tolerance
       thresholds:
-        - max: 0.01
-          label: "A+"
-        - max: 0.02
-          label: "A"
-        - max: 0.05
-          label: "B+"
-        - max: 0.10
-          label: "B"
-        - max: 0.20
-          label: "C"
-      default: "D"
+      - max: 0.01
+        label: A+
+      - max: 0.02
+        label: A
+      - max: 0.05
+        label: B+
+      - max: 0.1
+        label: B
+      - max: 0.2
+        label: C
+      default: D
   confidence: 0.85
-
 - name: facility_tier_from_capabilities
   requires:
-    - process_types
-    - materials_handled
-    - equipment_list
+  - process_types
+  - materials_handled
+  - equipment_list
   min_confidence: 0.5
   conditions:
-    - field: process_types
-      operator: exists
-    - field: materials_handled
-      operator: exists
+  - field: process_types
+    operator: exists
+  - field: materials_handled
+    operator: exists
   produces:
     facility_tier:
       method: lookup
       key_field: process_types
       table:
-        "extrusion,injection": "processor-advanced"
-        "extrusion": "processor-mid"
-        "grinding": "processor-basic"
-        "collection": "collector"
-        "sorting": "mrf"
-      default: "processor-basic"
-  confidence: 0.80
-
+        extrusion,injection: processor-advanced
+        extrusion: processor-mid
+        grinding: processor-basic
+        collection: collector
+        sorting: mrf
+      default: processor-basic
+  confidence: 0.8
 - name: buyer_class_from_grade_and_volume
   requires:
-    - material_grade
-    - monthly_volume_lbs
+  - material_grade
+  - monthly_volume_lbs
   min_confidence: 0.6
   conditions:
-    - field: material_grade
-      operator: in
-      value: ["A+", "A", "B+"]
-    - field: monthly_volume_lbs
-      operator: gte
-      value: 50000
+  - field: material_grade
+    operator: in
+    value:
+    - A+
+    - A
+    - B+
+  - field: monthly_volume_lbs
+    operator: gte
+    value: 50000
   produces:
     buyer_class:
       method: static
-      value: "premium"
+      value: premium
   confidence: 0.82
-
 - name: buyer_class_standard
   requires:
-    - material_grade
+  - material_grade
   min_confidence: 0.5
   conditions:
-    - field: material_grade
-      operator: in
-      value: ["B", "B+", "C"]
+  - field: material_grade
+    operator: in
+    value:
+    - B
+    - B+
+    - C
   produces:
     buyer_class:
       method: static
-      value: "standard"
+      value: standard
   confidence: 0.75
-
 - name: application_class_from_food_grade
   requires:
-    - food_grade_certified
-    - material_grade
+  - food_grade_certified
+  - material_grade
   min_confidence: 0.6
   conditions:
-    - field: food_grade_certified
-      operator: eq
-      value: true
-    - field: material_grade
-      operator: in
-      value: ["A+", "A"]
+  - field: food_grade_certified
+    operator: eq
+    value: true
+  - field: material_grade
+    operator: in
+    value:
+    - A+
+    - A
   produces:
     application_class:
       method: static
-      value: "food-contact"
+      value: food-contact
   confidence: 0.88
-
 - name: application_class_industrial
   requires:
-    - food_grade_certified
+  - food_grade_certified
   min_confidence: 0.4
   conditions:
-    - field: food_grade_certified
-      operator: eq
-      value: false
+  - field: food_grade_certified
+    operator: eq
+    value: false
   produces:
     application_class:
       method: static
-      value: "industrial"
+      value: industrial
   confidence: 0.78
-
 - name: mfi_range_from_process
   requires:
-    - process_types
-    - polymer_code
+  - process_types
+  - polymer_code
   min_confidence: 0.5
   conditions:
-    - field: polymer_code
-      operator: eq
-      value: "HDPE"
-    - field: process_types
-      operator: contains
-      value: "extrusion"
+  - field: polymer_code
+    operator: eq
+    value: HDPE
+  - field: process_types
+    operator: contains
+    value: extrusion
   produces:
     min_mfi:
       method: static
