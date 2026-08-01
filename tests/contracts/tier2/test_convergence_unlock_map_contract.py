@@ -17,7 +17,7 @@ from app.engines.convergence_controller import (
 )
 from app.models.schemas import EnrichRequest, EnrichResponse
 
-pytestmark = [pytest.mark.unit]
+pytestmark = [pytest.mark.tier2, pytest.mark.contract]
 
 
 UNLOCK_DOMAIN_SPEC = {
