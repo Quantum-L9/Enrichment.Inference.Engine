@@ -5,12 +5,25 @@ image:
 
 ingress:
   enabled: true
+  # Dev overlay must not inherit production hosts/TLS/cert-manager annotations.
+  annotations: {}
+  hosts:
+    - host: enrichment.dev.local
+      paths:
+        - path: /api
+          pathType: Prefix
+  tls: []
 
 autoscaling:
   enabled: true
+  # Keep HPA floor aligned with replicaCount: 1
+  minReplicas: 1
+  maxReplicas: 2
 
 pdb:
   enabled: true
+  # With a single replica, minAvailable must be 1 (prod default 2 would block).
+  minAvailable: 1
 
 config:
   LOG_LEVEL: "DEBUG"

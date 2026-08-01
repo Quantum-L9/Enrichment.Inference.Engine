@@ -233,7 +233,7 @@ A source's availability is decided at **three layers**, in order of authority:
 
 | Layer | File | Read at runtime? | Effect of `enabled: true` |
 |-------|------|------------------|---------------------------|
-| 1. Runtime gate | `config/provider_config.yaml` | **Yes** — `WaterfallEngine` (`waterfall_engine.py`) skips any provider whose `enabled` is not `true` | Provider is eligible for the waterfall **when its `${*_API_KEY}` env var is also set** |
+| 1. Runtime gate | `config/provider_config.yaml` | **Yes** — `WaterfallEngine` (`waterfall_engine.py`) skips any provider whose `enabled` is not `true` | Provider is eligible for the waterfall **when its `*_API_KEY` env var is also set** |
 | 2. Dependency contract | `docs/contracts/dependencies/<provider>.yaml` | Loaded by `runtime_attestation.py` via `_index.yaml`; the `enabled` field itself is **descriptive** (not enforced) | Documents the provider as an intended-active dependency |
 | 3. Source catalog | `config/enrichment_sources.yaml` | **No** — not imported by any module; descriptive catalog only | Records catalog intent |
 
