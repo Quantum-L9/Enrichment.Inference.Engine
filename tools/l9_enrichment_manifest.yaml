@@ -2,79 +2,76 @@ version: 2.0.0
 generated_from: l9-template v1.0.0
 engine: enrichment
 description: Active transport/runtime contract manifest for Enrichment.Inference.Engine
-
 contracts:
   active_transport_runtime:
-    - path: app/main.py
-      sha256: 9330790cd7abea20824efb5038bb17f430837e67543e3eeadcaaa87293b4504a
-      required_refs:
-        - AGENTS.md
-        - ARCHITECTURE.md
-        - REPO_MAP.md
-        - EXECUTION_FLOWS.md
-      description: "SDK transport runtime bootstrap and production ingress ownership"
-    - path: app/api/v1/chassis_endpoint.py
-      sha256: f905f320b9625e1e25005d904f08ce31fe6c22ebb3860d051fc6228f9bfc06c5
-      required_refs:
-        - AGENTS.md
-        - ARCHITECTURE.md
-        - REPO_MAP.md
-      description: "Transport-adjacent HTTP routes; `/v1/execute` is not defined here"
-    - path: app/services/chassis_handlers.py
-      sha256: b644efe87bc4d0c0a56a9bf216b2779f03f88a82ce5977b94636fe99916c105b
-      required_refs:
-        - AGENTS.md
-        - ARCHITECTURE.md
-        - REPO_MAP.md
-      description: "Supplemental SDK inbound handler registration"
-    - path: app/engines/orchestration_layer.py
-      sha256: 6e90a7d052b18a32304e1e86045412df770fa9b6cd88488d3857196e05a85de3
-      required_refs:
-        - AGENTS.md
-        - ARCHITECTURE.md
-        - EXECUTION_FLOWS.md
-      description: "Canonical SDK action registration and orchestration wiring"
-    - path: app/engines/handlers.py
-      sha256: 2252fd732f4ebc0701d52f69f2bc8d3a4f90f728fe18c210abf25eebff646b52
-      required_refs:
-        - AGENTS.md
-        - AI_AGENT_REVIEW_CHECKLIST.md
-        - REPO_MAP.md
-      description: "Production action handlers aligned to runtime registrations"
-    - path: app/engines/graph_sync_client.py
-      sha256: 3bbb9262cb89a9b2c861a144cc67c7a8ee07cbe7bf78e7a32ec489266a523640
-      required_refs:
-        - AGENTS.md
-        - ARCHITECTURE.md
-        - REPO_MAP.md
-      description: "Gate-only outbound transport client"
-
+  - path: app/main.py
+    sha256: 6f234edb511bc3d51e70e7af875d22ef920066436401c00f250f4f60806eb700
+    required_refs:
+    - AGENTS.md
+    - ARCHITECTURE.md
+    - REPO_MAP.md
+    - EXECUTION_FLOWS.md
+    description: SDK transport runtime bootstrap and production ingress ownership
+  - path: app/api/v1/chassis_endpoint.py
+    sha256: f905f320b9625e1e25005d904f08ce31fe6c22ebb3860d051fc6228f9bfc06c5
+    required_refs:
+    - AGENTS.md
+    - ARCHITECTURE.md
+    - REPO_MAP.md
+    description: Transport-adjacent HTTP routes; `/v1/execute` is not defined here
+  - path: app/services/chassis_handlers.py
+    sha256: b644efe87bc4d0c0a56a9bf216b2779f03f88a82ce5977b94636fe99916c105b
+    required_refs:
+    - AGENTS.md
+    - ARCHITECTURE.md
+    - REPO_MAP.md
+    description: Supplemental SDK inbound handler registration
+  - path: app/engines/orchestration_layer.py
+    sha256: 6e90a7d052b18a32304e1e86045412df770fa9b6cd88488d3857196e05a85de3
+    required_refs:
+    - AGENTS.md
+    - ARCHITECTURE.md
+    - EXECUTION_FLOWS.md
+    description: Canonical SDK action registration and orchestration wiring
+  - path: app/engines/handlers.py
+    sha256: 4b9d96074d31ae94a1b60e0cb687907ea0181647c7aa08a904e55e07a611450e
+    required_refs:
+    - AGENTS.md
+    - AI_AGENT_REVIEW_CHECKLIST.md
+    - REPO_MAP.md
+    description: Production action handlers aligned to runtime registrations
+  - path: app/engines/graph_sync_client.py
+    sha256: 31df759cc522a312826ed46909863f1a6f32c2bd5a3b6af155d58385a0318fa8
+    required_refs:
+    - AGENTS.md
+    - ARCHITECTURE.md
+    - REPO_MAP.md
+    description: Gate-only outbound transport client
   engine_level:
-    - path: app/models/loop_schemas.py
-      sha256: 91e633e4cb6c80a0b0dd52039fe962296e454c13dafa96ece8927cdce4a89346
-      required_refs:
-        - AGENTS.md
-      description: "Loop schema contract"
-    - path: app/models/field_confidence.py
-      sha256: a163a9aef9cdee76155db0a8da20e68f45ee0b727ac0926fedd9faf7f3360fd4
-      required_refs:
-        - AGENTS.md
-      description: "Field confidence schema contract"
-    - path: app/score/score_models.py
-      sha256: 14df007b8beb5c698b54948c9476df40c68e8ac705e4ae96cf409c89b2327f4c
-      required_refs:
-        - AGENTS.md
-      description: "Score schema contract"
-    - path: app/health/health_models.py
-      sha256: 993a41ce4830daaa468983d0299db2894a514190be9cf4e6dfc8849d9af4e75f
-      required_refs:
-        - AGENTS.md
-      description: "Health schema contract"
-
+  - path: app/models/loop_schemas.py
+    sha256: 91e633e4cb6c80a0b0dd52039fe962296e454c13dafa96ece8927cdce4a89346
+    required_refs:
+    - AGENTS.md
+    description: Loop schema contract
+  - path: app/models/field_confidence.py
+    sha256: cc2a33d4d8476319c12e1c9060bfe4727233addf021770e5b20cc127519ae8be
+    required_refs:
+    - AGENTS.md
+    description: Field confidence schema contract
+  - path: app/score/score_models.py
+    sha256: 46c4831a8cc16412ad2362e7ae8f0ee6fc374213d5069fef14b79d930621c118
+    required_refs:
+    - AGENTS.md
+    description: Score schema contract
+  - path: app/health/health_models.py
+    sha256: 993a41ce4830daaa468983d0299db2894a514190be9cf4e6dfc8849d9af4e75f
+    required_refs:
+    - AGENTS.md
+    description: Health schema contract
 deprecated_artifacts:
-  - path: chassis/envelope.py
-    description: "Deprecated compatibility artifact; not part of production dispatch"
-  - path: chassis/router.py
-    description: "Deprecated compatibility artifact; not part of production dispatch"
-  - path: chassis/registry.py
-    description: "Deprecated compatibility artifact; not part of production dispatch"
+- path: chassis/envelope.py
+  description: Deprecated compatibility artifact; not part of production dispatch
+- path: chassis/router.py
+  description: Deprecated compatibility artifact; not part of production dispatch
+- path: chassis/registry.py
+  description: Deprecated compatibility artifact; not part of production dispatch
