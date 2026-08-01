@@ -91,6 +91,34 @@ Before any modification, run the 5 Gates:
 
 ---
 
+## Feature Flag & Config State
+
+Current off-by-default flag posture after the full-throttle activation change. Agents
+changing these must keep this table and `CHANGELOG.md` in sync.
+
+**Activated (`true`) — descriptive/config, test-proven, no live external call turned on:**
+
+| Flag | File | Real effect |
+|------|------|-------------|
+| `linkedin.enabled` | `config/enrichment_sources.yaml` | Catalog intent only — file is not imported by any module |
+| `enabled` (×4) | `docs/contracts/dependencies/{apollo,clearbit,hunter,zoominfo}.yaml` | Dependency-contract attestation; runtime call still gated by `*_API_KEY` + `config/provider_config.yaml` |
+| `ingress`, `autoscaling`, `pdb` `.enabled` | `infra/k8s/helm/enrichment-api/values-dev.yaml` | Dev Helm overlay only |
+| `auth_enabled` | `monitoring/loki/loki-config.yaml` | Loki multi-tenant mode — requires `X-Scope-OrgID` from Promtail/Grafana |
+| `analytics.reporting_enabled` | `monitoring/loki/loki-config.yaml` | Anonymous usage telemetry to Grafana Labs |
+
+**Held OFF by design — do not flip without explicit human sign-off:**
+
+| Flag | File | Why held |
+|------|------|----------|
+| `GF_USERS_ALLOW_SIGN_UP` | `docker-compose.yml` | Enabling Grafana self-signup loosens an access control on the observability stack (which also ships a default admin password). Stays `false`. |
+
+`auto_pause_after_reviewed_commits` was removed from `.coderabbit.yaml` (never auto-pause review).
+
+The real enrichment runtime gate is `config/provider_config.yaml` + the provider's API key
+env var — **not** the dependency-contract or catalog `enabled` fields above.
+
+---
+
 ## Mandatory Pre-Commit Command
 
 ```bash

@@ -4,13 +4,13 @@ image:
   tag: "dev-latest"
 
 ingress:
-  enabled: false
+  enabled: true
 
 autoscaling:
-  enabled: false
+  enabled: true
 
 pdb:
-  enabled: false
+  enabled: true
 
 config:
   LOG_LEVEL: "DEBUG"
