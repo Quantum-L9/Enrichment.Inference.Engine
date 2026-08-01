@@ -42,17 +42,19 @@ class OpenAIClient:
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
-        self._http = httpx.AsyncClient(
-            base_url=_OPENAI_BASE,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=httpx.Timeout(timeout),
-        )
         self._failure_count = 0
         self._circuit_open = False
         self._availability_cache: tuple[bool, float] | None = None
+
+    def _client_kwargs(self) -> dict[str, Any]:
+        return {
+            "base_url": _OPENAI_BASE,
+            "headers": {
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            "timeout": httpx.Timeout(self._timeout),
+        }
 
     async def complete(self, prompt: str, max_tokens: int = 2000, temperature: float = 0.3) -> str:
         """Return the text content of the first completion choice."""
@@ -86,7 +88,8 @@ class OpenAIClient:
         if self._availability_cache and (now - self._availability_cache[1]) < 60:
             return self._availability_cache[0]
         try:
-            resp = await self._http.get("/models", timeout=5)
+            async with httpx.AsyncClient(**self._client_kwargs()) as client:
+                resp = await client.get("/models", timeout=5)
             available = resp.status_code == 200
         except Exception:
             available = False
@@ -112,7 +115,8 @@ class OpenAIClient:
         for attempt, delay in enumerate(_RETRY_DELAYS, start=1):
             start = time.monotonic()
             try:
-                resp = await self._http.post("/chat/completions", json=body)
+                async with httpx.AsyncClient(**self._client_kwargs()) as client:
+                    resp = await client.post("/chat/completions", json=body)
                 latency_ms = int((time.monotonic() - start) * 1000)
 
                 if resp.status_code in _RETRYABLE_STATUS:

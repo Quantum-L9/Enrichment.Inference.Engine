@@ -15,6 +15,8 @@ from typing import Any
 
 import structlog
 
+from app.utils.safe_convert import safe_float
+
 from ..models.schemas import EnrichResponse
 from . import pg_store
 from .pg_models import ConvergenceRun, EnrichmentResult
@@ -207,11 +209,11 @@ class ResultStore:
             return [
                 {
                     "pass_number": r.pass_number,
-                    "confidence": float(r.confidence),
+                    "confidence": safe_float(r.confidence),
                     "source": r.source,
                     "field_value": r.field_value,
                     "variation_agreement": (
-                        float(r.variation_agreement) if r.variation_agreement else None
+                        safe_float(r.variation_agreement) if r.variation_agreement else None
                     ),
                     "recorded_at": r.recorded_at.isoformat(),
                 }

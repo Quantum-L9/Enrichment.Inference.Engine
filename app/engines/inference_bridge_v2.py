@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from app.utils.safe_convert import safe_float
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,7 +90,7 @@ def _collect_edges_from_node(node_def: dict) -> list[DerivationEdge]:
                 target=prop_name,
                 inputs=tuple(derived_from),
                 inference_rule=prop_def.get("inference_rule"),
-                confidence_floor=float(prop_def.get("confidence_floor", 0.6)),
+                confidence_floor=safe_float(prop_def.get("confidence_floor", 0.6)),
                 managed_by=prop_def.get("managed_by", "computed"),
             )
         )

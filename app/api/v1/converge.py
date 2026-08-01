@@ -16,6 +16,8 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.utils.safe_convert import safe_float
+
 from ...core.auth import verify_api_key
 from ...core.config import Settings, get_settings
 from ...engines.convergence.loop_state import LoopState, LoopStateStore, LoopStatus
@@ -173,7 +175,7 @@ async def converge_single(
     await store.save(state)
 
     convergence_reason = getattr(conv_response, "convergence_reason", "completed")
-    cost_usd = float(conv_response.tokens_used) * settings.token_rate_usd_per_1k / 1000.0
+    cost_usd = safe_float(conv_response.tokens_used) * settings.token_rate_usd_per_1k / 1000.0
 
     return ConvergeSingleResponse(
         run_id=state.run_id,
