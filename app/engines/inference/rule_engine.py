@@ -57,6 +57,37 @@ def _eval_not_in(value: Any, target: Any) -> bool:
     return _normalise(value) != _normalise(target)
 
 
+def _finite_floats(left: Any, right: Any) -> tuple[float, float] | None:
+    try:
+        return float(left), float(right)
+    except (TypeError, ValueError):
+        return None
+
+
+def _eval_numeric(op: Operator, value: Any, target: Any) -> bool:
+    pair = _finite_floats(value, target)
+    if pair is None:
+        return False
+    left, right = pair
+    if op is Operator.GT:
+        return left > right
+    if op is Operator.LT:
+        return left < right
+    if op is Operator.GTE:
+        return left >= right
+    return left <= right
+
+
+def _eval_collection(op: Operator, value: Any, target: Any) -> bool:
+    if op is Operator.CONTAINS:
+        return _eval_contains(value, target)
+    if op is Operator.IN:
+        return _eval_in(value, target)
+    if op is Operator.NOT_IN:
+        return _eval_not_in(value, target)
+    return False
+
+
 def _evaluate_condition(condition: RuleCondition, value: Any) -> bool:
     op = condition.operator
     target = condition.value
@@ -71,20 +102,10 @@ def _evaluate_condition(condition: RuleCondition, value: Any) -> bool:
         return False
     if op is Operator.EQUALS:
         return _normalise(value) == _normalise(target)
-    if op is Operator.GT:
-        return float(value) > float(target)
-    if op is Operator.LT:
-        return float(value) < float(target)
-    if op is Operator.GTE:
-        return float(value) >= float(target)
-    if op is Operator.LTE:
-        return float(value) <= float(target)
-    if op is Operator.CONTAINS:
-        return _eval_contains(value, target)
-    if op is Operator.IN:
-        return _eval_in(value, target)
-    if op is Operator.NOT_IN:
-        return _eval_not_in(value, target)
+    if op in {Operator.GT, Operator.LT, Operator.GTE, Operator.LTE}:
+        return _eval_numeric(op, value, target)
+    if op in {Operator.CONTAINS, Operator.IN, Operator.NOT_IN}:
+        return _eval_collection(op, value, target)
     return False
 
 

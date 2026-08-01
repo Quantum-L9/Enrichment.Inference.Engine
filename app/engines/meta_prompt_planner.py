@@ -17,6 +17,8 @@ from typing import Any, Literal
 
 import structlog
 
+from app.utils.safe_convert import safe_float
+
 from ..models.loop_schemas import PassContext
 from ..services.domain_yaml_reader import DomainSpec
 
@@ -295,7 +297,7 @@ class MetaPromptPlanner:
                     and hasattr(prop, "metadata")
                     and isinstance(prop.metadata, dict)
                 ):
-                    return float(prop.metadata.get("scoring_weight", 0.0))
+                    return safe_float(prop.metadata.get("scoring_weight", 0.0))
         return 0.0
 
     def _generate_reasoning(

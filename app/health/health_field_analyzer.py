@@ -14,6 +14,8 @@ import statistics
 from collections import defaultdict
 from typing import Any
 
+from app.utils.safe_convert import safe_float
+
 from .health_models import (
     FieldHealth,
     HealthAction,
@@ -204,7 +206,7 @@ def analyze_distribution(
         return stats
 
     if is_numeric:
-        nums = [float(v) for v in non_null]
+        nums = [safe_float(v) for v in non_null]
         stats.mean = statistics.mean(nums)
         stats.median = statistics.median(nums)
         stats.stdev = statistics.stdev(nums) if len(nums) > 1 else 0.0
@@ -354,7 +356,7 @@ def run_field_diagnostic(
     outliers: list[OutlierResult] = []
     non_null = [(eid, v) for eid, v in entity_values if v is not None]
     if dist.field_type == "numeric":
-        numeric_pairs = [(eid, float(v)) for eid, v in non_null if isinstance(v, (int, float))]
+        numeric_pairs = [(eid, safe_float(v)) for eid, v in non_null if isinstance(v, (int, float))]
         outliers = detect_numeric_outliers(field_health.field_name, numeric_pairs)
     else:
         str_pairs = [(eid, str(v)) for eid, v in non_null]

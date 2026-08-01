@@ -16,6 +16,8 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app.utils.safe_convert import safe_float
+
 from ...core.auth import verify_api_key
 from ...core.config import Settings, get_settings
 from ...services.result_store import ResultStore
@@ -69,7 +71,7 @@ async def get_field_confidence_map(
             source = latest_entry["source"]
             pass_num = latest_entry["pass_number"]
         else:
-            conf = float(latest.confidence)
+            conf = safe_float(latest.confidence)
             source = "enrichment"
             pass_num = latest.pass_count
 

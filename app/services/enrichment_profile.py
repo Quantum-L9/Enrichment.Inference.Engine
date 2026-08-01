@@ -13,6 +13,8 @@ from typing import Any, Protocol
 import structlog
 from pydantic import BaseModel, Field
 
+from app.utils.safe_convert import safe_float
+
 logger = structlog.get_logger(__name__)
 
 
@@ -87,7 +89,7 @@ MAX_TOKENS_PER_ENTITY = 10000
 def _compute_priority(entity: dict[str, Any]) -> float:
     null_count = int(entity.get("null_count", 0))
     staleness = int(entity.get("staleness_days", 0))
-    confidence = float(entity.get("avg_confidence", 1.0))
+    confidence = safe_float(entity.get("avg_confidence", 1.0))
     failed = int(entity.get("failed_matches", 0))
 
     null_norm = min(null_count / 20.0, 1.0)
@@ -125,7 +127,7 @@ def select_entities(profile: EnrichmentProfile, store: EntityStore) -> list[Enti
                 priority_score=priority,
                 null_count=int(entity.get("null_count", 0)),
                 staleness_days=int(entity.get("staleness_days", 0)),
-                avg_confidence=float(entity.get("avg_confidence", 0.0)),
+                avg_confidence=safe_float(entity.get("avg_confidence", 0.0)),
                 failed_matches=int(entity.get("failed_matches", 0)),
                 gate_fields_missing=int(entity.get("gate_fields_missing", 0)),
             )
