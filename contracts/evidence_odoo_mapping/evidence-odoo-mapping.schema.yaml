@@ -1,0 +1,97 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:l9:plasticos:contracts:eie:evidence-odoo-mapping:1.0.0-draft
+title: PlasticOS EIE Evidence-to-Odoo Mapping Contract
+description: >
+  Allowlisted FeatureEvidence → Odoo field mappings with merge-not-overwrite
+  and review-mode policy. EIE produces the contract; Odoo consumes it (TASK-053).
+  Direct CRM mutation from EIE is forbidden.
+x-publication-status: draft-unpublished
+type: object
+additionalProperties: false
+required:
+- contract_version
+- domain
+- owner
+- policy
+- projections
+properties:
+  contract_version:
+    type: string
+    const: 1.0.0-draft
+  domain:
+    type: string
+    const: plasticos
+  owner:
+    type: string
+    const: eie
+  description:
+    type: string
+  policy:
+    type: object
+    additionalProperties: false
+    required:
+    - merge_strategy
+    - review_mode
+    - default_write_mode
+    - human_review_precedence
+    properties:
+      merge_strategy:
+        type: string
+        const: merge_not_overwrite
+      review_mode:
+        type: string
+        enum:
+        - always
+        - inferred_only
+      default_write_mode:
+        type: string
+        const: proposal_only
+      human_review_precedence:
+        type: boolean
+        const: true
+  projections:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required:
+      - feature_id
+      - odoo_model
+      - odoo_field
+      - write_mode
+      - value_kinds
+      properties:
+        feature_id:
+          type: string
+          pattern: ^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)+$
+        odoo_model:
+          type: string
+          minLength: 1
+        odoo_field:
+          type: string
+          minLength: 1
+        unit:
+          type:
+          - string
+          - 'null'
+        write_mode:
+          type: string
+          enum:
+          - proposal_only
+        value_kinds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum:
+            - string
+            - number
+            - boolean
+            - string_list
+            - null
+  rules:
+    type: array
+    items:
+      type: string
+      minLength: 1

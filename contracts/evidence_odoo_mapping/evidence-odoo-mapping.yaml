@@ -1,10 +1,16 @@
-version: 1.0.0-draft
+contract_version: 1.0.0-draft
 domain: plasticos
 owner: eie
 description: >
-  Compatibility shim for TASK-041 fixtures. Canonical producer contract is
-  contracts/evidence_odoo_mapping/evidence-odoo-mapping.yaml (TASK-029).
-canonical_contract: contracts/evidence_odoo_mapping/evidence-odoo-mapping.yaml
+  FeatureEvidence → Odoo allowlisted mapping (TASK-029 producer).
+  Consumers (plasticos_gate / TASK-053) must honor merge-not-overwrite and
+  review mode. Writeback remains proposal_only until an explicit Odoo
+  activation task.
+policy:
+  merge_strategy: merge_not_overwrite
+  review_mode: always
+  default_write_mode: proposal_only
+  human_review_precedence: true
 projections:
 - feature_id: facility.capacity.available_lbs_month
   odoo_model: res.partner
@@ -39,5 +45,6 @@ projections:
 rules:
 - never treat stale FeatureEvidence as current without explicit policy
 - inferred evidence must carry rule_or_model_version before proposal
+- late EIE evidence cannot overwrite newer or human-approved Odoo state
 - projection does not authorize direct Odoo mutation from EIE
-- prefer contracts/evidence_odoo_mapping for producer/consumer parity
+- auto-apply / approved_write modes are forbidden in this contract version

@@ -17,7 +17,11 @@ Compiles live EIE `FieldConfidence` / `FieldConfidenceMap` into the reviewed
 Pack draft schema URN: `urn:l9:plasticos:contracts:payload:feature-evidence:1.0.0-draft`
 (local schema `$id` matches).
 
-## Odoo fixture
+## Odoo fixture / mapping contract
 
-See `fixtures/odoo_projection.yaml` for FeatureEvidence → Odoo projection
-mapping (proposal_only; no writeback activation in this task).
+Canonical producer contract (TASK-029):
+`contracts/evidence_odoo_mapping/evidence-odoo-mapping.yaml`
+(loader: `app.models.evidence_odoo_mapping`).
+
+Compatibility fixture retained at `fixtures/odoo_projection.yaml`
+(proposal_only; no writeback activation in this task).
