@@ -1,0 +1,15 @@
+contract_version: 1.0.0-draft
+domain: plasticos
+owner: eie
+policy:
+  merge_strategy: merge_not_overwrite
+  review_mode: always
+  default_write_mode: approved_write
+  human_review_precedence: true
+projections:
+- feature_id: material.polymer_type
+  odoo_model: res.partner
+  odoo_field: x_polymer_type
+  unit: null
+  write_mode: approved_write
+  value_kinds: [string]

@@ -1,5 +1,13 @@
 """Pydantic request/response schemas."""
 
+from .evidence_odoo_mapping import (
+    ApplyDecision,
+    EvidenceApplyInput,
+    EvidenceOdooMappingContract,
+    OdooFieldState,
+    decide_apply,
+    load_evidence_odoo_mapping,
+)
 from .feature_evidence import (
     EvidenceProvenance,
     EvidenceSource,
@@ -54,6 +62,13 @@ __all__ = [
     "FeatureEvidence",
     "feature_evidence_from_field_confidence",
     "compile_field_confidence_map",
+    # evidence_odoo_mapping.py
+    "ApplyDecision",
+    "EvidenceApplyInput",
+    "EvidenceOdooMappingContract",
+    "OdooFieldState",
+    "decide_apply",
+    "load_evidence_odoo_mapping",
     # loop_schemas.py
     "ApprovalMode",
     "ConvergeRequest",
