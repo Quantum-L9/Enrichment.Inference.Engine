@@ -19,6 +19,7 @@ All egress is Gate-only via PacketRouter / event emitter.
 from __future__ import annotations
 
 import hashlib
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -174,10 +175,13 @@ class SideEffectCoordinator:
 
 
 _coordinator: SideEffectCoordinator | None = None
+_coordinator_lock = threading.Lock()
 
 
 def get_side_effect_coordinator() -> SideEffectCoordinator:
     global _coordinator
     if _coordinator is None:
-        _coordinator = SideEffectCoordinator()
+        with _coordinator_lock:
+            if _coordinator is None:
+                _coordinator = SideEffectCoordinator()
     return _coordinator

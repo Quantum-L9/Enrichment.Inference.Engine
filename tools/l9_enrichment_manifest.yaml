@@ -27,14 +27,14 @@ contracts:
     - REPO_MAP.md
     description: Supplemental SDK inbound handler registration
   - path: app/engines/orchestration_layer.py
-    sha256: 6e90a7d052b18a32304e1e86045412df770fa9b6cd88488d3857196e05a85de3
+    sha256: 39916e83512699869fea3d4b761968f06fb8dcd09d0cc68897663a06c29f5380
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
     - EXECUTION_FLOWS.md
     description: Canonical SDK action registration and orchestration wiring
   - path: app/engines/handlers.py
-    sha256: 4b9d96074d31ae94a1b60e0cb687907ea0181647c7aa08a904e55e07a611450e
+    sha256: b421e1888bf1c7b3642b161075f98e8b5e84f18b238f34499893349558455a76
     required_refs:
     - AGENTS.md
     - AI_AGENT_REVIEW_CHECKLIST.md
