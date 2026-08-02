@@ -1,0 +1,41 @@
+version: 1.0.0-draft
+domain: plasticos
+owner: eie
+description: >
+  FeatureEvidence to Odoo projection fixture (TASK-041).
+  Mapping only; write_mode is proposal_only until Odoo semantic kernel activates writeback.
+projections:
+- feature_id: facility.capacity.available_lbs_month
+  odoo_model: res.partner
+  odoo_field: x_available_lbs_month
+  unit: lb/month
+  write_mode: proposal_only
+  value_kinds: [number]
+- feature_id: material.contamination_pct
+  odoo_model: res.partner
+  odoo_field: x_contamination_pct
+  unit: percent
+  write_mode: proposal_only
+  value_kinds: [number]
+- feature_id: facility.food_grade_certified
+  odoo_model: res.partner
+  odoo_field: x_food_grade_certified
+  unit: null
+  write_mode: proposal_only
+  value_kinds: [boolean]
+- feature_id: material.polymer_type
+  odoo_model: res.partner
+  odoo_field: x_polymer_type
+  unit: null
+  write_mode: proposal_only
+  value_kinds: [string]
+- feature_id: material.mfi
+  odoo_model: res.partner
+  odoo_field: x_melt_flow_index
+  unit: g/10min
+  write_mode: proposal_only
+  value_kinds: [number]
+rules:
+- never treat stale FeatureEvidence as current without explicit policy
+- inferred evidence must carry rule_or_model_version before proposal
+- projection does not authorize direct Odoo mutation from EIE

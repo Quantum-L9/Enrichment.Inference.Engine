@@ -1,7 +1,7 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: urn:l9:plasticos:contracts:payload:feature-evidence:1.0.0-draft
 title: PlasticOS FeatureEvidence
-description: EIE-emitted value-bearing evidence. Not a transport envelope.
+description: EIE-emitted value-bearing evidence compiled from FieldConfidence. Not a transport envelope.
 x-publication-status: draft-unpublished
 type: object
 additionalProperties: false
@@ -93,3 +93,15 @@ properties:
   execution_version:
     type: string
     minLength: 1
+allOf:
+- if:
+    properties:
+      value_state:
+        const: inferred
+    required:
+    - value_state
+  then:
+    properties:
+      provenance:
+        required:
+        - rule_or_model_version

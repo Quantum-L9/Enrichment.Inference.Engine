@@ -6,6 +6,7 @@ from .feature_evidence import (
     FeatureEvidence,
     TypedValue,
     ValueState,
+    compile_field_confidence_map,
     feature_evidence_from_field_confidence,
 )
 from .field_confidence import (
@@ -52,6 +53,7 @@ __all__ = [
     "EvidenceProvenance",
     "FeatureEvidence",
     "feature_evidence_from_field_confidence",
+    "compile_field_confidence_map",
     # loop_schemas.py
     "ApprovalMode",
     "ConvergeRequest",

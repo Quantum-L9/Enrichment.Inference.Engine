@@ -13,6 +13,7 @@ FeatureEvidence contract (TASK-019).
 
 Defines attributed, versioned evidence payloads emitted by EIE.
 Extends FieldConfidence concepts without replacing the convergence loop.
+TASK-041 compiles FieldConfidenceMap batches into FeatureEvidence.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.models.field_confidence import FieldConfidence, FieldSource
+from app.models.field_confidence import FieldConfidence, FieldConfidenceMap, FieldSource
 
 ENTITY_REF_PATTERN = r"^[a-z0-9_.-]+:[^\s]+$"
 FEATURE_ID_PATTERN = r"^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)+$"
@@ -191,6 +192,9 @@ def feature_evidence_from_field_confidence(
         EvidenceSource.MANUAL: ProvenanceSourceType.MANUAL,
         EvidenceSource.SEED: ProvenanceSourceType.SEED,
     }[_source_from_field(field.source)]
+    version = rule_or_model_version
+    if state == ValueState.INFERRED and not version and field.kb_fragment_ids:
+        version = field.kb_fragment_ids[0]
     return FeatureEvidence(
         feature_id=fid,
         subject_ref=subject_ref,
@@ -205,8 +209,44 @@ def feature_evidence_from_field_confidence(
             source_type=prov_source,
             source_ref=source_ref,
             method=method,
-            rule_or_model_version=rule_or_model_version,
+            rule_or_model_version=version,
         ),
         evidence_ref=evidence_ref,
         execution_version=execution_version,
     )
+
+
+def compile_field_confidence_map(
+    confidence_map: FieldConfidenceMap,
+    *,
+    subject_ref: str,
+    execution_version: str,
+    source_ref: str,
+    feature_id_by_field: dict[str, str] | None = None,
+    unit_by_feature: dict[str, str | None] | None = None,
+    observed_at: datetime | None = None,
+) -> list[FeatureEvidence]:
+    """Compile a live FieldConfidenceMap into FeatureEvidence payloads.
+
+    Aligns TASK-041 acceptance: every emitted item is attributed; inferred
+    items carry rule/model version (explicit or from kb_fragment_ids).
+    """
+    mapping = feature_id_by_field or {}
+    units = unit_by_feature or {}
+    stamp = observed_at or datetime.now(UTC)
+    out: list[FeatureEvidence] = []
+    for name, field in confidence_map.fields.items():
+        fid = mapping.get(name)
+        unit = units.get(fid) if fid else units.get(name)
+        out.append(
+            feature_evidence_from_field_confidence(
+                field=field,
+                subject_ref=subject_ref,
+                feature_id=fid,
+                execution_version=execution_version,
+                source_ref=source_ref,
+                unit=unit,
+                observed_at=stamp,
+            )
+        )
+    return out
