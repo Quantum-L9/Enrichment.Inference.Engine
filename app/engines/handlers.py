@@ -59,62 +59,28 @@ async def _persist_and_sync(
     object_type: str,
 ) -> None:
     """
-    GAP-5 + GAP-6: Persist enrichment result and dispatch graph sync packet.
-    Fire-and-forward — never raises; failures are logged.
+    Delegate post-enrich side effects to the single SideEffectCoordinator (TASK-021).
+    Fire-and-forward — never raises; failures are logged inside the coordinator.
     """
     settings = get_settings()
     entity_id = payload.get("entity_id", payload.get("entity", {}).get("id", "unknown"))
     domain = payload.get("domain", settings.default_domain)
+    packet_id = None
+    if payload.get("packet_id"):
+        packet_id = str(payload["packet_id"])
+    from app.services.side_effect_coordinator import get_side_effect_coordinator
 
-    import asyncio
-
-    # GAP-5: Persist to PostgreSQL via ResultStore
-    try:
-        from ..models.schemas import EnrichResponse
-        from ..services.result_store import ResultStore
-
-        store = ResultStore(tenant_id=tenant)
-        resp_obj = EnrichResponse.model_validate(response_dict)
-        await asyncio.wait_for(
-            store.persist_enrich_response(
-                response=resp_obj,
-                entity_id=entity_id,
-                object_type=object_type,
-                domain=domain,
-                idempotency_key=payload.get("idempotency_key"),
-            ),
-            timeout=30.0,
-        )
-        logger.info("handlers.result_persisted", entity_id=entity_id, tenant=tenant, domain=domain)
-    except TimeoutError:
-        logger.warning("handlers.result_persist_timeout", entity_id=entity_id, tenant=tenant)
-    except (ConnectionError, OSError, RuntimeError) as exc:
-        logger.warning("handlers.result_persist_failed", entity_id=entity_id, error=str(exc))
-
-    # GAP-6: Graph sync via PacketRouter
-    try:
-        from ..engines.packet_router import NodeTarget, get_router
-
-        router = get_router(settings)
-        await asyncio.wait_for(
-            router.notify_graph_sync(
-                tenant_id=tenant,
-                entity_id=entity_id,
-                fields=response_dict.get("fields", {}),
-                domain=domain,
-            ),
-            timeout=15.0,
-        )
-        router.route_fire_and_forget(
-            target=NodeTarget.SCORE,
-            action="score-invalidate",
-            tenant_id=tenant,
-            payload={"entity_id": entity_id, "domain": domain},
-        )
-    except TimeoutError:
-        logger.warning("handlers.graph_sync_timeout", entity_id=entity_id, tenant=tenant)
-    except (ConnectionError, OSError) as exc:
-        logger.warning("handlers.graph_sync_failed", entity_id=entity_id, error=str(exc))
+    await get_side_effect_coordinator().commit_after_enrich(
+        tenant=tenant,
+        entity_id=entity_id,
+        object_type=object_type,
+        domain=domain,
+        response_dict=response_dict,
+        settings=settings,
+        packet_id=packet_id,
+        idempotency_key=payload.get("idempotency_key"),
+        emit_event=True,
+    )
 
 
 async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
