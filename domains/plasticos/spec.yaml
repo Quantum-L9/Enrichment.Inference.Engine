@@ -1,105 +1,113 @@
 name: plasticos
-version: "0.2.0"
-description: PlasticOS recycled polymer matching domain
+version: "0.3.0"
+description: >
+  PlasticOS evidence and inference domain for EIE.
+  Candidate ranking, matching gates, and scoring dimensions are owned by CEG
+  (TASK-020). This contract is evidence-only.
+
+authority:
+  owns:
+  - feature evidence extraction
+  - enrichment target schema
+  - inference rules with provenance
+  - entity resolution hints
+  does_not_own:
+  - candidate ranking
+  - match gates / scoring dimensions
+  - match/outcomes chassis actions
 
 ontology:
   nodes:
-    - label: Facility
-      description: Plastics recycling or processing facility
-      properties:
-        - {name: id,                          type: string}
-        - {name: name,                        type: string}
-        - {name: city,                        type: string}
-        - {name: state,                       type: string}
-        - {name: zip_code,                    type: string}
-        - {name: polymer_types,               type: list}
-        - {name: density_min,                 type: float}
-        - {name: density_max,                 type: float}
-        - {name: mfi_min,                     type: float}
-        - {name: mfi_max,                     type: float}
-        - {name: contamination_tolerance,     type: float}
-        - {name: facility_tier,               type: string}
-        - {name: material_grade,              type: string}
-        - {name: certifications,              type: list}
-        - {name: annual_capacity_mt,          type: float}
+  - label: Facility
+    description: Plastics recycling or processing facility
+    properties:
+    - {name: id, type: string}
+    - {name: name, type: string}
+    - {name: city, type: string}
+    - {name: state, type: string}
+    - {name: zip_code, type: string}
+    - {name: polymer_types, type: list}
+    - {name: density_min, type: float}
+    - {name: density_max, type: float}
+    - {name: mfi_min, type: float}
+    - {name: mfi_max, type: float}
+    - {name: contamination_tolerance, type: float}
+    - {name: facility_tier, type: string}
+    - {name: material_grade, type: string}
+    - {name: certifications, type: list}
+    - {name: annual_capacity_mt, type: float}
+    enrichment_hints:
+      objective_template: "Enrich plastics facility profile for evidence emission"
+      priority_fields:
+      - polymer_types
+      - contamination_tolerance
+      - mfi_min
+      - mfi_max
+      - annual_capacity_mt
+      - certifications
+      min_confidence: 0.75
 
 queryschema:
   fields:
-    - {name: polymer_type,              type: string,  description: "e.g. HDPE, LDPE, PP"}
-    - {name: form,                      type: string,  description: "e.g. Regrind, Pellet, Flake"}
-    - {name: density,                   type: float,   description: "g/cm³"}
-    - {name: mfi,                       type: float,   description: "melt flow index g/10min"}
-    - {name: contamination,             type: float,   description: "contamination fraction 0–1"}
-    - {name: required_certifications,   type: list,    description: "list of cert codes"}
+  - {name: polymer_type, type: string, description: "e.g. HDPE, LDPE, PP"}
+  - {name: form, type: string, description: "e.g. Regrind, Pellet, Flake"}
+  - {name: density, type: float, description: "g/cm³"}
+  - {name: mfi, type: float, description: "melt flow index g/10min"}
+  - {name: contamination, type: float, description: "contamination fraction 0–1"}
+  - {name: required_certifications, type: list, description: "list of cert codes"}
 
-gates:
-  - id: polymer-type-match
-    type: set_overlap
-    field: polymer_types
-    invertible: true
-  - id: density-range
-    type: range
-    field: density
-    params: {min: 0.90, max: 0.97}
-    invertible: false
-  - id: mfi-window
-    type: range
-    field: mfi
-    params: {min: 2.0, max: 15.0}
-    invertible: false
-  - id: contamination-ceiling
-    type: threshold
-    field: contamination_tolerance
-    params: {max: 0.07}
-    invertible: false
-
+# Ranking/match authority removed (owned by CEG).
+gates: []
 scoring:
-  dimensions:
-    - {name: grade_fit,          field: material_grade,             weight: 0.35}
-    - {name: capacity_headroom,  field: annual_capacity_mt,         weight: 0.20}
-    - {name: geo_proximity,      field: state,                      weight: 0.15}
-    - {name: certification_fit,  field: certifications,             weight: 0.30}
+  dimensions: []
 
 chassisbinding:
   handleractions:
-    - {name: match,         description: "Find matching buyer/seller facilities"}
-    - {name: sync,          description: "Sync facility record to graph"}
-    - {name: resolve,       description: "Resolve entity to canonical form"}
-    - {name: outcomes,      description: "Record match outcome for reinforcement"}
+  - {name: enrich, description: "Enrich facility fields for evidence"}
+  - {name: converge, description: "Run enrichment-inference convergence"}
+  - {name: discover, description: "Discover schema/fields for evidence"}
+  - {name: sync, description: "Sync facility record via Gate"}
+  - {name: resolve, description: "Resolve entity to canonical form"}
+  forbidden_actions:
+  - match
+  - outcomes
 
 semantic_registry:
   enabled: true
   canonical_entities:
-    - entity_type: Facility
-      resolution_strategy: hybrid
-      match_threshold: 0.85
-      key_fields: [name, city, state, zip_code]
+  - entity_type: Facility
+    resolution_strategy: hybrid
+    resolution_threshold: 0.85
+    key_fields: [name, city, state, zip_code]
 
 inference_rules:
-  - rule_id: grade-assignment-hdpe-a
-    conditions:
-      - {field: polymer_types, operator: CONTAINS, value: HDPE}
-      - {field: contamination_tolerance, operator: LT, value: 0.03}
-    outputs:
-      - {field: material_grade, value_expr: "A", derivation_type: classification}
-    confidence: 0.92
-    priority: 10
+- rule_id: grade-assignment-hdpe-a
+  conditions:
+  - {field: polymer_types, operator: CONTAINS, value: HDPE}
+  - {field: contamination_tolerance, operator: LT, value: 0.03}
+  outputs:
+  - {field: material_grade, value_expr: "A", derivation_type: classification}
+  confidence: 0.92
+  priority: 10
+  rule_or_model_version: plasticos-inference-0.3.0
 
-  - rule_id: grade-assignment-hdpe-b
-    conditions:
-      - {field: polymer_types, operator: CONTAINS, value: HDPE}
-      - {field: contamination_tolerance, operator: GTE, value: 0.03}
-      - {field: contamination_tolerance, operator: LTE, value: 0.07}
-    outputs:
-      - {field: material_grade, value_expr: "B", derivation_type: classification}
-    confidence: 0.85
-    priority: 5
+- rule_id: grade-assignment-hdpe-b
+  conditions:
+  - {field: polymer_types, operator: CONTAINS, value: HDPE}
+  - {field: contamination_tolerance, operator: GTE, value: 0.03}
+  - {field: contamination_tolerance, operator: LTE, value: 0.07}
+  outputs:
+  - {field: material_grade, value_expr: "B", derivation_type: classification}
+  confidence: 0.85
+  priority: 5
+  rule_or_model_version: plasticos-inference-0.3.0
 
-  - rule_id: tier-1-high-capacity
-    conditions:
-      - {field: annual_capacity_mt, operator: GTE, value: 5000}
-      - {field: material_grade, operator: IN, value: ["A", "A+"]}
-    outputs:
-      - {field: facility_tier, value_expr: "tier_1", derivation_type: classification}
-    confidence: 0.90
-    priority: 8
+- rule_id: tier-1-high-capacity
+  conditions:
+  - {field: annual_capacity_mt, operator: GTE, value: 5000}
+  - {field: material_grade, operator: IN, value: ["A", "A+"]}
+  outputs:
+  - {field: facility_tier, value_expr: "tier_1", derivation_type: classification}
+  confidence: 0.90
+  priority: 8
+  rule_or_model_version: plasticos-inference-0.3.0
