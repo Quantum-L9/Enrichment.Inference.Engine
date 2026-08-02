@@ -84,34 +84,19 @@ def _resolve_under_root(path: Path) -> Path:
     return resolved
 
 
-def _structural_schema_errors(schema: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
-    if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
-        errors.append("missing Draft 2020-12 $schema")
-    if not schema.get("$id"):
-        errors.append("missing $id")
-    if schema.get("type") not in {None, "object"}:
-        errors.append("unexpected root type")
-    return errors
-
-
 def _apply_schema_check(entry: dict[str, Any], schema: dict[str, Any]) -> None:
-    if Draft202012Validator is not None:
-        try:
-            Draft202012Validator.check_schema(schema)
-            entry["check_schema"] = "PASS"
-            entry["check_schema_backend"] = "jsonschema"
-        except Exception as exc:
-            entry["check_schema"] = "FAIL"
-            entry["error"] = str(exc)
-        return
-    errors = _structural_schema_errors(schema)
-    if errors:
+    # Fail closed: Draft 2020-12 validation requires jsonschema (no shallow PASS).
+    if Draft202012Validator is None:
         entry["check_schema"] = "FAIL"
-        entry["error"] = "; ".join(errors)
+        entry["error"] = "jsonschema package required for Draft 2020-12 validation"
         return
-    entry["check_schema"] = "PASS"
-    entry["check_schema_backend"] = "structural"
+    try:
+        Draft202012Validator.check_schema(schema)
+        entry["check_schema"] = "PASS"
+        entry["check_schema_backend"] = "jsonschema"
+    except Exception as exc:
+        entry["check_schema"] = "FAIL"
+        entry["error"] = str(exc)
 
 
 def _schema_entry(path: Path) -> dict[str, Any]:

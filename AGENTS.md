@@ -9,7 +9,7 @@ Stack: Python 3.12 / FastAPI app surface / SDK transport runtime / Perplexity LL
 
 ## Three Rules Every Agent Must Know
 
-1. **Run `make agent-check` before every commit** — all 7 gates must pass.
+1. **Run `make agent-check` before every commit** — all 8 gates must pass.
 2. **Respect your Tier** — see Autonomy Tiers below. T4/T5 changes require human review.
 3. **This file is law** — if you see a conflict between documents, AGENTS.md wins.
 
@@ -125,7 +125,7 @@ env var — **not** the dependency-contract or catalog `enabled` fields above.
 make agent-check
 ```
 
-All 7 gates must pass before any commit.
+All 8 gates must pass before any commit.
 
 | Gate           | Command                               | Blocks On                                 |
 | -------------- | ------------------------------------- | ----------------------------------------- |
@@ -307,7 +307,7 @@ print("debug")                               # C-04: always structlog
 | What can I do without human review? | Autonomy Tiers                         |
 | What is forbidden?                  | Prohibited Actions, Forbidden Patterns |
 | Which files can I never modify?     | Protected Files (T4/T5)                |
-| What are the 7 gates?               | Mandatory Pre-Commit Command           |
+| What are the 8 gates?               | Mandatory Pre-Commit Command           |
 | What are the contracts?             | Architectural Contracts (C-01 to C-21) |
 | What owns `/v1/execute`?            | C-21 + Protected Files                 |
 

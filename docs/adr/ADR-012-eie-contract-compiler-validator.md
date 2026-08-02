@@ -10,7 +10,8 @@ Add `tools/payload_contract_compiler.py` as the EIE contract compiler validator.
 
 It:
 
-- Draft-2020-12 checks FeatureEvidence and evidence-odoo-mapping schemas
+- Draft-2020-12 checks FeatureEvidence and evidence-odoo-mapping schemas via `jsonschema`
+  (fails closed if `jsonschema` is not installed — no shallow structural PASS)
 - Validates positive/negative fixtures against native models
 - Confirms FeatureEvidence + `load_evidence_odoo_mapping` remain the sole evidence authorities
 - Emits a deterministic digest report under `artifacts/`

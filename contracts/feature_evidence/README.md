@@ -14,4 +14,4 @@ Use `compile_field_confidence_map` to emit FeatureEvidence from live FieldConfid
 
 ## Compiler validator (TASK-059)
 
-Run `tools/payload_contract_compiler.py` (also `make agent-check` step 8/8) to Draft-2020-12 check schemas, validate fixtures against native models, and emit a digest report. See `docs/adr/ADR-012-eie-contract-compiler-validator.md`.
+Run `tools/payload_contract_compiler.py` (also `make agent-check` step 8/8) to Draft-2020-12 check schemas via `jsonschema` (fails closed if missing), validate fixtures against native models, and emit a digest report. See `docs/adr/ADR-012-eie-contract-compiler-validator.md`.
