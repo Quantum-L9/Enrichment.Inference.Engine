@@ -1,7 +1,7 @@
 version: 1.0.0-draft
 domain: plasticos
 owner: eie
-description: Canonical feature IDs emitted as FeatureEvidence (TASK-019).
+description: Canonical feature IDs emitted as FeatureEvidence (TASK-019/041).
 features:
 - feature_id: facility.capacity.available_lbs_month
   value_kinds: [number]

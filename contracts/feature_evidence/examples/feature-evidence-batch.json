@@ -1,0 +1,50 @@
+[
+  {
+    "contract_version": "1.0.0-draft",
+    "domain": "plasticos",
+    "feature_id": "material.polymer_type",
+    "subject_ref": "res.partner:102",
+    "value": {"kind": "string", "value": "HDPE"},
+    "unit": null,
+    "value_state": "observed",
+    "confidence": 0.95,
+    "source": "crm",
+    "method": "field_confidence_adapter",
+    "observed_at": "2026-08-02T03:00:00Z",
+    "valid_until": null,
+    "provenance": {
+      "source_type": "odoo",
+      "source_ref": "odoo.partner:102",
+      "method": "field_confidence_adapter",
+      "rule_or_model_version": null
+    },
+    "evidence_ref": null,
+    "supersedes_ref": null,
+    "conflicts_with_refs": [],
+    "execution_version": "eie-0.9.0"
+  },
+  {
+    "contract_version": "1.0.0-draft",
+    "domain": "plasticos",
+    "feature_id": "facility.capacity.available_lbs_month",
+    "subject_ref": "res.partner:102",
+    "value": {"kind": "number", "value": 120000},
+    "unit": "lb/month",
+    "value_state": "inferred",
+    "confidence": 0.82,
+    "source": "inference",
+    "method": "capacity-rule-2.1.0",
+    "observed_at": "2026-08-02T03:00:00Z",
+    "valid_until": "2026-08-31T23:59:59Z",
+    "provenance": {
+      "source_type": "inference",
+      "source_ref": "eie.convergence:run-123",
+      "method": "capacity-rule-2.1.0",
+      "rule_or_model_version": "capacity-rule-2.1.0"
+    },
+    "evidence_ref": "plasticos.capacity.observation:44",
+    "supersedes_ref": null,
+    "conflicts_with_refs": [],
+    "execution_version": "eie-0.9.0"
+  }
+]
