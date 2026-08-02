@@ -91,3 +91,30 @@ def test_schema_file_forbids_transport_fields() -> None:
     props = schema.get("properties") or {}
     for banned in ("packet_uuid", "tenant_uuid", "correlation_id", "transport_hash"):
         assert banned not in props
+
+
+def test_feature_id_requires_dot_segment() -> None:
+    payload = _load("examples/feature-evidence.json")
+    payload["feature_id"] = "polymer"
+    with pytest.raises(ValidationError):
+        FeatureEvidence.model_validate(payload)
+
+
+def test_adapter_preserves_integer_numeric_type() -> None:
+    fc = FieldConfidence(
+        field_name="lot_count",
+        value=3,
+        confidence=0.9,
+        source=FieldSource.CRM,
+    )
+    ev = feature_evidence_from_field_confidence(
+        field=fc,
+        subject_ref="res.partner:102",
+        feature_id="ops.lot_count",
+        execution_version="eie-0.9.0",
+        source_ref="odoo.partner:102",
+        value_state=ValueState.OBSERVED,
+    )
+    assert ev.value.kind == "number"
+    assert ev.value.value == 3
+    assert isinstance(ev.value.value, int)

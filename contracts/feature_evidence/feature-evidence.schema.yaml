@@ -27,7 +27,7 @@ properties:
     const: plasticos
   feature_id:
     type: string
-    pattern: ^[a-z][a-z0-9_.-]{1,127}$
+    pattern: ^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)+$
   subject_ref:
     type: string
     pattern: ^[a-z0-9_.-]+:[^\s]+$

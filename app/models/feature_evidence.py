@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.models.field_confidence import FieldConfidence, FieldSource
 
 ENTITY_REF_PATTERN = r"^[a-z0-9_.-]+:[^\s]+$"
-FEATURE_ID_PATTERN = r"^[a-z][a-z0-9_.-]{1,127}$"
+FEATURE_ID_PATTERN = r"^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)+$"
 
 
 class ValueState(StrEnum):
@@ -138,8 +138,10 @@ def _typed_value_from_raw(raw: Any) -> TypedValue:
         return TypedValue(kind="null", value=None)
     if isinstance(raw, bool):
         return TypedValue(kind="boolean", value=raw)
-    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-        return TypedValue(kind="number", value=raw + 0.0 if isinstance(raw, int) else raw)
+    if isinstance(raw, int):
+        return TypedValue(kind="number", value=raw)
+    if isinstance(raw, float):
+        return TypedValue(kind="number", value=raw)
     if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
         return TypedValue(kind="string_list", value=list(raw))
     return TypedValue(kind="string", value=str(raw))
