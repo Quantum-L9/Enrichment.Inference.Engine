@@ -1,0 +1,34 @@
+version: 1.0.0-draft
+domain: plasticos
+owner: eie
+description: Canonical feature IDs emitted as FeatureEvidence (TASK-019).
+features:
+- feature_id: facility.capacity.available_lbs_month
+  value_kinds: [number]
+  unit: lb/month
+  producers: [inference, enrichment]
+  attribution_required: true
+- feature_id: material.contamination_pct
+  value_kinds: [number]
+  unit: percent
+  producers: [enrichment, observed]
+  attribution_required: true
+- feature_id: facility.food_grade_certified
+  value_kinds: [boolean]
+  unit: null
+  producers: [crm, enrichment]
+  attribution_required: true
+- feature_id: material.polymer_type
+  value_kinds: [string]
+  unit: null
+  producers: [crm, enrichment, inference]
+  attribution_required: true
+- feature_id: material.mfi
+  value_kinds: [number]
+  unit: g/10min
+  producers: [enrichment, inference]
+  attribution_required: true
+rules:
+- inferred values require provenance.rule_or_model_version
+- stale evidence is never current without explicit policy
+- confidence is 0..1

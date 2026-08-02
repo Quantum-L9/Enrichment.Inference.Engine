@@ -1,5 +1,13 @@
 """Pydantic request/response schemas."""
 
+from .feature_evidence import (
+    EvidenceProvenance,
+    EvidenceSource,
+    FeatureEvidence,
+    TypedValue,
+    ValueState,
+    feature_evidence_from_field_confidence,
+)
 from .field_confidence import (
     FieldConfidence,
     FieldConfidenceMap,
@@ -37,6 +45,13 @@ __all__ = [
     "FieldConfidence",
     "FieldConfidenceMap",
     "compute_field_confidences",
+    # feature_evidence.py
+    "ValueState",
+    "EvidenceSource",
+    "TypedValue",
+    "EvidenceProvenance",
+    "FeatureEvidence",
+    "feature_evidence_from_field_confidence",
     # loop_schemas.py
     "ApprovalMode",
     "ConvergeRequest",
