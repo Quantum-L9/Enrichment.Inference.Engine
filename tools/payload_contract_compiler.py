@@ -75,118 +75,142 @@ def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _resolve_under_root(path: Path) -> Path:
+    """Reject report paths that escape the repository root."""
+    resolved = path.expanduser().resolve()
+    root = ROOT.resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError(f"--report must stay under repo root ({root})")
+    return resolved
+
+
+def _structural_schema_errors(schema: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
+        errors.append("missing Draft 2020-12 $schema")
+    if not schema.get("$id"):
+        errors.append("missing $id")
+    if schema.get("type") not in {None, "object"}:
+        errors.append("unexpected root type")
+    return errors
+
+
+def _apply_schema_check(entry: dict[str, Any], schema: dict[str, Any]) -> None:
+    if Draft202012Validator is not None:
+        try:
+            Draft202012Validator.check_schema(schema)
+            entry["check_schema"] = "PASS"
+            entry["check_schema_backend"] = "jsonschema"
+        except Exception as exc:
+            entry["check_schema"] = "FAIL"
+            entry["error"] = str(exc)
+        return
+    errors = _structural_schema_errors(schema)
+    if errors:
+        entry["check_schema"] = "FAIL"
+        entry["error"] = "; ".join(errors)
+        return
+    entry["check_schema"] = "PASS"
+    entry["check_schema_backend"] = "structural"
+
+
+def _schema_entry(path: Path) -> dict[str, Any]:
+    schema = _load_yaml(path)
+    entry: dict[str, Any] = {
+        "path": str(path.relative_to(ROOT)),
+        "id": schema.get("$id"),
+        "digest": _sha_file(path),
+    }
+    _apply_schema_check(entry, schema)
+    text = path.read_text(encoding="utf-8")
+    hits = [token for token in FORBIDDEN_TOKENS if token in text]
+    entry["forbidden_token_hits"] = hits
+    entry["status"] = "PASS" if entry["check_schema"] == "PASS" and not hits else "FAIL"
+    return entry
+
+
 def validate_schemas() -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-    for path in SCHEMA_FILES:
-        schema = _load_yaml(path)
-        entry: dict[str, Any] = {
-            "path": str(path.relative_to(ROOT)),
-            "id": schema.get("$id"),
-            "digest": _sha_file(path),
-        }
-        if Draft202012Validator is not None:
-            try:
-                Draft202012Validator.check_schema(schema)
-                entry["check_schema"] = "PASS"
-                entry["check_schema_backend"] = "jsonschema"
-            except Exception as exc:
-                entry["check_schema"] = "FAIL"
-                entry["error"] = str(exc)
+    return [_schema_entry(path) for path in SCHEMA_FILES]
+
+
+def _feature_positive(path: Path, model: type) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "file": str(path.relative_to(ROOT)),
+        "model": "FeatureEvidence",
+    }
+    payload = _load_json(path)
+    try:
+        if isinstance(payload, list):
+            for item in payload:
+                model.model_validate(item)
+            entry["items"] = len(payload)
         else:
-            errors: list[str] = []
-            if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
-                errors.append("missing Draft 2020-12 $schema")
-            if not schema.get("$id"):
-                errors.append("missing $id")
-            if schema.get("type") not in {None, "object"}:
-                errors.append("unexpected root type")
-            if errors:
-                entry["check_schema"] = "FAIL"
-                entry["error"] = "; ".join(errors)
-            else:
-                entry["check_schema"] = "PASS"
-                entry["check_schema_backend"] = "structural"
-        text = path.read_text(encoding="utf-8")
-        hits = [token for token in FORBIDDEN_TOKENS if token in text]
-        entry["forbidden_token_hits"] = hits
-        entry["status"] = "PASS" if entry["check_schema"] == "PASS" and not hits else "FAIL"
-        results.append(entry)
-    return results
+            model.model_validate(payload)
+        entry["status"] = "PASS"
+    except ValidationError as exc:
+        entry["status"] = "FAIL"
+        entry["error"] = str(exc)[:400]
+    return entry
+
+
+def _mapping_positive(model: type) -> dict[str, Any]:
+    mapping_path = MAPPING_DIR / "evidence-odoo-mapping.yaml"
+    entry: dict[str, Any] = {
+        "file": str(mapping_path.relative_to(ROOT)),
+        "model": "EvidenceOdooMappingContract",
+    }
+    try:
+        model.model_validate(_load_yaml(mapping_path))
+        entry["status"] = "PASS"
+    except ValidationError as exc:
+        entry["status"] = "FAIL"
+        entry["error"] = str(exc)[:400]
+    return entry
+
+
+def _expect_reject(
+    path: Path, model: type, *, model_name: str, semantic: str | None = None
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "file": str(path.relative_to(ROOT)),
+        "model": model_name,
+    }
+    payload = _load_json(path) if path.suffix == ".json" else _load_yaml(path)
+    try:
+        model.model_validate(payload)
+        entry["status"] = "FAIL"
+        entry["detail"] = "incorrectly_accepted"
+    except ValidationError:
+        entry["status"] = "PASS"
+        entry["detail"] = "rejected_as_expected"
+        if semantic is not None:
+            entry["enforcement"] = "owner_semantic"
+    return entry
 
 
 def validate_fixtures() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from app.models.evidence_odoo_mapping import EvidenceOdooMappingContract
     from app.models.feature_evidence import FeatureEvidence
 
-    positives: list[dict[str, Any]] = []
-    negatives: list[dict[str, Any]] = []
+    positives = [
+        _feature_positive(path, FeatureEvidence)
+        for path in sorted((FEATURE_DIR / "examples").glob("*.json"))
+    ]
+    positives.append(_mapping_positive(EvidenceOdooMappingContract))
 
-    # FeatureEvidence positives
-    for path in sorted((FEATURE_DIR / "examples").glob("*.json")):
-        entry: dict[str, Any] = {
-            "file": str(path.relative_to(ROOT)),
-            "model": "FeatureEvidence",
-        }
-        payload = _load_json(path)
-        try:
-            if isinstance(payload, list):
-                for item in payload:
-                    FeatureEvidence.model_validate(item)
-                entry["items"] = len(payload)
-            else:
-                FeatureEvidence.model_validate(payload)
-            entry["status"] = "PASS"
-        except ValidationError as exc:
-            entry["status"] = "FAIL"
-            entry["error"] = str(exc)[:400]
-        positives.append(entry)
-
-    # Mapping contract positive
-    mapping_path = MAPPING_DIR / "evidence-odoo-mapping.yaml"
-    map_entry: dict[str, Any] = {
-        "file": str(mapping_path.relative_to(ROOT)),
-        "model": "EvidenceOdooMappingContract",
-    }
-    try:
-        EvidenceOdooMappingContract.model_validate(_load_yaml(mapping_path))
-        map_entry["status"] = "PASS"
-    except ValidationError as exc:
-        map_entry["status"] = "FAIL"
-        map_entry["error"] = str(exc)[:400]
-    positives.append(map_entry)
-
-    # FeatureEvidence negatives
-    for path in sorted((FEATURE_DIR / "negative_examples").glob("*.json")):
-        entry = {
-            "file": str(path.relative_to(ROOT)),
-            "model": "FeatureEvidence",
-        }
-        try:
-            FeatureEvidence.model_validate(_load_json(path))
-            entry["status"] = "FAIL"
-            entry["detail"] = "incorrectly_accepted"
-        except ValidationError:
-            entry["status"] = "PASS"
-            entry["detail"] = "rejected_as_expected"
-            if path.name == "inferred-without-version.json":
-                entry["enforcement"] = "owner_semantic"
-        negatives.append(entry)
-
-    # Mapping negatives
-    for path in sorted((MAPPING_DIR / "negative_examples").glob("*.yaml")):
-        entry = {
-            "file": str(path.relative_to(ROOT)),
-            "model": "EvidenceOdooMappingContract",
-        }
-        try:
-            EvidenceOdooMappingContract.model_validate(_load_yaml(path))
-            entry["status"] = "FAIL"
-            entry["detail"] = "incorrectly_accepted"
-        except ValidationError:
-            entry["status"] = "PASS"
-            entry["detail"] = "rejected_as_expected"
-        negatives.append(entry)
-
+    negatives = [
+        _expect_reject(
+            path,
+            FeatureEvidence,
+            model_name="FeatureEvidence",
+            semantic="owner_semantic" if path.name == "inferred-without-version.json" else None,
+        )
+        for path in sorted((FEATURE_DIR / "negative_examples").glob("*.json"))
+    ]
+    negatives.extend(
+        _expect_reject(path, EvidenceOdooMappingContract, model_name="EvidenceOdooMappingContract")
+        for path in sorted((MAPPING_DIR / "negative_examples").glob("*.yaml"))
+    )
     return positives, negatives
 
 
@@ -214,6 +238,11 @@ def validate_evidence_authority() -> dict[str, Any]:
     }
 
 
+def _write_report(write_path: Path, report: dict[str, Any]) -> None:
+    write_path.parent.mkdir(parents=True, exist_ok=True)
+    write_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+
 def compile_report(*, write_path: Path | None) -> dict[str, Any]:
     schema_results = validate_schemas()
     positives, negatives = validate_fixtures()
@@ -236,8 +265,7 @@ def compile_report(*, write_path: Path | None) -> dict[str, Any]:
     report["result"] = "PASS" if ok else "FAIL"
     report["digest"] = _sha_obj({k: v for k, v in report.items() if k != "digest"})
     if write_path is not None:
-        write_path.parent.mkdir(parents=True, exist_ok=True)
-        write_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        _write_report(write_path, report)
     return report
 
 
@@ -255,7 +283,8 @@ def main(argv: list[str] | None = None) -> int:
         help="Do not write report file",
     )
     args = parser.parse_args(argv)
-    report = compile_report(write_path=None if args.stdout_only else args.report)
+    write_path = None if args.stdout_only else _resolve_under_root(args.report)
+    report = compile_report(write_path=write_path)
     print(json.dumps({"result": report["result"], "digest": report["digest"]}, indent=2))
     return 0 if report["result"] == "PASS" else 1
 

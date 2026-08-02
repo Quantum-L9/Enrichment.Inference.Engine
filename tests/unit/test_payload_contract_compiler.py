@@ -39,12 +39,22 @@ def test_compiler_report_passes(tmp_path: Path) -> None:
     assert all(n["status"] == "PASS" for n in report["negatives"])
 
 
-def test_compiler_cli_exit_zero(tmp_path: Path) -> None:
+def test_compiler_cli_exit_zero() -> None:
     mod = _load_compiler()
-    report_path = tmp_path / "cli-report.json"
-    assert mod.main(["--report", str(report_path)]) == 0
-    data = json.loads(report_path.read_text(encoding="utf-8"))
-    assert data["result"] == "PASS"
+    report_path = ROOT / "artifacts" / "payload-contract-compiler-cli-test.json"
+    try:
+        assert mod.main(["--report", str(report_path)]) == 0
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+        assert data["result"] == "PASS"
+    finally:
+        if report_path.exists():
+            report_path.unlink()
+
+
+def test_compiler_cli_rejects_escape_path(tmp_path: Path) -> None:
+    mod = _load_compiler()
+    with pytest.raises(ValueError, match="repo root"):
+        mod.main(["--report", str(tmp_path / "escape.json")])
 
 
 def test_contract_schemas_exist() -> None:
