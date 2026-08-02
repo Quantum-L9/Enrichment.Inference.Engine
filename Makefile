@@ -83,16 +83,17 @@ agent-check:  ## THE universal gate. Agents run this before every commit.
 	@echo "║  L9 Agent Check — Enrichment.Inference.Engine ║"
 	@echo "╚══════════════════════════════════════════════╝"
 	@echo ""
-	@echo "=== [1/7] LINT ===" && ruff check .
-	@echo "=== [2/7] FORMAT ===" && ruff format --check .
-	@echo "=== [3/7] TYPES ===" && mypy app
-	@echo "=== [4/7] UNIT TESTS ===" && $(PYTEST) tests/unit/ tests/compliance/ -v --tb=short -x
-	@echo "=== [5/7] CI TESTS ===" && $(PYTEST) tests/ci/ -v --tb=short -x
-	@echo "=== [6/7] AUDIT ===" && $(PYTHON) tools/audit_engine.py --strict
-	@echo "=== [7/7] CONTRACTS ===" && $(PYTHON) tools/verify_contracts.py
+	@echo "=== [1/8] LINT ===" && ruff check .
+	@echo "=== [2/8] FORMAT ===" && ruff format --check .
+	@echo "=== [3/8] TYPES ===" && mypy app
+	@echo "=== [4/8] UNIT TESTS ===" && $(PYTEST) tests/unit/ tests/compliance/ -v --tb=short -x
+	@echo "=== [5/8] CI TESTS ===" && $(PYTEST) tests/ci/ -v --tb=short -x
+	@echo "=== [6/8] AUDIT ===" && $(PYTHON) tools/audit_engine.py --strict
+	@echo "=== [7/8] CONTRACTS ===" && $(PYTHON) tools/verify_contracts.py
+	@echo "=== [8/8] PAYLOAD COMPILER ===" && PYTHONPATH="$${PYTHONPATH}:." $(PYTHON) tools/payload_contract_compiler.py --stdout-only
 	@echo ""
 	@echo "╔══════════════════════════════════════════════╗"
-	@echo "║  ALL 7 GATES PASSED ✓                         ║"
+	@echo "║  ALL 8 GATES PASSED ✓                         ║"
 	@echo "╚══════════════════════════════════════════════╝"
 
 agent-fix:  ## Auto-fix what can be fixed
