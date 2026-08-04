@@ -93,6 +93,7 @@ async def discover_schema(
     "/api/v1/scan",
     dependencies=[Depends(verify_api_key)],
     summary="CRM field scan — Seed tier entry point",
+    responses={404: {"description": "Domain not found"}},
 )
 async def scan_crm_fields(
     request: ScanRequest,

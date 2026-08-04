@@ -2,11 +2,18 @@
 
 ## Executive verdict
 
-**REMEDIATED_PENDING_REMOTE_ANALYSIS** — 33 confirmed issues fixed at their root cause
-with minimal, behavior-preserving changes across 14 files. Remaining issues are either
-proven false positives or deferred with explicit rationale (CI-install risk,
-interface-contract async, or broad-refactor risk). Remote SonarCloud closure is PENDING
-re-analysis of the candidate branch.
+**REMEDIATED_PENDING_REMOTE_ANALYSIS** — 32 confirmed issues fixed at their root cause
+with minimal, behavior-preserving changes, plus one contract regression test. Remaining
+issues are either proven false positives or deferred with explicit rationale (CI-install
+risk, interface-contract async, or broad-refactor risk). Remote SonarCloud closure is
+PENDING re-analysis of the candidate branch.
+
+> **PR-gate note:** the 5th S1192 site (`app/core/telemetry.py`) was intentionally
+> **reverted**. Extracting the pre-existing `http://otel-collector:4317` literal to a new
+> constant line made SonarCloud treat it as *new code* and flag `python:S5332`
+> (clear-text protocol), failing the PR's `new_security_rating` gate. The internal
+> OTLP/gRPC collector endpoint is `http` by design; reverting keeps runtime behavior and
+> the new-code security rating clean. Net remediated: 32 (S1192 ×4).
 
 ## Target identity
 
@@ -51,7 +58,7 @@ Quality gate: **ERROR** — failing condition `new_security_rating` actual `3` (
 | C4 | pythonbugs:S2259 (BUG) | 1 | `services/event_emitter.py` | `self._nc.publish()` on a possibly-`None` connection. Narrowed via local `nc` + explicit `RuntimeError` guard after `connect()`. |
 | C5 | python:S1244 (BUG) | 1 | `health/health_field_analyzer.py` | Float `stdev == 0.0` equality → `math.isclose(stdev, 0.0, abs_tol=1e-12)` (also guards near-zero division). |
 | C6 | python:S9083 | 9 | `tests/test_crm_integration.py`, `tests/test_waterfall_enrichment.py` | Empty-paren pytest decorators → bare form, matching the repo-dominant style (62:3 fixture, 85:6 asyncio). |
-| C7 | python:S1192 (CRITICAL) | 5 | `engines/convergence/schema_proposer.py` (×2), `score/score_api.py`, `core/telemetry.py`, `scripts/validate_phase5_readiness.py` | Duplicated string literals (≥3×) → module-level constants. |
+| C7 | python:S1192 (CRITICAL) | 4 | `engines/convergence/schema_proposer.py` (×2), `score/score_api.py`, `scripts/validate_phase5_readiness.py` | Duplicated string literals (≥3×) → module-level constants. (telemetry.py site reverted — see PR-gate note.) |
 
 ## Confirmed vs rejected findings
 
