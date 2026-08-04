@@ -93,32 +93,42 @@ async def discover_schema(
     "/api/v1/scan",
     dependencies=[Depends(verify_api_key)],
     summary="CRM field scan — Seed tier entry point",
+    responses={404: {"description": "Domain not found"}},
 )
 async def scan_crm_fields(
     request: ScanRequest,
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, Any]:
     try:
+        from ...services.crm_field_scanner import (
+            CRMField,
+            scan_result_to_dict,
+        )
         from ...services.crm_field_scanner import scan_crm_fields as _scan
+        from . import converge as _converge
+
+        domain_spec = _converge._domain_specs.get(request.domain)
+        if not domain_spec:
+            available = sorted(_converge._domain_specs.keys())
+            raise HTTPException(
+                status_code=404,
+                detail=f"Domain '{request.domain}' not found. Available: {available}",
+            )
 
         crm_fields = [
-            {
-                "name": f.name,
-                "type": f.type,
-                "sample_values": f.sample_values or [],
-                "fill_rate": f.fill_rate or 0.0,
-            }
+            CRMField(
+                name=f.name,
+                field_type=f.type,
+                sample_values=f.sample_values or [],
+                fill_rate=f.fill_rate or 0.0,
+            )
             for f in request.fields
         ]
-        result = await _scan(
-            crm_fields=crm_fields,
-            domain=request.domain,
-            tenant_id=request.tenant_id,
-            settings=settings,
-        )
-        return result
+        result = _scan(crm_fields, domain_spec)
+        return scan_result_to_dict(result)
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.error("crm_scan_failed", domain=request.domain, error=str(exc))
+        logger.exception("crm_scan_failed", domain=request.domain)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

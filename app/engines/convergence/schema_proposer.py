@@ -18,6 +18,9 @@ from app.utils.safe_convert import safe_float
 
 logger = structlog.get_logger(__name__)
 
+_KERNEL_NAME_INVARIANT_EVENT = "schema_proposer.kernel_name_invariant_violation"
+_KERNEL_SECTION = "L9 §3.1/§5.1/§5.2"
+
 MIN_FILL_RATE = 0.60
 MIN_AVG_CONFIDENCE = 0.70
 MAX_SAMPLE_VALUES = 10
@@ -234,11 +237,11 @@ def _build_field_proposals(
             continue
         if not _is_canonical_field_name(field_name):
             logger.warning(
-                "schema_proposer.kernel_name_invariant_violation",
+                _KERNEL_NAME_INVARIANT_EVENT,
                 field_name=field_name,
                 entity_count=acc.non_null,
                 stage="propose",
-                kernel_section="L9 §3.1/§5.1/§5.2",
+                kernel_section=_KERNEL_SECTION,
             )
             continue
         field_type = _infer_type(acc.values)
@@ -274,10 +277,10 @@ def _apply_node_properties(
                 if fp.field_name in approved_fields:
                     if not _is_canonical_field_name(fp.field_name):
                         logger.warning(
-                            "schema_proposer.kernel_name_invariant_violation",
+                            _KERNEL_NAME_INVARIANT_EVENT,
                             field_name=fp.field_name,
                             stage="apply",
-                            kernel_section="L9 §3.1/§5.1/§5.2",
+                            kernel_section=_KERNEL_SECTION,
                         )
                         continue
                     props[fp.field_name] = {"type": fp.field_type, "source": fp.source}
@@ -293,10 +296,10 @@ def _apply_gate_proposals(
         if gp.field_name in approved_fields:
             if not _is_canonical_field_name(gp.field_name):
                 logger.warning(
-                    "schema_proposer.kernel_name_invariant_violation",
+                    _KERNEL_NAME_INVARIANT_EVENT,
                     field_name=gp.field_name,
                     stage="apply",
-                    kernel_section="L9 §3.1/§5.1/§5.2",
+                    kernel_section=_KERNEL_SECTION,
                 )
                 continue
             gates.append({"field": gp.field_name, "type": gp.gate_type, "auto_proposed": True})
@@ -312,10 +315,10 @@ def _apply_scoring_proposals(
         if sp.field_name in approved_fields:
             if not _is_canonical_field_name(sp.field_name):
                 logger.warning(
-                    "schema_proposer.kernel_name_invariant_violation",
+                    _KERNEL_NAME_INVARIANT_EVENT,
                     field_name=sp.field_name,
                     stage="apply",
-                    kernel_section="L9 §3.1/§5.1/§5.2",
+                    kernel_section=_KERNEL_SECTION,
                 )
                 continue
             scoring.append(

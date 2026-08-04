@@ -13,6 +13,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = REPO_ROOT / "docs/contracts/enforcement/phase5-readiness.yaml"
+_CHASSIS_ENDPOINT_PATH = "app/api/v1/chassis_endpoint.py"
 
 
 @dataclass
@@ -414,7 +415,7 @@ def _agent_truth(spec: dict[str, Any]) -> TruthResult:
 
         selection = select_gates(
             [
-                "app/api/v1/chassis_endpoint.py",
+                _CHASSIS_ENDPOINT_PATH,
                 "docs/contracts/api/openapi.yaml",
                 "tests/contracts/tier2/test_enforcement_packet_runtime.py",
             ]
@@ -424,7 +425,7 @@ def _agent_truth(spec: dict[str, Any]) -> TruthResult:
         else:
             pass_evidence.append("gate selection includes constitution_verify")
 
-        ok_block, _ = build_review_signal(["app/api/v1/chassis_endpoint.py"])
+        ok_block, _ = build_review_signal([_CHASSIS_ENDPOINT_PATH])
         if ok_block:
             errors.append(
                 "review signal did not block contract-bound change without companion updates"
@@ -436,7 +437,7 @@ def _agent_truth(spec: dict[str, Any]) -> TruthResult:
 
         ok_pass, markdown_pass = build_review_signal(
             [
-                "app/api/v1/chassis_endpoint.py",
+                _CHASSIS_ENDPOINT_PATH,
                 "docs/contracts/api/openapi.yaml",
                 "docs/contracts/node.constitution.yaml",
                 "tests/contracts/tier2/test_enforcement_packet_runtime.py",
