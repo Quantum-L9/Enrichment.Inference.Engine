@@ -86,7 +86,9 @@ async def discover_schema(
             domain=request.domain,
             error=str(exc),
         )
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500, detail="Internal error during schema discovery"
+        ) from exc
 
 
 @router.post(
@@ -119,7 +121,7 @@ async def scan_crm_fields(
         return result
     except Exception as exc:
         logger.error("crm_scan_failed", domain=request.domain, error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Internal error during CRM field scan") from exc
 
 
 @router.get(

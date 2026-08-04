@@ -58,7 +58,9 @@ def _cache_key(domain_spec: dict[str, Any]) -> str:
     nodes = ontology.get("nodes", ontology.get("entities", {}))
     node_count = len(nodes) if isinstance(nodes, (dict, list)) else 0
     raw = f"{domain_name}:{node_count}"
-    return hashlib.md5(raw.encode()).hexdigest()
+    # Non-security cache key only; usedforsecurity=False marks this hash as
+    # non-cryptographic to satisfy weak-hashing scanners (CWE-327/328).
+    return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
 
 
 def get_or_classify_domain(domain_spec: dict[str, Any]) -> DomainClassification:
