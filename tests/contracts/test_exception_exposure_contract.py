@@ -56,10 +56,9 @@ async def test_discover_does_not_leak_exception(client, monkeypatch):
     async def _boom(**_kwargs):
         raise RuntimeError(SENTINEL)
 
-    # discover_schema imports `discover` lazily from schema_discovery at call
-    # time, so the name is not a module attribute until then — raising=False is
-    # required to inject the fake; raising=True cannot patch a not-yet-bound name.
-    monkeypatch.setattr("app.engines.schema_discovery.discover", _boom, raising=False)
+    # The route delegates to the canonical handle_discover; force it to raise
+    # and assert the failure detail is not echoed to the client.
+    monkeypatch.setattr("app.api.v1.discover.handle_discover", _boom)
     resp = await client.post(
         "/api/v1/discover",
         json={
@@ -74,12 +73,16 @@ async def test_discover_does_not_leak_exception(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_scan_does_not_leak_exception(client, monkeypatch):
-    async def _boom(**_kwargs):
+    def _boom(*_args, **_kwargs):
         raise RuntimeError(SENTINEL)
 
-    # scan_crm_fields is a real module attribute; default raising=True so the
-    # test fails loudly if the patch target is ever renamed/removed.
-    monkeypatch.setattr("app.services.crm_field_scanner.scan_crm_fields", _boom)
+    # Resolve to a stub spec, then force the scanner to raise; the caught
+    # exception must not reach the client body.
+    monkeypatch.setattr(
+        "app.api.v1.discover._resolve_domain_spec",
+        lambda _domain, _settings: {"ontology": {"nodes": []}},
+    )
+    monkeypatch.setattr("app.api.v1.discover.run_crm_field_scan", _boom)
     resp = await client.post(
         "/api/v1/scan",
         json={

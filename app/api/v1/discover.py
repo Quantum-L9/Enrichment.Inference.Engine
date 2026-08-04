@@ -11,10 +11,13 @@ POST /api/v1/proposals/{proposal_id}/approve — human approval
 
 from __future__ import annotations
 
+import re
 import uuid
+from pathlib import Path
 from typing import Annotated, Any
 
 import structlog
+import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
@@ -22,10 +25,52 @@ from app.utils.safe_convert import safe_float
 
 from ...core.auth import verify_api_key
 from ...core.config import Settings, get_settings
+from ...engines.handlers import handle_discover
 from ...services import pg_store
+from ...services.crm_field_scanner import (
+    CRMField,
+    scan_result_to_dict,
+)
+from ...services.crm_field_scanner import (
+    scan_crm_fields as run_crm_field_scan,
+)
 
 logger = structlog.get_logger("api.discover")
 router = APIRouter(tags=["discover"])
+
+# Domain identifiers are path segments under settings.domains_dir; restrict them
+# to a safe character set so a request value can never traverse the filesystem.
+_DOMAIN_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+# Raw domain-spec YAML is static; cache per domain to keep file I/O off the
+# request path after first load (mirrors DomainYamlReader's caching).
+_DOMAIN_SPEC_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _resolve_domain_spec(domain: str, settings: Settings) -> dict[str, Any]:
+    """Resolve a domain id to its raw domain-spec dict.
+
+    Reads the canonical ``{domains_dir}/{domain}/spec.yaml`` (falling back to
+    ``{domains_dir}/{domain}.yaml``), the same layout DomainYamlReader uses.
+    Returns the raw mapping expected by ``scan_crm_fields``. Raises HTTP 404 for
+    an unknown or malformed domain id.
+    """
+    if not _DOMAIN_ID_RE.match(domain):
+        raise HTTPException(status_code=404, detail=f"Domain '{domain}' not found")
+    if domain in _DOMAIN_SPEC_CACHE:
+        return _DOMAIN_SPEC_CACHE[domain]
+
+    root = Path(settings.domains_dir)
+    spec_path = root / domain / "spec.yaml"
+    if not spec_path.exists():
+        spec_path = root / f"{domain}.yaml"
+    if not spec_path.exists():
+        raise HTTPException(status_code=404, detail=f"Domain '{domain}' not found")
+
+    with open(spec_path) as fh:
+        spec = yaml.safe_load(fh) or {}
+    _DOMAIN_SPEC_CACHE[domain] = spec
+    return spec
 
 
 # ── Request / Response Models ──────────────────────────────────────────────
@@ -66,19 +111,19 @@ class ApprovalRequest(BaseModel):
 )
 async def discover_schema(
     request: DiscoverRequest,
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, Any]:
+    # Delegate to the canonical "discover" action handler (enrich + schema
+    # proposal); it is the same implementation registered for the chassis
+    # `discover` action. The request's entity id/domain/object_type are mapped
+    # onto the EnrichRequest payload the handler validates.
+    payload: dict[str, Any] = {
+        "entity": {"id": request.entity_id},
+        "object_type": request.object_type,
+        "objective": f"Discover schema fields for domain '{request.domain}'",
+        "kb_context": request.domain,
+    }
     try:
-        from ...engines.schema_discovery import discover
-
-        result = await discover(
-            entity_id=request.entity_id,
-            domain=request.domain,
-            object_type=request.object_type,
-            tenant_id=request.tenant_id,
-            settings=settings,
-        )
-        return result
+        return await handle_discover(tenant=request.tenant_id, payload=payload)
     except Exception as exc:
         logger.error(
             "schema_discovery_failed",
@@ -101,28 +146,32 @@ async def scan_crm_fields(
     request: ScanRequest,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, Any]:
+    # Resolve the domain to its raw spec (404 if unknown), then run the
+    # canonical synchronous field scanner with its real (crm_fields, domain_spec)
+    # signature. scan_crm_fields is pure in-memory field mapping (no blocking
+    # I/O), so it is safe to call directly on the event loop.
+    domain_spec = _resolve_domain_spec(request.domain, settings)
+    crm_fields = [
+        CRMField(
+            name=f.name,
+            field_type=f.type,
+            sample_values=f.sample_values or [],
+            fill_rate=f.fill_rate,
+        )
+        for f in request.fields
+    ]
     try:
-        from ...services.crm_field_scanner import scan_crm_fields as _scan
-
-        crm_fields = [
-            {
-                "name": f.name,
-                "type": f.type,
-                "sample_values": f.sample_values or [],
-                "fill_rate": f.fill_rate or 0.0,
-            }
-            for f in request.fields
-        ]
-        result = await _scan(
-            crm_fields=crm_fields,
+        scan_result = run_crm_field_scan(crm_fields, domain_spec)
+    except Exception as exc:
+        logger.error(
+            "crm_scan_failed",
             domain=request.domain,
             tenant_id=request.tenant_id,
-            settings=settings,
+            error=str(exc),
+            exc_info=True,
         )
-        return result
-    except Exception as exc:
-        logger.error("crm_scan_failed", domain=request.domain, error=str(exc), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error during CRM field scan") from exc
+    return scan_result_to_dict(scan_result)
 
 
 @router.get(
