@@ -50,12 +50,14 @@ from .score_models import (
 
 # ── Dependency stubs (replaced by DI in production) ───────────
 
+_CONFIGURE_HINT = "Call configure_score_dependencies() in lifespan"
+
 
 def get_score_engine():
     """Injected by app startup via dependency_overrides."""
     raise DependencyNotConfiguredError(
         "ScoreEngine",
-        "Call configure_score_dependencies() in lifespan",
+        _CONFIGURE_HINT,
     )
 
 
@@ -63,7 +65,7 @@ def get_decay_engine():
     """Injected by app startup via dependency_overrides."""
     raise DependencyNotConfiguredError(
         "DecayEngine",
-        "Call configure_score_dependencies() in lifespan",
+        _CONFIGURE_HINT,
     )
 
 
@@ -71,7 +73,7 @@ def get_explainer():
     """Injected by app startup via dependency_overrides."""
     raise DependencyNotConfiguredError(
         "ScoreExplainer",
-        "Call configure_score_dependencies() in lifespan",
+        _CONFIGURE_HINT,
     )
 
 
@@ -79,7 +81,7 @@ def get_profile_store():
     """Injected by app startup via dependency_overrides."""
     raise DependencyNotConfiguredError(
         "ProfileStore",
-        "Call configure_score_dependencies() in lifespan",
+        _CONFIGURE_HINT,
     )
 
 
@@ -87,7 +89,7 @@ def get_score_store():
     """Injected by app startup via dependency_overrides."""
     raise DependencyNotConfiguredError(
         "ScoreStore",
-        "Call configure_score_dependencies() in lifespan",
+        _CONFIGURE_HINT,
     )
 
 

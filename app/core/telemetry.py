@@ -34,6 +34,8 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 logger = structlog.get_logger(__name__)
 
+_DEFAULT_OTLP_ENDPOINT = "http://otel-collector:4317"
+
 
 def setup_telemetry(app: object, service_name: str | None = None) -> None:
     """
@@ -69,13 +71,13 @@ def setup_telemetry(app: object, service_name: str | None = None) -> None:
         "otel_initialized",
         service=resolved_name,
         environment=environment,
-        endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4317"),
+        endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", _DEFAULT_OTLP_ENDPOINT),
     )
 
 
 def _setup_tracing(resource: Resource) -> None:
     """Configure distributed tracing with OTLP export."""
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4317")
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", _DEFAULT_OTLP_ENDPOINT)
     span_exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
     tracer_provider = TracerProvider(resource=resource)
     tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
@@ -84,7 +86,7 @@ def _setup_tracing(resource: Resource) -> None:
 
 def _setup_metrics(resource: Resource) -> None:
     """Configure metrics collection with 60s OTLP export interval."""
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4317")
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", _DEFAULT_OTLP_ENDPOINT)
     metric_exporter = OTLPMetricExporter(endpoint=endpoint, insecure=True)
     metric_reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=60_000)
     meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
