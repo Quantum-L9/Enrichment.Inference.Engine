@@ -56,6 +56,9 @@ async def test_discover_does_not_leak_exception(client, monkeypatch):
     async def _boom(**_kwargs):
         raise RuntimeError(SENTINEL)
 
+    # discover_schema imports `discover` lazily from schema_discovery at call
+    # time, so the name is not a module attribute until then — raising=False is
+    # required to inject the fake; raising=True cannot patch a not-yet-bound name.
     monkeypatch.setattr("app.engines.schema_discovery.discover", _boom, raising=False)
     resp = await client.post(
         "/api/v1/discover",
@@ -74,7 +77,9 @@ async def test_scan_does_not_leak_exception(client, monkeypatch):
     async def _boom(**_kwargs):
         raise RuntimeError(SENTINEL)
 
-    monkeypatch.setattr("app.services.crm_field_scanner.scan_crm_fields", _boom, raising=False)
+    # scan_crm_fields is a real module attribute; default raising=True so the
+    # test fails loudly if the patch target is ever renamed/removed.
+    monkeypatch.setattr("app.services.crm_field_scanner.scan_crm_fields", _boom)
     resp = await client.post(
         "/api/v1/scan",
         json={
@@ -117,15 +122,31 @@ async def test_converge_does_not_leak_exception(client, monkeypatch):
     _assert_no_leak(resp)
 
 
-def test_cache_key_marks_md5_non_security():
-    """Digest is preserved and MD5 is flagged non-security (usedforsecurity=False)."""
-    from app.engines.convergence_controller import _cache_key
+def test_cache_key_marks_md5_non_security(monkeypatch):
+    """MD5 is called with usedforsecurity=False, and the digest is preserved.
+
+    MD5's digest is identical with or without the flag on non-FIPS hosts, so a
+    digest-only assertion would still pass if the flag regressed. We therefore
+    spy on hashlib.md5 to assert the kwarg is actually passed as False — this
+    fails if the CWE-327/328 remediation is ever removed.
+    """
+    from app.engines import convergence_controller as cc
+
+    real_md5 = hashlib.md5
+    captured: dict[str, object] = {}
+
+    def _spy_md5(data=b"", **kwargs):
+        captured["usedforsecurity"] = kwargs.get("usedforsecurity")
+        return real_md5(data, **kwargs)
+
+    monkeypatch.setattr(cc.hashlib, "md5", _spy_md5)
 
     spec = {"domain": "test_domain", "ontology": {"nodes": {"A": {}, "B": {}}}}
-    expected = hashlib.md5(b"test_domain:2", usedforsecurity=False).hexdigest()
-    assert _cache_key(spec) == expected
+    expected = real_md5(b"test_domain:2", usedforsecurity=False).hexdigest()
+    assert cc._cache_key(spec) == expected
+    assert captured["usedforsecurity"] is False
 
     # Deterministic: an independently-constructed but equivalent spec yields
     # the same key (distinct object, not a self-comparison).
     spec_equivalent = {"domain": "test_domain", "ontology": {"nodes": {"A": {}, "B": {}}}}
-    assert _cache_key(spec) == _cache_key(spec_equivalent)
+    assert cc._cache_key(spec) == cc._cache_key(spec_equivalent)
