@@ -15,7 +15,7 @@ logger = structlog.get_logger(__name__)
 def get_runtime_attestation() -> dict[str, Any]:
     try:
         return build_runtime_attestation()
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         logger.error("runtime_attestation_failed", error=str(exc))
         raise HTTPException(
             status_code=500, detail="Internal error during runtime attestation"

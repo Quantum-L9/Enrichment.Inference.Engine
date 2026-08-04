@@ -1,15 +1,12 @@
-"""Regression tests for CodeQL security remediations.
+"""Security-contract regression tests for CodeQL remediations.
 
-Covers two root-cause clusters remediated together:
+Contract: HTTP handlers MUST NOT return raw exception text to clients
+(CWE-209, ``py/stack-trace-exposure``). The ``detail`` of a 5xx response
+must be a generic message; the exception is logged server-side only.
 
-1. CWE-209 stack-trace / information exposure (``py/stack-trace-exposure``):
-   FastAPI handlers must not return raw exception text to clients. The
-   ``detail`` field of a 5xx response must never echo the underlying
-   exception message; the exception is logged server-side instead.
-
-2. CWE-327/328 weak hashing (``py/weak-cryptographic-algorithm``):
-   the non-security cache key in ``convergence_controller`` must mark its
-   MD5 usage ``usedforsecurity=False`` while preserving the digest value.
+Also pins the non-security cache-key hardening (CWE-327/328,
+``py/weak-cryptographic-algorithm``): ``convergence_controller._cache_key``
+marks its MD5 usage ``usedforsecurity=False`` while preserving the digest.
 """
 
 from __future__ import annotations
@@ -27,15 +24,23 @@ SENTINEL = "SENSITIVE-INTERNAL-/srv/secret/api_token=leak123"
 
 @pytest_asyncio.fixture
 async def client():
-    """FastAPI client with API-key auth overridden (auth is not under test)."""
+    """FastAPI client with API-key auth overridden (auth is not under test).
+
+    Saves and restores any pre-existing dependency overrides so this fixture
+    never clobbers overrides set by other tests, even if setup raises.
+    """
     from app.core.auth import verify_api_key
     from app.main import app
 
+    saved_overrides = dict(app.dependency_overrides)
     app.dependency_overrides[verify_api_key] = lambda: "test-principal"
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="https://testserver") as ac:
-        yield ac
-    app.dependency_overrides.clear()
+    try:
+        async with AsyncClient(transport=transport, base_url="https://testserver") as ac:
+            yield ac
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(saved_overrides)
 
 
 def _assert_no_leak(resp) -> None:
@@ -116,11 +121,11 @@ def test_cache_key_marks_md5_non_security():
     """Digest is preserved and MD5 is flagged non-security (usedforsecurity=False)."""
     from app.engines.convergence_controller import _cache_key
 
-    spec = {
-        "domain": "test_domain",
-        "ontology": {"nodes": {"A": {}, "B": {}}},
-    }
+    spec = {"domain": "test_domain", "ontology": {"nodes": {"A": {}, "B": {}}}}
     expected = hashlib.md5(b"test_domain:2", usedforsecurity=False).hexdigest()
     assert _cache_key(spec) == expected
-    # Deterministic across calls.
-    assert _cache_key(spec) == _cache_key(spec)
+
+    # Deterministic: an independently-constructed but equivalent spec yields
+    # the same key (distinct object, not a self-comparison).
+    spec_equivalent = {"domain": "test_domain", "ontology": {"nodes": {"A": {}, "B": {}}}}
+    assert _cache_key(spec) == _cache_key(spec_equivalent)
