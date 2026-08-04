@@ -28,14 +28,15 @@
   },
   "remediated_clusters": {
     "python:S930": 4,
-    "python:S8572": 11,
+    "python:S8572": 7,
     "python:S7502": 2,
     "pythonbugs:S2259": 1,
     "python:S1244": 1,
     "python:S9083": 9,
-    "python:S1192": 4
+    "python:S1192": 3
   },
-  "remediated_total": 32,
+  "remediated_total": 27,
+  "note_audit_scope": "S8572 x4 (crm/salesforce_client.py) and S1192 x1 (score/score_api.py) were reverted: both files carry a pre-existing, already-accepted L9-audit finding (SEC-SQL escaped SOQL; permitted chassis-adapter FastAPI import). The L9 Audit gate promotes any dangerous finding in a touched file to blocking, so a low-value logging fix would have converted accepted inherited debt into a merge blocker.",
   "note_s1192": "One S1192 site (app/core/telemetry.py) was intentionally reverted: extracting the pre-existing 'http://otel-collector:4317' literal to a new constant line caused SonarCloud to flag it as new-code python:S5332 (clear-text). Runtime behavior for the internal OTLP/gRPC collector endpoint is unchanged.",
   "false_positive": { "pythonbugs:S2583": 1 },
   "deferred_summary": "See SONARCLOUD_REMEDIATION_REPORT.md for the full deferred-with-rationale table (FP simulation PRNG S2245, interface-contract async S1172/S7503, cognitive complexity S3776, and workflow/container hardening that risks the gated private-SDK install)."

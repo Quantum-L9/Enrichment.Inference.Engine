@@ -110,7 +110,7 @@ class SalesforceClient(CRMClientBase):
             logger.info("Salesforce connected: %s", self._instance_url)
             return True
         except Exception as exc:
-            logger.exception("Salesforce connect failed: %s", exc)
+            logger.error("Salesforce connect failed: %s", exc)
             return False
 
     def test_connection(self) -> bool:
@@ -140,7 +140,7 @@ class SalesforceClient(CRMClientBase):
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
-            logger.exception("SF get_record error: %s", exc)
+            logger.error("SF get_record error: %s", exc)
             return None
 
     def query_records(
@@ -184,7 +184,7 @@ class SalesforceClient(CRMClientBase):
             resp.raise_for_status()
             return resp.json().get("records", [])
         except Exception as exc:
-            logger.exception("SF query error: %s", exc)
+            logger.error("SF query error: %s", exc)
             return []
 
     def create_record(self, object_type: str, data: dict[str, Any]) -> WriteResult:
@@ -313,7 +313,7 @@ class SalesforceClient(CRMClientBase):
                 for f in describe.get("fields", [])
             }
         except Exception as exc:
-            logger.exception("SF metadata error: %s", exc)
+            logger.error("SF metadata error: %s", exc)
             return {}
 
     def _headers(self) -> dict[str, str]:

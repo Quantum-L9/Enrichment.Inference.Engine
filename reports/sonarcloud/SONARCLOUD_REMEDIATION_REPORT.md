@@ -2,11 +2,19 @@
 
 ## Executive verdict
 
-**REMEDIATED_PENDING_REMOTE_ANALYSIS** — 32 confirmed issues fixed at their root cause
+**REMEDIATED_PENDING_REMOTE_ANALYSIS** — 27 confirmed issues fixed at their root cause
 with minimal, behavior-preserving changes, plus one contract regression test. Remaining
 issues are either proven false positives or deferred with explicit rationale (CI-install
 risk, interface-contract async, or broad-refactor risk). Remote SonarCloud closure is
 PENDING re-analysis of the candidate branch.
+
+> **Audit-scope note:** the S8572 fixes in `crm/salesforce_client.py` (×4) and the S1192
+> fix in `score/score_api.py` (×1) were **reverted**. Both files carry a pre-existing,
+> already-accepted L9-audit finding (salesforce: `SEC-SQL` — SOQL is escaped/allowlisted;
+> score_api: FastAPI import is permitted in the chassis adapter). The L9 Audit gate
+> promotes any dangerous finding in a *touched* file to blocking, so a low-value logging
+> smell fix would have converted accepted inherited debt into a merge blocker. Left as
+> inherited advisory debt. Net remediated: 27 (S8572 ×7, S1192 ×3).
 
 > **PR-gate note:** the 5th S1192 site (`app/core/telemetry.py`) was intentionally
 > **reverted**. Extracting the pre-existing `http://otel-collector:4317` literal to a new
