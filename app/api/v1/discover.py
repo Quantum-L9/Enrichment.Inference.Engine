@@ -85,6 +85,7 @@ async def discover_schema(
             entity_id=request.entity_id,
             domain=request.domain,
             error=str(exc),
+            exc_info=True,
         )
         raise HTTPException(
             status_code=500, detail="Internal error during schema discovery"
@@ -120,7 +121,7 @@ async def scan_crm_fields(
         )
         return result
     except Exception as exc:
-        logger.error("crm_scan_failed", domain=request.domain, error=str(exc))
+        logger.error("crm_scan_failed", domain=request.domain, error=str(exc), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error during CRM field scan") from exc
 
 
