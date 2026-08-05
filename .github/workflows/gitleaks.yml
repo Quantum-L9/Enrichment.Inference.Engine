@@ -51,7 +51,7 @@ jobs:
           persist-credentials: false  # scan-only job — do not retain git push credentials
 
       - name: Gitleaks scan
-        uses: gitleaks/gitleaks-action@961680e5305a30eb575f3ddf6bb6b2e265b68f0a  # v2.3.6
+        uses: gitleaks/gitleaks-action@bcfb9cce635345aac9996cedc19b2de8e01b894f  # v2.3.6
         with:
           config-path: .gitleaks.toml
         env:
