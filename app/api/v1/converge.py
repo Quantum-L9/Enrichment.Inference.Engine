@@ -184,7 +184,8 @@ async def converge_single(
         state.status = LoopStatus.FAILED
         state.failure_reason = str(exc)
         await store.save(state)
-        raise HTTPException(status_code=500, detail=f"Convergence failed: {exc}") from exc
+        logger.error("convergence_loop_failed", run_id=state.run_id, error=str(exc), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error during convergence") from exc
 
     state.accumulated_fields = conv_response.fields or {}
     state.current_pass = conv_response.pass_count

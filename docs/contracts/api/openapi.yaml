@@ -496,7 +496,12 @@ components:
           schema:
             $ref: "./schemas/error-responses.yaml#/components/schemas/ValidationErrorResponse"
     InternalError:
-      description: Internal server error
+      description: >-
+        Internal server error. The `detail` is a generic, non-sensitive message;
+        the underlying exception is recorded in server-side structured logs only
+        and is never returned to the client (CWE-209 information-exposure
+        hardening applied to the discover, scan, converge, and attestation
+        handlers).
       content:
         application/json:
           schema:
