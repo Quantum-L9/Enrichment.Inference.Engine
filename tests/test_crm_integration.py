@@ -59,7 +59,7 @@ class TestCRMBase:
 class TestOdooClient:
     """Test Odoo XML-RPC client with mocked transport."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def odoo_creds(self):
         return CRMCredentials(
             crm_type=CRMType.ODOO,
@@ -155,7 +155,7 @@ class TestOdooClient:
 class TestFieldMapper:
     """Test canonical → CRM field mapping."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def mapping_yaml(self, tmp_path):
         content = """
 crm: odoo

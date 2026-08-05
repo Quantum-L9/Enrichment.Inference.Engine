@@ -24,7 +24,6 @@ from ...core.auth import verify_api_key
 from ...engines.handlers import handle_discover
 from ...services import pg_store
 from ...services.crm_field_scanner import CRMField, scan_crm_fields, scan_result_to_dict
-from .converge import get_domain_spec
 
 logger = structlog.get_logger("api.discover")
 router = APIRouter(tags=["discover"])
@@ -94,12 +93,21 @@ async def discover_schema(request: DiscoverRequest) -> dict[str, Any]:
     "/api/v1/scan",
     dependencies=[Depends(verify_api_key)],
     summary="CRM field scan — Seed tier entry point",
+    responses={404: {"description": "Domain not found"}},
 )
 async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
-    # scan_crm_fields is synchronous with the (crm_fields, domain_spec) contract;
-    # domain_spec is resolved through the shared converge registry (get_domain_spec).
+    # scan_crm_fields is synchronous with the (crm_fields, domain_spec) contract.
+    # Resolve domain_spec from the shared converge registry; unknown domain -> 404.
+    from . import converge as _converge
+
+    domain_spec = _converge._domain_specs.get(request.domain)
+    if not domain_spec:
+        available = sorted(_converge._domain_specs.keys())
+        raise HTTPException(
+            status_code=404,
+            detail=f"Domain '{request.domain}' not found. Available: {available}",
+        )
     try:
-        domain_spec = get_domain_spec(request.domain)
         crm_fields = [
             CRMField(
                 name=f.name,
@@ -114,7 +122,7 @@ async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("crm_scan_failed", domain=request.domain, error=str(exc))
+        logger.exception("crm_scan_failed", domain=request.domain)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

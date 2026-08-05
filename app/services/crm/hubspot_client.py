@@ -52,7 +52,7 @@ class HubSpotClient(CRMClientBase):
             logger.info("HubSpot connected: portal %s", info.get("portalId"))
             return True
         except Exception as exc:
-            logger.error("HubSpot connect failed: %s", exc)
+            logger.exception("HubSpot connect failed: %s", exc)
             return False
 
     def test_connection(self) -> bool:
@@ -81,7 +81,7 @@ class HubSpotClient(CRMClientBase):
             resp.raise_for_status()
             return resp.json().get("properties", {})
         except Exception as exc:
-            logger.error("HS get_record error: %s", exc)
+            logger.exception("HS get_record error: %s", exc)
             return None
 
     def query_records(
@@ -118,7 +118,7 @@ class HubSpotClient(CRMClientBase):
             resp.raise_for_status()
             return [r.get("properties", {}) for r in resp.json().get("results", [])]
         except Exception as exc:
-            logger.error("HS query error: %s", exc)
+            logger.exception("HS query error: %s", exc)
             return []
 
     def create_record(self, object_type: str, data: dict[str, Any]) -> WriteResult:
@@ -253,7 +253,7 @@ class HubSpotClient(CRMClientBase):
                 for p in resp.json().get("results", [])
             }
         except Exception as exc:
-            logger.error("HS metadata error: %s", exc)
+            logger.exception("HS metadata error: %s", exc)
             return {}
 
     def _headers(self) -> dict[str, str]:

@@ -150,7 +150,7 @@ class TestQualityScorer:
 class TestWaterfallEngine:
     """Test multi-source waterfall enrichment."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def engine(self):
         """Create a waterfall engine with mock sources."""
         engine = WaterfallEngine()
@@ -172,14 +172,14 @@ class TestWaterfallEngine:
         )
         return engine
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_enrich_basic(self, engine):
         merged, quality, results = await engine.enrich("company", {"entity_name": "Acme"})
         assert "company_name" in merged
         assert quality > 0.0
         assert len(results) > 0
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_enrich_merges_sources(self):
         """When quality threshold is NOT met by first source, second is called."""
         engine = WaterfallEngine()
@@ -205,13 +205,13 @@ class TestWaterfallEngine:
         assert merged.get("employee_count") == 500
         assert len(results) == 2
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_enrich_provenance_injected(self, engine):
         merged, _, _ = await engine.enrich("company", {"entity_name": "Acme"})
         assert "enrichment_sources_used" in merged
         assert "enrichment_quality_score" in merged
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_enrich_with_failing_source(self):
         engine = WaterfallEngine()
         engine.register_source("failing", FailingSource())
@@ -230,14 +230,14 @@ class TestWaterfallEngine:
         # First result should have error
         assert results[0].error is not None
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_enrich_empty_domain(self):
         engine = WaterfallEngine()
         merged, quality, results = await engine.enrich("unknown_domain", {"entity_name": "Test"})
         assert quality == 0.0 or quality >= 0.0  # no sources = low quality
         assert "enrichment_sources_used" in merged
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_register_source(self):
         engine = WaterfallEngine()
         source = MockSource(name="test_source")

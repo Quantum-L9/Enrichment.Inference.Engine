@@ -104,9 +104,13 @@ class NATSBackend:
     async def publish(self, event: EnrichmentEvent) -> None:
         if self._nc is None:
             await self.connect()
+        nc = self._nc
+        if nc is None:
+            msg = "NATS connection unavailable after connect()"
+            raise RuntimeError(msg)
         subject = f"enrich.events.{event.tenant_id}.{event.event_type.value}"
         payload = json.dumps(event.model_dump(mode="json")).encode()
-        await self._nc.publish(subject, payload)
+        await nc.publish(subject, payload)
 
     async def close(self) -> None:
         if self._nc:
@@ -118,6 +122,7 @@ class EventEmitter:
 
     def __init__(self, backend: RedisStreamsBackend | NATSBackend) -> None:
         self._backend = backend
+        self._tasks: set[asyncio.Task[Any]] = set()
 
     async def _publish_safe(self, event: EnrichmentEvent) -> None:
         try:
@@ -146,7 +151,9 @@ class EventEmitter:
 
     async def emit(self, event: EnrichmentEvent) -> None:
         """Fire-and-forget. Returns immediately; never raises."""
-        asyncio.create_task(self._publish_safe(event))
+        task = asyncio.create_task(self._publish_safe(event))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def emit_enrichment_completed(
         self,

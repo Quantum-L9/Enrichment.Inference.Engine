@@ -149,7 +149,7 @@ def test_scan_synchronous_contract_and_classification(
     assert matched_props == {"polymer_type"}
 
 
-def test_scan_unknown_domain_returns_400(
+def test_scan_unknown_domain_returns_404(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(converge_mod, "_domain_specs", {"plastics-recycling": DOMAIN_SPEC})
@@ -157,5 +157,5 @@ def test_scan_unknown_domain_returns_400(
         "/api/v1/scan",
         json={"fields": [], "domain": "does-not-exist", "tenant_id": "tenant-1"},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 404
     assert "does-not-exist" in resp.json()["detail"]

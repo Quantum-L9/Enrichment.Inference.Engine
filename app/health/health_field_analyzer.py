@@ -66,7 +66,7 @@ def detect_numeric_outliers(
     nums = [v for _, v in values]
     mean = statistics.mean(nums)
     stdev = statistics.stdev(nums) if len(nums) > 1 else 0.0
-    if stdev == 0.0:
+    if math.isclose(stdev, 0.0, abs_tol=1e-12):
         return []
 
     outliers: list[OutlierResult] = []

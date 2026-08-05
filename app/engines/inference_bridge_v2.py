@@ -327,7 +327,7 @@ def _execute_inference_rule(
     try:
         value, rule_confidence = fn(input_values, edge)
     except Exception as e:
-        logger.error(
+        logger.exception(
             "inference_rule.error",
             target=target_field,
             rule=rule_name,

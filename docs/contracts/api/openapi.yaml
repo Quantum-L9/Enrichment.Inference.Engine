@@ -960,8 +960,8 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
-        "400":
-          description: Unknown or unregistered domain — no matching domain spec
+        "404":
+          description: Domain not found — no matching domain spec in the registry
           content:
             application/json:
               schema:
