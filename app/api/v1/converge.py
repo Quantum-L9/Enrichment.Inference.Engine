@@ -72,6 +72,23 @@ def _get_profile_registry() -> ProfileRegistry:
     return _profile_registry
 
 
+def get_domain_spec(domain: str) -> dict[str, Any]:
+    """Resolve a configured domain spec from the injected registry.
+
+    Single resolution path for CRM scans, shared by ``POST /v1/scan`` and
+    ``POST /api/v1/scan``. The registry is populated once at startup via
+    :func:`configure` (main.py lifespan). Raises HTTP 400 when the domain is
+    not registered so callers surface a client error, not a 500.
+    """
+    domain_spec = _domain_specs.get(domain)
+    if not domain_spec:
+        available = list(_domain_specs.keys())
+        raise HTTPException(
+            status_code=400, detail=f"Domain '{domain}' not found. Available: {available}"
+        )
+    return domain_spec
+
+
 class ConvergeRequestBody(BaseModel):
     entity: dict[str, Any] = Field(...)
     object_type: str = "Account"
@@ -354,11 +371,6 @@ async def get_pending_proposals(domain: str) -> dict[str, Any]:
 
 @router.post("/scan", response_model=DiscoveryReport)
 async def scan_crm(body: ScanRequestBody) -> DiscoveryReport:
-    domain_spec = _domain_specs.get(body.domain)
-    if not domain_spec:
-        available = list(_domain_specs.keys())
-        raise HTTPException(
-            status_code=400, detail=f"Domain '{body.domain}' not found. Available: {available}"
-        )
+    domain_spec = get_domain_spec(body.domain)
     scan_result = scan_crm_fields(body.fields, domain_spec)
     return generate_discovery_report(scan_result, domain_spec)
