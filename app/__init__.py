@@ -1,1 +1,1 @@
-"""Domain Enrichment API v2.2.0"""
+"""Domain Enrichment API v2.3.0"""

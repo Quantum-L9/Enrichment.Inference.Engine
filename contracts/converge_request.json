@@ -1,0 +1,12 @@
+{
+  "entity": {
+    "Name": "Acme Polymers LLC",
+    "BillingCountry": "US",
+    "Website": "acmepolymers.example"
+  },
+  "object_type": "Account",
+  "objective": "Classify polymer type and material grade for recycling intake.",
+  "kb_context": "HDPE",
+  "max_variations": 5,
+  "idempotency_key": "b7c1e2f4-8a90-4c3d-9e21-0f1a2b3c4d5e"
+}

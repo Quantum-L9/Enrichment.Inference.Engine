@@ -50,6 +50,9 @@ logger = structlog.get_logger("main")
 
 _kb: KBResolver | None = None
 _idem: IdempotencyStore | None = None
+# Gate registration outcome (TASK-003): None = not attempted/disabled,
+# True = accepted, False = rejected or errored (non-fatal).
+_gate_registered: bool | None = None
 
 
 class EnrichmentLifecycle(LifecycleHook):
@@ -57,7 +60,7 @@ class EnrichmentLifecycle(LifecycleHook):
 
     async def startup(self) -> None:
         """Load KB, connect Redis, init persistence, and register SDK handlers."""
-        global _kb, _idem
+        global _kb, _idem, _gate_registered
 
         settings = get_settings()
         setup_logging(settings.log_level)
@@ -111,10 +114,19 @@ class EnrichmentLifecycle(LifecycleHook):
             profiles=profile_registry.list_profiles(),
             state_backend="redis" if _idem else "memory",
         )
+
+        # TASK-003: explicit, non-fatal Gate registration. auto_register_with_gate
+        # is False, so we register here exactly once per process lifecycle.
+        if _gate_registered is None:
+            from .services.gate_registration import register_with_gate
+
+            _gate_registered = await register_with_gate(settings)
+            logger.info("gate_registration_attempted", result=_gate_registered)
+
         logger.info("api_started", version="2.3.0")
 
     async def shutdown(self) -> None:
-        global _kb, _idem
+        global _kb, _idem, _gate_registered
 
         if _idem:
             await _idem.close()
@@ -123,6 +135,9 @@ class EnrichmentLifecycle(LifecycleHook):
         await _pg.close_engine()
         _kb = None
         _idem = None
+        # The Gate SDK exposes no deregister primitive; a stale Gate entry is
+        # refreshed via overwrite=true on the next startup registration.
+        _gate_registered = None
 
 
 def _build_runtime_config() -> NodeRuntimeConfig:
@@ -203,14 +218,18 @@ app.include_router(score_router)
 @app.get("/api/v1/health", response_model=HealthCheckResponse)
 async def health_check():
     kb = _kb or KBResolver("/dev/null")
+    # A failed Gate registration degrades health; None (disabled/not attempted)
+    # keeps the node "ok".
+    status = "degraded" if _gate_registered is False else "ok"
     return HealthCheckResponse(
-        status="ok",
+        status=status,
         version="2.3.0",
         kb_loaded=kb.index.is_loaded,
         kb_polymers=len(kb.index.polymers),
         kb_grades=kb.index.total_grades,
         kb_rules=kb.index.total_rules,
         circuit_breaker_state=breaker.state,
+        gate_registered=_gate_registered,
     )
 
 

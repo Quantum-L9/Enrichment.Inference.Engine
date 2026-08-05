@@ -148,9 +148,12 @@ class BatchEnrichResponse(BaseModel):
 
 class HealthCheckResponse(BaseModel):
     status: str = "ok"
-    version: str = "2.2.0"
+    version: str = "2.3.0"
     kb_loaded: bool = False
     kb_polymers: int = 0
     kb_grades: int = 0
     kb_rules: int = 0
     circuit_breaker_state: str = "closed"
+    # TASK-003: None = registration disabled/not attempted, True = accepted,
+    # False = rejected/errored (health reports "degraded").
+    gate_registered: bool | None = None

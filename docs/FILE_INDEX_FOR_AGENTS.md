@@ -14,7 +14,7 @@
 
 # FILE_INDEX_FOR_AGENTS.md — File Lookup Index
 
-**VERSION**: 2.2.0 | **SHA_BASELINE**: 358d15d | **LAST_REVIEWED**: 2026-04-11
+**VERSION**: 2.3.0 | **SHA_BASELINE**: 358d15d | **LAST_REVIEWED**: 2026-04-11
 
 ---
 
