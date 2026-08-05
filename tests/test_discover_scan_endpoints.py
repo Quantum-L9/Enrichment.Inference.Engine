@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 import app.api.v1.converge as converge_mod
 import app.api.v1.discover as discover_mod
 import app.engines.schema_discovery as schema_discovery_mod
-from app.api.v1.discover import router as discover_router
 from app.core.auth import verify_api_key
 from app.services.crm_field_scanner import scan_crm_fields as service_scan_crm_fields
 
@@ -47,7 +46,7 @@ DOMAIN_SPEC = {
 def client() -> TestClient:
     """Isolated app with only the discover router; auth stubbed, no lifespan."""
     app = FastAPI()
-    app.include_router(discover_router)
+    app.include_router(discover_mod.router)
     app.dependency_overrides[verify_api_key] = lambda: None
     return TestClient(app)
 
