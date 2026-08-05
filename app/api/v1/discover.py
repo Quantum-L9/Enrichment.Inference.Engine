@@ -21,8 +21,10 @@ from pydantic import BaseModel
 from app.utils.safe_convert import safe_float
 
 from ...core.auth import verify_api_key
-from ...core.config import Settings, get_settings
+from ...engines.handlers import handle_discover
 from ...services import pg_store
+from ...services.crm_field_scanner import CRMField, scan_crm_fields, scan_result_to_dict
+from .converge import get_domain_spec
 
 logger = structlog.get_logger("api.discover")
 router = APIRouter(tags=["discover"])
@@ -64,21 +66,20 @@ class ApprovalRequest(BaseModel):
     dependencies=[Depends(verify_api_key)],
     summary="Trigger schema discovery for a domain entity",
 )
-async def discover_schema(
-    request: DiscoverRequest,
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> dict[str, Any]:
+async def discover_schema(request: DiscoverRequest) -> dict[str, Any]:
+    # Delegate to the canonical schema-discovery handler, which drives the
+    # SchemaDiscoveryEngine interface (enrich → engine.analyze → proposal).
+    # There is no module-level `discover()`; SchemaDiscoveryEngine is the
+    # canonical entry point and handle_discover is its single production caller.
     try:
-        from ...engines.schema_discovery import discover
-
-        result = await discover(
-            entity_id=request.entity_id,
-            domain=request.domain,
-            object_type=request.object_type,
-            tenant_id=request.tenant_id,
-            settings=settings,
-        )
-        return result
+        payload = {
+            "entity": {"id": request.entity_id},
+            "entity_id": request.entity_id,
+            "object_type": request.object_type,
+            "domain": request.domain,
+            "objective": f"Schema discovery for domain '{request.domain}'",
+        }
+        return await handle_discover(tenant=request.tenant_id, payload=payload)
     except Exception as exc:
         logger.error(
             "schema_discovery_failed",
@@ -94,29 +95,24 @@ async def discover_schema(
     dependencies=[Depends(verify_api_key)],
     summary="CRM field scan — Seed tier entry point",
 )
-async def scan_crm_fields(
-    request: ScanRequest,
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> dict[str, Any]:
+async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
+    # scan_crm_fields is synchronous with the (crm_fields, domain_spec) contract;
+    # domain_spec is resolved through the shared converge registry (get_domain_spec).
     try:
-        from ...services.crm_field_scanner import scan_crm_fields as _scan
-
+        domain_spec = get_domain_spec(request.domain)
         crm_fields = [
-            {
-                "name": f.name,
-                "type": f.type,
-                "sample_values": f.sample_values or [],
-                "fill_rate": f.fill_rate or 0.0,
-            }
+            CRMField(
+                name=f.name,
+                field_type=f.type,
+                sample_values=f.sample_values or [],
+                fill_rate=f.fill_rate,
+            )
             for f in request.fields
         ]
-        result = await _scan(
-            crm_fields=crm_fields,
-            domain=request.domain,
-            tenant_id=request.tenant_id,
-            settings=settings,
-        )
-        return result
+        result = scan_crm_fields(crm_fields, domain_spec)
+        return scan_result_to_dict(result)
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("crm_scan_failed", domain=request.domain, error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
