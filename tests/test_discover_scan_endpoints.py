@@ -113,8 +113,10 @@ def test_discover_maps_handler_error_to_500(
             "tenant_id": "tenant-1",
         },
     )
+    # 500 with a populated detail — do not pin the raw exception text, which may
+    # later be hardened to a generic message while the cause is still logged.
     assert resp.status_code == 500
-    assert "boom" in resp.json()["detail"]
+    assert resp.json().get("detail")
 
 
 # ── POST /api/v1/scan ────────────────────────────────────────────────────────

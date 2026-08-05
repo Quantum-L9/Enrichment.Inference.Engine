@@ -960,6 +960,13 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+        "400":
+          description: Unknown or unregistered domain — no matching domain spec
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         "401":
           $ref: "#/components/responses/Unauthorized"
         "500":
