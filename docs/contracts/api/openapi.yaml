@@ -960,6 +960,13 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+        "404":
+          description: Domain not found — no matching domain spec in the registry
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         "401":
           $ref: "#/components/responses/Unauthorized"
         "500":

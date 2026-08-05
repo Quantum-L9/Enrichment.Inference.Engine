@@ -90,10 +90,9 @@ async def trigger_graph_sync(
             extra={"entity_id": entity_id, "packet_id": str(response.header.packet_id)},
         )
     except Exception as exc:
-        logger.error(
+        logger.exception(
             "graph_sync_failed",
             extra={"entity_id": entity_id, "gate_url": settings.gate_url, "error": str(exc)},
-            exc_info=True,
         )
 
 
@@ -141,8 +140,7 @@ async def invalidate_score_cache(
             extra={"entity_id": entity_id, "packet_id": str(response.header.packet_id)},
         )
     except Exception as exc:
-        logger.error(
+        logger.exception(
             "score_invalidation_failed",
             extra={"entity_id": entity_id, "gate_url": settings.gate_url, "error": str(exc)},
-            exc_info=True,
         )

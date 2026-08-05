@@ -76,6 +76,7 @@ class PacketRouter:
             )
         )
         self._gate_url = gate_url
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def route(
         self,
@@ -145,7 +146,9 @@ class PacketRouter:
                     error=str(exc),
                 )
 
-        asyncio.create_task(_safe_route())
+        task = asyncio.create_task(_safe_route())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def notify_graph_sync(
         self,
