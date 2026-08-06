@@ -42,6 +42,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.3.0] — 2026-08-05
+
+### Added
+- **Explicit Gate registration lifecycle (TASK-003).** `app/services/gate_registration.py`
+  builds the Gate admin-registration payload in-process and POSTs it to
+  `{gate_url}/v1/admin/register?overwrite=true` during startup. Registration is
+  feature-flagged (`gate_registration_enabled`, default `false`) and non-fatal:
+  any failure is caught and surfaced, never crashing startup. New Settings fields:
+  `gate_registration_enabled`, `gate_internal_url`, `gate_admin_token`.
+- `HealthCheckResponse.gate_registered` (`bool | None`) surfaces registration
+  outcome; `/api/v1/health` reports `status="degraded"` when registration failed.
+- Canonical converge contract fixtures `contracts/converge_request.json` and
+  `contracts/converge_response.json` with conformance tests (TASK-005).
+
+### Changed
+- **Version alignment to 2.3.0.** Reconciled lagging `2.2.0` declarations
+  (`pyproject.toml`, `app/__init__.py`, `HealthCheckResponse.version`,
+  k8s kustomize `app.kubernetes.io/version`, Helm `Chart.yaml`
+  `version`/`appVersion`, and the `docs/FILE_INDEX_FOR_AGENTS.md` /
+  `docs/INVARIANTS.md` VERSION headers) with the runtime literals already at
+  `2.3.0`. The `EnrichResponse.inference_version` (`v2.2.0`) is a distinct
+  contract-asserted artifact and is intentionally unchanged.
+
+---
+
 ## [2.2.0] — 2026-03-30
 
 ### Added

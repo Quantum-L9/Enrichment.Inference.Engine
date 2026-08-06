@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     ceg_base_url: str = "http://localhost:8001"
 
     gate_url: str = "http://localhost:8080"
+    # Explicit Gate registration (TASK-003). Registration is opt-in and non-fatal.
+    gate_registration_enabled: bool = False
+    gate_internal_url: str = ""  # URL the Gate dispatches to; empty → derived default
+    gate_admin_token: str = ""
     # Legacy direct peer URLs retained for backward-compatible config loading only.
     graph_node_url: str = "http://localhost:8001"
     score_node_url: str = "http://localhost:8002"

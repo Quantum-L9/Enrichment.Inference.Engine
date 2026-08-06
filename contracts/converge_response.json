@@ -1,0 +1,36 @@
+{
+  "fields": {
+    "polymer_type": "HDPE",
+    "material_grade": "Premium HDPE",
+    "contamination_pct": 2.1
+  },
+  "confidence": 0.91,
+  "kb_content_hash": "a3f9b2c1d4e5f678901234567890abcd",
+  "variation_count": 5,
+  "consensus_threshold": 0.75,
+  "uncertainty_score": 0.8,
+  "pass_count": 3,
+  "inference_version": "v2.2.0",
+  "processing_time_ms": 4120,
+  "enrichment_payload": null,
+  "feature_vector": null,
+  "kb_files_consulted": [
+    "plastics_recycling.yaml"
+  ],
+  "kb_fragment_ids": [
+    "hdpe.mfi_range",
+    "premium_hdpe_grade"
+  ],
+  "inferences": [
+    {
+      "field": "material_grade",
+      "value": "Premium HDPE",
+      "confidence": 0.95
+    }
+  ],
+  "quality_tier": "gold",
+  "grade_matches": [],
+  "tokens_used": 1840,
+  "failure_reason": null,
+  "state": "completed"
+}
