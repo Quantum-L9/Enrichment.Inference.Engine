@@ -5,6 +5,10 @@ Chassis Handlers — register_handler("enrich", ...) bridge.
 Handler signature (L9 contract):
     async def handle_<action>(tenant: str, payload: dict) -> dict
 
+handle_converge speaks the Odoo plasticos_gate ConvergeRequest wire format
+(entity_snapshot + source_urls) and returns map_converge_response-shaped
+payloads with allowlisted partner fields for live CRM writeback.
+
 Integration fixes applied (PR#21/PR#22 merge pass):
     GAP-5: ResultStore.persist_enrich_response called after handle_enrich and handle_converge
     GAP-6: packet_router.notify_graph_sync called after handle_enrich and handle_converge
@@ -18,6 +22,7 @@ import aiofiles
 import structlog
 
 from ..core.config import get_settings
+from ..engines.convergence.convergence_config import ConvergenceConfig
 from ..engines.convergence_controller import run_convergence_loop
 from ..engines.domain_yaml_reader import DomainYamlReader
 from ..engines.enrichment_orchestrator import enrich_batch, enrich_entity
@@ -27,6 +32,15 @@ from ..services.crm.base import CRMType
 from ..services.crm.writeback import WriteBackOrchestrator
 from ..services.idempotency import IdempotencyStore
 from ..services.kb_resolver import KBResolver
+from ..services.odoo_gate_converge import (
+    DEFAULT_CONVERGE_TIMEOUT_SECONDS,
+    build_enrich_request,
+    build_odoo_converge_error,
+    build_odoo_converge_response,
+    is_odoo_converge_payload,
+    new_run_id,
+    parse_odoo_converge_request,
+)
 from ..services.simulation_bridge import (
     analyze_leverage,
     brief_to_dict,
@@ -110,31 +124,127 @@ async def handle_enrichbatch(tenant: str, payload: dict[str, Any]) -> dict[str, 
 
 
 async def handle_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """SDK handler for action='converge'.
+
+    Primary wire format is Odoo plasticos_gate ConvergeRequest -> map_converge_response.
+    Legacy EnrichRequest payloads (entity/object_type/objective) remain supported for
+    internal callers.
+    """
+    if is_odoo_converge_payload(payload):
+        return await _handle_odoo_converge(tenant, payload)
+    return await _handle_legacy_converge(tenant, payload)
+
+
+async def _handle_odoo_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Odoo Gate converge path — allowlisted partner fields, bounded timeout."""
+    import asyncio
+
+    run_id = new_run_id()
+    try:
+        parsed = parse_odoo_converge_request(payload)
+    except ValueError as exc:
+        logger.warning("handlers.converge_parse_failed", tenant=tenant, error=str(exc))
+        return build_odoo_converge_error(error=str(exc), run_id=run_id)
+
+    settings = get_settings()
+    request = build_enrich_request(parsed)
+    domain_hints, inference_rules = await _load_domain_convergence_context(
+        domain_id=parsed["domain"],
+        node_label=payload.get("node_label") or "Partner",
+    )
+    convergence_config = ConvergenceConfig(max_passes=parsed["max_passes"])
+
+    try:
+        response = await asyncio.wait_for(
+            run_convergence_loop(
+                request=request,
+                settings=settings,
+                kb_resolver=_kb,
+                idem_store=_idem,
+                inference_rules=inference_rules,
+                domain_hints=domain_hints,
+                convergence_config=convergence_config,
+            ),
+            timeout=DEFAULT_CONVERGE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning(
+            "handlers.converge_timeout",
+            tenant=tenant,
+            entity_id=parsed["entity_id"],
+            timeout_s=DEFAULT_CONVERGE_TIMEOUT_SECONDS,
+            run_id=run_id,
+        )
+        # Raise so the hub returns an error packet and Odoo falls back to local.
+        raise TimeoutError(
+            f"converge exceeded {DEFAULT_CONVERGE_TIMEOUT_SECONDS:.0f}s budget "
+            f"for {parsed['entity_id']}"
+        ) from None
+    except Exception as exc:
+        logger.exception(
+            "handlers.converge_failed",
+            tenant=tenant,
+            entity_id=parsed["entity_id"],
+            run_id=run_id,
+            error=str(exc),
+        )
+        raise
+
+    result = build_odoo_converge_response(
+        enrich_response=response,
+        parsed=parsed,
+        run_id=run_id,
+    )
+
+    # Odoo currently treats any non-exception response as success; raise on
+    # non-completed convergence so the hub error path triggers local fallback.
+    if result.get("status") != "ok":
+        raise RuntimeError(result.get("error") or "converge returned non-ok status")
+
+    if result.get("final_fields"):
+        persist_payload = {
+            **payload,
+            "entity_id": parsed["entity_id"],
+            "domain": parsed["domain"],
+            "entity": request.entity,
+            "idempotency_key": request.idempotency_key,
+        }
+        await _persist_and_sync(
+            tenant,
+            persist_payload,
+            {
+                "fields": result["final_fields"],
+                "confidence": response.confidence,
+                "tokens_used": response.tokens_used,
+                "pass_count": response.pass_count,
+                "state": response.state,
+            },
+            request.object_type,
+        )
+
+    logger.info(
+        "handlers.converge_odoo_ok",
+        tenant=tenant,
+        entity_id=parsed["entity_id"],
+        run_id=run_id,
+        fields=sorted(result.get("final_fields", {}).keys()),
+        pass_count=result.get("pass_count"),
+        status=result.get("status"),
+    )
+    return result
+
+
+async def _handle_legacy_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Legacy EnrichRequest-shaped converge (internal / pre-Odoo-gate callers)."""
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
 
-    domain_hints: dict[str, Any] = {}
-    inference_rules: list[dict[str, Any]] = []
-
-    domain_id = payload.get("domain_id")
+    domain_id = payload.get("domain_id") or payload.get("domain")
     node_label = payload.get("node_label")
-    if domain_id and node_label and _domain_reader:
-        domain_hints = _domain_reader.get_enrichment_hints(domain_id, node_label)
-        config = _domain_reader.load(domain_id)
-        if config.inference_rules_path:
-            from pathlib import Path
-
-            import yaml
-
-            rules_path = Path(config.inference_rules_path)
-            if rules_path.exists():
-                async with aiofiles.open(rules_path) as f:
-                    content = await f.read()
-                    loaded = yaml.safe_load(content) or []
-                    if isinstance(loaded, dict):
-                        inference_rules = loaded.get("inference_rules") or loaded.get("rules") or []
-                    else:
-                        inference_rules = loaded
+    domain_hints, inference_rules = await _load_domain_convergence_context(
+        domain_id=domain_id,
+        node_label=node_label,
+    )
 
     response = await run_convergence_loop(
         request=request,
@@ -150,6 +260,51 @@ async def handle_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any
         await _persist_and_sync(tenant, payload, result, request.object_type)
 
     return result
+
+
+async def _load_domain_convergence_context(
+    *,
+    domain_id: str | None,
+    node_label: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load optional domain hints + inference rules for converge."""
+    domain_hints: dict[str, Any] = {}
+    inference_rules: list[dict[str, Any]] = []
+    if not domain_id or not _domain_reader:
+        return domain_hints, inference_rules
+
+    label = node_label or "Partner"
+    try:
+        domain_hints = _domain_reader.get_enrichment_hints(domain_id, label)
+    except (FileNotFoundError, ValueError, OSError, KeyError) as exc:
+        logger.warning(
+            "handlers.converge_domain_hints_failed",
+            domain_id=domain_id,
+            error=str(exc),
+        )
+
+    try:
+        config = _domain_reader.load(domain_id)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        logger.warning(
+            "handlers.converge_domain_load_failed",
+            domain_id=domain_id,
+            error=str(exc),
+        )
+        return domain_hints, inference_rules
+
+    if config.inference_rules_path:
+        from pathlib import Path
+
+        import yaml
+
+        rules_path = Path(config.inference_rules_path)
+        if rules_path.exists():
+            async with aiofiles.open(rules_path) as f:
+                content = await f.read()
+                inference_rules = yaml.safe_load(content) or []
+
+    return domain_hints, inference_rules
 
 
 async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:

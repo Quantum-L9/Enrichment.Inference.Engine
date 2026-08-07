@@ -173,7 +173,9 @@ registered_handlers:
   - action: converge
     handler: handle_converge
     source_file: app/engines/orchestration_layer.py
-    description: Multi-pass convergence loop.
+    description: >
+      Odoo Gate partner converge (ConvergeRequest snapshot + source_urls) returning
+      allowlisted final_fields/writeback.partner_fields for live CRM writeback.
 
   - action: discover
     handler: handle_discover
