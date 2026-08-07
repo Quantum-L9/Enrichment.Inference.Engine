@@ -116,10 +116,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve lowercase image ref
+        id: img
+        run: echo "ref=${REGISTRY,,}/${IMAGE_NAME,,}:${TAG}" >> "$GITHUB_OUTPUT"
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          TAG: ${{ needs.build.outputs.image_tag }}
+
       - name: Run Trivy Vulnerability Scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}
+          image-ref: ${{ steps.img.outputs.ref }}
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -150,10 +158,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve lowercase image ref
+        id: img
+        run: echo "ref=${REGISTRY,,}/${IMAGE_NAME,,}:${TAG}" >> "$GITHUB_OUTPUT"
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          TAG: ${{ needs.build.outputs.image_tag }}
+
       - name: Generate Container SBOM
         uses: anchore/sbom-action@v0.17.0
         with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}
+          image: ${{ steps.img.outputs.ref }}
           format: spdx-json
           output-file: container-sbom.spdx.json
           upload-artifact: true
