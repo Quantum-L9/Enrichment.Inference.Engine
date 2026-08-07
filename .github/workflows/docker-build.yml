@@ -54,6 +54,7 @@ jobs:
     outputs:
       image_digest: ${{ steps.build.outputs.digest }}
       image_tag: ${{ steps.meta.outputs.version }}
+      image_name_lower: ${{ steps.img.outputs.name }}
 
     steps:
       - name: Checkout Repository
@@ -82,6 +83,10 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Lowercase image name
+        id: img
+        run: echo "name=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
 
       - name: Build and Push Docker Image
         id: build
@@ -119,7 +124,7 @@ jobs:
       - name: Run Trivy Vulnerability Scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}
+          image-ref: ${{ env.REGISTRY }}/${{ needs.build.outputs.image_name_lower }}:${{ needs.build.outputs.image_tag }}
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -153,7 +158,7 @@ jobs:
       - name: Generate Container SBOM
         uses: anchore/sbom-action@v0.17.0
         with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}
+          image: ${{ env.REGISTRY }}/${{ needs.build.outputs.image_name_lower }}:${{ needs.build.outputs.image_tag }}
           format: spdx-json
           output-file: container-sbom.spdx.json
           upload-artifact: true
