@@ -38,7 +38,7 @@ dev = [
     "pytest-httpx>=0.34",
     "pytest-cov==7.1.0",
     "respx>=0.22",
-    "ruff==0.16.1",
+    "ruff==0.16.2",
     "mypy==2.3.0",
     "coverage==7.15.2",
     "jsonschema>=4.23.0",
