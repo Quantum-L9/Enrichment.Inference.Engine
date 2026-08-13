@@ -21,8 +21,24 @@ jobs:
       - name: Install control dependencies
         env:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
+          IS_DEPENDABOT: ${{ github.actor == 'dependabot[bot]' }}
         run: |
+          # Dependabot exception: GitHub isolates repo Actions secrets from
+          # Dependabot pull_request events by design, so SDK_TOKEN will be
+          # empty here. Dep-only diffs do not require attestation verification
+          # (they touch neither app code nor contracts). Record an auditable
+          # skip; the same gate runs against the merge commit on push-to-main.
           if [ -z "${SDK_TOKEN}" ]; then
+            if [ "${IS_DEPENDABOT}" = "true" ]; then
+              {
+                echo "### Constitution + Attestation — Dependabot event skip"
+                echo "- Actor: \`${{ github.actor }}\`"
+                echo "- Rationale: Dependabot events cannot access \`SDK_TOKEN\`; dep-only diffs do not require attestation. Post-merge push-to-main run preserves the gate."
+                echo "- Remediation to eliminate skip: mirror \`SDK_TOKEN\` into the Dependabot secrets store."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "DEPENDABOT_SKIP=1" >> "$GITHUB_ENV"
+              exit 0
+            fi
             echo "SDK_TOKEN is required to install private SDK dependencies"
             exit 1
           fi
@@ -37,10 +53,12 @@ jobs:
           fi
 
       - name: Verify constitution
+        if: env.DEPENDABOT_SKIP != '1'
         run: |
           python scripts/l9_contract_control.py verify-constitution
 
       - name: Verify attestation
+        if: env.DEPENDABOT_SKIP != '1'
         run: |
           python scripts/l9_contract_control.py verify-attestation || {
             if python -c "import app" 2>/dev/null; then
