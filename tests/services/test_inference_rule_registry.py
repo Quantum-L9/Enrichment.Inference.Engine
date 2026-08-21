@@ -108,8 +108,12 @@ def test_infer_icp_fit_score(context):
 
 
 def test_infer_buyer_persona_from_title(context):
-    """infer_buyer_persona should categorize by job title."""
-    entity = {"job_title": "VP of Procurement"}
+    """infer_buyer_persona should categorize by job title.
+
+    Exec keywords (vp/ceo/...) are checked before procurement. Use a title
+    that uniquely hits the still-registered procurement rule.
+    """
+    entity = {"job_title": "Procurement Manager"}
     result = execute_rule("infer_buyer_persona", entity, context)
     assert result is not None
     assert result.field_name == "buyer_persona"

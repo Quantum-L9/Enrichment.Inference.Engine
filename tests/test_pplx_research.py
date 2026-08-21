@@ -1,99 +1,122 @@
-"""Tests for app/services/perplexity_client_v2.py (pplx_research)
+"""Tests for app/services/perplexity_client.py (query_perplexity / SonarResponse).
 
 Covers: Sonar API integration, citation extraction, rate limiting,
-        circuit breaker, retry logic.
-
-Source: ~180 lines | Target coverage: 75%
+        retry logic. No network — SDK client is mocked.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+from perplexity import PerplexityError
 
 from app.services.perplexity_client import (
-    SonarResponse as PerplexityResponse,
+    SonarResponse,
+    _parse_completion,
+    _sync_call,
+    query_perplexity,
 )
 
 
+def _completion(
+    content: str,
+    *,
+    tokens: int = 1200,
+    citations: list[str] | None = None,
+    model: str = "sonar",
+) -> MagicMock:
+    completion = MagicMock()
+    completion.usage.total_tokens = tokens
+    message = MagicMock()
+    message.content = content
+    choice = MagicMock()
+    choice.message = message
+    completion.choices = [choice]
+    completion.citations = citations if citations is not None else ["https://example.com/hdpe"]
+    completion.search_results = []
+    completion.model = model
+    return completion
+
+
 class TestPerplexityClient:
-    """Tests for Sonar API integration."""
+    """Tests for the current query_perplexity / _sync_call public surface."""
 
     @pytest.fixture
-    def client(self):
-        return PerplexityClient(api_key="test-key", model="sonar")
-
-    @pytest.fixture
-    def mock_response_success(self):
-        return {
-            "id": "test-id",
-            "choices": [
-                {"message": {"content": '{"polymer_type": "HDPE", "mfi_range": "0.5-3.0"}'}}
-            ],
-            "citations": ["https://example.com/hdpe"],
-            "usage": {"total_tokens": 1200},
-        }
+    def mock_response_success(self) -> SonarResponse:
+        return SonarResponse(
+            data={"polymer_type": "HDPE", "mfi_range": "0.5-3.0"},
+            tokens_used=1200,
+            citations=["https://example.com/hdpe"],
+            model="sonar",
+        )
 
     @pytest.mark.asyncio
-    async def test_search_returns_response(self, client, mock_response_success):
-        with patch.object(client, "_post", new_callable=AsyncMock) as mock_post:
-            mock_post.return_value = mock_response_success
-            response = await client.search("What is HDPE mfi range?")
-            assert isinstance(response, PerplexityResponse)
+    async def test_search_returns_response(self, mock_response_success: SonarResponse) -> None:
+        with patch(
+            "app.services.perplexity_client._sync_call",
+            return_value=mock_response_success,
+        ):
+            response = await query_perplexity({"model": "sonar"}, api_key="test-key")
+            assert isinstance(response, SonarResponse)
 
     @pytest.mark.asyncio
-    async def test_response_has_content(self, client, mock_response_success):
-        with patch.object(client, "_post", new_callable=AsyncMock) as mock_post:
-            mock_post.return_value = mock_response_success
-            response = await client.search("HDPE properties")
-            assert response.content is not None
-            assert len(response.content) > 0
+    async def test_response_has_content(self, mock_response_success: SonarResponse) -> None:
+        with patch(
+            "app.services.perplexity_client._sync_call",
+            return_value=mock_response_success,
+        ):
+            response = await query_perplexity({"model": "sonar"}, api_key="test-key")
+            assert response.data
+            assert response.data.get("polymer_type") == "HDPE"
 
     @pytest.mark.asyncio
-    async def test_citation_extraction(self, client, mock_response_success):
-        with patch.object(client, "_post", new_callable=AsyncMock) as mock_post:
-            mock_post.return_value = mock_response_success
-            response = await client.search("HDPE info")
-            assert response.citations is not None
+    async def test_citation_extraction(self, mock_response_success: SonarResponse) -> None:
+        with patch(
+            "app.services.perplexity_client._sync_call",
+            return_value=mock_response_success,
+        ):
+            response = await query_perplexity({"model": "sonar"}, api_key="test-key")
+            assert response.citations
+            assert "https://example.com/hdpe" in response.citations
 
     @pytest.mark.asyncio
-    async def test_token_usage_tracked(self, client, mock_response_success):
-        with patch.object(client, "_post", new_callable=AsyncMock) as mock_post:
-            mock_post.return_value = mock_response_success
-            response = await client.search("HDPE")
-            assert response.tokens_used > 0 or response.tokens_used == 0
+    async def test_token_usage_tracked(self, mock_response_success: SonarResponse) -> None:
+        with patch(
+            "app.services.perplexity_client._sync_call",
+            return_value=mock_response_success,
+        ):
+            response = await query_perplexity({"model": "sonar"}, api_key="test-key")
+            assert response.tokens_used > 0
+
+    def test_empty_response_handling(self) -> None:
+        parsed = _parse_completion(_completion(""), {"model": "sonar"}, start=0.0)
+        assert parsed.data == {"_raw": ""}
 
     @pytest.mark.asyncio
-    async def test_empty_response_handling(self, client):
-        with patch.object(client, "_post", new_callable=AsyncMock) as mock_post:
-            mock_post.return_value = {
-                "choices": [{"message": {"content": ""}}],
-                "usage": {"total_tokens": 0},
-            }
-            response = await client.search("nothing here")
-            assert response.content == "" or response.content is not None
+    async def test_timeout_raises_error(self) -> None:
+        with (
+            patch(
+                "app.services.perplexity_client._sync_call",
+                side_effect=TimeoutError("Request timed out"),
+            ),
+            pytest.raises(TimeoutError),
+        ):
+            await query_perplexity({"model": "sonar"}, api_key="test-key")
 
-    @pytest.mark.asyncio
-    async def test_timeout_raises_error(self, client):
-        with patch.object(client, "_post", new_callable=AsyncMock) as mock_post:
-            mock_post.side_effect = TimeoutError("Request timed out")
-            with pytest.raises((TimeoutError, Exception)):
-                await client.search("timeout test")
+    def test_rate_limit_429_retry(self) -> None:
+        err = PerplexityError("429 Too Many Requests")
+        err.status_code = 429
+        success = _completion('{"polymer_type": "HDPE", "mfi_range": "0.5-3.0"}')
+        client = MagicMock()
+        client.chat.completions.create.side_effect = [err, success]
 
-    @pytest.mark.asyncio
-    async def test_rate_limit_429_retry(self, client, mock_response_success):
-        call_count = 0
+        with (
+            patch("app.services.perplexity_client._get_client", return_value=client),
+            patch("app.services.perplexity_client.time.sleep"),
+        ):
+            response = _sync_call({"model": "sonar"}, "test-key", 60)
 
-        async def mock_post_with_retry(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise Exception("429 Too Many Requests")
-            return mock_response_success
-
-        with patch.object(client, "_post", side_effect=mock_post_with_retry):
-            try:
-                response = await client.search("retry test")
-            except Exception:
-                pass  # retry behavior depends on implementation
+        assert response.data["polymer_type"] == "HDPE"
+        assert client.chat.completions.create.call_count == 2
+        assert response.tokens_used == 1200

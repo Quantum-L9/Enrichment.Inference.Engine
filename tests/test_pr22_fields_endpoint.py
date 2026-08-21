@@ -9,29 +9,61 @@ Also proves the router is mounted (not orphaned) and respects tenant_id isolatio
 
 from __future__ import annotations
 
+import hashlib
+import os
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
+from app.core.config import get_settings
+
+_TEST_API_KEY = "pass"
+os.environ["API_KEY_HASH"] = hashlib.sha256(_TEST_API_KEY.encode()).hexdigest()
+get_settings.cache_clear()
+AUTH = {"X-API-Key": _TEST_API_KEY}
+
 
 def _make_mock_result(entity_id: str = "ent-001", tenant_id: str = "test-tenant"):
-    """Build a minimal EnrichmentResult-compatible mock."""
-    from app.services.pg_models import EnrichmentResult
+    """Plain result object — ORM EnrichmentResult.__new__ has no session identity."""
+    return SimpleNamespace(
+        id="uuid-001",
+        tenant_id=tenant_id,
+        entity_id=entity_id,
+        object_type="Account",
+        fields={"material_type": "HDPE", "facility_tier": "tier-2"},
+        confidence=0.85,
+        state="completed",
+        pass_count=2,
+        tokens_used=480,
+        processing_time_ms=1100,
+        created_at=datetime.now(UTC),
+    )
 
-    r = EnrichmentResult.__new__(EnrichmentResult)
-    r.id = "uuid-001"
-    r.tenant_id = tenant_id
-    r.entity_id = entity_id
-    r.object_type = "Account"
-    r.fields = {"material_type": "HDPE", "facility_tier": "tier-2"}
-    r.confidence = 0.85
-    r.state = "completed"
-    r.pass_count = 2
-    r.tokens_used = 480
-    r.processing_time_ms = 1100
-    r.created_at = datetime.now(UTC)
-    return r
+
+class _FakeResultStore:
+    """In-memory ResultStore stand-in — no Redis / pg session."""
+
+    latest = None
+    history: list = []
+    captured_tenants: list[str] = []
+
+    def __init__(self, tenant_id: str) -> None:
+        self.tenant_id = tenant_id
+        _FakeResultStore.captured_tenants.append(tenant_id)
+
+    async def get_latest_for_entity(self, entity_id: str):
+        return _FakeResultStore.latest
+
+    async def get_field_confidence_history(self, entity_id: str, field_name: str = ""):
+        return list(_FakeResultStore.history)
+
+
+def _reset_fake_store(latest=None, history: list | None = None) -> None:
+    _FakeResultStore.latest = latest
+    _FakeResultStore.history = history or []
+    _FakeResultStore.captured_tenants = []
 
 
 @pytest.mark.asyncio
@@ -39,18 +71,15 @@ async def test_fields_endpoint_404_when_no_result():
     """Without a persisted result, /fields must return 404."""
     from httpx import ASGITransport, AsyncClient
 
-    with patch(
-        "app.services.result_store.ResultStore.get_latest_for_entity",
-        new_callable=AsyncMock,
-        return_value=None,
-    ):
-        from app.main import app
+    from app.main import app
 
+    _reset_fake_store(latest=None)
+    with patch("app.api.v1.fields.ResultStore", _FakeResultStore):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
             resp = await client.get(
                 "/api/v1/fields/ent-001",
                 params={"tenant_id": "test-tenant"},
-                headers={"X-API-Key": "test-key"},
+                headers=AUTH,
             )
 
     assert resp.status_code == 404
@@ -61,27 +90,15 @@ async def test_fields_endpoint_200_after_persist():
     """After GAP-5 fix: a persisted result must yield 200 with correct field map."""
     from httpx import ASGITransport, AsyncClient
 
-    mock_result = _make_mock_result()
+    from app.main import app
 
-    with (
-        patch(
-            "app.services.result_store.ResultStore.get_latest_for_entity",
-            new_callable=AsyncMock,
-            return_value=mock_result,
-        ),
-        patch(
-            "app.services.result_store.ResultStore.get_field_confidence_history",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
-    ):
-        from app.main import app
-
+    _reset_fake_store(latest=_make_mock_result(), history=[])
+    with patch("app.api.v1.fields.ResultStore", _FakeResultStore):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
             resp = await client.get(
                 "/api/v1/fields/ent-001",
                 params={"tenant_id": "test-tenant"},
-                headers={"X-API-Key": "test-key"},
+                headers=AUTH,
             )
 
     assert resp.status_code == 200
@@ -98,7 +115,7 @@ async def test_fields_endpoint_confidence_history_used_when_present():
     """Confidence history is used in preference to response.confidence when available."""
     from httpx import ASGITransport, AsyncClient
 
-    mock_result = _make_mock_result()
+    from app.main import app
 
     history = [
         {
@@ -107,26 +124,13 @@ async def test_fields_endpoint_confidence_history_used_when_present():
             "pass_number": 2,
         }
     ]
-
-    with (
-        patch(
-            "app.services.result_store.ResultStore.get_latest_for_entity",
-            new_callable=AsyncMock,
-            return_value=mock_result,
-        ),
-        patch(
-            "app.services.result_store.ResultStore.get_field_confidence_history",
-            new_callable=AsyncMock,
-            return_value=history,
-        ),
-    ):
-        from app.main import app
-
+    _reset_fake_store(latest=_make_mock_result(), history=history)
+    with patch("app.api.v1.fields.ResultStore", _FakeResultStore):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
             resp = await client.get(
                 "/api/v1/fields/ent-001/material_type/history",
                 params={"tenant_id": "test-tenant"},
-                headers={"X-API-Key": "test-key"},
+                headers=AUTH,
             )
 
     assert resp.status_code == 200
@@ -138,40 +142,18 @@ async def test_fields_endpoint_confidence_history_used_when_present():
 
 @pytest.mark.asyncio
 async def test_fields_endpoint_tenant_isolation():
-    """GET /fields must use the tenant_id query param for scoping."""
+    """GET /fields must use the tenant_id query param for ResultStore scoping."""
     from httpx import ASGITransport, AsyncClient
 
-    captured_tenant: list = []
+    from app.main import app
 
-    async def mock_get_latest(entity_id):
-        return None
-
-    original_init = __import__(
-        "app.services.result_store", fromlist=["ResultStore"]
-    ).ResultStore.__init__
-
-    def capturing_init(self, tenant_id):
-        captured_tenant.append(tenant_id)
-        original_init(self, tenant_id)
-
-    with (
-        patch(
-            "app.services.result_store.ResultStore.__init__",
-            side_effect=capturing_init,
-        ),
-        patch(
-            "app.services.result_store.ResultStore.get_latest_for_entity",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        from app.main import app
-
+    _reset_fake_store(latest=None)
+    with patch("app.api.v1.fields.ResultStore", _FakeResultStore):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
             await client.get(
                 "/api/v1/fields/ent-001",
                 params={"tenant_id": "specific-tenant"},
-                headers={"X-API-Key": "test-key"},
+                headers=AUTH,
             )
 
-    assert "specific-tenant" in captured_tenant
+    assert "specific-tenant" in _FakeResultStore.captured_tenants

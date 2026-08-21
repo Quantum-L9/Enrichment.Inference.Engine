@@ -11,6 +11,8 @@ from __future__ import annotations
 import pytest
 
 from app.engines.convergence.schema_proposer import (
+    ApprovalDecision,
+    FieldProposal,
     SchemaProposalSet,
 )
 from app.engines.convergence.schema_proposer import (
@@ -19,7 +21,6 @@ from app.engines.convergence.schema_proposer import (
 from app.engines.convergence.schema_proposer import (
     propose as propose_schema,
 )
-from app.models.loop_schemas import ApprovalDecision
 
 
 class TestSchemaProposer:
@@ -82,7 +83,6 @@ class TestSchemaProposer:
             assert len(proposal.sample_values) <= 10
 
     def test_no_proposals_when_all_in_schema(self, current_yaml):
-        # All fields already in YAML
         results = [
             {
                 "final_fields": {"polymer_type": "HDPE"},
@@ -96,14 +96,26 @@ class TestSchemaProposer:
 
     def test_apply_proposals_updates_yaml(self, current_yaml):
         decisions = [
-            ApprovalDecision(field_name="new_field", approved=True),
+            ApprovalDecision(field_name="contamination_tolerance_pct", approved=True),
         ]
         ps = SchemaProposalSet(
-            proposed_fields=[],
-            yaml_diff="+ new_field: string",
+            proposed_fields=[
+                FieldProposal(
+                    field_name="contamination_tolerance_pct",
+                    field_type="float",
+                    source="enrichment",
+                    fill_rate=0.9,
+                    avg_confidence=0.8,
+                )
+            ],
+            version_bump="1.3.0-discovered",
+            yaml_diff="+ contamination_tolerance_pct: float",
         )
         updated = apply_proposals(current_yaml, decisions, ps)
         assert isinstance(updated, dict)
+        props = updated["ontology"]["nodes"]["Facility"]["properties"]
+        assert "contamination_tolerance_pct" in props
+        assert updated["version"] == "1.3.0-discovered"
 
     def test_version_bump_in_proposal_set(self, batch_results, current_yaml):
         ps = propose_schema(batch_results, current_yaml, domain="plastics_recycling")
