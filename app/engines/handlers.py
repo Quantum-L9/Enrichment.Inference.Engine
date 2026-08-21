@@ -50,6 +50,17 @@ from ..services.simulation_bridge import (
 
 logger = structlog.get_logger("handlers")
 
+
+def _authoritative_tenant(tenant: str, payload: dict[str, Any]) -> str | dict[str, Any]:
+    """Transport tenant is authoritative. Payload tenant_id may match, never override."""
+    claimed = payload.get("tenant_id")
+    if claimed in (None, ""):
+        return tenant
+    if claimed == tenant:
+        return tenant
+    return {"status": "rejected", "error": "tenant_mismatch", "tenant_id": tenant}
+
+
 _kb: KBResolver | None = None
 _idem: IdempotencyStore | None = None
 _domain_reader: DomainYamlReader | None = None
@@ -98,6 +109,10 @@ async def _persist_and_sync(
 
 
 async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
     response = await enrich_entity(
@@ -112,6 +127,10 @@ async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def handle_enrichbatch(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     settings = get_settings()
     batch_req = BatchEnrichRequest.model_validate(payload)
     results = await enrich_batch(
@@ -134,6 +153,10 @@ async def handle_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any
     Legacy EnrichRequest payloads (entity/object_type/objective) remain supported for
     internal callers.
     """
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     if is_odoo_converge_payload(payload):
         return await _handle_odoo_converge(tenant, payload)
     return await _handle_legacy_converge(tenant, payload)
@@ -327,9 +350,13 @@ def _resolve_node_label(config: Any, node_label: str | None) -> str | None:
 
 
 async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
-    response = await enrich_entity(request, settings, _kb, _idem)
+    response = await enrich_entity(request, settings, _kb, _idem, tenant=tenant)
 
     current_schema = payload.get("current_schema", {})
     version = payload.get("schema_version", "0.1.0-seed")
@@ -360,6 +387,10 @@ async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any
 
 
 async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     settings = get_settings()
     crm_field_names: list[str] = payload.get("crm_field_names", [])
     domain_id: str = payload.get("domain_id", "plastics")
@@ -404,6 +435,10 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
 
 
 async def handle_writeback(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     settings = get_settings()
     domain = payload.get("domain", "company")
     canonical = payload.get("canonical", {})
