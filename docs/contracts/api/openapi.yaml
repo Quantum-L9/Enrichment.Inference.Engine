@@ -463,13 +463,18 @@ components:
       required:
         - approved
         - reviewed_by
+        - tenant_id
       properties:
         approved:
           type: boolean
         reviewed_by:
           type: string
           description: Identity of the reviewer.
-      x-source-file: app/api/v1/discover.py:47
+        tenant_id:
+          type: string
+          description: Tenant that owns the proposal. Cross-tenant UUIDs change zero rows.
+          example: acme-corp
+      x-source-file: app/api/v1/discover.py:55
       additionalProperties: false
 
   responses:
@@ -1060,6 +1065,7 @@ paths:
             example:
               approved: true
               reviewed_by: "igor@example.com"
+              tenant_id: acme-corp
       responses:
         "200":
           description: Approval status

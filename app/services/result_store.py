@@ -84,10 +84,13 @@ class ResultStore:
             convergence_run_id=convergence_run_id,
             field_confidence_map=field_confidence_map,
         )
-        return record.id
+        result_id = record.id
+        if not isinstance(result_id, uuid.UUID):
+            raise TypeError("enrichment result id must be a UUID")
+        return result_id
 
     async def get_result(self, result_id: uuid.UUID) -> EnrichmentResult | None:
-        return await pg_store.get_enrichment_result(result_id)
+        return await pg_store.get_enrichment_result(result_id, self.tenant_id)
 
     async def get_latest_for_entity(self, entity_id: str) -> EnrichmentResult | None:
         return await pg_store.get_latest_enrichment_for_entity(self.tenant_id, entity_id)
@@ -109,7 +112,10 @@ class ResultStore:
             max_budget_tokens=max_budget_tokens,
             domain_yaml_version_before=domain_yaml_version,
         )
-        return run.id
+        run_id = run.id
+        if not isinstance(run_id, uuid.UUID):
+            raise TypeError("convergence run id must be a UUID")
+        return run_id
 
     async def checkpoint_convergence_pass(
         self,
@@ -129,6 +135,7 @@ class ResultStore:
         """
         await pg_store.update_convergence_run(
             run_id=run_id,
+            tenant_id=self.tenant_id,
             current_pass=pass_number,
             accumulated_fields=accumulated_fields,
             accumulated_confidences=accumulated_confidences,
@@ -153,6 +160,7 @@ class ResultStore:
         """Mark a convergence run as complete with final state."""
         await pg_store.update_convergence_run(
             run_id=run_id,
+            tenant_id=self.tenant_id,
             state=state,
             convergence_reason=convergence_reason,
             accumulated_fields=accumulated_fields,
@@ -172,7 +180,15 @@ class ResultStore:
         )
 
     async def get_convergence_run(self, run_id: uuid.UUID) -> ConvergenceRun | None:
-        return await pg_store.get_convergence_run(run_id)
+        return await pg_store.get_convergence_run(run_id, self.tenant_id)
+
+    async def approve_schema_proposal(
+        self, proposal_id: uuid.UUID, reviewed_by: str, approved: bool
+    ) -> int:
+        """Approve only this tenant's proposal. Cross-tenant UUID returns 0."""
+        return await pg_store.approve_schema_proposal(
+            self.tenant_id, proposal_id, reviewed_by, approved
+        )
 
     async def list_active_runs(self, domain: str | None = None) -> list[ConvergenceRun]:
         return await pg_store.list_active_convergence_runs(self.tenant_id, domain)

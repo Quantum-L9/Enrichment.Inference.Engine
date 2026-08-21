@@ -7,7 +7,7 @@ name = "domain-enrichment-api"
 license = { text = "Proprietary" }
 version = "2.3.0"
 description = "Universal domain-aware entity enrichment API — Salesforce + Odoo single ingress"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "aiofiles>=23.0.0",
     "asyncpg",

@@ -50,6 +50,17 @@ from ..services.simulation_bridge import (
 
 logger = structlog.get_logger("handlers")
 
+
+def _authoritative_tenant(tenant: str, payload: dict[str, Any]) -> str | dict[str, Any]:
+    """Transport tenant is authoritative. Payload tenant_id may match, never override."""
+    claimed = payload.get("tenant_id")
+    if claimed in (None, ""):
+        return tenant
+    if claimed == tenant:
+        return tenant
+    return {"status": "rejected", "error": "tenant_mismatch", "tenant_id": tenant}
+
+
 _kb: KBResolver | None = None
 _idem: IdempotencyStore | None = None
 _domain_reader: DomainYamlReader | None = None
@@ -98,9 +109,13 @@ async def _persist_and_sync(
 
 
 async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
-    response = await enrich_entity(request, settings, _kb, _idem)
+    response = await enrich_entity(request, settings, _kb, _idem, tenant=tenant, action="enrich")
     result = response.model_dump()
 
     if response.state == "completed":
@@ -110,9 +125,15 @@ async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def handle_enrichbatch(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     settings = get_settings()
     batch_req = BatchEnrichRequest.model_validate(payload)
-    results = await enrich_batch(batch_req.entities, settings, _kb, _idem)
+    results = await enrich_batch(
+        batch_req.entities, settings, _kb, _idem, tenant=tenant, action="enrichbatch"
+    )
     succeeded = sum(1 for r in results if r.state == "completed")
     failed = sum(1 for r in results if r.state == "failed")
     return {
@@ -130,6 +151,10 @@ async def handle_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any
     Legacy EnrichRequest payloads (entity/object_type/objective) remain supported for
     internal callers.
     """
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     if is_odoo_converge_payload(payload):
         return await _handle_odoo_converge(tenant, payload)
     return await _handle_legacy_converge(tenant, payload)
@@ -273,16 +298,6 @@ async def _load_domain_convergence_context(
     if not domain_id or not _domain_reader:
         return domain_hints, inference_rules
 
-    label = node_label or "Partner"
-    try:
-        domain_hints = _domain_reader.get_enrichment_hints(domain_id, label)
-    except (FileNotFoundError, ValueError, OSError, KeyError) as exc:
-        logger.warning(
-            "handlers.converge_domain_hints_failed",
-            domain_id=domain_id,
-            error=str(exc),
-        )
-
     try:
         config = _domain_reader.load(domain_id)
     except (FileNotFoundError, ValueError, OSError) as exc:
@@ -293,7 +308,21 @@ async def _load_domain_convergence_context(
         )
         return domain_hints, inference_rules
 
-    if config.inference_rules_path:
+    label = _resolve_node_label(config, node_label)
+    if label:
+        try:
+            domain_hints = _domain_reader.get_enrichment_hints(domain_id, label)
+        except (FileNotFoundError, ValueError, OSError, KeyError) as exc:
+            logger.warning(
+                "handlers.converge_domain_hints_failed",
+                domain_id=domain_id,
+                error=str(exc),
+            )
+
+    raw_rules = config.raw_spec.get("inference_rules")
+    if isinstance(raw_rules, list):
+        inference_rules = raw_rules
+    elif config.inference_rules_path:
         from pathlib import Path
 
         import yaml
@@ -302,15 +331,31 @@ async def _load_domain_convergence_context(
         if rules_path.exists():
             async with aiofiles.open(rules_path) as f:
                 content = await f.read()
-                inference_rules = yaml.safe_load(content) or []
+                loaded = yaml.safe_load(content) or []
+                if isinstance(loaded, list):
+                    inference_rules = loaded
 
     return domain_hints, inference_rules
 
 
+def _resolve_node_label(config: Any, node_label: str | None) -> str | None:
+    if node_label:
+        return node_label
+    labels = [name for name in config.node_schemas if name]
+    if len(labels) == 1:
+        label = labels[0]
+        return label if isinstance(label, str) else None
+    return None
+
+
 async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
-    response = await enrich_entity(request, settings, _kb, _idem)
+    response = await enrich_entity(request, settings, _kb, _idem, tenant=tenant)
 
     current_schema = payload.get("current_schema", {})
     version = payload.get("schema_version", "0.1.0-seed")
@@ -341,6 +386,10 @@ async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any
 
 
 async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     settings = get_settings()
     crm_field_names: list[str] = payload.get("crm_field_names", [])
     domain_id: str = payload.get("domain_id", "plastics")
@@ -385,6 +434,10 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
 
 
 async def handle_writeback(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant = resolved
     settings = get_settings()
     domain = payload.get("domain", "company")
     canonical = payload.get("canonical", {})

@@ -21,6 +21,16 @@ from .graph_return_channel import (
 logger = structlog.get_logger(__name__)
 
 
+def _authoritative_tenant(tenant: str, payload: dict[str, Any]) -> str | dict[str, Any]:
+    """Transport tenant wins. Matching payload tenant_id is accepted; mismatch is rejected."""
+    claimed = payload.get("tenant_id")
+    if claimed in (None, ""):
+        return tenant
+    if claimed == tenant:
+        return tenant
+    return {"status": "rejected", "error": "tenant_mismatch", "tenant_id": tenant}
+
+
 async def handle_community_export(
     tenant: str,
     payload: dict[str, Any],
@@ -33,7 +43,10 @@ async def handle_community_export(
     """
     from .graph_return_channel import GraphReturnChannel
 
-    tenant_id = payload.get("tenant_id") or tenant
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant_id = resolved
     communities = payload.get("communities", [])
 
     if not communities:
@@ -80,7 +93,10 @@ async def handle_schema_proposal(
     These contain proposed field additions from schema discovery
     that should be reviewed and potentially added to the domain schema.
     """
-    tenant_id = payload.get("tenant_id") or tenant
+    resolved = _authoritative_tenant(tenant, payload)
+    if isinstance(resolved, dict):
+        return resolved
+    tenant_id = resolved
     proposed_fields = payload.get("proposed_fields", [])
 
     logger.info(

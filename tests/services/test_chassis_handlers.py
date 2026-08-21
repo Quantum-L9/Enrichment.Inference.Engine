@@ -71,11 +71,21 @@ class TestHandleSchemaProposal:
         assert result["field_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_tenant_override(self) -> None:
+    async def test_tenant_mismatch_is_rejected(self) -> None:
         result = await handle_schema_proposal(
             "default", {"tenant_id": "override", "proposed_fields": [{"name": "f1"}]}
         )
-        assert result["tenant_id"] == "override"
+        assert result["status"] == "rejected"
+        assert result["error"] == "tenant_mismatch"
+        assert result["tenant_id"] == "default"
+
+    @pytest.mark.asyncio
+    async def test_matching_payload_tenant_is_accepted(self) -> None:
+        result = await handle_schema_proposal(
+            "acme", {"tenant_id": "acme", "proposed_fields": [{"name": "f1"}]}
+        )
+        assert result["status"] == "received"
+        assert result["tenant_id"] == "acme"
         assert result["field_count"] == 1
 
     @pytest.mark.asyncio

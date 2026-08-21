@@ -159,3 +159,32 @@ def test_scan_unknown_domain_returns_404(
     )
     assert resp.status_code == 404
     assert "does-not-exist" in resp.json()["detail"]
+
+
+# ── POST /api/v1/proposals/{id}/approve ──────────────────────────────────────
+
+
+def test_approve_passes_tenant_to_store(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock = AsyncMock(return_value=1)
+    monkeypatch.setattr(discover_mod.pg_store, "approve_schema_proposal", mock)
+    proposal_id = "11111111-1111-1111-1111-111111111111"
+    resp = client.post(
+        f"/api/v1/proposals/{proposal_id}/approve",
+        json={"approved": True, "reviewed_by": "igor", "tenant_id": "acme"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+    mock.assert_awaited_once()
+    kwargs = mock.await_args.kwargs
+    assert kwargs["tenant_id"] == "acme"
+    assert kwargs["approved"] is True
+
+
+def test_approve_requires_tenant_id(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/proposals/11111111-1111-1111-1111-111111111111/approve",
+        json={"approved": True, "reviewed_by": "igor"},
+    )
+    assert resp.status_code == 422
