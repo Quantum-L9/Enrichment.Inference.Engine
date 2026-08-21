@@ -179,13 +179,18 @@ async def save_enrichment_result(
     return record
 
 
-async def get_enrichment_result(result_id: uuid.UUID) -> EnrichmentResult | None:
-    """Fetch a single enrichment result by primary key with field history."""
+async def get_enrichment_result(
+    result_id: uuid.UUID, tenant_id: str
+) -> EnrichmentResult | None:
+    """Fetch one enrichment result by UUID and tenant. UUID alone is not authz."""
     async with get_session() as session:
         stmt = (
             select(EnrichmentResult)
             .options(selectinload(EnrichmentResult.field_confidence_history))
-            .where(EnrichmentResult.id == result_id)
+            .where(
+                EnrichmentResult.id == result_id,
+                EnrichmentResult.tenant_id == tenant_id,
+            )
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
@@ -259,6 +264,7 @@ async def create_convergence_run(
 
 async def update_convergence_run(
     run_id: uuid.UUID,
+    tenant_id: str,
     current_pass: int | None = None,
     state: str | None = None,
     convergence_reason: str | None = None,
@@ -297,14 +303,22 @@ async def update_convergence_run(
 
     async with get_session() as session:
         await session.execute(
-            update(ConvergenceRun).where(ConvergenceRun.id == run_id).values(**values)
+            update(ConvergenceRun)
+            .where(
+                ConvergenceRun.id == run_id,
+                ConvergenceRun.tenant_id == tenant_id,
+            )
+            .values(**values)
         )
 
 
-async def get_convergence_run(run_id: uuid.UUID) -> ConvergenceRun | None:
-    """Load a convergence run by primary key."""
+async def get_convergence_run(run_id: uuid.UUID, tenant_id: str) -> ConvergenceRun | None:
+    """Load a convergence run by UUID and tenant. UUID alone is not authz."""
     async with get_session() as session:
-        stmt = select(ConvergenceRun).where(ConvergenceRun.id == run_id)
+        stmt = select(ConvergenceRun).where(
+            ConvergenceRun.id == run_id,
+            ConvergenceRun.tenant_id == tenant_id,
+        )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -392,15 +406,24 @@ async def get_pending_schema_proposals(tenant_id: str, domain: str) -> list[Sche
         return list(result.scalars().all())
 
 
-async def approve_schema_proposal(proposal_id: uuid.UUID, reviewed_by: str, approved: bool) -> None:
-    """Record a human approval or rejection decision on a schema proposal."""
+async def approve_schema_proposal(
+    tenant_id: str,
+    proposal_id: uuid.UUID,
+    reviewed_by: str,
+    approved: bool,
+) -> int:
+    """Record approval only when tenant and UUID both match. Returns rows changed."""
     async with get_session() as session:
-        await session.execute(
+        result = await session.execute(
             update(SchemaProposalRecord)
-            .where(SchemaProposalRecord.id == proposal_id)
+            .where(
+                SchemaProposalRecord.id == proposal_id,
+                SchemaProposalRecord.tenant_id == tenant_id,
+            )
             .values(
                 approval_status="approved" if approved else "rejected",
                 reviewed_by=reviewed_by,
                 reviewed_at=datetime.now(UTC),
             )
         )
+        return int(result.rowcount or 0)
