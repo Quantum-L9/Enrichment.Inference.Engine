@@ -12,7 +12,13 @@ PYTEST := $(PYTHON) -m pytest
 # SETUP
 # ============================================================
 setup:
-	pip install -e ".[dev]"
+	@if command -v uv >/dev/null 2>&1 && [ -f "$(CURDIR)/uv.lock" ]; then \
+		uv sync --extra dev --frozen; \
+	elif command -v uv >/dev/null 2>&1; then \
+		uv venv --python 3.12 && uv pip install -e ".[dev]"; \
+	else \
+		pip install -e ".[dev]"; \
+	fi
 	pre-commit install
 
 # ============================================================
