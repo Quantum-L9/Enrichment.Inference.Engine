@@ -16,6 +16,7 @@ Run: pytest tests/integration/test_gap_fixes.py -v
 
 from __future__ import annotations
 
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -35,7 +36,7 @@ class TestResultStoreWiring:
         from app.services.result_store import ResultStore
 
         mock_record = MagicMock()
-        mock_record.id = "uuid-123"
+        mock_record.id = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
         with patch("app.services.result_store.pg_store") as mock_pg:
             mock_pg.save_enrichment_result = AsyncMock(return_value=mock_record)
@@ -60,7 +61,7 @@ class TestResultStoreWiring:
                 object_type="Account",
             )
             mock_pg.save_enrichment_result.assert_called_once()
-            assert result_id == "uuid-123"
+            assert result_id == uuid.UUID("11111111-1111-1111-1111-111111111111")
 
 
 class TestGraphSyncAndScoreInvalidationHooks:

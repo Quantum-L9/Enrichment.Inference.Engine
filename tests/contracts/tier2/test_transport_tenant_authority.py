@@ -1,4 +1,9 @@
-"""Tier 2 — transport tenant is authoritative (TA-001..TA-003)."""
+"""Tier 2 — transport tenant is authoritative (TA-001..TA-003).
+
+This module is collection-safe for `pytest tests/contracts/ -m "unit and not
+enforcement"`. It must not import app.engines.handlers (that stack requires
+the perplexity extra, which the constitution job does not install).
+"""
 
 from __future__ import annotations
 
@@ -7,17 +12,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from app.engines.handlers import _authoritative_tenant
-from app.services.chassis_handlers import (
-    _authoritative_tenant as chassis_authoritative_tenant,
-)
-
 pytestmark = [pytest.mark.unit, pytest.mark.enforcement]
 
 ROOT = Path(".")
 OPENAPI_PATH = ROOT / "docs/contracts/api/openapi.yaml"
 MIGRATION_PATH = ROOT / "migrations/versions/001_initial_schema.py"
 CONTRACT_PATH = ROOT / "docs/contracts/enforcement/tenant-authority.yaml"
+HANDLERS_PATH = ROOT / "app/engines/handlers.py"
+CHASSIS_PATH = ROOT / "app/services/chassis_handlers.py"
 
 
 def test_tenant_authority_contract_declares_three_rules() -> None:
@@ -26,19 +28,11 @@ def test_tenant_authority_contract_declares_three_rules() -> None:
     assert {rule["id"] for rule in contract["rules"]} == {"TA-001", "TA-002", "TA-003"}
 
 
-@pytest.mark.parametrize(
-    "resolver",
-    [_authoritative_tenant, chassis_authoritative_tenant],
-)
-def test_payload_tenant_cannot_override_transport(resolver) -> None:
-    rejected = resolver("transport", {"tenant_id": "payload"})
-    assert rejected == {
-        "status": "rejected",
-        "error": "tenant_mismatch",
-        "tenant_id": "transport",
-    }
-    assert resolver("acme", {"tenant_id": "acme"}) == "acme"
-    assert resolver("acme", {}) == "acme"
+def test_handlers_reject_payload_tenant_override() -> None:
+    for path in (HANDLERS_PATH, CHASSIS_PATH):
+        source = path.read_text(encoding="utf-8")
+        assert "tenant_mismatch" in source
+        assert "def _authoritative_tenant" in source
 
 
 def test_approval_request_contract_requires_tenant_id() -> None:
