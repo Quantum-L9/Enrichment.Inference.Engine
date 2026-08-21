@@ -40,22 +40,22 @@ class InferenceResult(BaseModel):
 def _eval_contains(value: Any, target: Any) -> bool:
     """Check if target is contained within value (list or string)."""
     if isinstance(value, (list, tuple, set, frozenset)):
-        return _normalise(target) in {_normalise(v) for v in value}
-    return _normalise(target) in _normalise(value)
+        return bool(_normalise(target) in {_normalise(v) for v in value})
+    return bool(_normalise(target) in _normalise(value))
 
 
 def _eval_in(value: Any, target: Any) -> bool:
     """Check if value is a member of the target collection."""
     if isinstance(target, (list, tuple, set, frozenset)):
-        return _normalise(value) in {_normalise(t) for t in target}
-    return _normalise(value) == _normalise(target)
+        return bool(_normalise(value) in {_normalise(t) for t in target})
+    return bool(_normalise(value) == _normalise(target))
 
 
 def _eval_not_in(value: Any, target: Any) -> bool:
     """Check if value is absent from the target collection."""
     if isinstance(target, (list, tuple, set, frozenset)):
-        return _normalise(value) not in {_normalise(t) for t in target}
-    return _normalise(value) != _normalise(target)
+        return bool(_normalise(value) not in {_normalise(t) for t in target})
+    return bool(_normalise(value) != _normalise(target))
 
 
 def _finite_floats(left: Any, right: Any) -> tuple[float, float] | None:
@@ -102,7 +102,7 @@ def _evaluate_condition(condition: RuleCondition, value: Any) -> bool:
     if value is None:
         return False
     if op is Operator.EQUALS:
-        return _normalise(value) == _normalise(target)
+        return bool(_normalise(value) == _normalise(target))
     if op in {Operator.GT, Operator.LT, Operator.GTE, Operator.LTE}:
         return _eval_numeric(op, value, target)
     if op in {Operator.CONTAINS, Operator.IN, Operator.NOT_IN}:

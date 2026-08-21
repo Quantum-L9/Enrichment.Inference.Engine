@@ -191,7 +191,8 @@ async def get_enrichment_result(result_id: uuid.UUID, tenant_id: str) -> Enrichm
             )
         )
         result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        row = result.scalar_one_or_none()
+        return row if isinstance(row, EnrichmentResult) else None
 
 
 async def get_enrichment_result_by_idempotency_key(
@@ -205,7 +206,8 @@ async def get_enrichment_result_by_idempotency_key(
             EnrichmentResult.idempotency_key == idempotency_key,
         )
         result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        row = result.scalar_one_or_none()
+        return row if isinstance(row, EnrichmentResult) else None
 
 
 async def get_latest_enrichment_for_entity(
@@ -224,7 +226,8 @@ async def get_latest_enrichment_for_entity(
             .limit(1)
         )
         result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        row = result.scalar_one_or_none()
+        return row if isinstance(row, EnrichmentResult) else None
 
 
 # ── ConvergenceRun CRUD ────────────────────────────────────────────────────
@@ -318,7 +321,8 @@ async def get_convergence_run(run_id: uuid.UUID, tenant_id: str) -> ConvergenceR
             ConvergenceRun.tenant_id == tenant_id,
         )
         result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        row = result.scalar_one_or_none()
+        return row if isinstance(row, ConvergenceRun) else None
 
 
 async def list_active_convergence_runs(
@@ -364,7 +368,8 @@ async def save_schema_proposal(
             SchemaProposalRecord.field_name == field_name,
         )
         result = await session.execute(stmt)
-        record = result.scalar_one_or_none()
+        found = result.scalar_one_or_none()
+        record = found if isinstance(found, SchemaProposalRecord) else None
 
         if record is None:
             record = SchemaProposalRecord(
@@ -424,4 +429,5 @@ async def approve_schema_proposal(
                 reviewed_at=datetime.now(UTC),
             )
         )
-        return int(result.rowcount or 0)
+        changed = getattr(result, "rowcount", 0) or 0
+        return int(changed)

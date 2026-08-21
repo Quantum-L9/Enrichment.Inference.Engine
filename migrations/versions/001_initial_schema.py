@@ -11,10 +11,12 @@ a nonexistent 0001 and mutates config_snapshots).
 
 from __future__ import annotations
 
+import importlib
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-from alembic import op
+op = importlib.import_module("alembic.op")
 
 revision = "001"
 down_revision = None
@@ -62,7 +64,7 @@ def upgrade() -> None:
         sa.Column("entity_id", sa.String(256), nullable=False),
         sa.Column("object_type", sa.String(128), nullable=False),
         sa.Column("domain", sa.String(128), nullable=True),
-        sa.Column("idempotency_key", sa.String(256), nullable=True, unique=True),
+        sa.Column("idempotency_key", sa.String(256), nullable=True),
         sa.Column("fields", JSONB, nullable=False, server_default="{}"),
         sa.Column("confidence", sa.Numeric(5, 4), nullable=False, server_default="0"),
         sa.Column("uncertainty_score", sa.Float, nullable=False, server_default="0"),
@@ -94,7 +96,11 @@ def upgrade() -> None:
     op.create_index(
         "ix_enrichment_results_tenant_created", "enrichment_results", ["tenant_id", "created_at"]
     )
-    op.create_index("ix_enrichment_results_idempotency", "enrichment_results", ["idempotency_key"])
+    op.create_unique_constraint(
+        "uq_enrichment_results_tenant_idempotency",
+        "enrichment_results",
+        ["tenant_id", "idempotency_key"],
+    )
     op.create_index(
         "ix_enrichment_results_convergence_run", "enrichment_results", ["convergence_run_id"]
     )

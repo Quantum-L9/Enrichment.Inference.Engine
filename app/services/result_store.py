@@ -84,7 +84,10 @@ class ResultStore:
             convergence_run_id=convergence_run_id,
             field_confidence_map=field_confidence_map,
         )
-        return record.id
+        result_id = record.id
+        if not isinstance(result_id, uuid.UUID):
+            raise TypeError("enrichment result id must be a UUID")
+        return result_id
 
     async def get_result(self, result_id: uuid.UUID) -> EnrichmentResult | None:
         return await pg_store.get_enrichment_result(result_id, self.tenant_id)
@@ -109,7 +112,10 @@ class ResultStore:
             max_budget_tokens=max_budget_tokens,
             domain_yaml_version_before=domain_yaml_version,
         )
-        return run.id
+        run_id = run.id
+        if not isinstance(run_id, uuid.UUID):
+            raise TypeError("convergence run id must be a UUID")
+        return run_id
 
     async def checkpoint_convergence_pass(
         self,

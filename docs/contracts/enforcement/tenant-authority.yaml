@@ -1,0 +1,30 @@
+version: "1.0.0"
+id: tenant-authority
+description: >
+  Transport tenant is the only authoritative tenant identifier at handler
+  and approval boundaries. Payload tenant_id may match the transport tenant
+  or be omitted. A mismatched payload tenant_id is rejected.
+
+rules:
+  - id: TA-001
+    surface: SDK handlers
+    statement: >
+      handle_* receives tenant from the transport packet. payload.tenant_id
+      must not override it.
+  - id: TA-002
+    surface: schema proposal approval
+    statement: >
+      POST /api/v1/proposals/{id}/approve requires tenant_id. The store
+      updates only when tenant_id and proposal UUID both match.
+  - id: TA-003
+    surface: postgres uniqueness
+    statement: >
+      enrichment_results uniqueness is (tenant_id, idempotency_key), not
+      a global unique on idempotency_key.
+
+source_files:
+  - app/engines/handlers.py
+  - app/services/chassis_handlers.py
+  - app/api/v1/discover.py
+  - app/services/pg_models.py
+  - migrations/versions/001_initial_schema.py

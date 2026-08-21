@@ -55,6 +55,7 @@ class ScanRequest(BaseModel):
 class ApprovalRequest(BaseModel):
     approved: bool
     reviewed_by: str
+    tenant_id: str
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
@@ -168,6 +169,7 @@ async def approve_proposal(
     request: ApprovalRequest,
 ) -> dict[str, str]:
     await pg_store.approve_schema_proposal(
+        tenant_id=request.tenant_id,
         proposal_id=proposal_id,
         reviewed_by=request.reviewed_by,
         approved=request.approved,

@@ -343,7 +343,8 @@ def _resolve_node_label(config: Any, node_label: str | None) -> str | None:
         return node_label
     labels = [name for name in config.node_schemas if name]
     if len(labels) == 1:
-        return labels[0]
+        label = labels[0]
+        return label if isinstance(label, str) else None
     return None
 
 
