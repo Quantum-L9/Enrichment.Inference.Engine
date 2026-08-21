@@ -17,6 +17,8 @@ Sequence:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 from typing import Any
 
@@ -26,7 +28,7 @@ from ..core.config import Settings
 from ..models.schemas import EnrichRequest, EnrichResponse
 from ..services.circuit_breaker import CircuitBreaker
 from ..services.consensus_engine import synthesize
-from ..services.idempotency import IdempotencyStore
+from ..services.idempotency import IdempotencyConflict, IdempotencyStore
 from ..services.perplexity_client import SonarResponse, query_perplexity
 from ..services.prompt_builder import build_prompt, build_schema_hash
 from ..services.uncertainty_engine import compute_uncertainty
@@ -37,12 +39,46 @@ logger = structlog.get_logger("orchestrator")
 breaker = CircuitBreaker(failure_threshold=5, cooldown=60)
 
 
+async def call_perplexity(
+    *,
+    payload: dict[str, Any],
+    api_key: str,
+    breaker: CircuitBreaker,
+    timeout: int,
+) -> SonarResponse:
+    """Test-visible Perplexity entrypoint used by the variation loop."""
+    return await query_perplexity(
+        payload=payload,
+        api_key=api_key,
+        breaker=breaker,
+        timeout=timeout,
+    )
+
+
+def request_fingerprint(request: EnrichRequest, *, action: str = "enrich") -> str:
+    """Hash the semantic request. Transport and idempotency metadata are excluded."""
+    body = {
+        "action": action,
+        "consensus_threshold": request.consensus_threshold,
+        "entity": request.entity,
+        "kb_context": request.kb_context,
+        "max_variations": request.max_variations,
+        "object_type": request.object_type,
+        "objective": request.objective,
+        "target_schema": request.schema_,
+    }
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
 async def enrich_entity(
     request: EnrichRequest,
     settings: Settings,
     kb_resolver,
     idem_store: IdempotencyStore | None = None,
     sonar_config=None,
+    tenant: str | None = None,
+    action: str = "enrich",
 ) -> EnrichResponse:
     """Full enrichment pipeline for a single entity.
 
@@ -55,8 +91,20 @@ async def enrich_entity(
     """
     start = time.monotonic()
 
+    fingerprint = request_fingerprint(request, action=action)
     if request.idempotency_key and idem_store:
-        cached = await idem_store.get(request.idempotency_key)
+        try:
+            cached = await idem_store.get(
+                request.idempotency_key,
+                tenant=tenant,
+                fingerprint=fingerprint,
+            )
+        except IdempotencyConflict:
+            return EnrichResponse(
+                state="failed",
+                failure_reason="idempotency_conflict",
+                processing_time_ms=0,
+            )
         if cached:
             return EnrichResponse(**cached)
 
@@ -147,7 +195,7 @@ async def enrich_entity(
 
         async def _call() -> SonarResponse:
             async with sem:
-                return await query_perplexity(
+                return await call_perplexity(
                     payload=payload,
                     api_key=settings.perplexity_api_key,
                     breaker=breaker,
@@ -229,7 +277,12 @@ async def enrich_entity(
         )
 
         if request.idempotency_key and idem_store:
-            await idem_store.set(request.idempotency_key, resp.model_dump())
+            await idem_store.set(
+                request.idempotency_key,
+                resp.model_dump(),
+                tenant=tenant,
+                fingerprint=fingerprint,
+            )
 
         logger.info(
             "pipeline_completed",
@@ -282,13 +335,17 @@ async def enrich_batch(
     settings: Settings,
     kb_resolver,
     idem_store: IdempotencyStore | None = None,
+    tenant: str | None = None,
+    action: str = "enrichbatch",
 ) -> list[EnrichResponse]:
     """Batch enrichment with bounded concurrency."""
     sem = asyncio.Semaphore(10)
 
     async def _bounded(req: EnrichRequest) -> EnrichResponse:
         async with sem:
-            return await enrich_entity(req, settings, kb_resolver, idem_store)
+            return await enrich_entity(
+                req, settings, kb_resolver, idem_store, tenant=tenant, action=action
+            )
 
     results = await asyncio.gather(*[_bounded(r) for r in requests])
     return list(results)

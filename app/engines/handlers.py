@@ -100,7 +100,9 @@ async def _persist_and_sync(
 async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
-    response = await enrich_entity(request, settings, _kb, _idem)
+    response = await enrich_entity(
+        request, settings, _kb, _idem, tenant=tenant, action="enrich"
+    )
     result = response.model_dump()
 
     if response.state == "completed":
@@ -112,7 +114,9 @@ async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
 async def handle_enrichbatch(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     batch_req = BatchEnrichRequest.model_validate(payload)
-    results = await enrich_batch(batch_req.entities, settings, _kb, _idem)
+    results = await enrich_batch(
+        batch_req.entities, settings, _kb, _idem, tenant=tenant, action="enrichbatch"
+    )
     succeeded = sum(1 for r in results if r.state == "completed")
     failed = sum(1 for r in results if r.state == "failed")
     return {

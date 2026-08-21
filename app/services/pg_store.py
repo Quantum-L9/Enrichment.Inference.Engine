@@ -125,7 +125,7 @@ async def save_enrichment_result(
     written in the same transaction.
     """
     if idempotency_key:
-        existing = await get_enrichment_result_by_idempotency_key(idempotency_key)
+        existing = await get_enrichment_result_by_idempotency_key(tenant_id, idempotency_key)
         if existing:
             logger.debug("enrichment_result_idempotent_hit", idempotency_key=idempotency_key)
             return existing
@@ -192,11 +192,15 @@ async def get_enrichment_result(result_id: uuid.UUID) -> EnrichmentResult | None
 
 
 async def get_enrichment_result_by_idempotency_key(
+    tenant_id: str,
     idempotency_key: str,
 ) -> EnrichmentResult | None:
-    """Look up an existing result by caller-supplied idempotency key."""
+    """Look up an existing result by tenant + caller-supplied idempotency key."""
     async with get_session() as session:
-        stmt = select(EnrichmentResult).where(EnrichmentResult.idempotency_key == idempotency_key)
+        stmt = select(EnrichmentResult).where(
+            EnrichmentResult.tenant_id == tenant_id,
+            EnrichmentResult.idempotency_key == idempotency_key,
+        )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 

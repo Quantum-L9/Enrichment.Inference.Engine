@@ -55,9 +55,7 @@ class EnrichmentResult(Base):
     entity_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     object_type: Mapped[str] = mapped_column(String(128), nullable=False)
     domain: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    idempotency_key: Mapped[str | None] = mapped_column(
-        String(256), nullable=True, unique=True, index=True
-    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     fields: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     confidence: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
     uncertainty_score: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False)
@@ -96,6 +94,11 @@ class EnrichmentResult(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_enrichment_results_tenant_idempotency",
+        ),
         Index("ix_enrichment_results_tenant_entity", "tenant_id", "entity_id"),
         Index("ix_enrichment_results_tenant_created", "tenant_id", "created_at"),
     )
