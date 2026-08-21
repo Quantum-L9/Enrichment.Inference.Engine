@@ -19,7 +19,7 @@ CACHE_VERSION = 2
 KEY_PREFIX = "enrich:idem:v2:"
 
 
-class IdempotencyConflict(Exception):
+class IdempotencyConflictError(Exception):
     """Same tenant + key, different semantic request."""
 
 
@@ -52,7 +52,7 @@ class IdempotencyStore:
         stored_fp = payload.get("request_fingerprint")
         if stored_fp != fingerprint:
             logger.warning("idempotency_conflict")
-            raise IdempotencyConflict("idempotency key reused with a different request")
+            raise IdempotencyConflictError("idempotency key reused with a different request")
         logger.debug("idempotency_hit")
         response = payload.get("response")
         return response if isinstance(response, dict) else None

@@ -115,9 +115,7 @@ async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     tenant = resolved
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
-    response = await enrich_entity(
-        request, settings, _kb, _idem, tenant=tenant, action="enrich"
-    )
+    response = await enrich_entity(request, settings, _kb, _idem, tenant=tenant, action="enrich")
     result = response.model_dump()
 
     if response.state == "completed":

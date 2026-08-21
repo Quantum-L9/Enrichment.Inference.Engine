@@ -179,9 +179,7 @@ async def save_enrichment_result(
     return record
 
 
-async def get_enrichment_result(
-    result_id: uuid.UUID, tenant_id: str
-) -> EnrichmentResult | None:
+async def get_enrichment_result(result_id: uuid.UUID, tenant_id: str) -> EnrichmentResult | None:
     """Fetch one enrichment result by UUID and tenant. UUID alone is not authz."""
     async with get_session() as session:
         stmt = (

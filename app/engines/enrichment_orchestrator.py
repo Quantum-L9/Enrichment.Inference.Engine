@@ -28,7 +28,7 @@ from ..core.config import Settings
 from ..models.schemas import EnrichRequest, EnrichResponse
 from ..services.circuit_breaker import CircuitBreaker
 from ..services.consensus_engine import synthesize
-from ..services.idempotency import IdempotencyConflict, IdempotencyStore
+from ..services.idempotency import IdempotencyConflictError, IdempotencyStore
 from ..services.perplexity_client import SonarResponse, query_perplexity
 from ..services.prompt_builder import build_prompt, build_schema_hash
 from ..services.uncertainty_engine import compute_uncertainty
@@ -99,7 +99,7 @@ async def enrich_entity(
                 tenant=tenant,
                 fingerprint=fingerprint,
             )
-        except IdempotencyConflict:
+        except IdempotencyConflictError:
             return EnrichResponse(
                 state="failed",
                 failure_reason="idempotency_conflict",
