@@ -2,6 +2,11 @@
 field_confidence_history, schema_proposals.
 
 Revision ID: 001
+
+This is the only revision on the canonical `migrations/versions` tree.
+It is the lineage root and current head. Do not import or depend on
+`alembic/versions/0002_perplexity_api_key_default.py` (orphan, revises
+a nonexistent 0001 and mutates config_snapshots).
 """
 
 from __future__ import annotations
