@@ -75,7 +75,10 @@ class EnrichmentLifecycle(LifecycleHook):
             _idem = None
 
         clear_handlers()
-        register_orchestration(kb=_kb, idem_store=_idem)
+        from .engines.domain_yaml_reader import DomainYamlReader
+
+        domain_reader = DomainYamlReader(settings.domains_dir)
+        register_orchestration(kb=_kb, idem_store=_idem, domain_reader=domain_reader)
         from .services.chassis_handlers import register_all_handlers
 
         register_all_handlers()

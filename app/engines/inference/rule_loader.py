@@ -28,6 +28,7 @@ __all__ = [
     "RuleDefinition",
     "RuleRegistry",
     "load_rules",
+    "load_rules_data",
     "reload_rules",
     "build_unlock_index",
     "score_unlock_potential",
@@ -218,11 +219,30 @@ def load_rules(yaml_path: str | Path) -> RuleRegistry:
     if not isinstance(rules_data, list):
         raise ValueError(f"inference_rules must be a list, got {type(rules_data).__name__}")
 
+    registry = load_rules_data(rules_data)
+    logger.info(
+        "rules_loaded",
+        yaml_path=str(yaml_path),
+        loaded=registry.count(),
+        total=len(rules_data),
+    )
+    return registry
+
+
+def load_rules_data(rules_data: list[dict[str, Any]]) -> RuleRegistry:
+    """Validate inline inference_rules and build a RuleRegistry."""
+    if not isinstance(rules_data, list):
+        raise ValueError(f"inference_rules must be a list, got {type(rules_data).__name__}")
+
     registry = RuleRegistry()
     loaded_count = 0
     error_count = 0
 
     for idx, rule_dict in enumerate(rules_data):
+        if not isinstance(rule_dict, dict):
+            error_count += 1
+            logger.warning("rule_validation_failed", rule_index=idx, error="rule is not a mapping")
+            continue
         try:
             rule = RuleDefinition.model_validate(rule_dict)
             registry.add_rule(rule)
@@ -236,17 +256,9 @@ def load_rules(yaml_path: str | Path) -> RuleRegistry:
                 error=str(exc),
             )
 
-    logger.info(
-        "rules_loaded",
-        yaml_path=str(yaml_path),
-        loaded=loaded_count,
-        errors=error_count,
-        total=len(rules_data),
-    )
-
+    logger.info("rules_data_loaded", loaded=loaded_count, errors=error_count, total=len(rules_data))
     if error_count > 0 and loaded_count == 0:
-        raise ValueError(f"All rules failed validation in {yaml_path}")
-
+        raise ValueError("All rules failed validation")
     return registry
 
 

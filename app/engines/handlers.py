@@ -273,16 +273,6 @@ async def _load_domain_convergence_context(
     if not domain_id or not _domain_reader:
         return domain_hints, inference_rules
 
-    label = node_label or "Partner"
-    try:
-        domain_hints = _domain_reader.get_enrichment_hints(domain_id, label)
-    except (FileNotFoundError, ValueError, OSError, KeyError) as exc:
-        logger.warning(
-            "handlers.converge_domain_hints_failed",
-            domain_id=domain_id,
-            error=str(exc),
-        )
-
     try:
         config = _domain_reader.load(domain_id)
     except (FileNotFoundError, ValueError, OSError) as exc:
@@ -293,7 +283,21 @@ async def _load_domain_convergence_context(
         )
         return domain_hints, inference_rules
 
-    if config.inference_rules_path:
+    label = _resolve_node_label(config, node_label)
+    if label:
+        try:
+            domain_hints = _domain_reader.get_enrichment_hints(domain_id, label)
+        except (FileNotFoundError, ValueError, OSError, KeyError) as exc:
+            logger.warning(
+                "handlers.converge_domain_hints_failed",
+                domain_id=domain_id,
+                error=str(exc),
+            )
+
+    raw_rules = config.raw_spec.get("inference_rules")
+    if isinstance(raw_rules, list):
+        inference_rules = raw_rules
+    elif config.inference_rules_path:
         from pathlib import Path
 
         import yaml
@@ -302,9 +306,20 @@ async def _load_domain_convergence_context(
         if rules_path.exists():
             async with aiofiles.open(rules_path) as f:
                 content = await f.read()
-                inference_rules = yaml.safe_load(content) or []
+                loaded = yaml.safe_load(content) or []
+                if isinstance(loaded, list):
+                    inference_rules = loaded
 
     return domain_hints, inference_rules
+
+
+def _resolve_node_label(config: Any, node_label: str | None) -> str | None:
+    if node_label:
+        return node_label
+    labels = [name for name in config.node_schemas if name]
+    if len(labels) == 1:
+        return labels[0]
+    return None
 
 
 async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:

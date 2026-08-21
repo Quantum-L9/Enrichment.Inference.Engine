@@ -86,6 +86,8 @@ class InferenceBridge:
         confidence_map: dict[str, float] | None = None,
     ) -> InferenceResult:
         """Execute inference and return v1-shaped result."""
+        if _canonical_inference_rules(self._rules):
+            return self._run_rule_engine(entity)
         if self._graph is None:
             # No domain_spec provided — cannot run v2 inference
             return InferenceResult()
@@ -160,6 +162,27 @@ class InferenceBridge:
                 }
                 for edge in self._graph.edges
             ]
+        if _canonical_inference_rules(self._rules):
+            catalog: list[dict] = []
+            for rule in self._rules:
+                conditions = rule.get("conditions") or []
+                outputs = rule.get("outputs") or []
+                catalog.append(
+                    {
+                        "name": rule.get("rule_id") or rule.get("name", "unnamed"),
+                        "requires": [
+                            str(item.get("field"))
+                            for item in conditions
+                            if isinstance(item, dict) and item.get("field")
+                        ],
+                        "produces": [
+                            str(item.get("field"))
+                            for item in outputs
+                            if isinstance(item, dict) and item.get("field")
+                        ],
+                    }
+                )
+            return catalog
         # Fallback: v1-style flat rules
         return [
             {
@@ -178,7 +201,42 @@ class InferenceBridge:
         """
         return self._last_unlock_map
 
+    def _run_rule_engine(self, entity: dict[str, Any]) -> InferenceResult:
+        from .inference.rule_engine import infer
+        from .inference.rule_loader import load_rules_data
+
+        engine = infer(entity, load_rules_data(self._rules))
+        return InferenceResult(
+            derived_fields=engine.derived_fields,
+            confidence_map=engine.confidence_map,
+            rules_fired=len(engine.rules_fired),
+            rules_skipped=engine.rules_skipped,
+            rule_trace=[
+                {
+                    "rule": item.rule_id,
+                    "status": "fired",
+                    "produced": list(item.outputs_produced),
+                    "confidence": item.confidence,
+                }
+                for item in engine.rules_fired
+            ],
+            unlock_map={},
+            blocked_fields={},
+        )
+
     @property
     def graph(self) -> DerivationGraph | None:
         """Direct access to v2 graph for advanced consumers."""
         return self._graph
+
+
+def _canonical_inference_rules(rules: list[dict[str, Any]]) -> bool:
+    if not rules:
+        return False
+    first = rules[0]
+    if not isinstance(first, dict):
+        return False
+    conditions = first.get("conditions")
+    return isinstance(conditions, list) and any(
+        isinstance(item, dict) and item.get("field") and item.get("operator") for item in conditions
+    )

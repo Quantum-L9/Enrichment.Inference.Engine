@@ -25,6 +25,7 @@ class RuleFired(BaseModel):
 
 class InferenceResult(BaseModel):
     derived_fields: dict[str, Any] = Field(default_factory=dict)
+    confidence_map: dict[str, float] = Field(default_factory=dict)
     rules_fired: list[RuleFired] = Field(default_factory=list)
     rules_evaluated: int = 0
     rules_skipped: int = 0
@@ -219,11 +220,13 @@ def infer(entity_fields: dict[str, Any], registry: RuleRegistry) -> InferenceRes
             break
 
     derived: dict[str, Any] = {k: v[0] for k, v in best_output.items()}
-    confidences = [v[2] for v in best_output.values()]
+    confidence_map = {k: v[2] for k, v in best_output.items()}
+    confidences = list(confidence_map.values())
     min_conf = min(confidences) if confidences else 1.0
 
     return InferenceResult(
         derived_fields=derived,
+        confidence_map=confidence_map,
         rules_fired=all_fired,
         rules_evaluated=total_evaluated,
         rules_skipped=total_skipped,
