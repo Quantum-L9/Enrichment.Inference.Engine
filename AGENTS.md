@@ -348,3 +348,22 @@ Durable, non-obvious notes for running this service in the Cursor Cloud VM. The 
 - Lint is `ruff` only in practice; `mypy` is non-blocking per `WAIVER-001`. `ruff format --check .` currently flags two pre-existing files on `main` (`app/agents/deal_risk.py`, `app/score/score_models.py`) — not introduced by env setup; do not "fix" `score_models.py` (T5-protected).
 - Do not run the whole suite blindly: `tests/services/test_outcome_delegator.py` fails at **collection** on `main` (references `OutcomeVerdict.GRAPH_REJECTED`, which does not exist). The canonical gate suites (`tests/unit`, `tests/compliance`, `tests/ci`) pass — run those.
 - `pytest.ini` hard-codes `--cov-fail-under=60`, computed against all of `app`. Running a narrow subset will report low coverage and exit non-zero even when every test passes; that is a coverage-gate artifact, not a test failure. Running tests regenerates the gitignored `coverage.xml`/`htmlcov` — discard those.
+
+<!-- BEGIN L9 FORMATTER OWNERSHIP (generated — do not edit) -->
+
+## Formatter ownership
+
+Workspace class: `biome_default` — Default for every governed workspace: Biome owns JS/TS/JSON, VS Code JSON language features owns JSONC (the Biome extension cannot format jsonc), Ruff owns Python, Prettier owns Markdown (format-on-save off so governance docs do not churn).
+
+Exactly one formatter owns each language. Do not reformat a file with a tool other than its owner, and do not add config for a competing formatter: the result is a diff that churns on every save.
+
+| Languages | Owner | Note |
+|---|---|---|
+| `javascript`, `javascriptreact`, `typescript`, `typescriptreact`, `json` | **biome** | bound by the governed IDE profile |
+| `jsonc` | **vscode-json** | bound by the governed IDE profile |
+| `python` | **ruff** | bound by the governed IDE profile |
+| `markdown` | **prettier** | bound by the governed IDE profile |
+
+Generated from `environment/ide/policy.json` in the governance clone by `ops/scripts/adapters/agentdocs.sh`. Edit the policy, not this block.
+
+<!-- END L9 FORMATTER OWNERSHIP -->
