@@ -1,0 +1,35 @@
+# Apply with: gh label create --file (or github-label-sync). Names are load-bearing:
+# workflows in .github/workflows/issue-triage.yml write sev:*, priority:*, scope:*.
+- { name: "type:bug",        color: "d73a4a", description: "Incorrect behavior with evidence" }
+- { name: "type:feature",    color: "0e8a16", description: "New capability" }
+- { name: "type:task",       color: "c5def5", description: "Known work, known solution" }
+- { name: "type:incident",   color: "b60205", description: "Production degraded or down" }
+- { name: "sev:S1",          color: "b60205", description: "Outage, data loss, or security exposure" }
+- { name: "sev:S2",          color: "d93f0b", description: "Major function broken, no workaround" }
+- { name: "sev:S3",          color: "fbca04", description: "Degraded, workaround exists" }
+- { name: "sev:S4",          color: "fef2c0", description: "Cosmetic" }
+- { name: "sev:untriaged",   color: "ededed", description: "Severity not yet assessed" }
+- { name: "priority:P0",     color: "b60205", description: "Drop everything" }
+- { name: "priority:P1",     color: "d93f0b", description: "This sprint" }
+- { name: "priority:P2",     color: "fbca04", description: "Backlog, scheduled" }
+- { name: "priority:P3",     color: "fef2c0", description: "Someday" }
+- { name: "scope:S",         color: "e4e669", description: "Under a day" }
+- { name: "scope:M",         color: "e4e669", description: "A few days, one repo" }
+- { name: "scope:L",         color: "e4e669", description: "Multi-repo or migration" }
+- { name: "scope:XL",        color: "e4e669", description: "Needs a design doc first" }
+- { name: "needs:triage",    color: "ededed", description: "Awaiting maintainer review" }
+- { name: "needs:info",      color: "ededed", description: "Blocked on the reporter; eligible for stale" }
+- { name: "regression",      color: "5319e7", description: "Worked in an earlier version" }
+- { name: "breaking",        color: "5319e7", description: "Requires a major version bump" }
+- { name: "env:prod",        color: "1d76db", description: "Observed in production" }
+- { name: "area:ci",         color: "1d76db", description: "CI/CD pipelines" }
+- { name: "area:ci-templates", color: "1d76db", description: "workflow-templates/ starter gallery" }
+- { name: "area:ci-pack", color: "1d76db", description: "l9-ci-pack/ v2 instantiation kit" }
+- { name: "area:governance", color: "5319e7", description: "registry, ADR template, governance docs" }
+- { name: "area:ops", color: "1d76db", description: "ops/ scripts" }
+- { name: "area:issue-templates", color: "c5def5", description: ".github/ISSUE_TEMPLATE/" }
+- { name: "area:community-health", color: "0e8a16", description: "CONTRIBUTING/SECURITY/SUPPORT/etc" }
+- { name: "area:org-profile", color: "7057ff", description: "profile/ org landing page" }
+- { name: "area:ci-self", color: "1d76db", description: ".github/workflows/ self-CI" }
+- { name: "security:possible-leak", color: "b60205", description: "May contain a credential — rotate" }
+- { name: "good first issue",color: "7057ff", description: "Scoped, documented, low context" }
