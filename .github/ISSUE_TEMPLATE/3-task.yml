@@ -1,0 +1,36 @@
+name: 🔧 Task
+description: Known work with a known solution — chore, refactor, infra, docs.
+title: "chore: "
+labels: ["type:task"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Why this work exists. What degrades if it is never done?
+    validations:
+      required: true
+
+  - type: textarea
+    id: work
+    attributes:
+      label: Work
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: [chore, refactor, infra / IaC, governance, docs, dependency bump]
+    validations:
+      required: true
+
+  - type: input
+    id: blocks
+    attributes:
+      label: Blocks / blocked by
+      placeholder: "blocked by #12, blocks #34"

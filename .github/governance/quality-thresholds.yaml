@@ -1,0 +1,21 @@
+{
+  "schema": "l9.quality-threshold-selection/v1",
+  "profiles": {
+    "pr_fast": {
+      "sdk_policy": ""
+    },
+    "merge": {
+      "sdk_policy": ""
+    },
+    "nightly": {
+      "sdk_policy": ""
+    },
+    "release": {
+      "sdk_policy": ""
+    },
+    "supply_chain": {
+      "sdk_policy": ""
+    }
+  },
+  "note": "Core selects an SDK policy file but never evaluates finding thresholds itself. Point sdk_policy at a policy file the pinned SDK understands to raise/lower gates."
+}
