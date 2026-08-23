@@ -30,6 +30,43 @@ REPO_ROOT = Path(__file__).parent.parent
 ENGINE_DIR = REPO_ROOT / "app"
 
 
+#: An in-tree acknowledgement of a finding the tool cannot reason about.
+#: Form: `# l9-audit-reviewed: rule<N> -- <reason>`
+#: The reason is mandatory and length-checked; a bare marker suppresses
+#: nothing. Acknowledged findings are still reported, in their own section.
+REVIEWED_MARKER_RE = re.compile(
+    r"#\s*l9-audit-reviewed:\s*rule(?P<rule>\d+)\s*(?:--|—)\s*(?P<reason>.+?)\s*$"
+)
+
+#: A reason shorter than this is not a justification.
+REVIEWED_MIN_REASON = 30
+
+
+def reviewed_reason(lines: list[str], index: int, rule: int) -> str | None:
+    """Return the justification acknowledging `rule` at `lines[index]`, if any.
+
+    The marker may sit on the flagged line or on the line immediately above
+    it. Allowing the line above keeps long statements readable -- a trailing
+    marker on an already-long query line would push it past any sane width --
+    and matches how a reader writes the annotation by hand.
+
+    Mirrors the declare-with-a-reason pattern the test suite already uses for
+    STAGED_ARTIFACTS and UNREACHABLE_BASELINE: an exemption must say why, and
+    the reason is enforced rather than advisory.
+    """
+    candidates = [lines[index]]
+    if index > 0:
+        candidates.append(lines[index - 1])
+    for line in candidates:
+        m = REVIEWED_MARKER_RE.search(line)
+        if not m or int(m.group("rule")) != rule:
+            continue
+        reason = m.group("reason").strip()
+        if len(reason) >= REVIEWED_MIN_REASON:
+            return reason
+    return None
+
+
 @dataclass
 class Finding:
     severity: str  # CRITICAL, HIGH, MEDIUM, INFO
@@ -40,6 +77,11 @@ class Finding:
     file: str
     line: int
     fix_hint: str | None = None
+    #: Non-empty when a `# l9-audit-reviewed:` marker acknowledged this
+    #: finding. Reviewed findings are still reported and still counted --
+    #: they are reported separately and excluded from the --strict exit,
+    #: never dropped.
+    reviewed: str | None = None
 
 
 @dataclass
@@ -50,20 +92,30 @@ class AuditResult:
         self.findings.append(Finding(**kwargs))
 
     @property
+    def live(self) -> list:
+        """Findings that have not been acknowledged by a reviewed marker."""
+        return [f for f in self.findings if not f.reviewed]
+
+    @property
+    def reviewed(self) -> list:
+        """Findings acknowledged in-tree with a justification."""
+        return [f for f in self.findings if f.reviewed]
+
+    @property
     def critical_count(self):
-        return sum(1 for f in self.findings if f.severity == "CRITICAL")
+        return sum(1 for f in self.live if f.severity == "CRITICAL")
 
     @property
     def high_count(self):
-        return sum(1 for f in self.findings if f.severity == "HIGH")
+        return sum(1 for f in self.live if f.severity == "HIGH")
 
     @property
     def medium_count(self):
-        return sum(1 for f in self.findings if f.severity == "MEDIUM")
+        return sum(1 for f in self.live if f.severity == "MEDIUM")
 
     @property
     def info_count(self):
-        return sum(1 for f in self.findings if f.severity == "INFO")
+        return sum(1 for f in self.live if f.severity == "INFO")
 
 
 def get_py_files(exclude: list[str] | None = None) -> list[Path]:
@@ -297,19 +349,36 @@ def check_security(files: list[Path], result: AuditResult):
                 )
 
         # Rule 10: SQL injection patterns (raw string formatting in queries)
+        #
+        # Severity is split by what the statement can DO. This is a line
+        # regex with no taint model, so it cannot tell a guarded query from
+        # an unguarded one -- but it can tell a read from a write. A SELECT
+        # is a disclosure risk; INSERT/UPDATE/DELETE/DROP are mutation. They
+        # were previously graded identically, which mattered because
+        # --strict exits on CRITICAL *or* HIGH, leaving severity as the only
+        # signal a reader gets. It also mis-grades SOQL, which is
+        # SELECT-only and has no DML at all.
         for i, line in enumerate(lines, 1):
-            if re.search(r'f["\'].*(?:SELECT|INSERT|UPDATE|DELETE|DROP)\s', line, re.IGNORECASE):
-                counter += 1
-                result.add(
-                    severity="CRITICAL",
-                    code=f"C-{counter:03d}",
-                    rule=10,
-                    group="security",
-                    message="f-string SQL query -- injection risk",
-                    file=str(rel),
-                    line=i,
-                    fix_hint="Use parameterized queries",
-                )
+            m = re.search(
+                r'f["\'].*(?P<kw>SELECT|INSERT|UPDATE|DELETE|DROP)\s', line, re.IGNORECASE
+            )
+            if not m:
+                continue
+            writes = m.group("kw").upper() != "SELECT"
+            severity = "CRITICAL" if writes else "HIGH"
+            prefix = "C" if writes else "H"
+            counter += 1
+            result.add(
+                severity=severity,
+                code=f"{prefix}-{counter:03d}",
+                rule=10,
+                group="security",
+                message="f-string SQL query -- injection risk",
+                file=str(rel),
+                line=i,
+                fix_hint="Use parameterized queries",
+                reviewed=reviewed_reason(lines, i - 1, 10),
+            )
 
 
 # ============================================================
@@ -720,6 +789,7 @@ def main():
                 "file": f.file,
                 "line": f.line,
                 "fix_hint": f.fix_hint,
+                "reviewed": f.reviewed,
             }
             for f in result.findings
         ]
@@ -727,7 +797,7 @@ def main():
     else:
         if not result.findings:
             print("No findings. All 27 rules pass.")
-        for f in sorted(result.findings, key=lambda x: x.severity):
+        for f in sorted(result.live, key=lambda x: x.severity):
             sev = f"{f.severity:8s}"
             print(f"{sev} [{f.code}] {f.message}")
             print(f"         {f.file}:{f.line}")
@@ -735,9 +805,20 @@ def main():
                 print(f"         Fix: {f.fix_hint}")
             print()
 
+        # Acknowledged findings are shown, not hidden. A reader must be able
+        # to see what was waived and on what grounds without reading source.
+        if result.reviewed:
+            print(f"Reviewed (acknowledged in-tree) -- {len(result.reviewed)}:")
+            for f in sorted(result.reviewed, key=lambda x: (x.file, x.line)):
+                print(f"         [{f.code}] {f.message}")
+                print(f"         {f.file}:{f.line}")
+                print(f"         Reason: {f.reviewed}")
+                print()
+
         print(
             f"Summary: {result.critical_count} CRITICAL, {result.high_count} HIGH, "
             f"{result.medium_count} MEDIUM, {result.info_count} INFO"
+            + (f", {len(result.reviewed)} REVIEWED" if result.reviewed else "")
         )
 
     if args.strict and (result.critical_count > 0 or result.high_count > 0):

@@ -195,6 +195,28 @@ discover / simulate / writeback / enrich-and-sync only, and
 **Also still open:** `consensus_engine.py` has no provider dispatch, so
 multi-variation consensus across providers remains unbuilt.
 
+### Salesforce REST paths interpolate unquoted identifiers
+- [ ] `app/services/crm/salesforce_client.py` — `:134`, `:202`, `:219`, `:242`, `:308`
+
+`query_records` validates all three SOQL slots, but the REST **URL path**
+builders interpolate `object_type`, `record_id` and `external_id_value`
+straight into the path with no `urllib.parse.quote()` and no identifier check:
+
+```python
+url = f"{self._instance_url}/services/data/{self._api_version}/sobjects/{object_type}"
+```
+
+This is path-shaped, not SOQL-shaped, so the SOQL allowlist does not cover it
+and audit rule 10 does not see it. Not exploitable today for the same reason
+the SOQL finding is not: `SalesforceClient` is never instantiated in `app/` —
+`writeback.py:48-54` hardcodes `OdooClient` and raises `ValueError` for every
+other `CRMType`. Left unfixed deliberately rather than widening a PR about
+SOQL literals into one about URL construction.
+
+Worth deciding alongside: the client is 324 lines at 39.31% coverage with
+**zero call-reachability**. Deleting it is a live option; fixing the paths is
+the alternative. Doing neither is the current state.
+
 ### Waterfall path does not unwrap the build_prompt envelope
 - [x] `enrichment/sources/perplexity_adapter.py`, `enrichment/waterfall_engine.py`
 
