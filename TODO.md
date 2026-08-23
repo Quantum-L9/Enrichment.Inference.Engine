@@ -107,7 +107,12 @@ source of truth for them.
 
 - [~] Gap-5 Audit Persistence — `app/services/audit_persistence.py` exists (40 stmts) but is **not imported anywhere**; 0% coverage
 - [ ] Gap-6 Community Export Hook — `graph/community_export.py`
-- [ ] Gap-9 v1 Bridge Guard — `shared/inference_bridge_v1_guard.py`
+- [x] Gap-9 v1 Bridge Guard — **moot.** `shared/inference_bridge_v1_guard.py`
+      never existed, and the thing it would have guarded against is gone:
+      `app/engines/inference_bridge.py` (v1) was deleted once
+      `inference_bridge_adapter.py`'s own migration steps 1–3 were verified
+      complete. A guard against importing a module that no longer exists is
+      not worth writing.
 
 ### Multi-Provider LLM Clients
 - [~] `app/services/openai_client.py` — file exists (152 lines) but is imported only by `anthropic_client.py`; 0% coverage
@@ -173,17 +178,26 @@ Findings from the post-#179 ratchet audit. The ratchet ledgers themselves
 (`.l9/baselines/test-quarantine.yml`, `.l9/baselines/packet-envelope.yml`) are
 both empty — this is debt the ratchet does **not** cover.
 
-- [ ] **Unreachable modules (686 statements, 0% coverage).** Nine modules are not
-      loaded when `app.main` is imported: `api/v1/intake.py`,
-      `engines/inference/nary_inference_engine.py`, `engines/inference_bridge.py`,
-      `engines/inference_unlock_scorer.py`, `services/anthropic_client.py`,
-      `services/audit_persistence.py`, `services/convergence_helpers.py`,
-      `services/openai_client.py`, `services/score/scorer.py`. Removing them would
-      raise coverage 69.37% → 75.07% with no tests written. **Seven of the nine are
-      declared** in `docs/contracts/`, tests, or both, so this needs an owner
-      decision (and likely an ADR) per module, not a bulk delete. Only
-      `nary_inference_engine.py` and `convergence_helpers.py` have zero references
-      anywhere.
+- [x] **Unreachable modules — triaged into three tiers, not one.** The original
+      count was 686 statements across nine modules at 0% coverage, none loaded
+      when `app.main` is imported. Per-module investigation showed they were three
+      different problems, so they got three treatments:
+
+      **Deleted (336 stmts, superseded — this PR):** `services/score/scorer.py`
+      (+ its 0-byte `__init__.py`; it also shadowed the live `ScoreDimension`
+      enum with an incompatible Pydantic model), `services/convergence_helpers.py`,
+      `api/v1/intake.py` (had no `APIRouter` — never mountable), and
+      `engines/inference_bridge.py` (the adapter's own documented step 4).
+      `engines/inference_unlock_scorer.py` went with them, superseded by
+      `engines/inference/rule_loader.py`, whose functions its claimed consumer
+      `meta_prompt_planner.py:210` already imports.
+
+      **To wire, not delete (202 stmts):** `services/openai_client.py`,
+      `services/anthropic_client.py` and `services/audit_persistence.py` — see the
+      Multi-Provider LLM Clients and Gap-5 items above. Declared architecture.
+
+      **Staged (148 stmts):** `engines/inference/nary_inference_engine.py` — see
+      the n-ary enablement plan below.
 - [ ] **Coverage is a floor, not a ratchet.** See the companion PR raising the
       threshold. Note `ci.yml` reads `vars.COVERAGE_THRESHOLD` first, so the repo
       variable must match the in-tree default to take effect.
