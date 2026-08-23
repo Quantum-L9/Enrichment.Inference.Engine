@@ -1,7 +1,9 @@
 # TODO — Enrichment.Inference.Engine
 
-**Last Updated:** 2026-04-07
-**Source:** Gap analysis of Core Gap Analysis-1.md, Core Gap Analysis-2.md
+**Last Updated:** 2026-08-23
+**Source:** Gap analysis of Core Gap Analysis-1.md, Core Gap Analysis-2.md (2026-04-07),
+reconciled against the tree on 2026-08-23. Every status below was verified by
+file existence, router mounting, or a coverage run — not carried forward on trust.
 
 ---
 
@@ -12,49 +14,55 @@
 - 🟡 **MEDIUM** — Enhances product value
 - 🟢 **LOW** — Polish and optimization
 
+Status markers: `[x]` shipped and exercised · `[~]` code exists but is not wired
+into any live path · `[ ]` not started.
+
 ---
 
 ## 🔴 CRITICAL — Blocks Production
 
 ### PostgreSQL Persistence Layer
-- [ ] `app/services/pg_store.py` — Database connection pool, CRUD operations
-- [ ] `app/services/pg_models.py` — SQLAlchemy/Pydantic models for persistence
-- [ ] `app/services/result_store.py` — Durable enrichment record storage
-- [ ] Database migrations (Alembic) for schema versioning
+- [x] `app/services/pg_store.py` — connection pool + CRUD (402 lines)
+- [x] `app/services/pg_models.py` — persistence models (227 lines, 100% covered)
+- [x] `app/services/result_store.py` — durable enrichment records (221 lines)
+- [x] Alembic migrations wired (`alembic/env.py`, `alembic/versions/`)
 
-**Why:** No durable storage exists — enrichment results, convergence state, field confidence history all need PostgreSQL + pgvector for embedding storage.
+**Remaining:** pgvector embedding storage is still not present. Coverage on
+`pg_store.py` is 21.5% — the layer exists but is thinly exercised.
 
 ### Event Emitter
-- [ ] `app/services/event_emitter.py` — Publish events when enrichment completes, scores change, tiers transition
-
-**Why:** Downstream services (SIGNAL, SCORE, ROUTE) need event notifications to react to enrichment completions.
+- [x] `app/services/event_emitter.py` — publishes enrichment lifecycle events (232 lines)
 
 ### Async Task Queue
 - [ ] `app/services/task_queue.py` — Celery/ARQ/Redis Streams for async processing
 
-**Why:** Batch enrichment runs synchronously. Production needs async processing for scale.
+**Why:** Batch enrichment still runs synchronously. This is the only item in
+this section that has not been started.
 
 ---
 
 ## 🟠 HIGH — Blocks Full Product
 
 ### Single chassis HTTP ingress (fix multi-path gates)
-- [ ] **Problem:** One FastAPI process exposes many first-class routes (`/api/v1/enrich`, `/api/v1/enrich/batch`, discover, scan, proposals, `/v1/converge/*`, fields, etc.) *and* chassis routes (`POST /v1/execute`, `POST /v1/outcomes`). That violates the L9 “single ingress” model (constellation traffic should normalize on `POST /v1/execute` + health, not parallel REST surfaces).
+- [ ] **Problem:** One FastAPI process exposes many first-class routes (`/api/v1/enrich`, `/api/v1/enrich/batch`, discover, scan, proposals, `/v1/converge/*`, fields, etc.) *and* chassis routes (`POST /v1/execute`, `POST /v1/outcomes`). That violates the L9 "single ingress" model (constellation traffic should normalize on `POST /v1/execute` + health, not parallel REST surfaces).
 - [ ] **Target:** Collapse external HTTP to chassis contract — e.g. `POST /v1/execute` (and documented health/readiness only); map CRM and internal flows through `TransportPacket` actions or a single adapter layer (deprecate direct `/api/v1/*` enrichment paths behind a migration window).
-- [ ] **Follow-through:** Regenerate/sync `docs/contracts/api/openapi.yaml`, `node.constitution.yaml`, and integration docs (Salesforce, Odoo, Clay); wire or relocate `app/score/score_api.py` (currently unmounted) under the same ingress story.
+- [x] **Follow-through (partial):** `app/score/score_api.py` is now mounted
+      (`app.include_router(score_router)` in `app/main.py`). Regenerating
+      `docs/contracts/api/openapi.yaml` and `node.constitution.yaml` for the
+      collapsed ingress remains open.
 
 ### Downstream Services (Constellation Nodes)
 
-| Service | Purpose | Files Needed |
-|---------|---------|--------------|
-| **SIGNAL** | Engagement/intent signal detection | `app/signal/` (5 files) |
-| **ROUTE** | Lead routing from scores + territory | `app/route/` (5 files) |
-| **FORECAST** | Pipeline forecasting from enriched data | `app/forecast/` (5 files) |
-| **HANDOFF** | Automated handoff orchestration | `app/handoff/` (4 files) |
+| Service | Purpose | Files Needed | Status |
+|---------|---------|--------------|--------|
+| **SIGNAL** | Engagement/intent signal detection | `app/signal/` (5 files) | not started |
+| **ROUTE** | Lead routing from scores + territory | `app/route/` (5 files) | not started |
+| **FORECAST** | Pipeline forecasting from enriched data | `app/forecast/` (5 files) | not started |
+| **HANDOFF** | Automated handoff orchestration | `app/handoff/` (4 files) | not started |
 
 ### GRAPH Engine Gaps
-- [ ] Outcome recording endpoint (`POST /v1/outcomes`) — feeds reinforcement scoring
-- [ ] CO-OCCURRED_WITH edge generation — collaborative filtering (35% of Amazon GMV)
+- [x] Outcome recording endpoint (`POST /v1/outcomes`) — live in `app/api/v1/chassis_endpoint.py`; `app/services/outcome_delegator.py` is 100% covered
+- [ ] CO-OCCURRED_WITH edge generation — collaborative filtering
 - [ ] Entity resolution pre-match hook — deduplication before matching
 - [ ] Graph→enrichment feedback channel — tell ENRICH which entities need work
 
@@ -64,37 +72,32 @@
 - [ ] Pre-match enrichment wiring — ambiguous intake → enriched queries
 - [ ] Outcome→enrichment delegation — rejection triggers re-enrichment
 
-### gap-fixes/ Integration (BLOCKED — Awaiting SDK Chassis)
-**Status:** Code complete in `gap-fixes/`, integration blocked until SDK chassis defines wiring patterns.
+### gap-fixes/ Integration
 
-| Gap | Component | File in gap-fixes/ | Integration Status |
-|-----|-----------|-------------------|-------------------|
-| Gap-1 | Contract Enforcement | `enrich/contract_enforcement.py` | ⏸️ BLOCKED |
-| Gap-2 | GRAPH→ENRICH Return Channel | `enrich/graph_return_channel.py` | ⏸️ BLOCKED |
-| Gap-3 | Inference Rule Registry | `enrich/inference_rule_registry.py` | ⏸️ BLOCKED |
-| Gap-4 | Schema Proposal Emission | `enrich/convergence_controller_patch.py` | ⏸️ BLOCKED |
-| Gap-5 | Audit Persistence | `shared/audit_persistence.py` | ⏸️ BLOCKED |
-| Gap-6 | Community Export Hook | `graph/community_export.py` | ⏸️ BLOCKED |
-| Gap-7 | Per-field Confidence | `enrich/convergence_controller_patch.py` | ⏸️ BLOCKED |
-| Gap-8 | Domain Spec Enforcement | `enrich/convergence_controller_patch.py` | ⏸️ BLOCKED |
-| Gap-9 | v1 Bridge Guard | `shared/inference_bridge_v1_guard.py` | ⏸️ BLOCKED |
-| Gap-10 | Packet Type Registry | `enrich/contract_enforcement.py` | ⏸️ BLOCKED |
+Several components previously tracked as BLOCKED in `gap-fixes/` now exist under
+`app/` and are covered by tests — `contract_enforcement.py` (100%),
+`graph_return_channel.py` (92.6%), `inference_rule_registry.py` (61.9%),
+`schema_proposer.py` (89.9%). Re-audit this table against `app/` before treating
+any row as outstanding; the `gap-fixes/` staging directory is no longer the
+source of truth for them.
 
-**Startup wiring recipe:** `gap-fixes/app/startup_wiring.py`
-**Tests:** `gap-fixes/tests/test_gap*.py` (4 test files)
-
-**Why blocked:** SDK chassis will dictate TransportPacket validation, handler registration, and startup lifecycle. Integrating now would require rework.
+- [~] Gap-5 Audit Persistence — `app/services/audit_persistence.py` exists (40 stmts) but is **not imported anywhere**; 0% coverage
+- [ ] Gap-6 Community Export Hook — `graph/community_export.py`
+- [ ] Gap-9 v1 Bridge Guard — `shared/inference_bridge_v1_guard.py`
 
 ### Multi-Provider LLM Clients
-- [ ] `app/services/openai_client.py` — OpenAI API client
-- [ ] `app/services/anthropic_client.py` — Anthropic API client
+- [~] `app/services/openai_client.py` — file exists (152 lines) but is imported only by `anthropic_client.py`; 0% coverage
+- [~] `app/services/anthropic_client.py` — file exists (154 lines), imported by nothing; 0% coverage
 
-**Why:** Multi-variation consensus requires multiple LLM providers to avoid single-provider bias.
+**Why still open:** both files exist, but neither is reachable from `app.main`,
+so multi-provider consensus is not actually available at runtime. Formal
+dependency contracts are declared for both in
+`docs/contracts/dependencies/{openai,anthropic}.yaml` and asserted by
+`tests/contracts/test_dependency_contracts.py`, so these are declared
+architecture awaiting wiring — not dead code to delete.
 
 ### Transport / chassis router
-- [ ] `app/engines/packet_router.py` — Dispatch envelopes to constellation nodes
-
-**Why:** `chassis_contract.py` builds envelopes but `delegate_to_node` creates packets without sending them.
+- [x] `app/engines/packet_router.py` — exists (206 lines, 73.1% covered)
 
 ---
 
@@ -102,30 +105,30 @@
 
 ### Infrastructure
 - [ ] Terraform IaC — `terraform/` directory for repeatable deployments
-- [ ] OpenTelemetry distributed tracing — cross-service observability
+- [x] OpenTelemetry distributed tracing — `app/core/telemetry.py` (TracerProvider + OTLP exporter, 100% covered)
 - [ ] Multi-tenant database isolation — PostgreSQL RLS enforcement
 
-### API Endpoints (Missing Routes)
-- [ ] `POST /api/v1/discover` — Trigger schema discovery independently
-- [ ] `POST /api/v1/infer` — Run inference rules independently
-- [ ] `GET /api/v1/profile/{domain}` — Get/set enrichment profiles per domain
-- [ ] `GET /api/v1/convergence/{run_id}` — Get convergence run status/history
-- [ ] `GET /api/v1/fields/{entity_id}` — Get field-level confidence + provenance
+### API Endpoints
+- [x] `POST /api/v1/discover` — `app/api/v1/discover.py`, router mounted
+- [x] `GET /api/v1/fields/{entity_id}` — `app/api/v1/fields.py`, router mounted
+- [x] `GET /v1/converge/{run_id}` — `app/api/v1/converge.py:294`
+- [ ] `POST /api/v1/infer` — run inference rules independently
+- [ ] `GET /api/v1/profile/{domain}` — get/set enrichment profiles per domain
 
 ### Testing
-- [ ] Integration tests with real Neo4j (testcontainers)
+- [~] Integration tests with real Neo4j — `Neo4jContainer` fixture exists in `tests/integration/conftest.py` but skips when `testcontainers` is absent, which is the case in CI
 - [ ] Contract tests (ENRICH ↔ GRAPH bidirectional validation)
 - [ ] Load/stress tests — performance baselines
 
 ### Field Provenance
-- [ ] `app/models/provenance.py` — Track which pass/LLM/KB rule produced each field
+- [ ] `app/models/provenance.py` — track which pass/LLM/KB rule produced each field
 
 ---
 
 ## 🟢 LOW — Polish
 
 ### Convergence Loop
-- [ ] Human-in-the-loop approval gate for schema changes (Discover tier)
+- [ ] Human-in-the-loop approval gate for schema changes (Discover tier) — note `POST /v1/converge/{run_id}/approve` exists as a route
 - [ ] Domain KB hot-reload — add domains without restart
 
 ### Domain KB Expansion
@@ -140,6 +143,37 @@
 
 ---
 
+## 🔧 Engineering Debt (audit 2026-08-23)
+
+Findings from the post-#179 ratchet audit. The ratchet ledgers themselves
+(`.l9/baselines/test-quarantine.yml`, `.l9/baselines/packet-envelope.yml`) are
+both empty — this is debt the ratchet does **not** cover.
+
+- [ ] **Unreachable modules (686 statements, 0% coverage).** Nine modules are not
+      loaded when `app.main` is imported: `api/v1/intake.py`,
+      `engines/inference/nary_inference_engine.py`, `engines/inference_bridge.py`,
+      `engines/inference_unlock_scorer.py`, `services/anthropic_client.py`,
+      `services/audit_persistence.py`, `services/convergence_helpers.py`,
+      `services/openai_client.py`, `services/score/scorer.py`. Removing them would
+      raise coverage 69.37% → 75.07% with no tests written. **Seven of the nine are
+      declared** in `docs/contracts/`, tests, or both, so this needs an owner
+      decision (and likely an ADR) per module, not a bulk delete. Only
+      `nary_inference_engine.py` and `convergence_helpers.py` have zero references
+      anywhere.
+- [ ] **Coverage is a floor, not a ratchet.** See the companion PR raising the
+      threshold. Note `ci.yml` reads `vars.COVERAGE_THRESHOLD` first, so the repo
+      variable must match the in-tree default to take effect.
+- [ ] **Four xfail contract TODOs are invisible to the ratchet.**
+      `tests/contracts/test_contract_todos_gaps.py` uses imperative
+      `pytest.xfail()` (strict=False by design), so TODO-01, TODO-04, TODO-05 and
+      TODO-10 report as passes. Nothing prevents more being added. TODO-10 is
+      nearly closed — `/v1/converge/{run_id}` is missing only `state` and
+      `pass_count`.
+- [ ] **66 defensive `pytest.skip()` guards.** None fire today, but if a contract
+      file were deleted ~20 contract tests would skip rather than fail.
+
+---
+
 ## ✅ COMPLETED (Recent)
 
 ### GMP-ENRICH-001 — Consensus-Mode Enrichment (2026-03-30)
@@ -149,15 +183,20 @@
 - [x] `build_variation_prompts()` in `prompt_builder.py`
 - [x] `enrich_with_consensus()` in `waterfall_engine.py`
 - [x] `handle_enrich_consensus` handler in `handlers.py`
-- [x] Unit tests for consensus, uncertainty, kb_resolver (50 passing)
-- [x] Integration tests for consensus enrichment (8 passing)
+- [x] Unit tests for consensus, uncertainty, kb_resolver
+- [x] Integration tests for consensus enrichment
 - [x] `plastics_kb.yaml` test fixture
 - [x] Enrichment package README documentation
+
+### Test debt burndown (#139 / PR #179, 2026-08-23)
+- [x] All 112 quarantined nodeids adapted to live APIs; `.l9/baselines/test-quarantine.yml` emptied
+- [x] Cross-file `sys.modules` pollution in `tests/integration/test_consensus_enrichment.py` fixed
+- [x] Suite green at 1451 passed / 4 xfailed, 69.37% coverage
 
 ### Previously Completed
 - [x] HEALTH service — 5 files in `app/health/`
 - [x] SCORE service — 6 files in `app/score/`
-- [x] CI/CD pipelines — 13 workflow files
+- [x] CI/CD pipelines — 22 workflow files
 - [x] CRM field scanner — `crm_field_scanner.py`
 - [x] Enrichment profiles — `enrichment_profile.py`
 - [x] Cost tracking — `cost_tracker.py`
@@ -169,15 +208,9 @@
 
 ## Files to Delete (Obsolete)
 
-These files are superseded by the GMP-ENRICH-001 merge:
+Six of the seven originally listed have already been removed. Remaining:
 
-- [ ] `Enrichment-Deployment-pack/` — Features merged into WaterfallEngine
-- [ ] `plastics_enrichment_client.py` — Standalone reference, superseded
-- [ ] `Clean-CRM-Data-Readiness-Checklist.md` — Business process doc, not code
-- [ ] `Clean-CRM-for-AI-Business-Case.md` — Executive doc, not code
-- [ ] `Core Gap Analysis-1.md` — Analysis complete, tracked in this TODO
-- [ ] `Core Gap Analysis-2.md` — Analysis complete, tracked in this TODO
-- [ ] `File Build Plan.md` — All 12 files now exist
+- [ ] `plastics_enrichment_client.py` — standalone reference client at repo root, superseded by `WaterfallEngine`
 
 ---
 
