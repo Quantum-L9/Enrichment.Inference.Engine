@@ -12,9 +12,8 @@ import asyncio
 import os
 from logging.config import fileConfig
 
-from sqlalchemy.ext.asyncio import create_async_engine
-
 from alembic import context
+from sqlalchemy.ext.asyncio import create_async_engine
 
 os.environ.setdefault("PERPLEXITY_API_KEY", "alembic-placeholder")
 os.environ.setdefault("API_SECRET_KEY", "alembic-placeholder")
