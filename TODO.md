@@ -25,10 +25,18 @@ into any live path · `[ ]` not started.
 - [x] `app/services/pg_store.py` — connection pool + CRUD (402 lines)
 - [x] `app/services/pg_models.py` — persistence models (227 lines, 100% covered)
 - [x] `app/services/result_store.py` — durable enrichment records (221 lines)
-- [x] Alembic migrations wired (`alembic/env.py`, `alembic/versions/`)
+- [~] Alembic migrations — **two competing trees; revision `0002` is orphaned**
 
 **Remaining:** pgvector embedding storage is still not present. Coverage on
 `pg_store.py` is 21.5% — the layer exists but is thinly exercised.
+
+**Alembic defect:** `alembic.ini` sets `script_location = migrations`, so the
+live chain is `migrations/env.py` + `migrations/versions/001_initial_schema.py`.
+A second tree exists at `alembic/versions/0002_perplexity_api_key_default.py`
+with no `alembic/env.py` beside it, so `alembic upgrade head` never discovers
+it and the `0002` schema change is **not applied**. Either rebase `0002` into
+`migrations/versions/` as a child of `001`, or delete it and document the
+single wired tree. Until then this is not shipped.
 
 ### Event Emitter
 - [x] `app/services/event_emitter.py` — publishes enrichment lifecycle events (232 lines)
@@ -46,10 +54,15 @@ this section that has not been started.
 ### Single chassis HTTP ingress (fix multi-path gates)
 - [ ] **Problem:** One FastAPI process exposes many first-class routes (`/api/v1/enrich`, `/api/v1/enrich/batch`, discover, scan, proposals, `/v1/converge/*`, fields, etc.) *and* chassis routes (`POST /v1/execute`, `POST /v1/outcomes`). That violates the L9 "single ingress" model (constellation traffic should normalize on `POST /v1/execute` + health, not parallel REST surfaces).
 - [ ] **Target:** Collapse external HTTP to chassis contract — e.g. `POST /v1/execute` (and documented health/readiness only); map CRM and internal flows through `TransportPacket` actions or a single adapter layer (deprecate direct `/api/v1/*` enrichment paths behind a migration window).
-- [x] **Follow-through (partial):** `app/score/score_api.py` is now mounted
-      (`app.include_router(score_router)` in `app/main.py`). Regenerating
-      `docs/contracts/api/openapi.yaml` and `node.constitution.yaml` for the
-      collapsed ingress remains open.
+- [~] **Follow-through:** `app/score/score_api.py` is mounted
+      (`app.include_router(score_router)` in `app/main.py`), but mounting is
+      not wiring. All five providers in that module — `get_score_engine`,
+      `get_decay_engine`, `get_explainer`, `get_profile_store`,
+      `get_score_store` — unconditionally `raise DependencyNotConfiguredError`,
+      and nothing sets `dependency_overrides` or configures them at startup, so
+      every `/score/*` request fails at dependency resolution. Configuring
+      those providers, and regenerating `docs/contracts/api/openapi.yaml` and
+      `node.constitution.yaml` for the collapsed ingress, both remain open.
 
 ### Downstream Services (Constellation Nodes)
 
