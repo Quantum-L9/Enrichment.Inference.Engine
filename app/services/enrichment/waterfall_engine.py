@@ -341,6 +341,7 @@ class WaterfallEngine:
         """
         import time
 
+        from ...prompt_builder import unwrap_envelope
         from ..perplexity_client import query_perplexity
         from ..prompt_builder import build_variation_prompts
 
@@ -386,7 +387,11 @@ class WaterfallEngine:
                         breaker=breaker,
                         timeout=timeout,
                     )
-                    return resp.data
+                    # Each variation is a build_prompt completion, so strip
+                    # the {"confidence", "fields"} envelope before it reaches
+                    # consensus; otherwise every variation agrees on the two
+                    # wrapper keys and on nothing else.
+                    return unwrap_envelope(resp.data)
                 except Exception as exc:
                     logger.warning(
                         "consensus_variation_failed",
