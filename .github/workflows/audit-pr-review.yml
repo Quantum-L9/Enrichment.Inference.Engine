@@ -225,16 +225,32 @@ jobs:
               dangerous = is_dangerous_category(finding)
               advisory_category = is_advisory_category(finding)
               unknown_high_critical = rule == 'unknown_rule' and severity in {'CRITICAL', 'HIGH'}
+              # An in-tree `# l9-audit-reviewed: rule<N> -- <reason>` marker
+              # carries a justification the scanner cannot derive: audit_engine
+              # rules are line regexes with no taint model, so they cannot see
+              # that a query is SOQL, that its inputs are validated, or that the
+              # module is unreachable. The reason is mandatory and
+              # length-checked by audit_engine, and the marker only resolves
+              # when its rule number matches the finding's, so it cannot be
+              # used as a blanket silencer.
+              #
+              # It downgrades a CLASSIFIED finding to advisory. It can never
+              # satisfy the unknown-rule branch below, which stays first
+              # precisely so acknowledging something the tool could not
+              # classify cannot defeat the fail-closed backstop.
+              reviewed = normalize_text(finding.get('reviewed') or '')
               blocking_reason = ''
 
-              if touched and dangerous:
+              if unknown_high_critical:
+                  blocking_reason = 'unknown_high_or_critical_fail_closed'
+              elif reviewed:
+                  blocking_reason = ''
+              elif touched and dangerous:
                   blocking_reason = 'touched_dangerous_finding'
               elif not inherited and dangerous:
                   blocking_reason = 'new_dangerous_finding'
               elif not inherited and severity in {'CRITICAL', 'HIGH'} and not advisory_category:
                   blocking_reason = 'new_high_or_critical'
-              elif unknown_high_critical:
-                  blocking_reason = 'unknown_high_or_critical_fail_closed'
 
               finding['_l9_rule'] = rule
               finding['_l9_key'] = key
@@ -242,6 +258,7 @@ jobs:
               finding['_l9_inherited'] = inherited
               finding['_l9_dangerous'] = dangerous
               finding['_l9_advisory_category'] = advisory_category
+              finding['_l9_reviewed'] = reviewed
               finding['_l9_blocking'] = bool(blocking_reason)
               finding['_l9_blocking_reason'] = blocking_reason
               enriched.append(finding)
@@ -255,6 +272,7 @@ jobs:
               'finding_count': len(enriched),
               'blocking_finding_count': len(blocking),
               'advisory_finding_count': len(advisory),
+              'reviewed_finding_count': sum(1 for f in enriched if f['_l9_reviewed']),
               'blocking_findings': blocking,
               'advisory_findings': advisory,
               'policy': {
@@ -271,6 +289,8 @@ jobs:
               handle.write(f"finding_count={len(enriched)}\n")
               handle.write(f"blocking_finding_count={len(blocking)}\n")
               handle.write(f"advisory_finding_count={len(advisory)}\n")
+              reviewed_n = sum(1 for f in enriched if f['_l9_reviewed'])
+              handle.write(f"reviewed_finding_count={reviewed_n}\n")
               handle.write(f"should_block={'true' if blocking else 'false'}\n")
           PY
 
