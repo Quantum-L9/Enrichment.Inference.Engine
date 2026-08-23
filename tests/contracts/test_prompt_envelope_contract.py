@@ -1,16 +1,23 @@
-"""The build_prompt response envelope must be stripped by every consumer.
+"""
+Prompt Response Envelope Contract
+Source: app/services/prompt_builder.py — the system prompt's declared reply shape.
+Markers: unit
 
-`prompt_builder.build_prompt` instructs the model to answer with
-`{"confidence": <float>, "fields": {...}}`. A consumer that treats that
-object as field values merges the two wrapper keys instead of the requested
-data, and — worse — any completeness-style quality score counts both wrapper
+`build_prompt` instructs the model to answer with
+`{"confidence": <float>, "fields": {...}}`. That envelope is a contract between
+the builder and every consumer of a completion built from it: a consumer that
+treats the envelope as field values merges the two wrapper keys instead of the
+requested data, and any completeness-style quality score counts both wrapper
 keys as populated and reports a perfect result over an empty payload.
 
-Two consumers already handled this before these tests existed:
-`validation_engine.validate_response` and `simulation_bridge`. Both are on
-live request paths, and both are asserted here so a refactor cannot quietly
-drop the behaviour. The two that did NOT handle it — `perplexity_adapter` and
-the `waterfall_engine` consensus path — are fixed alongside these tests.
+Four consumers exist. Two stripped the envelope before this file existed —
+`validation_engine.validate_response` and `simulation_bridge`, both on live
+request paths — and both are asserted here so a refactor cannot quietly drop
+the behaviour. The two that did not, `perplexity_adapter` and the
+`waterfall_engine` consensus path, are fixed alongside these tests.
+
+This lives under tests/contracts/ because the envelope is a declared response
+contract, not an implementation detail of any one adapter.
 """
 
 from __future__ import annotations
