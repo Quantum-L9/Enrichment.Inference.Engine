@@ -9,7 +9,6 @@ Proves GAP-3 and GAP-4:
 
 from __future__ import annotations
 
-import hashlib
 import os
 from unittest.mock import patch
 
@@ -18,15 +17,14 @@ import pytest
 from app.core.config import get_settings
 
 _TEST_API_KEY = "pass"
-# Not a credential hash: this mirrors app/core/auth.py's SHA-256 digest so the
-# fixture key authenticates against a throwaway in-process app. The input is a
-# hard-coded test literal, never a real secret, so usedforsecurity=False marks
-# the call as non-security (CWE-327/328, py/weak-sensitive-data-hashing) —
-# same treatment as app/engines/convergence_controller.py::_cache_key. The
-# digest itself is byte-identical, so hmac.compare_digest still matches.
-os.environ["API_KEY_HASH"] = hashlib.sha256(
-    _TEST_API_KEY.encode(), usedforsecurity=False
-).hexdigest()
+# Precomputed sha256(_TEST_API_KEY) — the same literal digest already used by
+# tests/test_api.py, tests/test_rate_limiter.py and tests/services/
+# test_gate_registration.py. Stored rather than computed so no hashing call
+# exists here at all: hashing a fixture key inline is what CodeQL flags as
+# py/weak-sensitive-data-hashing (SHA-256 is not a computationally expensive
+# password hash), and usedforsecurity=False does not suppress that query.
+# app/core/auth.py still does the real comparison via hmac.compare_digest.
+os.environ["API_KEY_HASH"] = "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1"
 get_settings.cache_clear()
 AUTH = {"X-API-Key": _TEST_API_KEY}
 
