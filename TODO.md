@@ -149,21 +149,48 @@ Registration makes the adapters *resolvable*; it does not make them
 *reachable*. Setting `OPENAI_API_KEY` today still cannot cause an enrichment
 request to construct or call one. Verified:
 
-- `WaterfallEngine(` is constructed in 10 places, **all under `tests/`**
+- `WaterfallEngine(` is constructed in 12 places, **all under `tests/`**
 - `auto_register_sources` has no caller outside `tests/`
 - `config/enrichment_sources.yaml` lists clearbit, zoominfo, apollo, hunter,
   linkedin, perplexity_sonar — neither new provider
 - all three `config/waterfall_config.yaml` tiers name `perplexity_sonar` only
 - `app.main` invokes `enrichment_orchestrator` directly
 
-**To close this item** someone must activate the waterfall path: construct a
-`WaterfallEngine` at startup, call `auto_register_sources`, add both providers
-to `enrichment_sources.yaml` and to the `waterfall_config.yaml` tiers with
-priorities and quality thresholds, and decide how it composes with
-`enrichment_orchestrator`. That changes enrichment behaviour for every
-request, including the live Perplexity one, so it needs its own PR and review.
-Do it AFTER the Perplexity envelope defect below, or activation puts a source
-that can score 1.0 on zero merged fields into the live path.
+**To close this item** the waterfall path must be activated. That is a project,
+not a wiring task. A full audit found **twelve** blockers, several of which mean
+the path does not merely sit unused — it does not currently work at all:
+
+| # | Blocker | Evidence |
+|---|---|---|
+| 1 | `auto_register_sources()` **crashes on its own default path**. `config/provider_config.yaml` is a YAML *list*; the code does `cfg.get("providers", {}).items()` | `provider_config.yaml:1-18` vs `waterfall_engine.py:118-119` |
+| 2 | Same file uses `provider:` and `api_url:`; the loader wants a dict key and `base_url:` | `provider_config.yaml:2,4` vs `waterfall_engine.py:137` |
+| 3 | **No env var reaches a `SourceConfig`.** `CLEARBIT/ZOOMINFO/APOLLO/HUNTER/OPENAI/ANTHROPIC_API_KEY` are declared and read by nothing; adapters read `self.config.api_key`, populated only from YAML | `core/config.py:56-62` |
+| 4 | `enrichment_sources.yaml` has **no reader anywhere**. The `sources_config_path` parameter actually wants `waterfall_config.yaml` | `waterfall_engine.py:71,98-99` |
+| 5 | `gong_ai`, `linkedin`, `clay` are not in `SOURCE_REGISTRY`, so the `opportunity` tier degrades to perplexity-only | `sources/__init__.py:28-36`, `waterfall_config.yaml:80` |
+| 6 | `openai`/`anthropic` appear in **no** config file, so they cannot be registered even after #188 | both YAMLs |
+| 7 | `EnrichRequest.object_type` (`"Account"`, `"res.partner"`) never matches waterfall domain keys (`company`/`contact`/`opportunity`) — a mapping layer is required | `models/schemas.py:41-44` vs `waterfall_config.yaml:4,40,76` |
+| 8 | `quality_thresholds.yaml` nests `required_fields` under `per_domain_thresholds`, but the reader expects it top-level — so `required_fields` and `validation_rules` are **silently inert** and accuracy always returns the neutral 0.7 | `quality_thresholds.yaml:17-67` vs `quality_scorer.py:71-73,145-147` |
+| 9 | Clearbit would build `.../v2/v2/companies/find` if fed `enrichment_sources.yaml` | `clearbit.py:69` vs `enrichment_sources.yaml:4` |
+| 10 | No feature flag, no construction site, and **no `handle_enrich_consensus`** — despite four documents describing it as shipped | `config.py`, `main.py:58-126`, `handlers.py:418` |
+| 11 | Per-source `priority`, `timeout`, `retry`, `cost`, `quality_threshold` and the `fields` allowlist in `waterfall_config.yaml` are **all inert** — only `name` is ever read | `waterfall_engine.py:279` |
+| 12 | `fallback_behavior.on_quality_below_threshold` is compared against `"use_inference_bridge"` but ships as `retry_with_next_source`, so the branch is dead — and if it did match it only emits a log line | `waterfall_engine.py:258` vs `waterfall_config.yaml:98` |
+
+Three config files describe enrichment sources in three mutually incompatible
+shapes, and two of them have zero readers. Reconciling them onto one schema is
+the first real task; the tests in `tests/test_waterfall_autoregister.py:18-39`
+are the closest thing to a spec for the shape the loader expects.
+
+Blockers 1-4 and 7 must be fixed before activation is even testable. Activation
+itself changes enrichment behaviour for every request, including the live
+Perplexity one, so it needs its own PR and review.
+
+**Docs to correct alongside:** `app/services/enrichment/README.md:261`,
+`TODO.md:338`, `workflow_state.md:47,89` and
+`reports/GMP-Report-ENRICH-001-*.md:110-129` all describe a
+`handle_enrich_consensus` handler. It does not exist — `handlers.py:418` and
+`orchestration_layer.py:40-46` register enrich / enrichbatch / converge /
+discover / simulate / writeback / enrich-and-sync only, and
+`NodeRuntimeConfig.allowed_actions` (`main.py:153-164`) has no consensus action.
 
 **Also still open:** `consensus_engine.py` has no provider dispatch, so
 multi-variation consensus across providers remains unbuilt.

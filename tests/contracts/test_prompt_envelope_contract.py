@@ -149,6 +149,20 @@ class TestWaterfallConsensusUnwraps:
     async def test_variations_are_unwrapped_before_consensus(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Every variation must be unwrapped before it reaches consensus.
+
+        A `perplexity_api_key` is REQUIRED here and is not incidental setup.
+        `enrich_with_consensus` looks up `source_clients["perplexity_sonar"]`
+        and, when it is absent, returns early with
+        `flags=["error:no_perplexity_source"]` and `fields={}` before any
+        variation runs. An engine built with no key therefore satisfies every
+        "wrapper key is absent" assertion vacuously, against an empty dict.
+        The positive assertion below is what forces the path to actually run.
+
+        Only the `app.services.perplexity_client` attribute is patched: the
+        import inside `enrich_with_consensus` is function-local, so patching
+        the `waterfall_engine` module attribute would bind nothing.
+        """
         from app.services.enrichment import waterfall_engine as we
 
         async def _fake_query(**_kwargs: object) -> _FakeSonarResponse:
@@ -156,12 +170,11 @@ class TestWaterfallConsensusUnwraps:
                 {"confidence": 0.9, "fields": {"company_industry": "Plastics Recycling"}}
             )
 
-        monkeypatch.setattr(we, "query_perplexity", _fake_query, raising=False)
         monkeypatch.setattr(
             "app.services.perplexity_client.query_perplexity", _fake_query, raising=False
         )
 
-        engine = we.WaterfallEngine()
+        engine = we.WaterfallEngine(perplexity_api_key="pk-test")
         result = await engine.enrich_with_consensus(
             domain="company",
             input_payload={"entity_name": "Acme", "company_domain": "acme.test"},
@@ -169,7 +182,12 @@ class TestWaterfallConsensusUnwraps:
             max_concurrent=2,
         )
 
-        # The wrapper keys must never appear as enriched fields.
+        # Positive: the consensus path ran and merged the real field.
+        assert "error:no_perplexity_source" not in result.flags
+        assert result.variations_valid >= 1
+        assert result.fields.get("company_industry") == "Plastics Recycling"
+
+        # Negative: the wrapper keys never appear as enriched fields.
         assert "fields" not in result.fields
         assert "confidence" not in result.fields
 
