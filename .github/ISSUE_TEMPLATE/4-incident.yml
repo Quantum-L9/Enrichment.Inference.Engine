@@ -1,0 +1,90 @@
+name: 🚨 Incident
+description: Production is degraded or down. File first, investigate second.
+title: "incident: "
+labels: ["type:incident", "sev:untriaged", "priority:P0"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Page first, file second.** If customers are affected and nobody is paged,
+        stop and page on-call. This issue is the written record, not the alarm.
+        If this is a security compromise, use a private advisory instead — not this form.
+
+  - type: input
+    id: started
+    attributes:
+      label: Detected at (UTC)
+      placeholder: "2026-07-28T15:04:00Z"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Customer-visible symptom. What is broken, for whom, since when?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - S1 — full outage, data loss, or security exposure
+        - S2 — major degradation, no workaround
+        - S3 — partial degradation, workaround in place
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Signal
+      description: Alert name, dashboard link, error rate, sample traceback.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Blast radius
+      description: Services, regions, tenants, and estimated request or user count.
+    validations:
+      required: true
+
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: Mitigation in progress
+      description: What is being done right now. Update this field as it evolves.
+    validations:
+      required: true
+
+  - type: input
+    id: suspect
+    attributes:
+      label: Suspected trigger
+      description: Deploy, PR, config change, or upstream provider. Link it.
+      placeholder: "#1184, deployed 14:52Z"
+
+  - type: input
+    id: commander
+    attributes:
+      label: Incident commander
+      placeholder: "@handle"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: gates
+    attributes:
+      label: Response checklist
+      options:
+        - label: On-call paged.
+          required: true
+        - label: Status page or stakeholder comms updated, or explicitly not needed.
+        - label: Timeline is being kept in the comments below.
+        - label: Postmortem issue will be opened within 48h of resolution.

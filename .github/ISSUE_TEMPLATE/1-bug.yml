@@ -1,0 +1,66 @@
+name: 🐛 Bug
+description: Something behaves incorrectly and you can show it.
+title: "bug: "
+labels: ["type:bug", "needs:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        CI pipeline failures go to
+        [l9-ci-debt-resolver](https://github.com/Quantum-L9/l9-ci-debt-resolver/issues/new)
+        instead — that component owns failure diagnosis.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: The symptom you observed, in one or two sentences. Not your theory.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Error output
+      description: Traceback, failing assertion, or log line. Redact secrets.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Steps from a clean checkout. Best effort is fine.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Release tag or SHA if you have it.
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: Routes triage. Advisory only — nothing is blocked by this.
+      options:
+        - S4 — cosmetic
+        - S3 — degraded, workaround exists
+        - S2 — major function broken, no workaround
+        - S1 — production down, data loss, or security exposure
+    validations:
+      required: true
+
+  - type: input
+    id: regression
+    attributes:
+      label: Last known good version
+      description: If set, implies a bisect range. Leave blank if unknown.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Suspected cause, related issues, workaround in use.

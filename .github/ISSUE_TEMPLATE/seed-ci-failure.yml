@@ -1,0 +1,57 @@
+name: Seed / auto-seed CI failure
+description: A red governance seed or auto-seed PR — ticket, not a chat
+title: "[Seed CI]: "
+labels: ["ci-failure", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when an org seed / auto-seed PR is red (Biome, labels, Semgrep
+        install, lockfile cache, required-check collision). For a code bug that
+        happens to fail tests, use Bug Report. For a kernel failure on a
+        feature PR, use CI Pipeline Failure.
+
+  - type: input
+    id: repository
+    attributes:
+      label: Repository
+      description: owner/name of the consumer that received the seed
+      placeholder: Quantum-L9/example-repo
+    validations:
+      required: true
+
+  - type: input
+    id: sha
+    attributes:
+      label: SHA
+      description: Commit SHA of the failing seed head
+      placeholder: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    validations:
+      required: true
+
+  - type: input
+    id: check_url
+    attributes:
+      label: Failing check URL
+      description: Full Actions run or check-run URL
+      placeholder: "https://github.com/Quantum-L9/example-repo/actions/runs/XXXXXXXXX"
+    validations:
+      required: true
+
+  - type: input
+    id: check_name
+    attributes:
+      label: Failing check name
+      placeholder: "L9 Analysis / Biome (format + lint) — SDK-owned / Node Test Suite"
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Error Output
+      description: Paste the relevant error section from the failed step.
+      render: shell
+    validations:
+      required: true
