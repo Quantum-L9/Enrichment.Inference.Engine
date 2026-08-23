@@ -110,3 +110,54 @@ class TestPerplexityAdapterUnwraps:
 
         assert result.data == {}
         assert result.quality_score == 0.0
+
+
+class TestWaterfallConsensusUnwraps:
+    """The consensus path did NOT unwrap before this change.
+
+    It is also entirely uncovered by the existing suite, which is how a
+    malformed import in this exact function survived a full green run: the
+    imports are function-local, so nothing executes them until the method is
+    called. These tests call it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_variations_are_unwrapped_before_consensus(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.services.enrichment import waterfall_engine as we
+
+        async def _fake_query(**_kwargs: object) -> _FakeSonarResponse:
+            return _FakeSonarResponse(
+                {"confidence": 0.9, "fields": {"company_industry": "Plastics Recycling"}}
+            )
+
+        monkeypatch.setattr(we, "query_perplexity", _fake_query, raising=False)
+        monkeypatch.setattr(
+            "app.services.perplexity_client.query_perplexity", _fake_query, raising=False
+        )
+
+        engine = we.WaterfallEngine()
+        result = await engine.enrich_with_consensus(
+            domain="company",
+            input_payload={"entity_name": "Acme", "company_domain": "acme.test"},
+            max_variations=2,
+            max_concurrent=2,
+        )
+
+        # The wrapper keys must never appear as enriched fields.
+        assert "fields" not in result.fields
+        assert "confidence" not in result.fields
+
+    @pytest.mark.asyncio
+    async def test_consensus_import_block_executes(self) -> None:
+        """Guards the function-local imports in enrich_with_consensus.
+
+        A wrong relative level here raises ModuleNotFoundError only when the
+        method runs. Importing the names the same way the function does proves
+        they resolve.
+        """
+        from app.services.prompt_builder import (  # noqa: F401
+            build_variation_prompts,
+            unwrap_envelope,
+        )

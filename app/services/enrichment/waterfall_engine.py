@@ -341,9 +341,8 @@ class WaterfallEngine:
         """
         import time
 
-        from ...prompt_builder import unwrap_envelope
         from ..perplexity_client import query_perplexity
-        from ..prompt_builder import build_variation_prompts
+        from ..prompt_builder import build_variation_prompts, unwrap_envelope
 
         t0 = time.monotonic()
 
