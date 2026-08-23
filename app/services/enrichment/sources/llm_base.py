@@ -22,7 +22,7 @@ from typing import Any, ClassVar
 
 import structlog
 
-from ...prompt_builder import build_prompt
+from ...prompt_builder import build_prompt, unwrap_envelope
 from .base import BaseSource, EnrichmentResult, SourceConfig
 
 logger = structlog.get_logger("llm_source")
@@ -58,27 +58,9 @@ def score_completeness(data: dict[str, Any]) -> float:
     return round(min(non_empty / total, 1.0), 3)
 
 
-def unwrap_fields(raw: dict[str, Any]) -> dict[str, Any]:
-    """Return the enrichment fields from a prompted provider response.
-
-    ``build_prompt`` instructs the model to answer with an envelope:
-    ``{"confidence": 0.82, "fields": {...}}``. Returning that envelope
-    verbatim would have two bad consequences. The waterfall would merge the
-    literal keys ``confidence`` and ``fields`` instead of the requested
-    values, and :func:`score_completeness` would see two populated keys and
-    report a perfect 1.0 while zero real fields were merged — a score high
-    enough to stop the waterfall from trying any further source.
-
-    The provider's self-reported ``confidence`` is deliberately NOT used as
-    the quality score. Quality here means "how much did we actually get",
-    measured the same way for every source; a model asserting 0.99 about an
-    empty payload must not outrank a source that returned real data.
-
-    A response without a dict ``fields`` key is passed through unchanged, so
-    a provider that answers with a flat object still works.
-    """
-    fields = raw.get("fields")
-    return fields if isinstance(fields, dict) else raw
+#: Re-exported so the adapters keep a single import site. The canonical
+#: definition lives with the prompt that creates the envelope.
+unwrap_fields = unwrap_envelope
 
 
 class LLMSource(BaseSource):

@@ -139,6 +139,32 @@ def build_prompt(
     }
 
 
+def unwrap_envelope(raw: dict[str, Any]) -> dict[str, Any]:
+    """Return the enrichment fields from a response built against this prompt.
+
+    The system prompt above instructs the model to answer with an envelope,
+    ``{"confidence": <float>, "fields": {...}}``. Anything that consumes a
+    completion produced by :func:`build_prompt` has to strip that envelope
+    before treating the payload as field values.
+
+    Skipping it has two consequences, and the second is the dangerous one:
+    the caller merges the literal keys ``confidence`` and ``fields`` instead
+    of the requested values, and any completeness-style quality score sees two
+    populated keys and reports a perfect result over zero real fields.
+
+    A response with no dict ``fields`` key is returned unchanged, so a model
+    that answers with a flat object still works.
+
+    This lives beside ``build_prompt`` deliberately: the module that defines
+    the envelope owns reading it, so a new consumer does not have to
+    rediscover the shape. ``validation_engine.validate_response`` and
+    ``simulation_bridge`` predate this helper and each implement the same
+    unwrap inline.
+    """
+    fields = raw.get("fields")
+    return fields if isinstance(fields, dict) else raw
+
+
 def build_schema_hash(target_schema: dict[str, str] | None) -> str:
     """Deterministic hash of the target schema for caching/dedup."""
     schema_str = json.dumps(sorted((target_schema or {}).items()), sort_keys=True)

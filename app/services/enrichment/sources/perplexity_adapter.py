@@ -19,7 +19,7 @@ from typing import Any
 import structlog
 
 from ...perplexity_client import SonarResponse, query_perplexity
-from ...prompt_builder import build_prompt
+from ...prompt_builder import build_prompt, unwrap_envelope
 from ..sources.base import BaseSource, EnrichmentResult, SourceConfig
 
 logger = structlog.get_logger("perplexity_adapter")
@@ -83,8 +83,11 @@ class PerplexitySonarSource(BaseSource):
 
             latency = self._now_ms() - start
 
-            # Quality score based on data completeness
-            data = response.data
+            # Strip the {"confidence", "fields"} envelope that build_prompt
+            # asked for. Without this the caller merges the two wrapper keys
+            # and the completeness score below counts them as populated
+            # fields, reporting 1.0 over an empty payload.
+            data = unwrap_envelope(response.data)
             non_empty = sum(1 for v in data.values() if v not in (None, "", [], {}))
             total = max(len(data), 1)
             quality = min(non_empty / total, 1.0)

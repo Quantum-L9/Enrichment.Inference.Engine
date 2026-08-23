@@ -168,28 +168,37 @@ that can score 1.0 on zero merged fields into the live path.
 **Also still open:** `consensus_engine.py` has no provider dispatch, so
 multi-variation consensus across providers remains unbuilt.
 
-### Perplexity response envelope is merged verbatim
-- [ ] `app/services/perplexity_client.py` / `enrichment/sources/perplexity_adapter.py`
+### Waterfall path does not unwrap the build_prompt envelope
+- [x] `enrichment/sources/perplexity_adapter.py`, `enrichment/waterfall_engine.py`
 
-`prompt_builder` instructs the model to answer with an envelope —
-`{"confidence": 0.82, "fields": {...}}` (see the example at
-`prompt_builder.py:37`). `_parse_completion` at `perplexity_client.py:70` does
-a bare `json.loads(content)` into `SonarResponse.data`, and the adapter
-returns that object unchanged.
+**Resolved.** `prompt_builder` instructs the model to answer with an envelope,
+`{"confidence": <float>, "fields": {...}}`. Two consumers stripped it and two
+did not:
 
-Two consequences on the **live** enrichment path:
+| Consumer | Before | Reachable from `app/` |
+|---|---|---|
+| `validation_engine.validate_response` | unwrapped | yes — `enrichment_orchestrator`, the live path |
+| `simulation_bridge._sonar_entity_for_name` | unwrapped | yes — via `engines/handlers.py` |
+| `perplexity_adapter` | **not** unwrapped | no — `WaterfallEngine` only |
+| `waterfall_engine` consensus variations | **not** unwrapped | no — `WaterfallEngine` only |
 
-1. The waterfall merges the literal keys `confidence` and `fields` instead of
-   the requested field values.
-2. Quality is scored over the envelope, so a response wrapping an empty
-   `fields` object counts two populated keys and scores **1.0** — high enough
-   to stop the waterfall having merged nothing.
+**This was never a production defect**, and an earlier revision of this entry
+wrongly said it was. Every reachable consumer already unwrapped; both broken
+consumers sat behind `WaterfallEngine`, which nothing under `app/` constructs.
+The claim came from grepping `json.loads` without following the call path —
+the same mistake this file records against the provider-adapter entry above.
 
-`llm_base.unwrap_fields()` fixes this for the OpenAI/Anthropic adapters and is
-the model for the fix here. Not applied to Perplexity in the same change
-because Perplexity is the production path and altering its merge and scoring
-is a behaviour change that deserves its own review. Regression tests to mirror:
-`TestLLMEnvelopeAndClientReuse` in `tests/test_enrichment_sources.py`.
+Fixed anyway, because the waterfall path must be correct *before* anyone
+activates it: an un-unwrapped source merges the two wrapper keys and scores a
+completeness of 1.0 over an empty payload, which is high enough to stop the
+waterfall from trying another source.
+
+`unwrap_envelope()` now lives in `prompt_builder.py`, beside the prompt that
+creates the envelope, so a new consumer does not have to rediscover the shape.
+`validate_response` and `simulation_bridge` keep their own inline unwraps —
+both work, both are on live paths, and rewriting them would be risk without
+behavioural gain.
+
 
 ### Transport / chassis router
 - [x] `app/engines/packet_router.py` — exists (206 lines, 73.1% covered)
