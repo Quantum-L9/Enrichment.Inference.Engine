@@ -9,7 +9,7 @@ All blocking gates must pass to merge.
 | 1 | `validate` | Python syntax, YAML validation |
 | 2 | `lint-ruff` | `ruff check .` |
 | 3 | `lint-format` | `ruff format --check .` |
-| 4 | `test` | pytest (coverage >= 60%) |
+| 4 | `test` | pytest (coverage >= 68%) |
 | 5 | `compliance-architecture` | Runtime/API/engine structure and SDK transport ownership |
 | 6 | `compliance-field-names` | Snake_case, no aliases, no naming drift |
 | 7 | `compliance-imports` | Import resolution and no deprecated dispatch reliance |
@@ -77,7 +77,7 @@ make verify
 
 ## Coverage Requirements
 
-* **Minimum**: 60%
+* **Minimum**: 68%
 * **Target**: 80%+ for engine/runtime-critical modules
 
 ---
