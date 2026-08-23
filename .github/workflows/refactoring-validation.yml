@@ -86,7 +86,7 @@ jobs:
           PYTHONPATH=. pytest -n auto \
             --cov=${{ env.SOURCE_DIR }} \
             --cov-report=term-missing \
-            --cov-fail-under=60 \
+            --cov-fail-under=68 \
             -v
 
       - name: Refactoring Gate Passed
