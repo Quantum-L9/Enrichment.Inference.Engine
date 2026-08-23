@@ -1,0 +1,19 @@
+{
+  "schema": "l9.rule-modes/v1",
+  "defaults": {
+    "pr_fast": "blocking",
+    "merge": "blocking",
+    "nightly": "advisory",
+    "release": "blocking",
+    "supply_chain": "blocking"
+  },
+  "provider_overrides": {
+    "semgrep": {}
+  },
+  "allowed_modes": [
+    "blocking",
+    "advisory",
+    "shadow",
+    "disabled"
+  ]
+}
