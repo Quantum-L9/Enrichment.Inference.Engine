@@ -68,7 +68,10 @@ def sql_finding_severity(keywords: set[str]) -> str:
 #: The reason is mandatory and length-checked; a bare marker suppresses
 #: nothing. Acknowledged findings are still reported, in their own section.
 REVIEWED_MARKER_RE = re.compile(
-    r"#\s*l9-audit-reviewed:\s*rule(?P<rule>\d+)\s*(?:--|—)\s*(?P<reason>.+?)\s*$"
+    # Greedy `.+$` rather than a lazy `.+?` paired with `\s*$`: the reason is
+    # stripped in Python anyway, so the two are equivalent, and the greedy form
+    # has no ambiguity for the engine to backtrack over.
+    r"#\s*l9-audit-reviewed:\s*rule(?P<rule>\d+)\s*(?:--|—)\s*(?P<reason>.+)$"
 )
 
 #: A reason shorter than this is not a justification.

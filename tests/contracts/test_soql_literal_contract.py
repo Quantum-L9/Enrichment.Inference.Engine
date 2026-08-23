@@ -123,12 +123,14 @@ class TestQueryRecordsGuards:
         monkeypatch.setattr(mod.httpx, "get", _forbidden)
 
     def test_rejects_bad_object_type(self) -> None:
+        client = _client()
         with pytest.raises(ValueError, match="Invalid SOQL object type"):
-            _client().query_records("Account WHERE Id != null OR '1'='1", {})
+            client.query_records("Account WHERE Id != null OR '1'='1", {})
 
     def test_rejects_bad_filter_key(self) -> None:
+        client = _client()
         with pytest.raises(ValueError, match="Invalid SOQL field name"):
-            _client().query_records("Account", {"Name = 'x' OR Id != null--": "v"})
+            client.query_records("Account", {"Name = 'x' OR Id != null--": "v"})
 
     def test_rejects_bad_field_name(self) -> None:
         """The slot that had NO guard before this change.
@@ -138,13 +140,15 @@ class TestQueryRecordsGuards:
         module docstring claims. Latent only because the sole caller
         (writeback.py:98) passes the literal ["id"].
         """
+        client = _client()
         with pytest.raises(ValueError, match="Invalid SOQL field name"):
-            _client().query_records("Account", {}, fields=["Id FROM Account WHERE Name != null--"])
+            client.query_records("Account", {}, fields=["Id FROM Account WHERE Name != null--"])
 
     def test_rejects_wildcard_field(self) -> None:
         """`*` is not an identifier; callers name their fields."""
+        client = _client()
         with pytest.raises(ValueError, match="Invalid SOQL field name"):
-            _client().query_records("Account", {}, fields=["*"])
+            client.query_records("Account", {}, fields=["*"])
 
 
 def _capture_query(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
