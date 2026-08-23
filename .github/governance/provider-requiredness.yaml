@@ -1,0 +1,20 @@
+{
+  "schema": "l9.provider-requiredness/v1",
+  "profiles": {
+    "pr_fast": {
+      "semgrep": true
+    },
+    "merge": {
+      "semgrep": true
+    },
+    "nightly": {
+      "semgrep": false
+    },
+    "release": {
+      "semgrep": true
+    },
+    "supply_chain": {
+      "semgrep": true
+    }
+  }
+}

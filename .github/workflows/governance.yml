@@ -1,0 +1,33 @@
+# Managed by Quantum-L9/.github. Pinned to a tag so main can move safely.
+#
+# This file should never need editing again. Governance logic lives in
+# Quantum-L9/.github/.github/workflows/governance-*.yml; shipping a change means
+# force-moving the v1 tag there, not touching this file.
+#
+# SECRETS: a called workflow does NOT inherit caller secrets automatically. Today
+# both callees use only the automatic GITHUB_TOKEN, so nothing is passed. If a
+# governance job later needs a real secret, add `secrets:` to the job below —
+# `inherit` for all, or named entries (preferred, least privilege).
+# See docs/DISTRIBUTION.md Appendix A.
+#
+# ACCESS: if this caller fails before any step runs, check the Actions policy on
+# THIS repo — see Appendix B. `gh api repos/OWNER/REPO/actions/permissions`
+
+name: Governance
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  issues:
+    types: [opened, edited, reopened]
+
+jobs:
+  pr:
+    if: github.event_name == 'pull_request'
+    uses: Quantum-L9/.github/.github/workflows/governance-pr.yml@v1
+    # secrets: inherit
+
+  issue:
+    if: github.event_name == 'issues'
+    uses: Quantum-L9/.github/.github/workflows/governance-issue.yml@v1
+    # secrets: inherit

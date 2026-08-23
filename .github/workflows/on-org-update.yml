@@ -1,0 +1,65 @@
+# Receiver for org template updates. Place at .github/workflows/on-org-update.yml.
+# When Quantum-L9/.github pushes a template change, this workflow auto-syncs.
+name: Sync on org update
+
+on:
+  repository_dispatch:
+    types: [org_template_updated]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Run sync-ci
+        run: |
+          set -euo pipefail
+          if [ -f scripts/sync_ci_from_pack.py ]; then
+            python scripts/sync_ci_from_pack.py
+          else
+            echo "::notice::No sync_ci_from_pack.py found — skipping"
+            exit 0
+          fi
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create sync PR
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          BRANCH="chore/auto-sync-org-templates"
+          git checkout -b "$BRANCH"
+          git add -A
+          git -c user.name="l9-governance[bot]" -c user.email="governance@quantum-l9.dev" \
+            commit -m "chore: auto-sync org templates from Quantum-L9/.github"
+          git push -f origin "$BRANCH"
+
+          # Create PR if none exists
+          EXISTING=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$EXISTING" ]; then
+            gh pr create \
+              --title "chore: auto-sync org templates" \
+              --body "Org templates changed in Quantum-L9/.github. This PR syncs the updates. Merge at your convenience." \
+              --base "$(git remote show origin | grep 'HEAD branch' | awk '{print $NF}')"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
