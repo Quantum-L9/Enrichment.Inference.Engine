@@ -13,5 +13,8 @@ base_url: https://api.anthropic.com
 base_url_env: null  # standard anthropic SDK
 
 role: Secondary LLM provider (waterfall fallback or parallel variation mode).
-# TODO: Determine usage scope from app/services/anthropic_client.py
+# Resolved 2026-08-23: enrichment. app/services/enrichment/sources/anthropic_adapter.py
+# registers AnthropicSource in SOURCE_REGISTRY under "anthropic", so the WaterfallEngine
+# dispatches to it as an enrichment source via AnthropicClient.complete_json(). It is not
+# wired into consensus_engine.py.
 
