@@ -19,7 +19,7 @@ permissions:
 env:
   PYTHON_VERSION: ${{ vars.PYTHON_VERSION || '3.12' }}
   REQUIREMENTS_FILE: ${{ vars.REQUIREMENTS_FILE || 'requirements.txt' }}
-  COVERAGE_THRESHOLD: ${{ vars.COVERAGE_THRESHOLD || '68' }}
+  COVERAGE_THRESHOLD: ${{ vars.COVERAGE_THRESHOLD || '71' }}
   TEST_DIR: ${{ vars.TEST_DIR || 'tests/' }}
   SOURCE_DIR: ${{ vars.SOURCE_DIR || 'app' }}
 

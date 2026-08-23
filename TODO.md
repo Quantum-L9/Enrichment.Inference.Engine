@@ -264,9 +264,49 @@ both empty — this is debt the ratchet does **not** cover.
 
       **Staged (148 stmts):** `engines/inference/nary_inference_engine.py` — see
       the n-ary enablement plan below.
-- [ ] **Coverage is a floor, not a ratchet.** See the companion PR raising the
-      threshold. Note `ci.yml` reads `vars.COVERAGE_THRESHOLD` first, so the repo
-      variable must match the in-tree default to take effect.
+### N-ary inference enablement plan (deferred, not started)
+
+`app/engines/inference/nary_inference_engine.py` (148 stmts) is **kept and
+declared staged** in `tests/compliance/test_module_reachability.py::STAGED_ARTIFACTS`.
+It is not dead code and it is not wired — it needs a feature project, not a
+wiring change. Two things block it, both verified on 2026-08-23:
+
+**Its bridge targets a protocol that does not exist.** `to_rule_engine_format()`
+returns `{relation, entities, confidence, source, rule, provenance,
+qualifier_trace, explanation}`. But `inference/rule_engine.InferenceResult` is
+`{derived_fields, rules_fired, rules_evaluated, rules_skipped,
+derivation_chains, inference_confidence, cascade_depth}`, and
+`inference_bridge_v2.InferenceResult` is a third shape, `{derived, blocked}`
+over `FieldInferenceResult`. **Zero field overlap with either.** The docstring's
+claim of compatibility was never true against the consumers it names.
+
+**There is no n-ary data.** The entire KB is `kb/plastics_recycling.yaml`, whose
+only top-level key is `inference_rules`. `NAryFact` requires `relation` +
+`participants: {role -> entity_id}` + `qualifiers`. Nothing in the KB has that
+shape, and `load_kb_facts()` takes pre-built objects — there is no loader.
+
+Prerequisites, in order. The first is not an engineering task:
+
+1. [ ] **Author n-ary facts for the plastics domain.** Domain modelling; needs
+       someone with the domain, not a code change.
+2. [ ] **Design the KB n-ary fact schema** and extend the `kb/*.yaml` contract.
+3. [ ] **Write the YAML -> `NAryFact` loader.**
+4. [ ] **Choose the target result shape** and reconcile the three above. Pick
+       one before writing any bridge code.
+5. [ ] **Add the call site** in `inference_bridge_v2` (which today contains no
+       n-ary references at all) and cover `combined_infer()`.
+
+Until step 1 exists, steps 2-5 have nothing to operate on. Deleting the module
+instead is defensible — it is reversible from git — but it is the only
+surviving implementation of n-ary inference, so it is staged rather than cut.
+
+- [x] **Coverage floor raised to 71%** (was 60%, then 68%). All seven in-tree
+      sites are synced — `pytest.ini`, `pyproject.toml`, `ci.yml`,
+      `pr-pipeline.yml`, `refactoring-validation.yml`, `Makefile`,
+      `.github/env.template` — plus contract C-15, INV-9 and the six other
+      living docs. `pyproject.toml` was previously missed because it spells the
+      setting `fail_under`, not `cov-fail-under`; it sat at 60 and would have
+      silently become the floor had `.coveragerc` ever been removed.
 - [ ] **Four xfail contract TODOs are invisible to the ratchet.**
       `tests/contracts/test_contract_todos_gaps.py` uses imperative
       `pytest.xfail()` (strict=False by design), so TODO-01, TODO-04, TODO-05 and

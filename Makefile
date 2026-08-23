@@ -3,7 +3,7 @@
 IMAGE_NAME ?= enrichment-api
 SERVICE_NAME ?= enrichment-api
 COMPOSE_FILE ?= docker-compose.prod.yml
-COVERAGE_MIN ?= 68
+COVERAGE_MIN ?= 71
 
 PYTHON := $(shell if [ -x "$(CURDIR)/.venv/bin/python" ]; then printf '%s' "$(CURDIR)/.venv/bin/python"; else command -v python3; fi)
 PYTEST := $(PYTHON) -m pytest

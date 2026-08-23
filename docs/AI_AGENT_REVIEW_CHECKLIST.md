@@ -77,7 +77,7 @@ Apply this verdict BEFORE writing any inline comments.
 - [ ] Tests added/updated for all changed logic?
 - [ ] All tests have at least one pytest marker where required?
 - [ ] Integration tests do not depend on external services without mocking or declared integration harness?
-- [ ] Coverage does not drop below 68%?
+- [ ] Coverage does not drop below 71%?
 
 ---
 

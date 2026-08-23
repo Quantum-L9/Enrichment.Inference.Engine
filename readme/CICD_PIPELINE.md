@@ -161,7 +161,7 @@ All workflows use **zero-config defaults** that work immediately. Customize via 
 |----------|---------|-------------|
 | `PYTHON_VERSION` | `3.12` | Python version for CI |
 | `SOURCE_DIR` | `app` | Source directory for coverage and type checks |
-| `COVERAGE_THRESHOLD` | `68` | Minimum test coverage percentage |
+| `COVERAGE_THRESHOLD` | `71` | Minimum test coverage percentage |
 | `PR_WARN_LINES` | `300` | PR size warning threshold |
 | `PR_BLOCK_LINES` | `1000` | PR size blocking threshold |
 

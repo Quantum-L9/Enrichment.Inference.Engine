@@ -73,7 +73,7 @@ Tier: T{N} change — {0/1/2} reviewers required.
 | `validate`     | Fix syntax/YAML first                         |
 | `lint-ruff`    | Run `make agent-fix`                          |
 | `lint-mypy`    | Log warning only if waiver applies            |
-| `test`         | Fix tests, ensure coverage >= 68%             |
+| `test`         | Fix tests, ensure coverage >= 71%             |
 | `compliance-*` | Fix the violation                             |
 | `contracts`    | Fix the active contract manifest / references |
 | `security-*`   | Log warning only if waiver applies            |
