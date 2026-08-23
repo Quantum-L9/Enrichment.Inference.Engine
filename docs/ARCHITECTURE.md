@@ -55,15 +55,15 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
 │  └── graph_sync_client.py     (Gate transport)                  │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
-              ┌────────────────┴────────────────┐
-              ▼                                 ▼
-┌─────────────────────────┐       ┌─────────────────────────────┐
-│  Inference Engine       │       │  External Services          │
-│  (app/engines/inference)│       │  tools/pplx_research.py     │
-│  grade_engine.py        │       │  (Perplexity sonar)         │
-│  rule_engine.py         │       └─────────────────────────────┘
-│  nary_inference.py      │
-└─────────────────────────┘
+              ┌────────────────┴─────────────────┐
+              ▼                                  ▼
+┌──────────────────────────┐       ┌─────────────────────────────┐
+│  Inference Engine        │       │  External Services          │
+│  (app/engines/inference) │       │  tools/pplx_research.py     │
+│  grade_engine.py         │       │  (Perplexity sonar)         │
+│  rule_engine.py          │       └─────────────────────────────┘
+│  nary_inference_engine.py│
+└──────────────────────────┘
               │
               ▼
 ┌─────────────────────────────────────────────────────────────────┐

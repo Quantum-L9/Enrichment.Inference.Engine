@@ -6,7 +6,10 @@ Proves PR#20 import path fix is live:
     app.engines.inference.rule_loader (corrected path)
   - meta_prompt_planner.py does not contain any reference to the
     old stale path "inference_rule_loader"
-  - inference_unlock_scorer.py does not reference the stale path
+  - no file under app/engines/ references the stale path
+    (the former per-file check for inference_unlock_scorer.py was retired with
+     that module; test_no_module_level_import_of_stale_path_in_pkg below scans
+     the whole package and is the stronger guarantee)
 """
 
 from __future__ import annotations
@@ -58,17 +61,6 @@ def test_meta_prompt_planner_no_stale_import():
     lines = _find_stale_import(path.read_text(), "inference_rule_loader")
     assert lines == [], (
         f"Stale import 'inference_rule_loader' found in meta_prompt_planner.py at lines: {lines}"
-    )
-
-
-def test_inference_unlock_scorer_no_stale_import():
-    """PR#20: inference_unlock_scorer.py must not reference 'inference_rule_loader'."""
-    path = pathlib.Path("app/engines/inference_unlock_scorer.py")
-    assert path.exists(), "inference_unlock_scorer.py must exist for the PR#20 import-fix check"
-    lines = _find_stale_import(path.read_text(), "inference_rule_loader")
-    assert lines == [], (
-        f"Stale import 'inference_rule_loader' found in inference_unlock_scorer.py "
-        f"at lines: {lines}"
     )
 
 
