@@ -1,0 +1,11 @@
+# Quantum-L9 org-wide funding configuration.
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+#
+# No public sponsor links are configured. This is an internal engineering org;
+# entries are intentionally left blank rather than omitting the file, so any
+# future decision to enable a sponsor button is a one-line change, not a new
+# file requiring CODEOWNERS/governance re-review.
+#
+# github: []
+# open_collective: # ''
+# custom: # ['']

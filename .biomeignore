@@ -1,0 +1,6 @@
+# Biome path exclusions (gitignore syntax).
+# Biome 2.5 reads files.includes in biome.json, not this file — keep generated trees in both.
+
+coverage/
+dist/
+.l9/

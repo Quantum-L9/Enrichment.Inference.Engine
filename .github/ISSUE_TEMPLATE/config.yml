@@ -1,0 +1,15 @@
+# Quantum-L9 org-wide issue template chooser config.
+# https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: Security Vulnerability Report
+    url: https://github.com/Quantum-L9/.github/security/policy
+    about: Do not open a public issue for security vulnerabilities. Follow SECURITY.md instead.
+  - name: Governance / CANONICAL_LAW Question
+    url: https://github.com/Quantum-L9/Cursor-Governance/blob/main/CANONICAL_LAW.md
+    about: For questions about governance policy, symlink contracts, or CANONICAL_LAW.md, read the policy source of truth first.
+  - name: CI Kernel API Contract
+    url: https://github.com/Quantum-L9/.github/blob/main/workflow-interface-registry.yml
+    about: For questions about kernel inputs/outputs/versioning, check the machine-readable registry before filing an issue.
