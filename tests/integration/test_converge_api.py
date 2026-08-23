@@ -14,7 +14,15 @@ import pytest
 from app.core.config import get_settings
 
 _TEST_API_KEY = "pass"
-os.environ["API_KEY_HASH"] = hashlib.sha256(_TEST_API_KEY.encode()).hexdigest()
+# Not a credential hash: this mirrors app/core/auth.py's SHA-256 digest so the
+# fixture key authenticates against a throwaway in-process app. The input is a
+# hard-coded test literal, never a real secret, so usedforsecurity=False marks
+# the call as non-security (CWE-327/328, py/weak-sensitive-data-hashing) —
+# same treatment as app/engines/convergence_controller.py::_cache_key. The
+# digest itself is byte-identical, so hmac.compare_digest still matches.
+os.environ["API_KEY_HASH"] = hashlib.sha256(
+    _TEST_API_KEY.encode(), usedforsecurity=False
+).hexdigest()
 get_settings.cache_clear()
 AUTH = {"X-API-Key": _TEST_API_KEY}
 
@@ -27,14 +35,46 @@ async def test_converge_health(api_client):
 
 
 @pytest.mark.asyncio
-@patch("app.services.perplexity_client.query_perplexity", new_callable=AsyncMock)
+# enrichment_orchestrator does `from ..services.perplexity_client import
+# query_perplexity`, so the alias is already bound by the time this test runs
+# (the api_client fixture imports app.main). Patching the *source* module would
+# leave that binding untouched and let the call reach the live Sonar API —
+# patch the name the orchestrator actually calls.
+@patch("app.engines.enrichment_orchestrator.query_perplexity", new_callable=AsyncMock)
 async def test_converge_single_entity(mock_llm, api_client):
-    """POST /v1/converge returns ConvergeResponse shape."""
-    mock_llm.return_value = {
-        "material_grade": "A",
-        "contamination_tolerance_pct": 0.02,
-        "facility_tier": "tier_1",
-    }
+    """POST /v1/converge converges and returns the ConvergeSingleResponse shape."""
+    import app.api.v1.converge as converge_module
+    from app.engines.convergence.loop_state import LoopState, LoopStateStore
+    from app.services.enrichment_profile import ProfileRegistry
+    from app.services.kb_resolver import KBResolver
+    from app.services.perplexity_client import SonarResponse
+
+    mock_llm.return_value = SonarResponse(
+        data={
+            "material_grade": "A",
+            "contamination_tolerance_pct": 0.02,
+            "facility_tier": "tier_1",
+        },
+        tokens_used=1200,
+        citations=["https://example.com/alpha-recyclers"],
+        model="sonar",
+    )
+
+    class _MemoryStateStore(LoopStateStore):
+        """Minimal in-process store so the endpoint is configured (GAP-3)."""
+
+        def __init__(self) -> None:
+            self._states: dict[str, LoopState] = {}
+
+        async def save(self, state: LoopState) -> None:
+            self._states[state.run_id] = state
+
+        async def load(self, run_id: str) -> LoopState | None:
+            return self._states.get(run_id)
+
+        async def list_active(self, domain: str | None = None) -> list[LoopState]:
+            return list(self._states.values())
+
     payload = {
         "entity": {
             "id": "test-001",
@@ -47,9 +87,51 @@ async def test_converge_single_entity(mock_llm, api_client):
         "max_passes": 2,
         "max_budget_tokens": 5000,
     }
-    resp = await api_client.post("/v1/converge", json=payload, headers=AUTH)
-    # 503 is the live unconfigured-store contract (GAP-3); 422 on body drift.
-    assert resp.status_code in (200, 422, 503)
+
+    # configure() writes five module-level globals; snapshot and restore all of
+    # them so this test cannot leak wiring into whatever runs next.
+    _configured = (
+        "_state_store",
+        "_profile_registry",
+        "_domain_specs",
+        "_kb_resolver",
+        "_idem_store",
+    )
+    original = {name: getattr(converge_module, name) for name in _configured}
+    converge_module.configure(
+        state_store=_MemoryStateStore(),
+        profile_registry=ProfileRegistry(),
+        domain_specs={},
+        # Mirrors app.main's wiring. KBResolver tolerates a missing kb_dir
+        # (logs a warning, resolves to empty), so this stays hermetic.
+        kb_resolver=KBResolver(get_settings().kb_dir),
+        idem_store=None,
+    )
+    try:
+        resp = await api_client.post("/v1/converge", json=payload, headers=AUTH)
+    finally:
+        for name, value in original.items():
+            setattr(converge_module, name, value)
+
+    # Configured store + mocked LLM: a 503 or 422 here is a real regression,
+    # not an accepted outcome.
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body) == {
+        "run_id",
+        "status",
+        "passes_completed",
+        "fields_discovered",
+        "tokens_used",
+        "cost_usd",
+        "convergence_reason",
+    }
+    assert body["run_id"]
+    assert body["status"] == "converged"
+    assert body["passes_completed"] >= 1
+    assert body["fields_discovered"] >= 1
+    assert body["tokens_used"] > 0
+    assert mock_llm.await_count >= 1
 
 
 @pytest.mark.asyncio

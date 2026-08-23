@@ -18,13 +18,30 @@ from app.services.enrichment.waterfall_engine import ConsensusEnrichmentResult
 
 @pytest.fixture(autouse=True)
 def mock_perplexity_module():
-    """Mock the perplexity_client module to avoid import issues."""
+    """Mock the perplexity_client module to avoid import issues.
+
+    The original module object is saved and restored verbatim. Deleting the
+    key instead would force a *re-import* on the next access, producing a
+    second, distinct module object. Tests that bound ``query_perplexity`` /
+    ``_sync_call`` at import time (tests/test_pplx_research.py) would then
+    patch the new module while their own references still resolve globals in
+    the old one, so the patch silently misses and the real Perplexity SDK is
+    called. Restore, never delete.
+    """
+    module_name = "app.services.perplexity_client"
+    sentinel = object()
+    original = sys.modules.get(module_name, sentinel)
+
     mock_module = MagicMock()
     mock_module.SonarResponse = MagicMock
-    sys.modules["app.services.perplexity_client"] = mock_module
-    yield
-    if "app.services.perplexity_client" in sys.modules:
-        del sys.modules["app.services.perplexity_client"]
+    sys.modules[module_name] = mock_module
+    try:
+        yield
+    finally:
+        if original is sentinel:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = original
 
 
 @pytest.fixture

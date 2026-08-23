@@ -18,7 +18,15 @@ import pytest
 from app.core.config import get_settings
 
 _TEST_API_KEY = "pass"
-os.environ["API_KEY_HASH"] = hashlib.sha256(_TEST_API_KEY.encode()).hexdigest()
+# Not a credential hash: this mirrors app/core/auth.py's SHA-256 digest so the
+# fixture key authenticates against a throwaway in-process app. The input is a
+# hard-coded test literal, never a real secret, so usedforsecurity=False marks
+# the call as non-security (CWE-327/328, py/weak-sensitive-data-hashing) —
+# same treatment as app/engines/convergence_controller.py::_cache_key. The
+# digest itself is byte-identical, so hmac.compare_digest still matches.
+os.environ["API_KEY_HASH"] = hashlib.sha256(
+    _TEST_API_KEY.encode(), usedforsecurity=False
+).hexdigest()
 get_settings.cache_clear()
 AUTH = {"X-API-Key": _TEST_API_KEY}
 
