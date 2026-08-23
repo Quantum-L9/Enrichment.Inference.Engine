@@ -105,7 +105,21 @@ Several components previously tracked as BLOCKED in `gap-fixes/` now exist under
 any row as outstanding; the `gap-fixes/` staging directory is no longer the
 source of truth for them.
 
-- [~] Gap-5 Audit Persistence — `app/services/audit_persistence.py` exists (40 stmts) but is **not imported anywhere**; 0% coverage
+- [~] Gap-5 Audit Persistence — `app/services/audit_persistence.py` exists (40 stmts),
+      is **not imported anywhere**, 0% coverage. Wiring it is **not** the two-line
+      startup call it appears to be; two blockers were found on 2026-08-23:
+
+      1. **No pool to give it.** `configure_audit_pool(pool)` expects a raw
+         `asyncpg.Pool`, but the app has none — `pg_store.init_engine()` builds a
+         SQLAlchemy `create_async_engine`, and `asyncpg.create_pool` appears
+         nowhere in `app/`. Wiring as-is means opening a second connection pool to
+         the same database. The right fix is to port the module to the existing
+         SQLAlchemy engine, matching `pg_store.py` and `result_store.py`.
+      2. **It does DDL at startup.** `configure_audit_pool` executes
+         `CREATE TABLE IF NOT EXISTS audit_log` plus an index on every boot.
+         `audit_log` exists in no migration and no model, so this bypasses Alembic
+         entirely — at odds with the single-tree migration policy. The table needs
+         a real migration and a `pg_models.py` entry first.
 - [ ] Gap-6 Community Export Hook — `graph/community_export.py`
 - [x] Gap-9 v1 Bridge Guard — **moot.** `shared/inference_bridge_v1_guard.py`
       never existed, and the thing it would have guarded against is gone:
@@ -115,15 +129,67 @@ source of truth for them.
       not worth writing.
 
 ### Multi-Provider LLM Clients
-- [~] `app/services/openai_client.py` — file exists (152 lines) but is imported only by `anthropic_client.py`; 0% coverage
-- [~] `app/services/anthropic_client.py` — file exists (154 lines), imported by nothing; 0% coverage
+- [~] `app/services/openai_client.py` — adapter built; NOT reachable from a request
+- [~] `app/services/anthropic_client.py` — adapter built; NOT reachable from a request
 
-**Why still open:** both files exist, but neither is reachable from `app.main`,
-so multi-provider consensus is not actually available at runtime. Formal
-dependency contracts are declared for both in
-`docs/contracts/dependencies/{openai,anthropic}.yaml` and asserted by
-`tests/contracts/test_dependency_contracts.py`, so these are declared
-architecture awaiting wiring — not dead code to delete.
+**Partial (2026-08-23).** `OpenAISource` and `AnthropicSource` implement the
+existing `BaseSource` protocol and are registered in `SOURCE_REGISTRY` as
+`"openai"` and `"anthropic"`. Shared guard/quality/error behaviour lives in
+`sources/llm_base.py` so the two adapters stay thin, and prompt construction
+delegates to `prompt_builder.build_prompt` rather than duplicating it. The
+`# TODO: Determine usage scope` comments in both dependency contracts are
+answered: enrichment, not consensus.
+
+Neither adapter picks a model — the clients' own defaults apply unless a
+caller passes one explicitly. Wiring is not the place to make a
+model-selection decision.
+
+**These are marked `[~]`, not `[x]`, and the distinction is the point.**
+Registration makes the adapters *resolvable*; it does not make them
+*reachable*. Setting `OPENAI_API_KEY` today still cannot cause an enrichment
+request to construct or call one. Verified:
+
+- `WaterfallEngine(` is constructed in 10 places, **all under `tests/`**
+- `auto_register_sources` has no caller outside `tests/`
+- `config/enrichment_sources.yaml` lists clearbit, zoominfo, apollo, hunter,
+  linkedin, perplexity_sonar — neither new provider
+- all three `config/waterfall_config.yaml` tiers name `perplexity_sonar` only
+- `app.main` invokes `enrichment_orchestrator` directly
+
+**To close this item** someone must activate the waterfall path: construct a
+`WaterfallEngine` at startup, call `auto_register_sources`, add both providers
+to `enrichment_sources.yaml` and to the `waterfall_config.yaml` tiers with
+priorities and quality thresholds, and decide how it composes with
+`enrichment_orchestrator`. That changes enrichment behaviour for every
+request, including the live Perplexity one, so it needs its own PR and review.
+Do it AFTER the Perplexity envelope defect below, or activation puts a source
+that can score 1.0 on zero merged fields into the live path.
+
+**Also still open:** `consensus_engine.py` has no provider dispatch, so
+multi-variation consensus across providers remains unbuilt.
+
+### Perplexity response envelope is merged verbatim
+- [ ] `app/services/perplexity_client.py` / `enrichment/sources/perplexity_adapter.py`
+
+`prompt_builder` instructs the model to answer with an envelope —
+`{"confidence": 0.82, "fields": {...}}` (see the example at
+`prompt_builder.py:37`). `_parse_completion` at `perplexity_client.py:70` does
+a bare `json.loads(content)` into `SonarResponse.data`, and the adapter
+returns that object unchanged.
+
+Two consequences on the **live** enrichment path:
+
+1. The waterfall merges the literal keys `confidence` and `fields` instead of
+   the requested field values.
+2. Quality is scored over the envelope, so a response wrapping an empty
+   `fields` object counts two populated keys and scores **1.0** — high enough
+   to stop the waterfall having merged nothing.
+
+`llm_base.unwrap_fields()` fixes this for the OpenAI/Anthropic adapters and is
+the model for the fix here. Not applied to Perplexity in the same change
+because Perplexity is the production path and altering its merge and scoring
+is a behaviour change that deserves its own review. Regression tests to mirror:
+`TestLLMEnvelopeAndClientReuse` in `tests/test_enrichment_sources.py`.
 
 ### Transport / chassis router
 - [x] `app/engines/packet_router.py` — exists (206 lines, 73.1% covered)

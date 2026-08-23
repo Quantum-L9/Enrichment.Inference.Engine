@@ -13,5 +13,8 @@ base_url: https://api.openai.com
 base_url_env: null  # standard openai SDK
 
 role: Secondary LLM provider (waterfall fallback or parallel variation mode).
-# TODO: Determine if OpenAI is used for enrichment or consensus only — verify from openai_client.py
+# Resolved 2026-08-23: enrichment. app/services/enrichment/sources/openai_adapter.py
+# registers OpenAISource in SOURCE_REGISTRY under "openai", so the WaterfallEngine
+# dispatches to it as an enrichment source via OpenAIClient.complete_json(). It is not
+# wired into consensus_engine.py.
 
