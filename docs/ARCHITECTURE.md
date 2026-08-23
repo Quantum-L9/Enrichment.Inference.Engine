@@ -100,7 +100,7 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
 | Handler signature      | `app/engines/handlers.py`, `app/engines/orchestration_layer.py` | C-02 contract                            |
 | Tenant isolation       | All Neo4j queries                                               | `WHERE n.tenant_id = $tenant`            |
 | Graph/Gate transport   | `app/engines/graph_sync_client.py`                              | Gate SDK                                 |
-| Coverage minimum       | CI pipeline                                                     | 60% coverage gate                        |
+| Coverage minimum       | CI pipeline                                                     | 68% coverage gate                        |
 
 ---
 

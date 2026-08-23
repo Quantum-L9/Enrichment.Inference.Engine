@@ -132,7 +132,7 @@ All 8 gates must pass before any commit.
 | 1/7 LINT       | ruff check .                          | Any lint error                            |
 | 2/7 FORMAT     | ruff format --check .                 | Formatting inconsistency                  |
 | 3/7 TYPES      | mypy app                              | Type errors (non-blocking per WAIVER-001) |
-| 4/7 UNIT TESTS | pytest tests/unit/ tests/compliance/  | Test failure or coverage < 60%            |
+| 4/7 UNIT TESTS | pytest tests/unit/ tests/compliance/  | Test failure or coverage < 68%            |
 | 5/7 CI TESTS   | pytest tests/ci/                      | Contract call enforcement failure         |
 | 6/7 AUDIT      | python tools/audit_engine.py --strict | CRITICAL/HIGH rule violations             |
 | 7/7 CONTRACTS  | python tools/verify_contracts.py      | Contract manifest integrity failure       |
@@ -172,7 +172,7 @@ All PRs must pass:
 | C-12 | No `Field(alias=...)` in Pydantic models | HIGH |
 | C-13 | Transport contract lockstep: `app/main.py`, `app/api/v1/chassis_endpoint.py`, `app/services/chassis_handlers.py`, `app/engines/orchestration_layer.py`, `app/engines/handlers.py`, and `app/engines/graph_sync_client.py` must stay aligned | CRITICAL |
 | C-14 | New SDK action registration requires corresponding handler + test in same PR | HIGH |
-| C-15 | Coverage >= 60% — never lower the threshold | HIGH |
+| C-15 | Coverage >= 68% — never lower the threshold | HIGH |
 | C-16 | Python 3.12+ — no backports, no 3.11-only APIs | CRITICAL |
 | C-17 | No camelCase Python field names | HIGH |
 | C-18 | Ruff ignore list is frozen — do not add/remove ignores | HIGH |
