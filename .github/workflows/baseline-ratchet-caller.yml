@@ -31,10 +31,13 @@ jobs:
       sdk-revision: 0779fca8238011f8abea551895f96584676e9d17
       python-version: "3.12"
       pytest-paths: tests
-      # EIE has one known collection error (test_outcome_delegator.py, ledgered
-      # in the quarantine); without this flag pytest aborts collection and the
-      # comparator sees 0 observed tests → 112 false stale-entry violations.
-      pytest-args: --continue-on-collection-errors
+      # No pytest-args: the collection error this once worked around
+      # (--continue-on-collection-errors, for test_outcome_delegator.py) no
+      # longer exists — `pytest tests --collect-only` reports 1455 tests and
+      # exits 0. Keeping the flag would only downgrade a *future* collection
+      # abort from "fail the step" to "continue with a partial run", which is
+      # exactly the case that makes the comparator see 0 observed tests and
+      # emit false stale-entry violations. Fail closed instead.
       test-quarantine-ledger: .l9/baselines/test-quarantine.yml
       packet-envelope-ledger: .l9/baselines/packet-envelope.yml
       # EIE declares no PacketEnvelope symbol and has zero deprecated
