@@ -147,48 +147,44 @@ class TestQueryRecordsGuards:
             _client().query_records("Account", {}, fields=["*"])
 
 
+def _capture_query(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Patch httpx.get and return a dict that receives the emitted SOQL.
+
+    Shared by both cases below: duplicating the stub response class per test
+    is what SonarCloud flags as duplicated new code, and the ellipsis bodies
+    it needs read as no-op statements to CodeQL.
+    """
+    captured: dict[str, Any] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"records": []}
+
+    def _fake_get(url: str, **kwargs: Any) -> _Resp:
+        captured["q"] = kwargs["params"]["q"]
+        return _Resp()
+
+    from app.services.crm import salesforce_client as mod
+
+    monkeypatch.setattr(mod.httpx, "get", _fake_get)
+    return captured
+
+
 class TestQueryRecordsEmitsSafeSoql:
     def test_hostile_value_is_escaped_into_the_query(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A quote in a filter VALUE must be escaped, not terminate the literal."""
-        from app.services.crm import salesforce_client as mod
-
-        captured: dict[str, Any] = {}
-
-        class _Resp:
-            status_code = 200
-
-            def raise_for_status(self) -> None: ...
-
-            def json(self) -> dict[str, Any]:
-                return {"records": []}
-
-        def _fake_get(url: str, **kwargs: Any) -> _Resp:
-            captured["q"] = kwargs["params"]["q"]
-            return _Resp()
-
-        monkeypatch.setattr(mod.httpx, "get", _fake_get)
+        captured = _capture_query(monkeypatch)
         _client().query_records("Account", {"Name": "O'Brien"}, fields=["Id", "Name"])
 
         assert captured["q"] == r"SELECT Id, Name FROM Account WHERE Name = 'O\'Brien'"
 
     def test_no_filters_uses_tautology_guard(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from app.services.crm import salesforce_client as mod
-
-        captured: dict[str, Any] = {}
-
-        class _Resp:
-            status_code = 200
-
-            def raise_for_status(self) -> None: ...
-
-            def json(self) -> dict[str, Any]:
-                return {"records": []}
-
-        def _fake_get(url: str, **kwargs: Any) -> _Resp:
-            captured["q"] = kwargs["params"]["q"]
-            return _Resp()
-
-        monkeypatch.setattr(mod.httpx, "get", _fake_get)
+        captured = _capture_query(monkeypatch)
         _client().query_records("Account", {})
 
         assert captured["q"] == "SELECT Id, Name FROM Account WHERE Id != null"

@@ -30,6 +30,29 @@ REPO_ROOT = Path(__file__).parent.parent
 ENGINE_DIR = REPO_ROOT / "app"
 
 
+#: Statement verbs that make an interpolated query a mutation rather than a
+#: read. SOQL has none of them -- it is SELECT-only.
+_SQL_WRITE_KEYWORDS = frozenset({"INSERT", "UPDATE", "DELETE", "DROP"})
+
+_FSTRING_PREFIX_RE = re.compile(r"""f["']""")
+_SQL_KEYWORD_RE = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|DROP)\s", re.IGNORECASE)
+
+
+def sql_keywords_in_fstring(line: str) -> set[str]:
+    """Return every SQL statement verb appearing inside an f-string on `line`.
+
+    Returns an empty set when the line has no f-string, or an f-string with no
+    statement verb. Scanning from the f-string prefix rather than capturing a
+    single keyword is what lets the caller see ALL the verbs present, so a
+    mixed statement is classified by what it does rather than by whichever
+    keyword a greedy `.*` reached last.
+    """
+    m = _FSTRING_PREFIX_RE.search(line)
+    if not m:
+        return set()
+    return {kw.upper() for kw in _SQL_KEYWORD_RE.findall(line[m.start() :])}
+
+
 #: An in-tree acknowledgement of a finding the tool cannot reason about.
 #: Form: `# l9-audit-reviewed: rule<N> -- <reason>`
 #: The reason is mandatory and length-checked; a bare marker suppresses
@@ -359,12 +382,15 @@ def check_security(files: list[Path], result: AuditResult):
         # signal a reader gets. It also mis-grades SOQL, which is
         # SELECT-only and has no DML at all.
         for i, line in enumerate(lines, 1):
-            m = re.search(
-                r'f["\'].*(?P<kw>SELECT|INSERT|UPDATE|DELETE|DROP)\s', line, re.IGNORECASE
-            )
-            if not m:
+            keywords = sql_keywords_in_fstring(line)
+            if not keywords:
                 continue
-            writes = m.group("kw").upper() != "SELECT"
+            # Classify by the statement's effective operation, not by whichever
+            # keyword a regex happened to capture last. `INSERT INTO t SELECT
+            # ...` and `DELETE ... WHERE id IN (SELECT ...)` both mutate, and a
+            # greedy match would capture the trailing SELECT and grade them as
+            # reads -- downgrading exactly the queries that matter most.
+            writes = bool(keywords - {"SELECT"})
             severity = "CRITICAL" if writes else "HIGH"
             prefix = "C" if writes else "H"
             counter += 1

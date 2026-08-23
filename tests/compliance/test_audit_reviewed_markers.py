@@ -89,3 +89,46 @@ def test_every_marker_still_suppresses_something() -> None:
         + "\n\nThe rule named does not fire on that line. Remove the marker, or "
         "move it back onto the line it was written for."
     )
+
+
+class TestSqlKeywordClassification:
+    """Rule 10 must grade a statement by what it does, not by regex luck.
+
+    The first version of the severity split captured a single keyword from a
+    greedy `f["\']. *(SELECT|INSERT|...)` match. In `INSERT INTO archive
+    SELECT ...` the `.*` runs to the trailing SELECT, so every mixed write
+    graded HIGH instead of CRITICAL — the split intended to raise precision
+    silently downgraded exactly the statements that matter most.
+    """
+
+    @staticmethod
+    def _severity(line: str) -> str | None:
+        from tools.audit_engine import sql_keywords_in_fstring
+
+        kws = sql_keywords_in_fstring(line)
+        if not kws:
+            return None
+        return "CRITICAL" if kws - {"SELECT"} else "HIGH"
+
+    def test_mixed_write_and_read_is_critical(self) -> None:
+        assert self._severity('q = f"INSERT INTO archive SELECT * FROM {t} "') == "CRITICAL"
+        assert (
+            self._severity('q = f"DELETE FROM t WHERE id IN (SELECT id FROM {x}) "') == "CRITICAL"
+        )
+        assert (
+            self._severity('q = f"UPDATE t SET a=1 WHERE b IN (SELECT b FROM {x}) "') == "CRITICAL"
+        )
+
+    def test_plain_write_is_critical(self) -> None:
+        assert self._severity('q = f"DROP TABLE {name} "') == "CRITICAL"
+
+    def test_read_only_is_high(self) -> None:
+        """A SELECT is disclosure, not mutation — and SOQL is SELECT-only."""
+        assert self._severity('soql = f"SELECT {fields} FROM {obj} WHERE {w}"') == "HIGH"
+
+    def test_no_fstring_is_not_a_finding(self) -> None:
+        assert self._severity('msg = "no fstring SELECT here"') is None
+
+    def test_keyword_before_the_fstring_is_ignored(self) -> None:
+        """Only text inside the interpolated string can carry the injection."""
+        assert self._severity('# DELETE the row, then: q = f"SELECT {a} FROM t "') == "HIGH"
