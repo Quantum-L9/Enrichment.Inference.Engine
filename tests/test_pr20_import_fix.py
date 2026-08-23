@@ -24,14 +24,17 @@ def test_rule_loader_import_resolves():
 
 
 def test_rank_fields_by_unlock_returns_list():
-    """rank_fields_by_unlock must return a list given a registry and entity dict."""
+    """rank_fields_by_unlock must return a list given a registry and missing fields."""
     from app.engines.inference.rule_loader import RuleRegistry, rank_fields_by_unlock
 
-    registry = RuleRegistry(rules=[])
+    registry = RuleRegistry()
     result = rank_fields_by_unlock(
+        missing_fields=[
+            {"field_name": "material_type", "is_gate_critical": False, "scoring_weight": 0.85}
+        ],
+        unlock_index={},
         registry=registry,
-        entity={"material_type": "HDPE"},
-        confidence_map={"material_type": 0.85},
+        domain_spec=None,
     )
     assert isinstance(result, list)
 
@@ -51,10 +54,7 @@ def _find_stale_import(src: str, stale: str) -> list[int]:
 def test_meta_prompt_planner_no_stale_import():
     """PR#20: meta_prompt_planner.py must not reference 'inference_rule_loader'."""
     path = pathlib.Path("app/engines/meta_prompt_planner.py")
-    if not path.exists():
-        import pytest
-
-        pytest.skip("meta_prompt_planner.py not found in cwd")
+    assert path.exists(), "meta_prompt_planner.py must exist for the PR#20 import-fix check"
     lines = _find_stale_import(path.read_text(), "inference_rule_loader")
     assert lines == [], (
         f"Stale import 'inference_rule_loader' found in meta_prompt_planner.py at lines: {lines}"
@@ -64,10 +64,7 @@ def test_meta_prompt_planner_no_stale_import():
 def test_inference_unlock_scorer_no_stale_import():
     """PR#20: inference_unlock_scorer.py must not reference 'inference_rule_loader'."""
     path = pathlib.Path("app/engines/inference_unlock_scorer.py")
-    if not path.exists():
-        import pytest
-
-        pytest.skip("inference_unlock_scorer.py not found in cwd")
+    assert path.exists(), "inference_unlock_scorer.py must exist for the PR#20 import-fix check"
     lines = _find_stale_import(path.read_text(), "inference_rule_loader")
     assert lines == [], (
         f"Stale import 'inference_rule_loader' found in inference_unlock_scorer.py "
@@ -77,11 +74,8 @@ def test_inference_unlock_scorer_no_stale_import():
 
 def test_no_module_level_import_of_stale_path_in_pkg():
     """Broad scan: no Python file in app/engines/ may import inference_rule_loader."""
-    import pytest
-
     engines_dir = pathlib.Path("app/engines")
-    if not engines_dir.exists():
-        pytest.skip("app/engines/ not found in cwd")
+    assert engines_dir.exists(), "app/engines/ must exist for the PR#20 import-fix check"
 
     offenders: list[str] = []
     for py_file in engines_dir.rglob("*.py"):

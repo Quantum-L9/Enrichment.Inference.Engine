@@ -2,8 +2,7 @@
 test_hierarchical_synthesis.py — 17 deterministic test cases
 """
 
-from unittest.mock import MagicMock
-
+from app.engines.convergence.convergence_config import ConvergenceConfig
 from app.engines.convergence.hierarchical_synthesis import (
     _COMPOSITE_NODES_KEY,
     _MAX_FIELDS_PER_NODE,
@@ -13,34 +12,29 @@ from app.engines.convergence.hierarchical_synthesis import (
     build_composite_nodes,
     synthesize_and_attach,
 )
-from app.models.enrichment import ConvergenceState, EnrichResponse
+from app.models.enrichment import ConvergenceState, EnrichResponse, FieldResult
 
 
-def _cfg(enabled=True, derived_targets=None):
-    cfg = MagicMock()
-    cfg.synthesize_composites = enabled
+def _cfg(enabled: bool = True, derived_targets: list[str] | None = None) -> ConvergenceConfig:
+    cfg = ConvergenceConfig(synthesize_composites=enabled)
     cfg.derived_field_targets = derived_targets or []
     return cfg
 
 
-def _field_result(confidence=0.85, resolved_pass=2):
-    fr = MagicMock()
-    fr.confidence = confidence
+def _field_result(confidence: float = 0.85, resolved_pass: int = 2) -> FieldResult:
+    fr = FieldResult(field_name="field", value=None, confidence=confidence)
     fr.resolved_pass = resolved_pass
     return fr
 
 
-def _state(resolved=None):
-    s = MagicMock(spec=ConvergenceState)
-    s.resolved_fields = resolved or {}
-    return s
+def _state(resolved: dict | None = None) -> ConvergenceState:
+    state = ConvergenceState()
+    state.resolved_fields = resolved or {}
+    return state
 
 
-def _response(fv=None):
-    r = MagicMock(spec=EnrichResponse)
-    r.feature_vector = fv or {}
-    r.replace = lambda **kw: _response(kw.get("feature_vector", r.feature_vector))
-    return r
+def _response(fv: dict | None = None) -> EnrichResponse:
+    return EnrichResponse(feature_vector=fv if fv is not None else {})
 
 
 # ── Feature flag ──────────────────────────────────────────────────────────────
@@ -53,7 +47,6 @@ def test_disabled_returns_empty():
 
 
 def test_disabled_response_unchanged():
-    response = _response({"x": 1})
     result = synthesize_and_attach(_state(), _response({"x": 1}), _cfg(enabled=False))
     assert result.feature_vector == {"x": 1}
 
@@ -142,12 +135,14 @@ def test_attach_adds_composite_key():
     nodes = [CompositeNode.build(["a", "b"], 2, 0.85, False)]
     response = _response({})
     result = attach_composites_to_feature_vector(response, nodes)
+    assert result.feature_vector is not None
     assert _COMPOSITE_NODES_KEY in result.feature_vector
 
 
 def test_attach_empty_nodes_unchanged():
     response = _response({"existing": 1})
     result = attach_composites_to_feature_vector(response, [])
+    assert result.feature_vector is not None
     assert _COMPOSITE_NODES_KEY not in result.feature_vector
     assert result.feature_vector["existing"] == 1
 
@@ -156,7 +151,9 @@ def test_attach_preserves_existing_keys():
     nodes = [CompositeNode.build(["a", "b"], 2, 0.85, False)]
     response = _response({"prior_key": "value"})
     result = attach_composites_to_feature_vector(response, nodes)
+    assert result.feature_vector is not None
     assert result.feature_vector["prior_key"] == "value"
+    assert _COMPOSITE_NODES_KEY in result.feature_vector
 
 
 def test_node_feature_entry_structure():

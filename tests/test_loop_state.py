@@ -1,8 +1,6 @@
 """Tests for app/engines/convergence/loop_state.py
 
 Covers: LoopState state machine, LoopStateStore persistence, LoopStatus enum.
-
-Source: 195 lines | Target coverage: 85%
 """
 
 from __future__ import annotations
@@ -15,6 +13,31 @@ from app.engines.convergence.loop_state import (
     LoopStatus,
 )
 from app.models.loop_schemas import CostSummary, PassResult
+
+
+class InMemoryLoopStateStore(LoopStateStore):
+    """Dict-backed store for unit tests — no Redis/Postgres."""
+
+    def __init__(self) -> None:
+        self._states: dict[str, LoopState] = {}
+
+    async def save(self, state: LoopState) -> None:
+        state.touch()
+        self._states[state.run_id] = state.model_copy(deep=True)
+
+    async def load(self, run_id: str) -> LoopState | None:
+        state = self._states.get(run_id)
+        return state.model_copy(deep=True) if state is not None else None
+
+    async def list_active(self, domain: str | None = None) -> list[LoopState]:
+        active: list[LoopState] = []
+        for state in self._states.values():
+            if state.status != LoopStatus.RUNNING:
+                continue
+            if domain and state.domain != domain:
+                continue
+            active.append(state.model_copy(deep=True))
+        return active
 
 
 class TestLoopStatus:
@@ -86,11 +109,11 @@ class TestLoopStateStore:
     """Tests for in-memory state persistence."""
 
     @pytest.fixture
-    def store(self):
-        return LoopStateStore()
+    def store(self) -> InMemoryLoopStateStore:
+        return InMemoryLoopStateStore()
 
     @pytest.mark.asyncio
-    async def test_save_and_load(self, store):
+    async def test_save_and_load(self, store: InMemoryLoopStateStore):
         state = LoopState(entity_id="test-1", domain="plastics_recycling")
         await store.save(state)
         loaded = await store.load(state.run_id)
@@ -98,15 +121,16 @@ class TestLoopStateStore:
         assert loaded.entity_id == "test-1"
 
     @pytest.mark.asyncio
-    async def test_load_nonexistent_returns_none(self, store):
+    async def test_load_nonexistent_returns_none(self, store: InMemoryLoopStateStore):
         loaded = await store.load("nonexistent-id")
         assert loaded is None
 
     @pytest.mark.asyncio
-    async def test_list_active(self, store):
+    async def test_list_active(self, store: InMemoryLoopStateStore):
         s1 = LoopState(entity_id="a", domain="plastics_recycling", status=LoopStatus.RUNNING)
         s2 = LoopState(entity_id="b", domain="plastics_recycling", status=LoopStatus.CONVERGED)
         await store.save(s1)
         await store.save(s2)
         active = await store.list_active(domain="plastics_recycling")
         assert any(s.entity_id == "a" for s in active)
+        assert all(s.status == LoopStatus.RUNNING for s in active)

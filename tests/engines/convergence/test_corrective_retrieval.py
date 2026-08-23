@@ -2,8 +2,9 @@
 test_corrective_retrieval.py — 15 deterministic test cases
 """
 
-from unittest.mock import MagicMock
+from dataclasses import dataclass, field
 
+from app.engines.convergence.convergence_config import ConvergenceConfig
 from app.engines.convergence.corrective_retrieval import (
     _CORRECTIVE_TARGETS_KEY,
     CorrectiveState,
@@ -14,39 +15,48 @@ from app.engines.convergence.corrective_retrieval import (
     should_apply_corrective,
 )
 from app.models.common import FieldStatus, FieldTrace
-from app.models.enrichment import ConvergenceState, InferenceResult
+from app.models.enrichment import ConvergenceState
 
 
-def _cfg(enabled=True, threshold=0.75):
-    cfg = MagicMock()
-    cfg.corrective_retrieval_enabled = enabled
-    cfg.convergence_threshold = threshold
-    return cfg
+@dataclass
+class _InferenceSnapshot:
+    """Test double with the blocked_fields / rule_trace attrs extract() reads."""
+
+    blocked_fields: dict
+    rule_trace: dict = field(default_factory=dict)
 
 
-def _inference(blocked, rule_trace=None):
-    ir = MagicMock(spec=InferenceResult)
-    ir.blocked_fields = blocked
-    ir.rule_trace = rule_trace or {}
-    return ir
+def _cfg(enabled: bool = True, threshold: float = 0.75) -> ConvergenceConfig:
+    return ConvergenceConfig(
+        corrective_retrieval_enabled=enabled,
+        confidence_threshold=threshold,
+    )
 
 
-def _state(meta=None):
-    s = MagicMock(spec=ConvergenceState)
-    s.metadata = meta or {}
-    s.replace = lambda **kw: _state(kw.get("metadata", s.metadata))
-    return s
+def _inference(blocked: dict, rule_trace: dict | None = None) -> _InferenceSnapshot:
+    return _InferenceSnapshot(blocked_fields=blocked, rule_trace=rule_trace or {})
 
 
-def _trace(status, unlock_map=None, missing=None, confidence=0.5):
-    t = MagicMock(spec=FieldTrace)
-    t.status = status
-    t.extra = {
-        "unlock_map": unlock_map or {},
-        "missing_inputs": missing or [],
-    }
-    t.confidence = confidence
-    return t
+def _state(meta: dict | None = None) -> ConvergenceState:
+    return ConvergenceState(metadata=meta or {})
+
+
+def _trace(
+    status: FieldStatus | str,
+    unlock_map: dict | None = None,
+    missing: list | None = None,
+    confidence: float = 0.5,
+    field_name: str = "field",
+) -> FieldTrace:
+    return FieldTrace(
+        field_name=field_name,
+        status=status if isinstance(status, FieldStatus) else FieldStatus(status),
+        confidence=confidence,
+        extra={
+            "unlock_map": unlock_map or {},
+            "missing_inputs": missing or [],
+        },
+    )
 
 
 # ── should_apply_corrective ───────────────────────────────────────────────────
@@ -83,10 +93,16 @@ def test_extract_inputs_missing_ranked_first():
     }
     traces = {
         "material_grade": _trace(
-            FieldStatus.INPUTS_MISSING, unlock_map={"material_grade": ["a", "b"]}, confidence=0.4
+            FieldStatus.INPUTS_MISSING,
+            unlock_map={"material_grade": ["a", "b"]},
+            confidence=0.4,
+            field_name="material_grade",
         ),
         "mfi_range": _trace(
-            FieldStatus.BELOW_THRESHOLD, unlock_map={"mfi_range": ["x", "y", "z"]}, confidence=0.6
+            FieldStatus.BELOW_THRESHOLD,
+            unlock_map={"mfi_range": ["x", "y", "z"]},
+            confidence=0.6,
+            field_name="mfi_range",
         ),
     }
     targets = extract_corrective_targets(_inference(blocked, traces), _state(), _cfg())
@@ -96,8 +112,15 @@ def test_extract_inputs_missing_ranked_first():
 def test_extract_unlock_score_ordering():
     blocked = {"a": FieldStatus.BELOW_THRESHOLD, "b": FieldStatus.BELOW_THRESHOLD}
     traces = {
-        "a": _trace(FieldStatus.BELOW_THRESHOLD, unlock_map={"a": ["x"]}, confidence=0.5),
-        "b": _trace(FieldStatus.BELOW_THRESHOLD, unlock_map={"b": ["x", "y", "z"]}, confidence=0.5),
+        "a": _trace(
+            FieldStatus.BELOW_THRESHOLD, unlock_map={"a": ["x"]}, confidence=0.5, field_name="a"
+        ),
+        "b": _trace(
+            FieldStatus.BELOW_THRESHOLD,
+            unlock_map={"b": ["x", "y", "z"]},
+            confidence=0.5,
+            field_name="b",
+        ),
     }
     targets = extract_corrective_targets(_inference(blocked, traces), _state(), _cfg())
     assert targets[0].field_name == "b"
@@ -173,3 +196,4 @@ def test_consume_idempotent_when_empty():
     state = _state()
     new_state, consumed = consume_corrective_override(state)
     assert consumed is None
+    assert new_state.metadata == {}

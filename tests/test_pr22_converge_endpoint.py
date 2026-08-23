@@ -9,9 +9,24 @@ Proves GAP-3 and GAP-4:
 
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
 
 import pytest
+
+from app.core.config import get_settings
+
+_TEST_API_KEY = "pass"
+# Precomputed sha256(_TEST_API_KEY) — the same literal digest already used by
+# tests/test_api.py, tests/test_rate_limiter.py and tests/services/
+# test_gate_registration.py. Stored rather than computed so no hashing call
+# exists here at all: hashing a fixture key inline is what CodeQL flags as
+# py/weak-sensitive-data-hashing (SHA-256 is not a computationally expensive
+# password hash), and usedforsecurity=False does not suppress that query.
+# app/core/auth.py still does the real comparison via hmac.compare_digest.
+os.environ["API_KEY_HASH"] = "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1"
+get_settings.cache_clear()
+AUTH = {"X-API-Key": _TEST_API_KEY}
 
 
 def _make_conv_response(
@@ -32,21 +47,23 @@ def _make_conv_response(
     )
 
 
+def _auth_headers() -> dict[str, str]:
+    return dict(AUTH)
+
+
 @pytest.mark.asyncio
 async def test_converge_503_when_not_configured():
     """GAP-3: /v1/converge must return 503 if configure() was never called."""
 
-    import app.api.v1.converge as cm
-
-    original_store = cm._state_store
-    cm._state_store = None
-
     from httpx import ASGITransport, AsyncClient
 
+    import app.api.v1.converge as cm
     from app.main import app
 
+    original_store = cm._state_store
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+            cm._state_store = None
             resp = await client.post(
                 "/v1/converge",
                 json={
@@ -54,7 +71,7 @@ async def test_converge_503_when_not_configured():
                     "object_type": "Account",
                     "objective": "test",
                 },
-                headers={"X-API-Key": "test-key"},
+                headers=_auth_headers(),
             )
         assert resp.status_code == 503
     finally:
@@ -103,7 +120,7 @@ async def test_converge_calls_run_convergence_loop():
     )
 
     with patch(
-        "app.api.v1.converge.run_convergence_loop",
+        "app.engines.convergence_controller.run_convergence_loop",
         side_effect=mock_run_loop,
     ):
         from httpx import ASGITransport, AsyncClient
@@ -111,6 +128,13 @@ async def test_converge_calls_run_convergence_loop():
         from app.main import app
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+            cm.configure(
+                state_store=MockStateStore(),
+                profile_registry=ProfileRegistry(),
+                domain_specs={},
+                kb_resolver=None,
+                idem_store=None,
+            )
             resp = await client.post(
                 "/v1/converge",
                 json={
@@ -119,7 +143,7 @@ async def test_converge_calls_run_convergence_loop():
                     "objective": "Full enrichment",
                     "max_passes": 3,
                 },
-                headers={"X-API-Key": "test-key"},
+                headers=_auth_headers(),
             )
 
     assert resp.status_code == 200
@@ -158,27 +182,25 @@ async def test_converge_batch_processes_inline_entities():
         async def list_active(self, domain=None):
             return []
 
+    from httpx import ASGITransport, AsyncClient
+
     import app.api.v1.converge as cm
+    from app.main import app
 
     profile = EnrichmentProfile(profile_name="test_batch", batch_size=10, max_passes=2)
     registry = ProfileRegistry()
     registry.register(profile)
 
-    cm.configure(
-        state_store=MockStateStore(),
-        profile_registry=registry,
-        domain_specs={},
-    )
-
     with patch(
-        "app.api.v1.converge.run_convergence_loop",
+        "app.engines.convergence_controller.run_convergence_loop",
         side_effect=mock_run_loop,
     ):
-        from httpx import ASGITransport, AsyncClient
-
-        from app.main import app
-
         async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+            cm.configure(
+                state_store=MockStateStore(),
+                profile_registry=registry,
+                domain_specs={},
+            )
             resp = await client.post(
                 "/v1/converge/batch",
                 json={
@@ -188,7 +210,7 @@ async def test_converge_batch_processes_inline_entities():
                         {"id": "e2", "object_type": "Account"},
                     ],
                 },
-                headers={"X-API-Key": "test-key"},
+                headers=_auth_headers(),
             )
 
     assert resp.status_code == 200

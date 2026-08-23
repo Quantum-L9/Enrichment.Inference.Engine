@@ -1,106 +1,102 @@
 """Tests for app/services/uncertainty_engine.py
 
-Covers: Convergence uncertainty scoring, schema coverage penalty,
-        confidence-weighted scoring, variation budget recommendation.
+Covers: variation budget from completeness, richness, and last_confidence.
 
-Source: ~160 lines | Target coverage: 85%
+Product API: compute_uncertainty(entity, target_schema=None, last_confidence=0.5,
+max_variations=5) -> int in [2, max_variations].
 """
 
 from __future__ import annotations
 
-from app.models.field_confidence import FieldConfidence, FieldConfidenceMap, FieldSource
+from typing import Any
+
+import pytest
+
 from app.services.uncertainty_engine import compute_uncertainty
 
 
-class TestUncertaintyEngine:
-    """Tests for convergence uncertainty scoring."""
+@pytest.fixture
+def rich_entity() -> dict[str, Any]:
+    """Complete entity: 10+ filled fields so richness saturates at 1.0."""
+    return {
+        "Name": "Acme Recycling Corp",
+        "BillingCountry": "US",
+        "Industry": "Recycling",
+        "polymer_type": "HDPE",
+        "contamination_pct": 3.5,
+        "facility_tier": "Tier 2",
+        "mfi_range": "0.5-3.0",
+        "material_grade": "Standard HDPE",
+        "website": "https://acme.example",
+        "city": "Houston",
+        "state": "TX",
+    }
 
-    def test_empty_entity_high_uncertainty(self):
-        score = compute_uncertainty(
-            entity={},
-            field_confidence_map=FieldConfidenceMap(),
-            schema={},
-        )
-        assert score >= 5.0
+
+class TestUncertaintyEngine:
+    """Tests for the live variation-budget contract (int, not a float score)."""
+
+    def test_empty_entity_high_uncertainty(self, sample_schema: dict[str, str]) -> None:
+        budget = compute_uncertainty(entity={}, target_schema=sample_schema)
+        assert isinstance(budget, int)
+        assert budget >= 4
+        assert budget <= 5
 
     def test_rich_entity_low_uncertainty(
-        self, rich_entity, sample_field_confidence_map, sample_schema
-    ):
-        score = compute_uncertainty(
+        self, rich_entity: dict[str, Any], sample_schema: dict[str, str]
+    ) -> None:
+        budget = compute_uncertainty(entity=rich_entity, target_schema=sample_schema)
+        assert isinstance(budget, int)
+        assert 2 <= budget <= 3
+
+    def test_low_confidence_increases_uncertainty(
+        self, rich_entity: dict[str, Any], sample_schema: dict[str, str]
+    ) -> None:
+        low = compute_uncertainty(
             entity=rich_entity,
-            field_confidence_map=sample_field_confidence_map,
-            schema=sample_schema,
+            target_schema=sample_schema,
+            last_confidence=0.1,
         )
-        assert score < 5.0
-
-    def test_low_confidence_increases_uncertainty(self, sample_schema):
-        fcm = FieldConfidenceMap()
-        for field_name in sample_schema:
-            fcm.set(
-                FieldConfidence(
-                    field_name=field_name,
-                    value="test",
-                    confidence=0.3,
-                    source=FieldSource.ENRICHMENT,
-                )
-            )
-        entity = dict.fromkeys(sample_schema, "test")
-        score = compute_uncertainty(entity=entity, field_confidence_map=fcm, schema=sample_schema)
-        # Low confidence should produce higher uncertainty
-        assert score > 3.0
-
-    def test_high_confidence_lowers_uncertainty(self, sample_schema):
-        fcm = FieldConfidenceMap()
-        for field_name in sample_schema:
-            fcm.set(
-                FieldConfidence(
-                    field_name=field_name,
-                    value="test",
-                    confidence=0.95,
-                    source=FieldSource.ENRICHMENT,
-                )
-            )
-        entity = dict.fromkeys(sample_schema, "test")
-        score = compute_uncertainty(entity=entity, field_confidence_map=fcm, schema=sample_schema)
-        assert score < 4.0
-
-    def test_schema_coverage_penalty(self, sample_schema):
-        fcm = FieldConfidenceMap()
-        fcm.set(
-            FieldConfidence(
-                field_name="polymer_type",
-                value="HDPE",
-                confidence=0.9,
-                source=FieldSource.ENRICHMENT,
-            )
+        high = compute_uncertainty(
+            entity=rich_entity,
+            target_schema=sample_schema,
+            last_confidence=0.9,
         )
-        entity = {"polymer_type": "HDPE"}
-        score_partial = compute_uncertainty(
-            entity=entity, field_confidence_map=fcm, schema=sample_schema
-        )
+        assert isinstance(low, int)
+        assert low > high
 
-        fcm_full = FieldConfidenceMap()
-        entity_full = {}
-        for field_name in sample_schema:
-            fcm_full.set(
-                FieldConfidence(
-                    field_name=field_name,
-                    value="test",
-                    confidence=0.9,
-                    source=FieldSource.ENRICHMENT,
-                )
-            )
-            entity_full[field_name] = "test"
-        score_full = compute_uncertainty(
-            entity=entity_full, field_confidence_map=fcm_full, schema=sample_schema
+    def test_high_confidence_lowers_uncertainty(
+        self, rich_entity: dict[str, Any], sample_schema: dict[str, str]
+    ) -> None:
+        high = compute_uncertainty(
+            entity=rich_entity,
+            target_schema=sample_schema,
+            last_confidence=0.95,
         )
-        # Partial coverage → higher uncertainty
-        assert score_partial > score_full
+        low = compute_uncertainty(
+            entity=rich_entity,
+            target_schema=sample_schema,
+            last_confidence=0.2,
+        )
+        assert isinstance(high, int)
+        assert high < low
+        assert high == 2
 
-    def test_uncertainty_returns_float(self):
-        score = compute_uncertainty(
-            entity={"Name": "X"},
-            field_confidence_map=FieldConfidenceMap(),
-            schema={},
+    def test_schema_coverage_penalty(
+        self, rich_entity: dict[str, Any], sample_schema: dict[str, str]
+    ) -> None:
+        budget_partial = compute_uncertainty(
+            entity={"polymer_type": "HDPE"},
+            target_schema=sample_schema,
         )
-        assert isinstance(score, float)
+        budget_full = compute_uncertainty(
+            entity=rich_entity,
+            target_schema=sample_schema,
+        )
+        assert isinstance(budget_partial, int)
+        assert budget_partial > budget_full
+
+    def test_uncertainty_returns_float(self) -> None:
+        budget = compute_uncertainty(entity={"Name": "X"})
+        assert isinstance(budget, int)
+        assert 2 <= budget <= 5

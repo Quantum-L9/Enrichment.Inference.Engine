@@ -8,6 +8,8 @@ Source: ~200 lines | Target coverage: 90%
 
 from __future__ import annotations
 
+import pytest
+
 from app.services.validation_engine import _coerce, validate_response
 
 # Alias for test compatibility
@@ -24,31 +26,35 @@ class TestSchemaCoercion:
     """Expand schema coercion tests."""
 
     def test_coerce_string_to_integer(self):
-        result = coerce_value("42", "integer")
+        result = coerce_value("42", int)
         assert result == 42
 
     def test_coerce_string_to_float(self):
-        result = coerce_value("3.14", "float")
+        result = coerce_value("3.14", float)
         assert abs(result - 3.14) < 0.001
 
     def test_coerce_integer_to_string(self):
-        result = coerce_value(42, "string")
+        result = coerce_value(42, str)
         assert result == "42"
 
     def test_coerce_list_to_string(self):
-        result = coerce_value(["A", "B", "C"], "string")
+        result = coerce_value(["A", "B", "C"], str)
         assert isinstance(result, str)
         # Should produce comma-separated or JSON
         assert "A" in result and "B" in result
 
     def test_coerce_boolean_strings(self):
-        assert coerce_value("true", "boolean") is True
-        assert coerce_value("false", "boolean") is False
-        assert coerce_value("True", "boolean") is True
+        assert coerce_value("true", bool) is True
+        assert coerce_value("false", bool) is False
+        assert coerce_value("True", bool) is True
 
     def test_invalid_coercion_returns_none(self):
-        result = coerce_value("not_a_number", "integer")
-        assert result is None
+        with pytest.raises((ValueError, TypeError)):
+            coerce_value("not_a_number", int)
+        result = validate_payload({"confidence": 0.8, "n": "not_a_number"}, {"n": "integer"})
+        assert isinstance(result, dict)
+        assert "n" not in result
+        assert "confidence" in result
 
 
 # ---------------------------------------------------------------------------
@@ -67,8 +73,10 @@ class TestValidationRules:
         }
         schema = {"polymer_type": "string", "contamination_pct": "float"}
         result = validate_payload(payload, schema)
-        assert result.is_valid is True
-        assert "polymer_type" in result.validated_fields
+        assert isinstance(result, dict)
+        assert "confidence" in result
+        assert result["polymer_type"] == "HDPE"
+        assert result["contamination_pct"] == 3.5
 
     def test_type_mismatch_excluded(self):
         payload = {
@@ -77,10 +85,8 @@ class TestValidationRules:
         }
         schema = {"contamination_pct": "float"}
         result = validate_payload(payload, schema)
-        # The field should be coerced or excluded
-        if "contamination_pct" in result.validated_fields:
-            # If coerced, should be a float
-            assert isinstance(result.validated_fields["contamination_pct"], (int, float))
+        assert "contamination_pct" not in result
+        assert "confidence" in result
 
     def test_extra_fields_kept(self):
         payload = {
@@ -88,17 +94,20 @@ class TestValidationRules:
             "polymer_type": "HDPE",
             "unknown_field": "discovered",
         }
-        schema = {"polymer_type": "string"}
-        result = validate_payload(payload, schema)
-        # Schema discovery: unknown fields should be kept
-        assert (
-            "unknown_field" in result.validated_fields or "polymer_type" in result.validated_fields
-        )
+        # No schema: extra fields pass through
+        passthrough = validate_payload(payload, None)
+        assert "unknown_field" in passthrough
+        assert passthrough["polymer_type"] == "HDPE"
+        # With schema: declared valid fields are kept
+        schema_result = validate_payload(payload, {"polymer_type": "string"})
+        assert schema_result["polymer_type"] == "HDPE"
 
     def test_empty_payload(self):
         result = validate_payload({}, {})
-        assert result.is_valid is True
-        assert len(result.validated_fields) == 0
+        assert isinstance(result, dict)
+        assert "confidence" in result
+        data_fields = {k: v for k, v in result.items() if k != "confidence"}
+        assert len(data_fields) == 0
 
     def test_none_values_excluded(self):
         payload = {
@@ -106,5 +115,6 @@ class TestValidationRules:
             "x": None,
             "y": "valid",
         }
-        validate_payload(payload, {})
-        # None values may or may not be excluded depending on implementation
+        result = validate_payload(payload, {"x": "string", "y": "string"})
+        assert "x" not in result
+        assert result["y"] == "valid"

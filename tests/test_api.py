@@ -195,7 +195,7 @@ class TestConsensusEngine:
             {"confidence": 0.85, "Industry": "Recycling"},
             {"confidence": 0.88, "Industry": "Recycling"},
         ]
-        result = synthesize(payloads, 0.65)
+        result = synthesize(payloads, 0.65, total_attempted=len(payloads))
         assert "Industry" in result["fields"]
         assert result["confidence"] > 0.8
 
