@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
 from typing import Any
 
 import httpx
@@ -56,6 +57,18 @@ def _soql_escape(value: str) -> str:
     """
     escaped = value.replace("\\", "\\\\").replace("'", "\\'")  # escape backslashes then quotes
     return f"'{escaped}'"
+
+
+def _validate_soql_identifiers(names: Iterable[str], kind: str) -> None:
+    """Reject any name that is not a bare SOQL identifier.
+
+    Shared by all three interpolated slots in query_records so the SELECT
+    list, the FROM object and the WHERE field names cannot drift apart --
+    `fields` previously had no check at all while its two siblings did.
+    """
+    for name in names:
+        if not _SOQL_FIELD_RE.match(name):
+            raise ValueError(f"Invalid SOQL {kind} '{name}': must match [A-Za-z_][A-Za-z0-9_.]*")
 
 
 def _soql_literal(value: Any) -> str:
@@ -151,31 +164,28 @@ class SalesforceClient(CRMClientBase):
     ) -> list[dict[str, Any]]:
         """Execute a SOQL query with injection-safe WHERE clause construction.
 
-        Filter values are converted to safe SOQL literals via _soql_literal().
-        Filter field names are validated against the SOQL identifier allowlist
-        (_SOQL_FIELD_RE) before interpolation.
-        object_type is validated against _SOQL_FIELD_RE before interpolation
-        into the SELECT...FROM clause.
+        All three interpolated slots are validated before they reach the query
+        string: object_type and every requested field name against the SOQL
+        identifier allowlist (_SOQL_FIELD_RE), filter field names against the
+        same allowlist, and filter values via _soql_literal().
 
-        Raises ValueError if object_type or any filter field name contains
-        non-SOQL characters.
+        Note _SOQL_FIELD_RE does not admit `*`. The wildcard is legal SOQL in
+        some contexts, but accepting it here would mean accepting an
+        unvalidated token into the SELECT list; callers name their fields.
+
+        Raises ValueError if object_type, any requested field name, or any
+        filter field name contains non-SOQL characters.
         """
-        if not _SOQL_FIELD_RE.match(object_type):
-            raise ValueError(
-                f"Invalid SOQL object type '{object_type}': must match [A-Za-z_][A-Za-z0-9_.]*"
-            )
+        _validate_soql_identifiers([object_type], "object type")
+        _validate_soql_identifiers(fields or [], "field name")
+        _validate_soql_identifiers(filters, "field name")
 
         field_list = ", ".join(fields) if fields else "Id, Name"
 
-        where_parts: list[str] = []
-        for k, v in filters.items():
-            if not _SOQL_FIELD_RE.match(k):
-                raise ValueError(
-                    f"Invalid SOQL field name '{k}': must match [A-Za-z_][A-Za-z0-9_.]*"
-                )
-            where_parts.append(f"{k} = {_soql_literal(v)}")
+        where_parts = [f"{k} = {_soql_literal(v)}" for k, v in filters.items()]
 
         where_clause = " AND ".join(where_parts) if where_parts else "Id != null"
+        # l9-audit-reviewed: rule10 -- SOQL, not SQL: SELECT-only, no DML, no statement stacking; all three interpolated slots validated above; SalesforceClient is never instantiated in app/ (writeback.py:48-54 hardcodes OdooClient)
         soql = f"SELECT {field_list} FROM {object_type} WHERE {where_clause}"
 
         url = f"{self._instance_url}/services/data/{self._api_version}/query"
