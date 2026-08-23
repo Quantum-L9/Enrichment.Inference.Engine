@@ -25,18 +25,29 @@ into any live path · `[ ]` not started.
 - [x] `app/services/pg_store.py` — connection pool + CRUD (402 lines)
 - [x] `app/services/pg_models.py` — persistence models (227 lines, 100% covered)
 - [x] `app/services/result_store.py` — durable enrichment records (221 lines)
-- [~] Alembic migrations — **two competing trees; revision `0002` is orphaned**
+- [x] Alembic migrations — single tree at `migrations/`, guarded
 
 **Remaining:** pgvector embedding storage is still not present. Coverage on
 `pg_store.py` is 21.5% — the layer exists but is thinly exercised.
 
-**Alembic defect:** `alembic.ini` sets `script_location = migrations`, so the
-live chain is `migrations/env.py` + `migrations/versions/001_initial_schema.py`.
-A second tree exists at `alembic/versions/0002_perplexity_api_key_default.py`
-with no `alembic/env.py` beside it, so `alembic upgrade head` never discovers
-it and the `0002` schema change is **not applied**. Either rebase `0002` into
-`migrations/versions/` as a child of `001`, or delete it and document the
-single wired tree. Until then this is not shipped.
+**Resolved (2026-08-23):** the orphaned second tree `alembic/` was deleted. Its
+only revision, `0002_perplexity_api_key_default.py`, was inapplicable rather
+than merely undiscovered: it mutated a `config_snapshots` table that exists
+nowhere in this repository, and declared `down_revision = "0001"` against a
+baseline whose revision is `"001"`. The concern it was written for — a safe
+default for a missing Perplexity key — was solved at `app/core/config.py:25`
+and is covered by `tests/integration/test_gap_fixes.py::TestPerplexityApiKeySafeDefault`.
+Its sibling `0003` (same phantom table) was already dropped unmerged.
+`alembic.ini` → `migrations/` is now the single tree, as
+`docs/contracts/dependencies/postgresql.yaml` and
+`docs/contracts/data/migrations/migration-policy.md` already declared, and
+`tests/compliance/test_architecture.py` now fails on any revision outside it.
+
+- [ ] **Schema drift: `uncertainty_score` type mismatch.** `migrations/versions/001_initial_schema.py`
+      creates it as `sa.Float`; `app/services/pg_models.py` declares
+      `Numeric(8, 4)`. This is real model-vs-schema drift and needs a migration.
+      `migrations/env.py` sets `target_metadata` from `Base.metadata`, so
+      `alembic revision --autogenerate` can detect it.
 
 ### Event Emitter
 - [x] `app/services/event_emitter.py` — publishes enrichment lifecycle events (232 lines)
