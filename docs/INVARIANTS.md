@@ -35,7 +35,7 @@
 | C-10 (no hardcoded creds) | INV-12 | COVERED |
 | C-11 (transport immutability) | INV-15 | PARTIAL |
 | C-13 (active transport bundle lockstep) | INV-1 | GAP |
-| C-15 (coverage >= 68%) | INV-9 | COVERED |
+| C-15 (coverage >= 71%) | INV-9 | COVERED |
 | C-16 (Python 3.12+) | INV-11 | COVERED |
 | C-18 (frozen ruff ignores) | INV-17 | GAP |
 | C-20 (L9_META header) | INV-10 | PARTIAL |
@@ -83,9 +83,9 @@
 **Severity**: CRITICAL | **Enforcement**: PARTIAL
 **Rule**: Gate compilation must precede scoring; these stages must not be merged or reversed.
 
-### INV-9: Coverage Threshold >= 68%
+### INV-9: Coverage Threshold >= 71%
 **Severity**: HIGH | **Enforcement**: COVERED
-**Rule**: Test coverage must never drop below 68%.
+**Rule**: Test coverage must never drop below 71%.
 
 ### INV-10: L9_META Presence
 **Severity**: MEDIUM | **Enforcement**: PARTIAL
