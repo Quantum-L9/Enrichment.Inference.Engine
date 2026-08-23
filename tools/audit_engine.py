@@ -53,6 +53,16 @@ def sql_keywords_in_fstring(line: str) -> set[str]:
     return {kw.upper() for kw in _SQL_KEYWORD_RE.findall(line[m.start() :])}
 
 
+def sql_finding_severity(keywords: set[str]) -> str:
+    """Grade an interpolated query by what its verbs can do.
+
+    A mutation is CRITICAL; a read is HIGH. Kept next to
+    sql_keywords_in_fstring, and used by both rule 10 and its tests, so the
+    rule and its regression cases cannot drift apart on the definition.
+    """
+    return "CRITICAL" if keywords & _SQL_WRITE_KEYWORDS else "HIGH"
+
+
 #: An in-tree acknowledgement of a finding the tool cannot reason about.
 #: Form: `# l9-audit-reviewed: rule<N> -- <reason>`
 #: The reason is mandatory and length-checked; a bare marker suppresses
@@ -390,9 +400,8 @@ def check_security(files: list[Path], result: AuditResult):
             # ...` and `DELETE ... WHERE id IN (SELECT ...)` both mutate, and a
             # greedy match would capture the trailing SELECT and grade them as
             # reads -- downgrading exactly the queries that matter most.
-            writes = bool(keywords - {"SELECT"})
-            severity = "CRITICAL" if writes else "HIGH"
-            prefix = "C" if writes else "H"
+            severity = sql_finding_severity(keywords)
+            prefix = "C" if severity == "CRITICAL" else "H"
             counter += 1
             result.add(
                 severity=severity,

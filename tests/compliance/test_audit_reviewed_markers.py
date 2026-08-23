@@ -103,12 +103,15 @@ class TestSqlKeywordClassification:
 
     @staticmethod
     def _severity(line: str) -> str | None:
-        from tools.audit_engine import sql_keywords_in_fstring
+        """Drive the production functions, not a copy of their logic.
+
+        An earlier version re-implemented the write/read decision here, which
+        would let the rule and its regression cases drift apart silently.
+        """
+        from tools.audit_engine import sql_finding_severity, sql_keywords_in_fstring
 
         kws = sql_keywords_in_fstring(line)
-        if not kws:
-            return None
-        return "CRITICAL" if kws - {"SELECT"} else "HIGH"
+        return sql_finding_severity(kws) if kws else None
 
     def test_mixed_write_and_read_is_critical(self) -> None:
         assert self._severity('q = f"INSERT INTO archive SELECT * FROM {t} "') == "CRITICAL"
