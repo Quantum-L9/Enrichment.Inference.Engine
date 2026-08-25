@@ -1,0 +1,86 @@
+name: CI Pipeline Failure
+description: Report a CI pipeline failure for triage by the platform team
+title: "[CI Failure]: "
+labels: ["ci-failure", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for CI pipeline failures that are not explained by a code bug.
+        For code bugs that cause test failures, use the Bug Report template instead.
+
+  - type: input
+    id: workflow-run-url
+    attributes:
+      label: Workflow Run URL
+      description: Paste the full URL of the failed GitHub Actions run.
+      placeholder: "https://github.com/Quantum-L9/l9-ci-core/actions/runs/XXXXXXXXX"
+    validations:
+      required: true
+
+  - type: input
+    id: failed-job
+    attributes:
+      label: Failed Job Name
+      placeholder: "pr-pipeline / security-scan / scorecard"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: trigger
+    attributes:
+      label: Triggered By
+      options:
+        - Pull Request
+        - Push to main
+        - Scheduled (cron)
+        - Workflow Dispatch
+        - Tag push
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Error Output
+      description: Paste the relevant error section from the failed step.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: bisect-attempted
+    attributes:
+      label: Bisect Attempted?
+      options:
+        - "No — first occurrence"
+        - "No — intermittent failure"
+        - "Yes — narrowed to specific commit (paste SHA below)"
+        - "Yes — cannot reproduce locally"
+    validations:
+      required: true
+
+  - type: input
+    id: bisect-sha
+    attributes:
+      label: Bisect SHA (if applicable)
+      placeholder: "2b330a5aab90cd7781bef08f14c5e7904b61bc56"
+
+  - type: dropdown
+    id: affected-kernel
+    attributes:
+      label: Affected Kernel
+      options:
+        - pr-pipeline.yml
+        - release-publish.yml
+        - nightly.yml
+        - pre-commit-ci.yml
+        - trio-governance.yml
+        - security.yml
+        - scorecard.yml
+        - sbom.yml
+        - l9-self-ci.yml (inline only)
+        - Not a kernel call (repo-local workflow)
+    validations:
+      required: true

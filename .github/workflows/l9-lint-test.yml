@@ -1,0 +1,217 @@
+# L9 consumer lint + test workflow (TEMPLATE — copy into your repo)
+#
+# This file is NOT executed from l9-ci-core. Copy it into the CONSUMER
+# repository at `.github/workflows/l9-lint-test.yml`. It replaces the
+# lint / type-check / test half of the retired v1 `pr-pipeline.yml`.
+#
+# Org-seed safety (mirrors Node #58):
+#   - Lint / test run only when `pyproject.toml` or `requirements.txt` exists.
+#   - The test job is named `Python Test Suite`, not `Test Suite`, so it
+#     cannot collide with a required Node check context.
+#   - Toolchain versions come only from install-consumer-ci: no unpinned
+#     pytest plugin fallbacks. That action pins ruff, mypy and pytest and
+#     nothing else, so the pytest invocation below stays inside that set --
+#     see Core's own pr-pipeline.yml, which runs a bare `pytest -q`.
+#   - The consumer's own package and dependencies are still installed from
+#     pyproject.toml / requirements.txt in BOTH jobs: pytest fails on import
+#     without them, and mypy silently type-checks a different world without
+#     them (an optional-dependency fallback guarded by `type: ignore` reads
+#     as an unused ignore once the real import is missing).
+#
+# v2 conventions preserved here:
+#   - immutable event-revision checkout (no floating action ref)
+#   - external actions pinned to full commit SHAs
+#   - explicit least-privilege permissions (contents: read, no write scopes)
+name: L9 Lint and Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# ── Consumer config ───────────────────────────────────────────────────────────
+# The org seeder rewrites this file from its own copy and force-updates the
+# seed branch, so an edit made here is reverted by the next sync. Values that
+# have to differ per repo are therefore auto-detected below; set one
+# explicitly only if the detection is wrong for your layout.
+env:
+  PYTHON_VERSION: "3.12"
+  # Blank = auto-detect: `src` when a src/ directory exists, else the repo
+  # root. A literal "." made mypy walk the entire checkout -- vendored packs,
+  # docs fixtures and all -- in every src-layout repo.
+  SOURCE_DIR: ""
+  TEST_DIR: "tests/"
+  # Fail the build below this line coverage percentage. 0 = advisory (no gate).
+  COVERAGE_THRESHOLD: "0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l9-lint-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-python:
+    name: Detect Python package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      has_python: ${{ steps.detect.outputs.has_python }}
+    steps:
+      - name: Checkout immutable event revision
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/${REPOSITORY}.git"
+          auth_header="Authorization: Basic $(printf 'x-access-token:%s' "${TOKEN}" | base64 | tr -d '\n')"
+          git -c protocol.version=2 \
+            -c "http.https://github.com/.extraheader=${auth_header}" \
+            fetch --depth=1 origin "${REVISION}"
+          git checkout --detach FETCH_HEAD
+      - id: detect
+        name: Detect pyproject.toml or requirements.txt
+        run: |
+          set -euo pipefail
+          if [ -f pyproject.toml ] || [ -f requirements.txt ]; then
+            echo "has_python=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_python=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no Python manifest; skipping lint and Python Test Suite"
+          fi
+
+  lint:
+    name: Lint and Type Check
+    needs: detect-python
+    if: needs.detect-python.outputs.has_python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout immutable event revision
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin \
+            "https://x-access-token:${TOKEN}@github.com/${REPOSITORY}.git"
+          git -c protocol.version=2 fetch --depth=1 origin "${REVISION}"
+          git checkout --detach FETCH_HEAD
+          git remote set-url origin "https://github.com/${REPOSITORY}.git"
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install consumer package and dependencies
+        run: |
+          set -euo pipefail
+          if [ -f pyproject.toml ]; then
+            pip install -e ".[dev]" || pip install -e . || \
+              echo "::notice::pyproject.toml is not pip-installable; relying on PYTHONPATH"
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+      - name: Install extra CI requirements
+        run: |
+          set -euo pipefail
+          if [ -f requirements-ci.txt ]; then pip install -r requirements-ci.txt; fi
+      - name: Install consumer CI toolchain
+        uses: Quantum-L9/l9-ci-core/.github/actions/install-consumer-ci@7148fc73dcbf41367f5c5401432dc997b1f4f869  # main@7148fc7
+      - id: srcdir
+        name: Resolve source directory
+        run: |
+          set -euo pipefail
+          dir="${SOURCE_DIR:-}"
+          if [ -z "${dir}" ]; then
+            if [ -d src ]; then dir="src"; else dir="."; fi
+          fi
+          echo "dir=${dir}" >> "$GITHUB_OUTPUT"
+          echo "::notice::SOURCE_DIR resolved to ${dir}"
+      - name: ruff check
+        run: ruff check . --output-format=github
+      - name: ruff format --check
+        run: ruff format --check .
+      - name: mypy
+        env:
+          SOURCE_DIR: ${{ steps.srcdir.outputs.dir }}
+        run: |
+          mypy "${SOURCE_DIR}" \
+            --show-error-codes --pretty \
+            --install-types --non-interactive --ignore-missing-imports
+
+  test:
+    name: Python Test Suite
+    needs: detect-python
+    if: needs.detect-python.outputs.has_python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout immutable event revision
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin \
+            "https://x-access-token:${TOKEN}@github.com/${REPOSITORY}.git"
+          git -c protocol.version=2 fetch --depth=1 origin "${REVISION}"
+          git checkout --detach FETCH_HEAD
+          git remote set-url origin "https://github.com/${REPOSITORY}.git"
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install consumer package and dependencies
+        run: |
+          set -euo pipefail
+          if [ -f pyproject.toml ]; then
+            pip install -e ".[dev]" || pip install -e . || \
+              echo "::notice::pyproject.toml is not pip-installable; relying on PYTHONPATH"
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+      - name: Install extra CI requirements
+        run: |
+          set -euo pipefail
+          if [ -f requirements-ci.txt ]; then pip install -r requirements-ci.txt; fi
+      # Core pins land last so a consumer dev extra declaring its own pytest
+      # range cannot move the version this job was pinned to.
+      - name: Install consumer CI toolchain
+        uses: Quantum-L9/l9-ci-core/.github/actions/install-consumer-ci@7148fc73dcbf41367f5c5401432dc997b1f4f869  # main@7148fc7
+      - id: srcdir
+        name: Resolve source directory
+        run: |
+          set -euo pipefail
+          dir="${SOURCE_DIR:-}"
+          if [ -z "${dir}" ]; then
+            if [ -d src ]; then dir="src"; else dir="."; fi
+          fi
+          echo "dir=${dir}" >> "$GITHUB_OUTPUT"
+          echo "::notice::SOURCE_DIR resolved to ${dir}"
+      - name: pytest with coverage
+        env:
+          TESTING: "true"
+          SOURCE_DIR: ${{ steps.srcdir.outputs.dir }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. pytest "${TEST_DIR}" \
+            --cov="${SOURCE_DIR}" \
+            --cov-report=xml --cov-report=term-missing \
+            --cov-fail-under="${COVERAGE_THRESHOLD}" \
+            --tb=short -v

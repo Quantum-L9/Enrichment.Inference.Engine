@@ -1,0 +1,84 @@
+name: Governance Violation
+description: Report a violation of CANONICAL_LAW.md policy
+title: "[Gov Violation]: "
+labels: ["governance", "violation", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to report a detected violation of [CANONICAL_LAW.md](https://github.com/Quantum-L9/Cursor-Governance/blob/main/CANONICAL_LAW.md).
+        The platform team will triage and enforce. Do NOT use this for general bugs — use the Bug Report template.
+
+  - type: dropdown
+    id: violation-type
+    attributes:
+      label: Violation Type
+      options:
+        - Symlink drift (§2 — symlinks missing or broken)
+        - Anti-pattern detected (§7 — forbidden patterns present)
+        - Trio separation breach (§3 — model/service/interface cross-import)
+        - Policy gate failure (CI gate not enforcing policy)
+        - Workspace wiring failure (§8 — workspace config broken)
+        - Kernel ref violation (@main used instead of @v1)
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: canonical-law-section
+    attributes:
+      label: CANONICAL_LAW.md Section Violated
+      options:
+        - "§1 — Unknown/General"
+        - "§2 — Symlink Contract"
+        - "§3 — Trio Separation"
+        - "§4 — Unknown"
+        - "§5 — Unknown"
+        - "§6 — Unknown"
+        - "§7 — Anti-Patterns"
+        - "§8 — Workspace Wiring"
+        - "§9 — Unknown"
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Paste command output, diff, or log that demonstrates the violation.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: affected-repos
+    attributes:
+      label: Affected Repository
+      multiple: true
+      options:
+        - l9-ci-core
+        - Cursor-Governance
+        - l9-assurance
+        - .github (org backbone)
+        - Multiple repos
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Critical (active governance bypass / security impact)
+        - High (CI not enforcing policy)
+        - Medium (drift detected but not exploited)
+        - Low (documentation only)
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-fix
+    attributes:
+      label: Proposed Fix (optional)
+      description: If you know how to fix this, describe the resolution.

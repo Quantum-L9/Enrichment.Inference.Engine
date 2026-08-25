@@ -1,0 +1,11 @@
+{
+  "schema": "l9.finding-policy/v1",
+  "metadata": {
+    "version": "1.0.0",
+    "status": "authoritative"
+  },
+  "defaults": {
+    "mode": "unresolved"
+  },
+  "rules": {}
+}
