@@ -17,6 +17,7 @@ from typing import Any
 
 import structlog
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -119,15 +120,28 @@ async def save_enrichment_result(
     """
     Persist an EnrichResponse. Returns the saved ORM record.
 
-    If idempotency_key is provided and a record already exists, returns
-    the existing record without writing (idempotent replay safety).
+    Replay safety is tenant-scoped: the logical operation is identified by
+    (tenant_id, idempotency_key), never by the raw caller key alone. A key that
+    tenant A supplied must never return, suppress, or collide with tenant B's
+    result, even when both tenants chose the same string.
+
+    The pre-read below is an optimisation, not the guarantee. Two concurrent
+    writers can both miss it; the composite unique constraint then rejects one
+    of them, and that rejection is resolved into an idempotent hit rather than
+    surfaced as a persistence failure — a duplicate of a logical operation that
+    already committed is a success for the caller, not an error.
+
     If field_confidence_map is provided, FieldConfidenceHistory rows are
     written in the same transaction.
     """
     if idempotency_key:
-        existing = await get_enrichment_result_by_idempotency_key(idempotency_key)
+        existing = await get_enrichment_result_by_idempotency_key(tenant_id, idempotency_key)
         if existing:
-            logger.debug("enrichment_result_idempotent_hit", idempotency_key=idempotency_key)
+            logger.debug(
+                "enrichment_result_idempotent_hit",
+                tenant_id=tenant_id,
+                idempotency_key=idempotency_key,
+            )
             return existing
 
     record = EnrichmentResult(
@@ -151,23 +165,41 @@ async def save_enrichment_result(
         convergence_run_id=convergence_run_id,
     )
 
-    async with get_session() as session:
-        session.add(record)
-        await session.flush()
+    try:
+        async with get_session() as session:
+            session.add(record)
+            await session.flush()
 
-        if field_confidence_map:
-            for field_name, conf in field_confidence_map.items():
-                fch = FieldConfidenceHistory(
-                    enrichment_result_id=record.id,
-                    tenant_id=tenant_id,
-                    entity_id=entity_id,
-                    field_name=field_name,
-                    field_value=str(fields.get(field_name, "")),
-                    confidence=conf,
-                    source="enrichment",
-                    pass_number=pass_count,
-                )
-                session.add(fch)
+            if field_confidence_map:
+                for field_name, conf in field_confidence_map.items():
+                    fch = FieldConfidenceHistory(
+                        enrichment_result_id=record.id,
+                        tenant_id=tenant_id,
+                        entity_id=entity_id,
+                        field_name=field_name,
+                        field_value=str(fields.get(field_name, "")),
+                        confidence=conf,
+                        source="enrichment",
+                        pass_number=pass_count,
+                    )
+                    session.add(fch)
+    except IntegrityError:
+        # Lost the (tenant_id, idempotency_key) race. The database, not this
+        # process, is the authority on which writer committed; read back the
+        # winner and treat it as the idempotent hit it is. Without a key there
+        # is no such constraint to violate, so the error is genuinely ours.
+        if not idempotency_key:
+            raise
+        winner = await get_enrichment_result_by_idempotency_key(tenant_id, idempotency_key)
+        if winner is None:
+            raise
+        logger.info(
+            "enrichment_result_idempotent_race_resolved",
+            tenant_id=tenant_id,
+            idempotency_key=idempotency_key,
+            id=str(winner.id),
+        )
+        return winner
 
     logger.info(
         "enrichment_result_saved",
@@ -192,11 +224,20 @@ async def get_enrichment_result(result_id: uuid.UUID) -> EnrichmentResult | None
 
 
 async def get_enrichment_result_by_idempotency_key(
+    tenant_id: str,
     idempotency_key: str,
 ) -> EnrichmentResult | None:
-    """Look up an existing result by caller-supplied idempotency key."""
+    """Look up an existing result by (tenant, caller-supplied idempotency key).
+
+    Tenant is part of the lookup, not a filter applied afterwards: a caller key
+    is only meaningful inside the tenant that issued it, so a query without
+    tenant can return another tenant's row for the same string.
+    """
     async with get_session() as session:
-        stmt = select(EnrichmentResult).where(EnrichmentResult.idempotency_key == idempotency_key)
+        stmt = select(EnrichmentResult).where(
+            EnrichmentResult.tenant_id == tenant_id,
+            EnrichmentResult.idempotency_key == idempotency_key,
+        )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 

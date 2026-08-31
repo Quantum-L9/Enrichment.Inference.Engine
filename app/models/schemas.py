@@ -93,6 +93,13 @@ class BatchEnrichRequest(BaseModel):
 
 # ── Response ─────────────────────────────────────────────────
 
+# The single terminal state that means "this convergence produced a durable,
+# usable result". Consumers derive their own status from it — IB-Odoo_19
+# `gate_mappers.map_converge_response` maps `state == COMPLETED_STATE` to
+# status "ok" and anything else to its degraded path. It is a canonical
+# enrichment-domain constant, not an Odoo-specific one.
+COMPLETED_STATE = "completed"
+
 
 class EnrichResponse(BaseModel):
     """Full enrichment response.
