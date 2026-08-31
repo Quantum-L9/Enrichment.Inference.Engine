@@ -1,4 +1,12 @@
-"""Unit tests for Odoo Gate converge wire-format adapter + handler path."""
+"""Unit tests for the converge dispatch and the compatibility adapter.
+
+Two things are pinned here, and the split between them is the point:
+
+* the live Odoo payload is served by the CANONICAL branch, untranslated;
+* the compatibility adapter still handles the older
+  ``entity_snapshot`` / top-level ``entity_id`` dialect, and cannot claim a
+  canonical payload.
+"""
 
 from __future__ import annotations
 
@@ -8,14 +16,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.engines.handlers import handle_converge
-from app.models.schemas import EnrichResponse
+from app.models.schemas import EnrichRequest, EnrichResponse
 from app.services.odoo_gate_converge import (
     PARTNER_WRITEBACK_FIELD_ALLOWLIST,
     build_enrich_request,
     build_odoo_converge_error,
     build_odoo_converge_response,
     filter_partner_fields,
-    is_odoo_converge_payload,
+    is_odoo_compat_converge_payload,
     parse_odoo_converge_request,
 )
 
@@ -62,36 +70,38 @@ def _live_odoo_payload(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-class TestLiveOdooBuilderShape:
-    """Regression: the live payload used to route to the legacy handler."""
+class TestLiveOdooBuilderShapeIsCanonical:
+    """The live payload is the canonical contract, not a compatibility shape.
 
-    def test_live_payload_is_recognised(self) -> None:
-        assert is_odoo_converge_payload(_live_odoo_payload()) is True
+    Regression: the compatibility adapter's discriminator was widened to match
+    ``entity["id"]``, which is exactly where the live builder puts the canonical
+    identity. That routed every production request into an adapter that drops
+    that identity, rewrites the caller's objective and object_type, and
+    truncates the response fields — a silent contract rewrite.
+    """
 
-    def test_live_payload_identity_is_read_from_the_entity(self) -> None:
-        parsed = parse_odoo_converge_request(_live_odoo_payload())
-        assert parsed["entity_id"] == "res.partner:55"
-        assert parsed["entity_id"] != "unknown"
+    def test_live_payload_is_not_a_compatibility_payload(self) -> None:
+        assert is_odoo_compat_converge_payload(_live_odoo_payload()) is False
 
-    def test_compatibility_alias_alone_is_enough(self) -> None:
+    def test_entity_id_alone_does_not_divert_a_canonical_payload(self) -> None:
+        payload = _live_odoo_payload(entity={"name": "Acme", "id": "res.partner:55"})
+        assert is_odoo_compat_converge_payload(payload) is False
+
+    def test_compatibility_alias_alone_does_not_divert_it_either(self) -> None:
         payload = _live_odoo_payload(entity={"name": "Acme", "_odoo_entity_id": "res.partner:55"})
-        assert parse_odoo_converge_request(payload)["entity_id"] == "res.partner:55"
+        assert is_odoo_compat_converge_payload(payload) is False
 
-    def test_domain_comes_from_object_type(self) -> None:
-        assert parse_odoo_converge_request(_live_odoo_payload())["domain"] == "plasticos"
-
-    def test_max_variations_maps_to_max_passes(self) -> None:
-        parsed = parse_odoo_converge_request(_live_odoo_payload(max_variations=4))
-        assert parsed["max_passes"] == 4
-
-    def test_snapshot_drops_identity_keys(self) -> None:
-        parsed = parse_odoo_converge_request(_live_odoo_payload())
-        assert parsed["entity_snapshot"] == {"name": "Acme Recycling", "city": "Charlotte"}
+    def test_live_payload_validates_as_a_canonical_enrich_request(self) -> None:
+        request = EnrichRequest.model_validate(_live_odoo_payload())
+        assert request.entity["id"] == "res.partner:55"
+        assert request.entity["_odoo_entity_id"] == "res.partner:55"
+        assert request.object_type == "plasticos"
+        assert request.objective == "Full entity enrichment and inference"
+        assert request.max_variations == 5
 
     def test_internal_enrich_request_is_not_captured(self) -> None:
-        """A free-form entity id must not be mistaken for an Odoo record ref."""
         assert (
-            is_odoo_converge_payload(
+            is_odoo_compat_converge_payload(
                 {"entity": {"id": "acme-corp", "name": "Acme"}, "object_type": "Account"}
             )
             is False
@@ -99,11 +109,11 @@ class TestLiveOdooBuilderShape:
 
 
 class TestOdooConvergeAdapter:
-    def test_detects_odoo_payload(self) -> None:
-        assert is_odoo_converge_payload(_odoo_payload()) is True
-        assert is_odoo_converge_payload({"entity_id": "res.partner:1"}) is True
+    def test_detects_compatibility_payload(self) -> None:
+        assert is_odoo_compat_converge_payload(_odoo_payload()) is True
+        assert is_odoo_compat_converge_payload({"entity_id": "res.partner:1"}) is True
         assert (
-            is_odoo_converge_payload(
+            is_odoo_compat_converge_payload(
                 {
                     "entity": {"Name": "X"},
                     "object_type": "Account",
@@ -213,8 +223,8 @@ class TestOdooConvergeAdapter:
 
 
 @pytest.mark.asyncio
-class TestHandleConvergeOdoo:
-    async def test_odoo_payload_returns_map_converge_response_shape(self) -> None:
+class TestHandleConvergeCompatibilityBranch:
+    async def test_compatibility_payload_returns_map_converge_response_shape(self) -> None:
         enrich = EnrichResponse(
             fields={"website": "https://enriched.example", "city": "Raleigh"},
             pass_count=2,
@@ -252,10 +262,10 @@ class TestHandleConvergeOdoo:
             {"entity_snapshot": {"name": "X"}, "domain": "plasticos"},
         )
         assert result["state"] == "failed"
-        assert "entity identity is required" in result["failure_reason"]
+        assert "entity_id is required" in result["failure_reason"]
         assert result["fields"] == {}
 
-    async def test_timeout_raises_for_odoo_fallback(self) -> None:
+    async def test_compatibility_timeout_raises_for_odoo_fallback(self) -> None:
         async def _slow(*_a: Any, **_k: Any) -> EnrichResponse:
             raise TimeoutError
 
@@ -273,7 +283,7 @@ class TestHandleConvergeOdoo:
         ):
             await handle_converge("plasticos", _odoo_payload())
 
-    async def test_legacy_enrich_request_path_still_works(self) -> None:
+    async def test_canonical_enrich_request_path_still_works(self) -> None:
         enrich = EnrichResponse(fields={"Industry": "Plastics"}, state="completed")
         payload = {
             "entity": {"Name": "Acme"},

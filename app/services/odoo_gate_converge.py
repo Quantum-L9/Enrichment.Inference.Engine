@@ -1,8 +1,26 @@
-"""Odoo Gate converge wire-format adapter.
+"""Compatibility adapter for the pre-canonical ``entity_snapshot`` converge dialect.
 
-Conforms to PlasticOS `plasticos_gate` contracts (IB-Odoo_19):
-  - Request: ConvergeRequest.to_dict()
-  - Response: map_converge_response / partner_writeback_from_converge
+**This module is not the canonical converge contract.** The canonical rail is
+
+    Odoo ``build_converge_request`` (EnrichRequest-shaped)
+      -> Gate_SDK TransportPacket(action="converge")
+      -> Constellation.Gate
+      -> EIE ``handlers._handle_canonical_converge``
+      -> ``EnrichResponse``
+
+and it is served by ``EnrichRequest.model_validate(payload)`` directly, with no
+translation. Everything here exists for one older shape — a top-level
+``entity_id`` or an ``entity_snapshot`` dict — which the live Odoo producer
+(IB-Odoo_19 ``plasticos_gate/services/gate_builders.py::build_converge_request``,
+PR #163) has never emitted.
+
+Why it must stay narrow: this adapter is lossy against a canonical payload. It
+drops ``entity["id"]`` (not a snapshot key), replaces the caller's ``objective``
+and ``object_type`` with its own, reinterprets ``max_variations`` as passes, and
+truncates the response ``fields`` to the partner allowlist. Applying it to a
+canonical request would silently rewrite the contract, so the discriminator
+below matches the compatibility shapes *only* and can never claim a payload the
+canonical branch should serve.
 
 Do not invent partner fields. The allowlist is the hard writeback boundary.
 """
@@ -17,6 +35,7 @@ from uuid import uuid4
 import structlog
 
 from app.models.schemas import EnrichRequest, EnrichResponse
+from app.services.request_deadline import CANONICAL_CONVERGE_BUDGET_SECONDS
 
 logger = structlog.get_logger(__name__)
 
@@ -41,7 +60,8 @@ PARTNER_SNAPSHOT_KEYS: frozenset[str] = PARTNER_WRITEBACK_FIELD_ALLOWLIST | froz
 
 DEFAULT_MAX_PASSES = 3
 MAX_PASSES_CEILING = 10
-DEFAULT_CONVERGE_TIMEOUT_SECONDS = 25.0
+# One budget SSOT for every converge branch — see request_deadline.
+DEFAULT_CONVERGE_TIMEOUT_SECONDS = CANONICAL_CONVERGE_BUDGET_SECONDS
 # Odoo gate_mappers.EIE_STATE_COMPLETED — the only state it maps to status "ok".
 ODOO_COMPLETED_STATE = "completed"
 
@@ -62,36 +82,40 @@ _ODOO_ENTITY_REF = re.compile(r"^[a-z][a-z0-9_.]*:\d+$")
 
 
 def odoo_entity_ref(payload: dict[str, Any]) -> str | None:
-    """Return the Odoo entity reference this payload carries, or None.
+    """Return the compatibility-shape entity reference, or None.
 
-    Contract authority is the live builder, IB-Odoo_19
-    ``plasticos_gate/services/gate_builders.py::build_converge_request``, which
-    puts the identity ON the entity — ``entity["id"] = "res.partner:N"`` with
-    ``entity["_odoo_entity_id"]`` as the compatibility alias — and never sends a
-    top-level ``entity_id`` or ``entity_snapshot``. Matching on a top-level
-    ``entity_id`` while excluding payloads that contain ``entity`` therefore
-    rejected every real request.
+    Only the pre-canonical shapes are recognised: identity at the TOP level
+    (``entity_id``), which the canonical EnrichRequest has no field for.
 
-    The reference pattern is the discriminator, so an internal EnrichRequest
-    whose entity happens to carry a free-form ``id`` is not misrouted here.
+    Deliberately NOT matched: ``entity["id"]`` / ``entity["_odoo_entity_id"]``.
+    That is where the live Odoo builder puts the canonical identity, and it is
+    exactly the payload the canonical branch must serve. Matching it here is
+    what routed every production request into this lossy adapter (see the
+    module docstring); the canonical branch keeps ``entity`` verbatim, so the
+    identity survives there rather than being re-derived here.
     """
     if not isinstance(payload, dict):
         return None
-    entity = payload.get("entity")
-    if isinstance(entity, dict):
+    legacy = payload.get("entity_id")
+    if isinstance(legacy, str) and legacy.strip():
+        return legacy.strip()
+    snapshot = payload.get("entity_snapshot")
+    if isinstance(snapshot, dict):
         for key in ("id", "_odoo_entity_id"):
-            value = entity.get(key)
+            value = snapshot.get(key)
             if isinstance(value, str) and _ODOO_ENTITY_REF.match(value.strip()):
                 return value.strip()
-    # Pre-Gate internal shape: identity at the top level, no `entity` key.
-    legacy = payload.get("entity_id")
-    if isinstance(legacy, str) and legacy.strip() and "entity" not in payload:
-        return legacy.strip()
     return None
 
 
-def is_odoo_converge_payload(payload: dict[str, Any]) -> bool:
-    """True when payload matches an Odoo Gate ConvergeRequest shape."""
+def is_odoo_compat_converge_payload(payload: dict[str, Any]) -> bool:
+    """True only for the pre-canonical ``entity_snapshot`` / ``entity_id`` dialect.
+
+    A canonical EnrichRequest — ``entity`` + ``object_type`` + ``objective``,
+    identity on ``entity["id"]`` — returns False here and is served by the
+    canonical branch untranslated. There is exactly one canonical contract
+    (EIE19); this predicate is the boundary that keeps it that way.
+    """
     if not isinstance(payload, dict):
         return False
     if isinstance(payload.get("entity_snapshot"), dict):
@@ -107,28 +131,19 @@ def parse_odoo_converge_request(payload: dict[str, Any]) -> dict[str, Any]:
     entity_id = odoo_entity_ref(payload)
     if not entity_id:
         raise ValueError(
-            "converge: entity identity is required — expected entity['id'] like "
-            "'res.partner:55' (live Odoo builder) or a top-level entity_id"
+            "converge (compatibility dialect): a top-level entity_id is required, "
+            "e.g. 'res.partner:55'"
         )
 
     domain_raw = payload.get("domain")
-    # The live builder carries the domain in `object_type` (it is built as
-    # `object_type=str(domain)`, e.g. "plasticos"). The pre-Gate shape has no
-    # `entity` key and keeps the default instead of borrowing its object_type,
-    # which there means a record type rather than a domain.
-    if not (isinstance(domain_raw, str) and domain_raw.strip()) and isinstance(
-        payload.get("entity"), dict
-    ):
-        domain_raw = payload.get("object_type")
+    # In this dialect `object_type` means a record type, not a domain, so it is
+    # never borrowed as one. (Canonical payloads, where `object_type` DOES carry
+    # the domain, are resolved on the canonical branch and never arrive here.)
     domain = (
         domain_raw.strip() if isinstance(domain_raw, str) and domain_raw.strip() else "plasticos"
     )
 
     snapshot_raw = payload.get("entity_snapshot")
-    if not isinstance(snapshot_raw, dict):
-        # Live builder: the partner snapshot IS `entity` (identity keys included,
-        # filtered out below because they are not snapshot fields).
-        snapshot_raw = payload.get("entity")
     snapshot: dict[str, Any] = {}
     if isinstance(snapshot_raw, dict):
         for key, value in snapshot_raw.items():
@@ -153,11 +168,7 @@ def parse_odoo_converge_request(payload: dict[str, Any]) -> dict[str, Any]:
     elif not isinstance(profile_id, str):
         profile_id = str(profile_id)
 
-    # Live builder sends `max_variations` (clamped 1..10); pre-Gate sends max_passes.
-    raw_passes = payload.get("max_passes")
-    if raw_passes in (None, "", False):
-        raw_passes = payload.get("max_variations")
-    max_passes = _normalize_max_passes(raw_passes)
+    max_passes = _normalize_max_passes(payload.get("max_passes"))
 
     return {
         "entity_id": entity_id,

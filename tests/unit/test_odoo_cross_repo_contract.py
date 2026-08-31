@@ -10,11 +10,12 @@ Nothing here imports IB-Odoo_19: the fixture and the mapper mirror are copies,
 each carrying the exact source file and function they represent, so this stays a
 contract test rather than a cross-repo runtime dependency.
 
-The defect being regressed: the adapter matched on a top-level ``entity_id`` and
-explicitly excluded payloads containing ``entity``, so no request the live
-builder can produce ever reached the hardened handler — and the handler answered
-with a ``status``/``final_fields``/``writeback`` envelope the live mapper does
-not read.
+The defect being regressed: the hardening was attached to a compatibility
+adapter for a ``entity_snapshot``/``entity_id`` dialect the live builder never
+emits. Widening that adapter's discriminator to swallow the real payload was not
+a fix — the adapter is lossy against it (drops ``entity["id"]``, rewrites
+``objective`` and ``object_type``, truncates ``fields``). The canonical branch
+now serves the live payload untranslated, and carries the hardening itself.
 """
 
 from __future__ import annotations
@@ -131,18 +132,19 @@ async def test_live_odoo_payload_round_trips_through_the_active_eie_path(eie_run
     """The whole contract, end to end, in one assertion block."""
     result = await handle_converge("plasticos", _odoo_builder_payload())
 
-    # 1. It reached the hardened canonical handler (not the legacy branch).
+    # 1. It reached the canonical handler (not the compatibility adapter).
     assert eie_runtime["loop"].await_count == 1
 
-    # 2. Identity survived; it never degraded to "unknown".
+    # 2. The request went in untranslated: identity, objective and object_type
+    #    are the caller's, not values this repo substituted for them.
     request = eie_runtime["loop"].await_args.kwargs["request"]
-    assert request.object_type == "res.partner"
-    persisted_entity = eie_runtime["persist"].call_args
-    assert persisted_entity is not None, "canonical convergence must still persist"
+    assert request.entity["id"] == ENTITY_REF
+    assert request.object_type == "plasticos"
+    assert request.objective == "Full entity enrichment and inference"
+    assert eie_runtime["persist"].call_args is not None, "canonical convergence must still persist"
 
     # 3/4. The response is the canonical {state, fields} the live mapper reads.
     assert result["state"] == "completed"
-    assert set(result["fields"]) <= _PARTNER_WRITEBACK_FIELD_ALLOWLIST
 
     # 5. The obsolete envelope is gone.
     for obsolete in ("status", "final_fields", "writeback", "total_cost_usd"):
@@ -153,14 +155,15 @@ async def test_live_odoo_payload_round_trips_through_the_active_eie_path(eie_run
     assert mapped["status"] == "ok", "live Odoo mapper must see a usable result"
     assert mapped["state"] == "completed"
     assert mapped["final_fields"]["website"] == "https://acme.example"
-    # city was already populated in the snapshot -> merge-not-overwrite noise dropped
-    assert "city" not in mapped["final_fields"]
+    # EIE does not pre-filter; the allowlist is applied on the Odoo side, and
+    # merge-not-overwrite is Odoo's own writeback rule.
     assert _odoo_partner_writeback(mapped) == {
         "website": "https://acme.example",
         "phone": "555-0100",
+        "city": "Charlotte",
     }
 
-    # 7. E11 — zero Graph calls on the canonical Odoo path.
+    # 7. EIE14 — zero Graph calls on the canonical Odoo path.
     assert eie_runtime["router"].notify_graph_sync.await_count == 0
 
 
@@ -199,9 +202,37 @@ async def test_live_odoo_payload_keeps_sdk_retries_disabled(eie_runtime):
 
 
 async def test_live_odoo_failure_degrades_rather_than_injecting(eie_runtime):
-    """A non-completed convergence must not read as success on the Odoo side."""
-    from app.services.odoo_gate_converge import build_odoo_converge_error
+    """A non-completed convergence must not read as success on the Odoo side.
 
-    mapped = _odoo_map_converge_response(build_odoo_converge_error(error="gate unavailable"))
+    The canonical failure is an EnrichResponse with a non-completed ``state``,
+    not a bespoke error envelope. Odoo's mapper resolves it to a non-ok status
+    and ``_run_gate_converge`` falls closed to its degraded state.
+    """
+    from app.engines.handlers import _canonical_failure
+
+    mapped = _odoo_map_converge_response(_canonical_failure("gate unavailable"))
     assert mapped["status"] != "ok"
+    assert mapped["state"] == "failed"
     assert mapped["final_fields"] == {}
+
+
+async def test_canonical_fields_reach_odoo_without_eie_side_filtering(eie_runtime):
+    """A non-partner field survives EIE; only Odoo's allowlist removes it.
+
+    The compatibility adapter filtered ``fields`` down to the eight partner keys
+    before answering. On the canonical rail that is field loss: EnrichResponse
+    carries whatever converged, and Odoo's ``partner_writeback_from_converge``
+    decides what it will write.
+    """
+    eie_runtime["loop"].return_value = EnrichResponse(
+        state="completed",
+        fields={"website": "https://acme.example", "annual_tonnage": 4200},
+        pass_count=1,
+    )
+
+    result = await handle_converge("plasticos", _odoo_builder_payload())
+
+    assert result["fields"]["annual_tonnage"] == 4200
+    mapped = _odoo_map_converge_response(result)
+    assert mapped["final_fields"]["annual_tonnage"] == 4200
+    assert _odoo_partner_writeback(mapped) == {"website": "https://acme.example"}
