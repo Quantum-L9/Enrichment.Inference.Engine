@@ -72,10 +72,16 @@ async def _persist_and_sync(
     payload: dict[str, Any],
     response_dict: dict[str, Any],
     object_type: str,
+    *,
+    graph_sync: bool = True,
 ) -> None:
     """
     Delegate post-enrich side effects to the single SideEffectCoordinator (TASK-021).
     Fire-and-forward — never raises; failures are logged inside the coordinator.
+
+    `graph_sync=False` keeps the Gate->GRAPH round trip off a latency-bounded
+    caller's path. Persistence still happens synchronously; only the Graph leg
+    is excluded.
     """
     settings = get_settings()
     entity_id = payload.get("entity_id", payload.get("entity", {}).get("id", "unknown"))
@@ -95,6 +101,7 @@ async def _persist_and_sync(
         packet_id=packet_id,
         idempotency_key=payload.get("idempotency_key"),
         emit_event=True,
+        graph_sync=graph_sync,
     )
 
 
@@ -229,6 +236,10 @@ async def _run_odoo_converge(
             "entity": request.entity,
             "idempotency_key": request.idempotency_key,
         }
+        # E11: zero Graph calls on the canonical Odoo path. Graph sync awaits up
+        # to three Gate attempts at 30 s each with backoff between them — 93 s in
+        # the worst case, against a caller that waits 30 s. Persistence stays
+        # synchronous because Odoo's response depends on it; Graph does not.
         await _persist_and_sync(
             tenant,
             persist_payload,
@@ -240,6 +251,7 @@ async def _run_odoo_converge(
                 "state": response.state,
             },
             request.object_type,
+            graph_sync=False,
         )
 
     logger.info(
