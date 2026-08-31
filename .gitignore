@@ -68,3 +68,10 @@ htmlcov/
 
 # Local agent session scratch (not project source)
 memory-bank/
+
+# Claude Code / L9 governance bootstrap output.
+# The sessionStart reconciler materialises .claude/ in every workspace as
+# symlinks into the governance clone plus two generated manifests. This
+# repository tracks no .claude files of its own, and the tree is regenerated on
+# each session, so it is container-local state rather than repository content.
+.claude/
