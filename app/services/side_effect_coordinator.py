@@ -50,6 +50,7 @@ class SideEffectReport:
     key: str
     persisted: bool = False
     graph_synced: bool = False
+    graph_skipped: bool = False
     score_invalidated: bool = False
     event_emitted: bool = False
     skipped: bool = False
@@ -77,7 +78,15 @@ class SideEffectCoordinator:
         packet_id: str | None = None,
         idempotency_key: str | None = None,
         emit_event: bool = True,
+        graph_sync: bool = True,
     ) -> SideEffectReport:
+        """Commit post-enrich side effects once per semantic key.
+
+        `graph_sync=False` excludes the Gate->GRAPH round trip. A caller that is
+        itself answering a latency-bounded request uses it: `notify_graph_sync`
+        awaits up to three Gate attempts at 30 s each with backoff between, which
+        no synchronous caller budget can absorb.
+        """
         key = semantic_side_effect_key(
             tenant=tenant,
             entity_id=entity_id,
@@ -110,21 +119,25 @@ class SideEffectCoordinator:
             report.errors.append(f"persist:{exc}")
             logger.warning("side_effect_persist_failed", entity_id=entity_id, error=str(exc))
 
-        # 2) Graph sync once (Gate-only PacketRouter)
-        try:
-            from app.engines.packet_router import get_router
+        # 2) Graph sync once (Gate-only PacketRouter), unless excluded
+        if not graph_sync:
+            report.graph_skipped = True
+            logger.info("side_effect_graph_sync_excluded", entity_id=entity_id, key=key)
+        else:
+            try:
+                from app.engines.packet_router import get_router
 
-            router = get_router(settings)
-            await router.notify_graph_sync(
-                tenant_id=tenant,
-                entity_id=entity_id,
-                fields=response_dict.get("fields", {}),
-                domain=domain,
-            )
-            report.graph_synced = True
-        except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"graph_sync:{exc}")
-            logger.warning("side_effect_graph_sync_failed", entity_id=entity_id, error=str(exc))
+                router = get_router(settings)
+                await router.notify_graph_sync(
+                    tenant_id=tenant,
+                    entity_id=entity_id,
+                    fields=response_dict.get("fields", {}),
+                    domain=domain,
+                )
+                report.graph_synced = True
+            except Exception as exc:  # noqa: BLE001
+                report.errors.append(f"graph_sync:{exc}")
+                logger.warning("side_effect_graph_sync_failed", entity_id=entity_id, error=str(exc))
 
         # 3) Score invalidation once
         try:
@@ -168,6 +181,7 @@ class SideEffectCoordinator:
             entity_id=entity_id,
             persisted=report.persisted,
             graph_synced=report.graph_synced,
+            graph_skipped=report.graph_skipped,
             score_invalidated=report.score_invalidated,
             event_emitted=report.event_emitted,
         )
