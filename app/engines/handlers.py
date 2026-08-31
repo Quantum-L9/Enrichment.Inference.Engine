@@ -41,6 +41,7 @@ from ..services.odoo_gate_converge import (
     new_run_id,
     parse_odoo_converge_request,
 )
+from ..services.request_deadline import Deadline, deadline_scope
 from ..services.simulation_bridge import (
     analyze_leverage,
     brief_to_dict,
@@ -136,37 +137,30 @@ async def handle_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any
 
 
 async def _handle_odoo_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Odoo Gate converge path — allowlisted partner fields, bounded timeout."""
+    """Odoo Gate converge path — allowlisted partner fields, bounded end-to-end.
+
+    Odoo waits 30 s. One deadline of DEFAULT_CONVERGE_TIMEOUT_SECONDS governs
+    the *complete* operation — domain context, convergence, persistence, and
+    response assembly — not just the convergence loop, and every provider
+    attempt underneath derives its transport timeout from what is left of it.
+    """
     import asyncio
 
     run_id = new_run_id()
+    deadline = Deadline.start(DEFAULT_CONVERGE_TIMEOUT_SECONDS)
+
     try:
         parsed = parse_odoo_converge_request(payload)
     except ValueError as exc:
         logger.warning("handlers.converge_parse_failed", tenant=tenant, error=str(exc))
         return build_odoo_converge_error(error=str(exc), run_id=run_id)
 
-    settings = get_settings()
-    request = build_enrich_request(parsed)
-    domain_hints, inference_rules = await _load_domain_convergence_context(
-        domain_id=parsed["domain"],
-        node_label=payload.get("node_label") or "Partner",
-    )
-    convergence_config = ConvergenceConfig(max_passes=parsed["max_passes"])
-
     try:
-        response = await asyncio.wait_for(
-            run_convergence_loop(
-                request=request,
-                settings=settings,
-                kb_resolver=_kb,
-                idem_store=_idem,
-                inference_rules=inference_rules,
-                domain_hints=domain_hints,
-                convergence_config=convergence_config,
-            ),
-            timeout=DEFAULT_CONVERGE_TIMEOUT_SECONDS,
-        )
+        with deadline_scope(deadline):
+            return await asyncio.wait_for(
+                _run_odoo_converge(tenant, payload, parsed, run_id),
+                timeout=max(deadline.remaining(), 0.0),
+            )
     except TimeoutError:
         logger.warning(
             "handlers.converge_timeout",
@@ -189,6 +183,32 @@ async def _handle_odoo_converge(tenant: str, payload: dict[str, Any]) -> dict[st
             error=str(exc),
         )
         raise
+
+
+async def _run_odoo_converge(
+    tenant: str,
+    payload: dict[str, Any],
+    parsed: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    """Complete canonical converge operation, run under the outer deadline."""
+    settings = get_settings()
+    request = build_enrich_request(parsed)
+    domain_hints, inference_rules = await _load_domain_convergence_context(
+        domain_id=parsed["domain"],
+        node_label=payload.get("node_label") or "Partner",
+    )
+    convergence_config = ConvergenceConfig(max_passes=parsed["max_passes"])
+
+    response = await run_convergence_loop(
+        request=request,
+        settings=settings,
+        kb_resolver=_kb,
+        idem_store=_idem,
+        inference_rules=inference_rules,
+        domain_hints=domain_hints,
+        convergence_config=convergence_config,
+    )
 
     result = build_odoo_converge_response(
         enrich_response=response,
