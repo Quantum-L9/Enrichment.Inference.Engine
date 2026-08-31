@@ -34,6 +34,7 @@ from ..services.idempotency import IdempotencyStore
 from ..services.kb_resolver import KBResolver
 from ..services.odoo_gate_converge import (
     DEFAULT_CONVERGE_TIMEOUT_SECONDS,
+    ODOO_COMPLETED_STATE,
     build_enrich_request,
     build_odoo_converge_error,
     build_odoo_converge_response,
@@ -223,12 +224,12 @@ async def _run_odoo_converge(
         run_id=run_id,
     )
 
-    # Odoo currently treats any non-exception response as success; raise on
-    # non-completed convergence so the hub error path triggers local fallback.
-    if result.get("status") != "ok":
-        raise RuntimeError(result.get("error") or "converge returned non-ok status")
+    # Odoo's mapper derives its status from `state`; raise on non-completed
+    # convergence so the hub error path triggers Odoo's degraded handling.
+    if result.get("state") != ODOO_COMPLETED_STATE:
+        raise RuntimeError(result.get("failure_reason") or "converge did not complete")
 
-    if result.get("final_fields"):
+    if result.get("fields"):
         persist_payload = {
             **payload,
             "entity_id": parsed["entity_id"],
@@ -244,7 +245,7 @@ async def _run_odoo_converge(
             tenant,
             persist_payload,
             {
-                "fields": result["final_fields"],
+                "fields": result["fields"],
                 "confidence": response.confidence,
                 "tokens_used": response.tokens_used,
                 "pass_count": response.pass_count,
@@ -259,9 +260,9 @@ async def _run_odoo_converge(
         tenant=tenant,
         entity_id=parsed["entity_id"],
         run_id=run_id,
-        fields=sorted(result.get("final_fields", {}).keys()),
+        fields=sorted(result.get("fields", {}).keys()),
         pass_count=result.get("pass_count"),
-        status=result.get("status"),
+        state=result.get("state"),
     )
     return result
 

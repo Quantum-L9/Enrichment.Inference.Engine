@@ -34,7 +34,7 @@ contracts:
     - EXECUTION_FLOWS.md
     description: Canonical SDK action registration and orchestration wiring
   - path: app/engines/handlers.py
-    sha256: 6f6f1788f71d829c42a10fa326550be96d3ddace3ee89f18a316a5dc82c35eca
+    sha256: 022b6f8fa5a8d476897146153207ae179891e0b0d8c0ac8663da6e2cbf23d35e
     required_refs:
     - AGENTS.md
     - AI_AGENT_REVIEW_CHECKLIST.md
