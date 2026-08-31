@@ -28,7 +28,7 @@ import pytest
 from app.engines.handlers import handle_converge
 from app.models.schemas import EnrichResponse
 from app.services import perplexity_client
-from app.services.odoo_gate_converge import DEFAULT_CONVERGE_TIMEOUT_SECONDS
+from app.services.request_deadline import CANONICAL_CONVERGE_BUDGET_SECONDS
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
@@ -185,8 +185,8 @@ async def test_live_odoo_payload_runs_under_the_converge_deadline(eie_runtime):
     await handle_converge("plasticos", _odoo_builder_payload())
 
     assert seen["deadline"] is not None, "canonical path ran without a deadline in scope"
-    assert 0 < seen["remaining"] <= DEFAULT_CONVERGE_TIMEOUT_SECONDS
-    assert DEFAULT_CONVERGE_TIMEOUT_SECONDS <= 25.0
+    assert 0 < seen["remaining"] <= CANONICAL_CONVERGE_BUDGET_SECONDS
+    assert CANONICAL_CONVERGE_BUDGET_SECONDS <= 25.0
 
 
 async def test_live_odoo_payload_keeps_sdk_retries_disabled(eie_runtime):

@@ -4,19 +4,23 @@
 models. This file pins the thing those fixtures cannot: that the payload a real
 producer sends actually reaches the code path that speaks them.
 
-That gap is not hypothetical. `handle_converge` carried a second branch — a
-compatibility adapter for an older `entity_snapshot` dialect — whose
+That gap is not hypothetical. `handle_converge` once carried a second branch —
+a compatibility adapter for an older `entity_snapshot` dialect — whose
 discriminator was widened until it claimed every live request. Both fixture
 tests stayed green throughout, because neither one dispatches. The adapter
 meanwhile dropped `entity["id"]`, replaced the caller's `objective` and
 `object_type` with its own, reinterpreted `max_variations` as convergence
-passes, and truncated the response `fields` to eight partner keys.
+passes, and truncated the response `fields` to eight partner keys. A consumer
+inventory found no active caller, so the adapter was deleted rather than left
+quarantined: a second protocol behind one action is a semantic duality that a
+discriminator can only narrow, never remove.
 
 So the assertions here are about routing and fidelity, deliberately:
 
-* the live payload selects the canonical branch, not the adapter;
+* the live payload is served by the one canonical contract, untranslated;
 * what reaches the convergence loop is what the caller sent;
-* what comes back is `EnrichResponse.model_dump()` and nothing else.
+* what comes back is `EnrichResponse.model_dump()` and nothing else;
+* a legacy-dialect payload now FAILS validation instead of being rewritten.
 
 Contract authority for the request shape is the live producer, IB-Odoo_19
 `plasticos_gate/services/gate_builders.py::build_converge_request` (PR #163);
@@ -41,7 +45,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.models.schemas import EnrichRequest, EnrichResponse
-from app.services.odoo_gate_converge import is_odoo_compat_converge_payload
 
 pytestmark = pytest.mark.asyncio
 
@@ -140,9 +143,9 @@ def converge_runtime():
 
 
 @pytest.mark.unit
-async def test_live_payload_is_not_claimed_by_the_compatibility_adapter() -> None:
-    """One canonical contract: the adapter cannot answer for a canonical payload."""
-    assert is_odoo_compat_converge_payload(_live_producer_payload()) is False
+async def test_no_alternate_converge_dialect_module_survives() -> None:
+    """EIE19 — one contract means the adapter module is gone, not quarantined."""
+    assert importlib.util.find_spec("app.services.odoo_gate_converge") is None
 
 
 @pytest.mark.unit
@@ -165,13 +168,11 @@ async def test_live_payload_validates_as_a_canonical_enrich_request() -> None:
 async def test_dispatch_routes_the_live_payload_to_the_canonical_branch(
     converge_runtime,
 ) -> None:
-    with patch(
-        "app.engines.handlers._handle_odoo_compat_converge", new_callable=AsyncMock
-    ) as compat:
-        await _handle_converge()("plasticos", _live_producer_payload())
+    """The live payload reaches the convergence loop, with nothing in between."""
+    result = await _handle_converge()("plasticos", _live_producer_payload())
 
-    assert compat.await_count == 0
     assert converge_runtime["loop"].await_count == 1
+    assert result["state"] == "completed"
 
 
 @requires_app_runtime
@@ -211,19 +212,25 @@ async def test_canonical_converge_makes_zero_graph_calls(converge_runtime) -> No
 
 
 @requires_app_runtime
-async def test_compatibility_dialect_still_has_a_home(converge_runtime) -> None:
-    """EIE20 — the compatibility branch is quarantined, not deleted."""
+async def test_legacy_dialect_payload_fails_instead_of_being_translated(
+    converge_runtime,
+) -> None:
+    """EIE20 — the pre-canonical dialect has no home behind this action.
+
+    The failure mode matters as much as the deletion. A legacy payload is not
+    silently rewritten into some other request; it does not validate as an
+    EnrichRequest, so it comes back as a canonical non-completed EnrichResponse
+    and never reaches the convergence loop. That is a visible, debuggable "we
+    do not speak this" rather than a quiet contract substitution.
+    """
     payload = {
         "entity_id": ENTITY_REF,
         "domain": "plasticos",
         "entity_snapshot": {"name": "Acme Recycling"},
     }
-    assert is_odoo_compat_converge_payload(payload) is True
 
-    with patch(
-        "app.engines.handlers._handle_odoo_compat_converge", new_callable=AsyncMock
-    ) as compat:
-        compat.return_value = {"state": "completed", "fields": {}}
-        await _handle_converge()("plasticos", payload)
+    result = await _handle_converge()("plasticos", payload)
 
-    assert compat.await_count == 1
+    assert result["state"] == "failed"
+    assert "invalid converge request" in result["failure_reason"]
+    assert converge_runtime["loop"].await_count == 0

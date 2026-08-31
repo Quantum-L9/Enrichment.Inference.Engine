@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 from logging.config import fileConfig
+from typing import Any
 
 from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -43,16 +44,35 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _do_run_migrations(connection: Any) -> None:
+    """Configure and run inside ONE sync callable, wrapped in a transaction.
+
+    Both properties matter and neither was present before.
+
+    `context.begin_transaction()` is what commits: SQLAlchemy 2.0 connections
+    are commit-as-you-go, so DDL emitted on a bare `engine.connect()` is rolled
+    back when the connection closes. `alembic upgrade` therefore logged
+    "Running upgrade -> 001" and left the database empty — a silent no-op, and
+    the worst possible failure mode for a migration runner, since it reports
+    success while the schema never moves.
+
+    Configure and run also have to share one `run_sync` call. Splitting them
+    left the second callable relying on module-level context state carried over
+    from the first, which is not a contract greenlet-bridged calls make.
+    """
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
 async def run_async_migrations() -> None:
     engine = create_async_engine(get_url())
-    async with engine.connect() as connection:
-        await connection.run_sync(
-            lambda sync_conn: context.configure(
-                connection=sync_conn, target_metadata=target_metadata
-            )
-        )
-        await connection.run_sync(lambda _: context.run_migrations())
-    await engine.dispose()
+    try:
+        async with engine.connect() as connection:
+            await connection.run_sync(_do_run_migrations)
+            await connection.commit()
+    finally:
+        await engine.dispose()
 
 
 def run_migrations_online() -> None:

@@ -55,9 +55,11 @@ class EnrichmentResult(Base):
     entity_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     object_type: Mapped[str] = mapped_column(String(128), nullable=False)
     domain: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    idempotency_key: Mapped[str | None] = mapped_column(
-        String(256), nullable=True, unique=True, index=True
-    )
+    # NOT globally unique. A caller-supplied key is only unique within the
+    # tenant that supplied it: two tenants may legitimately send the same
+    # string, and those are different logical operations. The uniqueness that
+    # actually holds is the composite constraint in __table_args__.
+    idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
     fields: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     confidence: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
     uncertainty_score: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False)
@@ -98,6 +100,16 @@ class EnrichmentResult(Base):
     __table_args__ = (
         Index("ix_enrichment_results_tenant_entity", "tenant_id", "entity_id"),
         Index("ix_enrichment_results_tenant_created", "tenant_id", "created_at"),
+        # The durable replay boundary. Postgres treats NULLs as distinct, so
+        # rows without a logical key are unconstrained (correctly: a run whose
+        # caller supplied no key is not a replay of anything), while two
+        # concurrent writers of the SAME (tenant, key) race here and exactly
+        # one wins. pg_store resolves the loser into an idempotent hit.
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_enrichment_results_tenant_idempotency",
+        ),
     )
 
 
@@ -149,7 +161,11 @@ class ConvergenceRun(Base):
 
     __table_args__ = (
         Index("ix_convergence_runs_tenant_entity", "tenant_id", "entity_id"),
-        Index("ix_convergence_runs_state", "state"),
+        # No explicit index on `state` here: `state`'s own `index=True` already
+        # emits `ix_convergence_runs_state`, and declaring the same name twice
+        # made `Base.metadata.create_all` issue CREATE INDEX twice, so building
+        # the schema against a real server failed with DuplicateTableError.
+        # Migration 001 creates this index once, which is the shape to match.
     )
 
 

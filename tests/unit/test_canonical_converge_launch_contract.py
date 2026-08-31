@@ -35,10 +35,6 @@ from perplexity import APITimeoutError, Perplexity
 from app.engines.handlers import handle_converge
 from app.models.schemas import EnrichRequest, EnrichResponse
 from app.services import perplexity_client
-from app.services.odoo_gate_converge import (
-    DEFAULT_CONVERGE_TIMEOUT_SECONDS,
-    is_odoo_compat_converge_payload,
-)
 from app.services.request_deadline import (
     CANONICAL_CONVERGE_BUDGET_SECONDS,
     RESPONSE_RESERVE_SECONDS,
@@ -367,21 +363,19 @@ def canonical_converge_probes():
         get_side_effect_coordinator().reset_for_tests()
 
 
-async def test_live_odoo_payload_selects_the_canonical_branch(canonical_converge_probes):
-    """EIE3 — the exact production payload must reach the canonical branch.
+async def test_live_odoo_payload_is_served_by_the_one_canonical_contract(
+    canonical_converge_probes,
+):
+    """EIE3 — the exact production payload runs the canonical convergence.
 
-    Not the compatibility adapter. That adapter is lossy against this shape: it
-    drops `entity["id"]`, substitutes its own objective and object_type, and
-    truncates the response fields to the partner allowlist.
+    This used to assert "not the compatibility adapter", which the adapter's
+    deletion makes unfalsifiable. What remains falsifiable — and is what the
+    assertion was ever really about — is that this payload reaches the
+    convergence loop and comes back completed, with no translation layer able
+    to claim it.
     """
-    assert is_odoo_compat_converge_payload(_odoo_request()) is False
+    result = await handle_converge("acme", _odoo_request())
 
-    with patch(
-        "app.engines.handlers._handle_odoo_compat_converge", new_callable=AsyncMock
-    ) as compat:
-        result = await handle_converge("acme", _odoo_request())
-
-    assert compat.await_count == 0, "the live payload was claimed by the compat adapter"
     assert canonical_converge_probes["loop"].await_count == 1
     assert result["state"] == "completed"
 
@@ -399,7 +393,7 @@ async def test_canonical_request_preserves_the_odoo_contract_verbatim(
     assert request.object_type == "plasticos"
     assert request.objective == "Full entity enrichment and inference"
     assert request.max_variations == 5
-    # The compat dialect's required keys are not required here.
+    # The retired dialect's keys are absent from the live payload entirely.
     payload = _odoo_request()
     assert "entity_snapshot" not in payload
     assert "entity_id" not in payload
@@ -487,7 +481,7 @@ async def test_canonical_provider_attempts_are_bound_by_the_shared_deadline(
 
 async def test_canonical_request_exits_within_the_complete_budget():
     """E1/E10 — the outer deadline covers the whole operation, not one leg."""
-    assert DEFAULT_CONVERGE_TIMEOUT_SECONDS <= 25.0
+    assert CANONICAL_CONVERGE_BUDGET_SECONDS <= 25.0
 
     async def _never_finishes(*_args: Any, **_kwargs: Any):
         await asyncio.sleep(3600)
@@ -495,7 +489,7 @@ async def test_canonical_request_exits_within_the_complete_budget():
     budget = 1.0
     with (
         patch("app.engines.handlers.run_convergence_loop", _never_finishes),
-        patch("app.engines.handlers.DEFAULT_CONVERGE_TIMEOUT_SECONDS", budget),
+        patch("app.engines.handlers.CANONICAL_CONVERGE_BUDGET_SECONDS", budget),
     ):
         # The guard below is the test's own ceiling. A handler that respects its
         # deadline answers inside `budget`; one that does not hangs and trips the
@@ -523,7 +517,7 @@ async def test_persistence_is_inside_the_outer_deadline():
     with (
         patch("app.engines.handlers.run_convergence_loop", new_callable=AsyncMock) as loop,
         patch("app.engines.handlers._persist_and_sync", _slow_persist),
-        patch("app.engines.handlers.DEFAULT_CONVERGE_TIMEOUT_SECONDS", budget),
+        patch("app.engines.handlers.CANONICAL_CONVERGE_BUDGET_SECONDS", budget),
     ):
         loop.return_value = _completed_response()
         # Same guard: persistence outside the deadline would hang here, so the

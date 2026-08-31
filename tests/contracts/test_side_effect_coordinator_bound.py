@@ -17,5 +17,12 @@ def test_coordinator_singleton_stable() -> None:
 
 
 def test_semantic_key_contract() -> None:
-    key = semantic_side_effect_key(tenant="t", entity_id="e", packet_id="abc")
-    assert key.startswith("pkt:abc")
+    """Logical operation identity first, packet identity second, entity never."""
+    assert (
+        semantic_side_effect_key(tenant="t", entity_id="e", idempotency_key="abc")
+        == "idem:t:abc:enrich"
+    )
+    assert (
+        semantic_side_effect_key(tenant="t", entity_id="e", packet_id="abc") == "pkt:t:abc:enrich"
+    )
+    assert semantic_side_effect_key(tenant="t", entity_id="e") is None
