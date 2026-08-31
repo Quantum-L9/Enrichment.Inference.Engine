@@ -29,6 +29,7 @@ from ..services.consensus_engine import synthesize
 from ..services.idempotency import IdempotencyStore
 from ..services.perplexity_client import SonarResponse, query_perplexity
 from ..services.prompt_builder import build_prompt, build_schema_hash
+from ..services.request_deadline import current_deadline, provider_attempt_timeout
 from ..services.uncertainty_engine import compute_uncertainty
 from ..services.validation_engine import ValidationError, validate_response
 
@@ -143,6 +144,36 @@ async def enrich_entity(
             if api_params.get("disable_search"):
                 payload["disable_search"] = True
 
+        # E4/E5: one attempt's transport timeout comes out of what is left of
+        # the shared request deadline, never from a fixed per-attempt constant.
+        effective_timeout = provider_attempt_timeout(float(settings.default_timeout_seconds))
+        if effective_timeout is None:
+            elapsed = int((time.monotonic() - start) * 1000)
+            logger.warning(
+                "pipeline_skipped_deadline",
+                reason="remaining request budget below response reserve",
+                elapsed_ms=elapsed,
+            )
+            return EnrichResponse(
+                state="failed",
+                failure_reason="request_deadline_exhausted_before_provider_call",
+                variation_count=0,
+                consensus_threshold=request.consensus_threshold,
+                uncertainty_score=0.0,
+                pass_count=1,
+                kb_content_hash=kb_data["content_hash"],
+                kb_fragment_ids=kb_data["fragment_ids"],
+                kb_files_consulted=kb_data["kb_files"],
+                tokens_used=0,
+                processing_time_ms=elapsed,
+            )
+
+        logger.info(
+            "provider_timeout_resolved",
+            effective_timeout_s=round(effective_timeout, 3),
+            deadline_bound=current_deadline() is not None,
+        )
+
         sem = asyncio.Semaphore(settings.max_concurrent_variations)
 
         async def _call() -> SonarResponse:
@@ -151,7 +182,7 @@ async def enrich_entity(
                     payload=payload,
                     api_key=settings.perplexity_api_key,
                     breaker=breaker,
-                    timeout=settings.default_timeout_seconds,
+                    timeout=effective_timeout,
                 )
 
         tasks = [_call() for _ in range(variation_count)]

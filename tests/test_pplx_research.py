@@ -109,6 +109,10 @@ class TestPerplexityClient:
         err.status_code = 429
         success = _completion('{"polymer_type": "HDPE", "mfi_range": "0.5-3.0"}')
         client = MagicMock()
+        # Requests go out via `with_options(timeout=..., max_retries=0)`; the
+        # double returns itself so the configured side_effect and call_count
+        # still measure the real provider calls.
+        client.with_options.return_value = client
         client.chat.completions.create.side_effect = [err, success]
 
         with (
@@ -120,3 +124,7 @@ class TestPerplexityClient:
         assert response.data["polymer_type"] == "HDPE"
         assert client.chat.completions.create.call_count == 2
         assert response.tokens_used == 1200
+        # EIE owns the retry: neither attempt may delegate one to the SDK.
+        assert client.with_options.call_count == 2
+        for call in client.with_options.call_args_list:
+            assert call.kwargs["max_retries"] == 0

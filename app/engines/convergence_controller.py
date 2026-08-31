@@ -25,6 +25,7 @@ from ..core.config import Settings
 from ..models.loop_schemas import PassContext
 from ..models.schemas import EnrichRequest, EnrichResponse
 from ..services.idempotency import IdempotencyStore
+from ..services.request_deadline import current_deadline
 from .convergence.confidence_tracker import ConfidenceTracker  # NEW
 from .convergence.convergence_config import ConvergenceConfig  # NEW
 from .convergence.cost_tracker import CostTracker
@@ -78,6 +79,11 @@ def get_or_classify_domain(domain_spec: dict[str, Any]) -> DomainClassification:
         stats=classification.stats,
     )
     return classification
+
+
+# Convergence stopped because the shared request deadline ran out. Not a
+# successful convergence — see _assemble_convergence_response.
+DEADLINE_EXHAUSTED_REASON = "deadline_exhausted"
 
 
 @dataclass
@@ -182,6 +188,20 @@ async def run_convergence_loop(
             known_fields=len(state.known_fields),
             inferred_fields=len(state.inferred_fields),
         )
+
+        # ── Deadline check ────────────────────────────────
+        # E5 at pass granularity: a shared request deadline stops the loop
+        # before it opens a pass it cannot finish and still respond.
+        deadline = current_deadline()
+        if deadline is not None and deadline.attempt_timeout() is None:
+            logger.info(
+                "deadline_exhausted",
+                pass_number=pass_num,
+                remaining_s=round(deadline.remaining(), 3),
+            )
+            state.converged = True
+            state.convergence_reason = DEADLINE_EXHAUSTED_REASON
+            break
 
         # ── Budget check ──────────────────────────────────
         if not cost_tracker.can_continue():
@@ -434,6 +454,19 @@ def _assemble_convergence_response(
     if confidence_tracker:  # NEW
         feature_vector["confidence_tracking"] = confidence_tracker.to_dict()
 
+    # A loop that stopped because the shared request deadline ran out has not
+    # converged, however many fields it managed to accumulate first. Reporting
+    # "completed" here would be read by Odoo's mapper as status="ok" (it derives
+    # its status from `state` alone) and a timed-out, possibly empty result would
+    # be injected as a good one. The deadline exists to produce a *bounded
+    # failure*, so say so.
+    if state.convergence_reason == DEADLINE_EXHAUSTED_REASON:
+        response_state = "failed"
+        failure_reason: str | None = DEADLINE_EXHAUSTED_REASON
+    else:
+        response_state = "completed"
+        failure_reason = None
+
     return EnrichResponse(
         fields=final_fields,
         confidence=round(avg_confidence, 4),
@@ -443,7 +476,8 @@ def _assemble_convergence_response(
         inference_version="v3.0.0-convergence",
         processing_time_ms=elapsed,
         tokens_used=state.total_tokens,
-        state="completed",
+        state=response_state,
+        failure_reason=failure_reason,
         inferences=pass_inferences,
         feature_vector=feature_vector if feature_vector else None,
     )
