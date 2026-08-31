@@ -28,7 +28,7 @@ exercised).**
 | Repository | `Quantum-L9/Enrichment.Inference.Engine` |
 | Branch | `claude/eie-domain-closure-86oi52` |
 | Base | `origin/main` @ `cfda45043477bfe4a0f2a8c249ff9be30d1705aa` |
-| Candidate HEAD | `df065ea30cf9ff9ede790be4797aa31c6b18cc17` |
+| Candidate HEAD | `20a0e57de2d2db7d7992ccfec560caa4582b3733` |
 | Python | 3.12.3 (repo pins 3.12; the container default 3.11 cannot install the SDK) |
 | Gate_SDK installed | `1.0.1` @ `a770e8531dc1c59ce01e1dbb0f4162785d9dda89` (unchanged) |
 | Migration head | `002` |
@@ -256,6 +256,27 @@ Stated as not run rather than implied by a passing mock.
 | `pytest tests/contracts/test_gate_registration_boundary.py` | 4 passed |
 | `ruff check` / `ruff format --check` | clean |
 | `alembic upgrade 001 → 002`, `downgrade`, round-trip | proven on real PG 16.13 |
+| `tools/verify_contracts.py` | PASS 10/10 (after re-stamping `handlers.py`) |
+| `tools/payload_contract_compiler.py --stdout-only` | PASS |
+| `mypy app` | 44 errors — **identical on `origin/main`**, advisory per AGENTS.md |
+| `tools/audit_engine.py --strict` | exit 1, 10 CRITICAL — **identical set on `origin/main`** |
+| `make pr` | **FAIL — target is dead repo-wide**, see below |
+
+### `make pr` could not run
+
+`make pr` shells `local_pr_pipeline/pr_pipeline.sh`, which does not exist —
+not on this branch, not on `origin/main`, and not anywhere in the repository's
+history (`git log --all -- local_pr_pipeline/pr_pipeline.sh` returns nothing).
+`local_pr_pipeline/docker-compose.pr.yml`, referenced by `pr-services-up`, is
+likewise absent. Every `make pr*` target is therefore non-functional, and has
+been since before this work.
+
+This is reported rather than worked around: authoring a replacement would mean
+inventing the phase contract the missing script defines. `make agent-check` —
+CLAUDE.md's "THE universal gate" — was run in its place, along with each of its
+eight phases individually. Gates 3 (mypy) and 6 (`audit --strict`) fail
+identically on `origin/main`, so `agent-check` is red on main independently of
+this change; every other gate passes.
 
 ## Remaining Blocking Defects
 
@@ -321,7 +342,7 @@ automatic trigger rather than a remembered chore.
 ```yaml
 repository: Quantum-L9/Enrichment.Inference.Engine
 branch: claude/eie-domain-closure-86oi52
-candidate_head: "df065ea30cf9ff9ede790be4797aa31c6b18cc17"
+candidate_head: "20a0e57de2d2db7d7992ccfec560caa4582b3733"
 canonical:
   action: converge
   request: EnrichRequest
@@ -365,7 +386,7 @@ validation:
   contracts: PASS
   integration: PASS
   real_postgres: PASS
-  make_pr: SEE_PR_FINDINGS_BRIEF
+  make_pr: FAIL_TARGET_MISSING  # local_pr_pipeline/pr_pipeline.sh has never existed in this repo
 blocking_defects: []
 non_blocking_defects:
   - "Redis IdempotencyStore key is not tenant-scoped (off the canonical converge path)"
