@@ -96,6 +96,14 @@ def odoo_entity_ref(payload: dict[str, Any]) -> str | None:
     """
     if not isinstance(payload, dict):
         return None
+    # Canonical precedence: a payload carrying an `entity` dict IS an
+    # EnrichRequest — that field is required by the canonical model and absent
+    # from this dialect. Pydantic ignores an extra top-level `entity_id`, so
+    # without this guard a canonical request that happened to carry one would be
+    # diverted here and silently rewritten, which is the exact lossy routing the
+    # narrowed discriminator exists to prevent (EIE18).
+    if isinstance(payload.get("entity"), dict):
+        return None
     legacy = payload.get("entity_id")
     if isinstance(legacy, str) and legacy.strip():
         return legacy.strip()
@@ -117,6 +125,10 @@ def is_odoo_compat_converge_payload(payload: dict[str, Any]) -> bool:
     (EIE19); this predicate is the boundary that keeps it that way.
     """
     if not isinstance(payload, dict):
+        return False
+    # Canonical wins whenever `entity` is present, even alongside a stray
+    # `entity_snapshot` or top-level `entity_id`.
+    if isinstance(payload.get("entity"), dict):
         return False
     if isinstance(payload.get("entity_snapshot"), dict):
         return True

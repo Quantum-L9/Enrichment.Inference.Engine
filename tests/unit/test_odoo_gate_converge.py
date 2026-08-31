@@ -99,6 +99,24 @@ class TestLiveOdooBuilderShapeIsCanonical:
         assert request.objective == "Full entity enrichment and inference"
         assert request.max_variations == 5
 
+    def test_canonical_payload_wins_over_a_stray_top_level_entity_id(self) -> None:
+        """Canonical precedence — found by review on this PR.
+
+        Pydantic ignores an unknown top-level `entity_id`, so a canonical
+        EnrichRequest carrying one is still perfectly valid. The discriminator
+        checked that field before looking for `entity`, which diverted such a
+        payload into the lossy adapter — the routing this change exists to
+        prevent (EIE18).
+        """
+        payload = _live_odoo_payload(entity_id="res.partner:55")
+        assert is_odoo_compat_converge_payload(payload) is False
+        assert EnrichRequest.model_validate(payload).entity["id"] == "res.partner:55"
+
+    def test_canonical_payload_wins_over_a_stray_entity_snapshot(self) -> None:
+        """Same precedence when the stray field is an `entity_snapshot`."""
+        payload = _live_odoo_payload(entity_snapshot={"name": "Stale"})
+        assert is_odoo_compat_converge_payload(payload) is False
+
     def test_internal_enrich_request_is_not_captured(self) -> None:
         assert (
             is_odoo_compat_converge_payload(

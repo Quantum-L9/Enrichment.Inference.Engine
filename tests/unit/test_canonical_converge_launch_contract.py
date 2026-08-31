@@ -33,7 +33,7 @@ import pytest
 from perplexity import APITimeoutError, Perplexity
 
 from app.engines.handlers import handle_converge
-from app.models.schemas import EnrichResponse
+from app.models.schemas import EnrichRequest, EnrichResponse
 from app.services import perplexity_client
 from app.services.odoo_gate_converge import (
     DEFAULT_CONVERGE_TIMEOUT_SECONDS,
@@ -535,6 +535,66 @@ async def test_persistence_is_inside_the_outer_deadline():
 
     assert result["state"] == "failed"
     assert "budget" in result["failure_reason"]
+
+
+# ── Deadline exhaustion must not read as success ───────────
+
+
+async def test_deadline_exhausted_convergence_does_not_report_completed():
+    """A loop stopped by the shared deadline must not answer `state="completed"`.
+
+    Found by review on this PR. The pass-level deadline check sets
+    `converged=True` and breaks, and `_assemble_convergence_response` emitted
+    `state="completed"` unconditionally — so an exhausted request returned
+    cleanly *inside* the response reserve, the outer `wait_for` never fired, and
+    Odoo's mapper (which derives status from `state` alone) would read a
+    timed-out, possibly empty convergence as `status="ok"` and inject it.
+
+    This exercises the real assembly function against a state whose only marker
+    is the deadline reason, so it fails against the pre-fix code.
+    """
+    from app.engines.convergence_controller import (
+        ConvergenceState,
+        _assemble_convergence_response,
+    )
+
+    # The literal, not the module constant: this must stay meaningful against a
+    # tree that has no such constant, or the test proves only that an import
+    # works. It is the exact reason string the pass-level deadline check sets.
+    state = ConvergenceState(known_fields={"name": "Acme"})
+    state.converged = True
+    state.convergence_reason = "deadline_exhausted"
+
+    response = _assemble_convergence_response(
+        state,
+        EnrichRequest.model_validate(_odoo_request()),
+        elapsed=100,
+    )
+
+    assert response.state != "completed"
+    assert response.state == "failed"
+    assert response.failure_reason == "deadline_exhausted"
+
+
+async def test_ordinary_convergence_still_reports_completed():
+    """The failure path above must not swallow a genuine success."""
+    from app.engines.convergence_controller import (
+        ConvergenceState,
+        _assemble_convergence_response,
+    )
+
+    state = ConvergenceState(known_fields={"name": "Acme"})
+    state.converged = True
+    state.convergence_reason = "verification_pass_complete"
+
+    response = _assemble_convergence_response(
+        state,
+        EnrichRequest.model_validate(_odoo_request()),
+        elapsed=100,
+    )
+
+    assert response.state == "completed"
+    assert response.failure_reason is None
 
 
 # ── 10. Graph-dependent workflows still reach Graph ────────
