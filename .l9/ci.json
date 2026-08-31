@@ -1,0 +1,6 @@
+{
+  "schema": "l9.ci-consumer/v1",
+  "owner": "Quantum-L9/platform",
+  "repo_class": "python",
+  "waiver_refs": []
+}

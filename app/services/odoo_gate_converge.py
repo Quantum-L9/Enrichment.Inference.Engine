@@ -1,14 +1,33 @@
-"""Odoo Gate converge wire-format adapter.
+"""Compatibility adapter for the pre-canonical ``entity_snapshot`` converge dialect.
 
-Conforms to PlasticOS `plasticos_gate` contracts (IB-Odoo_19):
-  - Request: ConvergeRequest.to_dict()
-  - Response: map_converge_response / partner_writeback_from_converge
+**This module is not the canonical converge contract.** The canonical rail is
+
+    Odoo ``build_converge_request`` (EnrichRequest-shaped)
+      -> Gate_SDK TransportPacket(action="converge")
+      -> Constellation.Gate
+      -> EIE ``handlers._handle_canonical_converge``
+      -> ``EnrichResponse``
+
+and it is served by ``EnrichRequest.model_validate(payload)`` directly, with no
+translation. Everything here exists for one older shape — a top-level
+``entity_id`` or an ``entity_snapshot`` dict — which the live Odoo producer
+(IB-Odoo_19 ``plasticos_gate/services/gate_builders.py::build_converge_request``,
+PR #163) has never emitted.
+
+Why it must stay narrow: this adapter is lossy against a canonical payload. It
+drops ``entity["id"]`` (not a snapshot key), replaces the caller's ``objective``
+and ``object_type`` with its own, reinterprets ``max_variations`` as passes, and
+truncates the response ``fields`` to the partner allowlist. Applying it to a
+canonical request would silently rewrite the contract, so the discriminator
+below matches the compatibility shapes *only* and can never claim a payload the
+canonical branch should serve.
 
 Do not invent partner fields. The allowlist is the hard writeback boundary.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -16,6 +35,7 @@ from uuid import uuid4
 import structlog
 
 from app.models.schemas import EnrichRequest, EnrichResponse
+from app.services.request_deadline import CANONICAL_CONVERGE_BUDGET_SECONDS
 
 logger = structlog.get_logger(__name__)
 
@@ -40,7 +60,10 @@ PARTNER_SNAPSHOT_KEYS: frozenset[str] = PARTNER_WRITEBACK_FIELD_ALLOWLIST | froz
 
 DEFAULT_MAX_PASSES = 3
 MAX_PASSES_CEILING = 10
-DEFAULT_CONVERGE_TIMEOUT_SECONDS = 25.0
+# One budget SSOT for every converge branch — see request_deadline.
+DEFAULT_CONVERGE_TIMEOUT_SECONDS = CANONICAL_CONVERGE_BUDGET_SECONDS
+# Odoo gate_mappers.EIE_STATE_COMPLETED — the only state it maps to status "ok".
+ODOO_COMPLETED_STATE = "completed"
 
 PARTNER_TARGET_SCHEMA: dict[str, str] = {
     "name": "string",
@@ -54,14 +77,62 @@ PARTNER_TARGET_SCHEMA: dict[str, str] = {
 }
 
 
-def is_odoo_converge_payload(payload: dict[str, Any]) -> bool:
-    """True when payload matches Odoo Gate ConvergeRequest shape."""
+# An Odoo record reference: dotted model name, colon, integer id.
+_ODOO_ENTITY_REF = re.compile(r"^[a-z][a-z0-9_.]*:\d+$")
+
+
+def odoo_entity_ref(payload: dict[str, Any]) -> str | None:
+    """Return the compatibility-shape entity reference, or None.
+
+    Only the pre-canonical shapes are recognised: identity at the TOP level
+    (``entity_id``), which the canonical EnrichRequest has no field for.
+
+    Deliberately NOT matched: ``entity["id"]`` / ``entity["_odoo_entity_id"]``.
+    That is where the live Odoo builder puts the canonical identity, and it is
+    exactly the payload the canonical branch must serve. Matching it here is
+    what routed every production request into this lossy adapter (see the
+    module docstring); the canonical branch keeps ``entity`` verbatim, so the
+    identity survives there rather than being re-derived here.
+    """
     if not isinstance(payload, dict):
+        return None
+    # Canonical precedence: a payload carrying an `entity` dict IS an
+    # EnrichRequest — that field is required by the canonical model and absent
+    # from this dialect. Pydantic ignores an extra top-level `entity_id`, so
+    # without this guard a canonical request that happened to carry one would be
+    # diverted here and silently rewritten, which is the exact lossy routing the
+    # narrowed discriminator exists to prevent (EIE18).
+    if isinstance(payload.get("entity"), dict):
+        return None
+    legacy = payload.get("entity_id")
+    if isinstance(legacy, str) and legacy.strip():
+        return legacy.strip()
+    snapshot = payload.get("entity_snapshot")
+    if isinstance(snapshot, dict):
+        for key in ("id", "_odoo_entity_id"):
+            value = snapshot.get(key)
+            if isinstance(value, str) and _ODOO_ENTITY_REF.match(value.strip()):
+                return value.strip()
+    return None
+
+
+def is_odoo_compat_converge_payload(payload: dict[str, Any]) -> bool:
+    """True only for the pre-canonical ``entity_snapshot`` / ``entity_id`` dialect.
+
+    A canonical EnrichRequest — ``entity`` + ``object_type`` + ``objective``,
+    identity on ``entity["id"]`` — returns False here and is served by the
+    canonical branch untranslated. There is exactly one canonical contract
+    (EIE19); this predicate is the boundary that keeps it that way.
+    """
+    if not isinstance(payload, dict):
+        return False
+    # Canonical wins whenever `entity` is present, even alongside a stray
+    # `entity_snapshot` or top-level `entity_id`.
+    if isinstance(payload.get("entity"), dict):
         return False
     if isinstance(payload.get("entity_snapshot"), dict):
         return True
-    entity_id = payload.get("entity_id")
-    return bool(isinstance(entity_id, str) and entity_id and "entity" not in payload)
+    return odoo_entity_ref(payload) is not None
 
 
 def parse_odoo_converge_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -69,12 +140,17 @@ def parse_odoo_converge_request(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("converge payload must be a dict")
 
-    entity_id = payload.get("entity_id")
-    if not isinstance(entity_id, str) or not entity_id.strip():
-        raise ValueError("converge: entity_id is required (e.g. 'res.partner:55')")
-    entity_id = entity_id.strip()
+    entity_id = odoo_entity_ref(payload)
+    if not entity_id:
+        raise ValueError(
+            "converge (compatibility dialect): a top-level entity_id is required, "
+            "e.g. 'res.partner:55'"
+        )
 
     domain_raw = payload.get("domain")
+    # In this dialect `object_type` means a record type, not a domain, so it is
+    # never borrowed as one. (Canonical payloads, where `object_type` DOES carry
+    # the domain, are resolved on the canonical branch and never arrive here.)
     domain = (
         domain_raw.strip() if isinstance(domain_raw, str) and domain_raw.strip() else "plasticos"
     )
@@ -175,25 +251,45 @@ def build_odoo_converge_response(
     parsed: dict[str, Any],
     run_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build payload matching Odoo map_converge_response expectations."""
-    snapshot = parsed.get("entity_snapshot") or {}
-    raw_fields = enrich_response.fields or {}
-    final_fields = filter_partner_fields(raw_fields, snapshot=snapshot)
+    """Build exactly the payload the live Odoo mapper consumes.
 
-    total_cost = _extract_total_cost_usd(enrich_response)
-    status = "ok" if enrich_response.state == "completed" else "error"
-    response: dict[str, Any] = {
+    Contract authority is IB-Odoo_19
+    ``plasticos_gate/services/gate_mappers.py::map_converge_response``, which
+    reads ``state``, ``failure_reason`` and ``fields`` off this payload (plus
+    the metrics below) and derives its OWN ``status`` from
+    ``state == "completed"``. It never reads ``status``, ``final_fields``, or
+    ``writeback``; a payload carrying those instead leaves the mapper with
+    ``state=None``, so it computes ``status="failed"`` and Odoo discards a
+    perfectly good convergence.
+
+    ``fields`` stays allowlist-filtered — that boundary is ours to enforce, and
+    Odoo's ``partner_writeback_from_converge`` filters again on its side.
+    """
+    snapshot = parsed.get("entity_snapshot") or {}
+    fields = filter_partner_fields(enrich_response.fields or {}, snapshot=snapshot)
+
+    return {
         "run_id": run_id or new_run_id(),
-        "status": status,
+        "state": enrich_response.state,
+        "failure_reason": enrich_response.failure_reason,
+        "fields": fields,
         "pass_count": int(enrich_response.pass_count or 0),
-        "final_fields": final_fields,
-        "writeback": {"partner_fields": dict(final_fields)},
-        "total_tokens": int(enrich_response.tokens_used or 0),
-        "total_cost_usd": total_cost,
+        "variation_count": enrich_response.variation_count,
+        "confidence": enrich_response.confidence,
+        "consensus_threshold": enrich_response.consensus_threshold,
+        "uncertainty_score": enrich_response.uncertainty_score,
+        "processing_time_ms": enrich_response.processing_time_ms,
+        "quality_tier": enrich_response.quality_tier,
+        "inference_version": enrich_response.inference_version,
+        "kb_content_hash": enrich_response.kb_content_hash,
+        "kb_files_consulted": list(enrich_response.kb_files_consulted or []),
+        "kb_fragment_ids": list(enrich_response.kb_fragment_ids or []),
+        "inferences": list(enrich_response.inferences or []),
+        "grade_matches": list(enrich_response.grade_matches or []),
+        "enrichment_payload": enrich_response.enrichment_payload,
+        "feature_vector": enrich_response.feature_vector,
+        "tokens_used": enrich_response.tokens_used,
     }
-    if status != "ok":
-        response["error"] = enrich_response.failure_reason or "convergence did not complete"
-    return response
 
 
 def build_odoo_converge_error(
@@ -202,18 +298,20 @@ def build_odoo_converge_error(
     run_id: str | None = None,
     pass_count: int = 0,
     total_tokens: int = 0,
-    total_cost_usd: float = 0.0,
 ) -> dict[str, Any]:
-    """Structured non-ok payload for graceful Odoo local-pipeline fallback."""
+    """Structured non-completed payload for graceful Odoo fallback.
+
+    ``state`` is anything but "completed", so Odoo's mapper resolves
+    ``status = failure_reason`` and ``_run_gate_converge`` fails closed to the
+    operator-visible degraded state instead of marking the run injected.
+    """
     return {
         "run_id": run_id or new_run_id(),
-        "status": "error",
+        "state": "failed",
+        "failure_reason": error,
+        "fields": {},
         "pass_count": pass_count,
-        "final_fields": {},
-        "writeback": {"partner_fields": {}},
-        "total_tokens": total_tokens,
-        "total_cost_usd": total_cost_usd,
-        "error": error,
+        "tokens_used": total_tokens,
     }
 
 
@@ -263,15 +361,3 @@ def _idempotency_key(parsed: dict[str, Any]) -> str | None:
     if isinstance(entity_id, str) and entity_id:
         return f"converge:{entity_id}"
     return None
-
-
-def _extract_total_cost_usd(response: EnrichResponse) -> float:
-    feature_vector = response.feature_vector or {}
-    cost_summary = feature_vector.get("cost_summary")
-    if isinstance(cost_summary, dict):
-        raw = cost_summary.get("total_cost_usd", 0.0)
-        try:
-            return float(raw or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
-    return 0.0
