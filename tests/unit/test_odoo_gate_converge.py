@@ -39,6 +39,65 @@ def _odoo_payload(**overrides: Any) -> dict[str, Any]:
     return base
 
 
+def _live_odoo_payload(**overrides: Any) -> dict[str, Any]:
+    """Exactly what the live Odoo builder sends.
+
+    Source of truth: IB-Odoo_19 plasticos_gate/services/gate_builders.py
+    ::build_converge_request -> gate_contracts.py::ConvergeRequest.to_dict.
+    Identity is on the entity; there is no top-level entity_id.
+    """
+    base: dict[str, Any] = {
+        "entity": {
+            "name": "Acme Recycling",
+            "city": "Charlotte",
+            "id": "res.partner:55",
+            "_odoo_entity_id": "res.partner:55",
+        },
+        "object_type": "plasticos",
+        "objective": "Full entity enrichment and inference",
+        "max_variations": 5,
+        "odoo": {"model": "plasticos.enrichment.run", "record_id": 7},
+    }
+    base.update(overrides)
+    return base
+
+
+class TestLiveOdooBuilderShape:
+    """Regression: the live payload used to route to the legacy handler."""
+
+    def test_live_payload_is_recognised(self) -> None:
+        assert is_odoo_converge_payload(_live_odoo_payload()) is True
+
+    def test_live_payload_identity_is_read_from_the_entity(self) -> None:
+        parsed = parse_odoo_converge_request(_live_odoo_payload())
+        assert parsed["entity_id"] == "res.partner:55"
+        assert parsed["entity_id"] != "unknown"
+
+    def test_compatibility_alias_alone_is_enough(self) -> None:
+        payload = _live_odoo_payload(entity={"name": "Acme", "_odoo_entity_id": "res.partner:55"})
+        assert parse_odoo_converge_request(payload)["entity_id"] == "res.partner:55"
+
+    def test_domain_comes_from_object_type(self) -> None:
+        assert parse_odoo_converge_request(_live_odoo_payload())["domain"] == "plasticos"
+
+    def test_max_variations_maps_to_max_passes(self) -> None:
+        parsed = parse_odoo_converge_request(_live_odoo_payload(max_variations=4))
+        assert parsed["max_passes"] == 4
+
+    def test_snapshot_drops_identity_keys(self) -> None:
+        parsed = parse_odoo_converge_request(_live_odoo_payload())
+        assert parsed["entity_snapshot"] == {"name": "Acme Recycling", "city": "Charlotte"}
+
+    def test_internal_enrich_request_is_not_captured(self) -> None:
+        """A free-form entity id must not be mistaken for an Odoo record ref."""
+        assert (
+            is_odoo_converge_payload(
+                {"entity": {"id": "acme-corp", "name": "Acme"}, "object_type": "Account"}
+            )
+            is False
+        )
+
+
 class TestOdooConvergeAdapter:
     def test_detects_odoo_payload(self) -> None:
         assert is_odoo_converge_payload(_odoo_payload()) is True
@@ -131,20 +190,26 @@ class TestOdooConvergeAdapter:
             run_id="eie-test-1",
         )
         assert result["run_id"] == "eie-test-1"
-        assert result["status"] == "ok"
+        # Odoo's mapper reads `state` and derives its own status from it.
+        assert result["state"] == "completed"
         assert result["pass_count"] == 2
         # city already present in snapshot -> omitted (merge-not-overwrite noise)
-        assert result["final_fields"] == {"website": "https://acme-new.example"}
-        assert result["writeback"]["partner_fields"] == result["final_fields"]
-        assert result["total_tokens"] == 1234
-        assert result["total_cost_usd"] == 0.05
+        assert result["fields"] == {"website": "https://acme-new.example"}
+        assert result["tokens_used"] == 1234
+        # `total_cost_usd` is not emitted: Odoo's ConvergeResponse pins it to
+        # None as UNAVAILABLE (DNB-006) and never reads it off the wire.
+        for obsolete in ("status", "final_fields", "writeback", "total_tokens", "total_cost_usd"):
+            assert obsolete not in result
 
     def test_error_payload_shape(self) -> None:
+        """Anything but state="completed" makes Odoo's mapper resolve a non-ok
+        status, so the run fails closed to degraded instead of injected."""
         err = build_odoo_converge_error(error="boom", run_id="eie-err")
-        assert err["status"] == "error"
-        assert err["final_fields"] == {}
-        assert err["writeback"]["partner_fields"] == {}
-        assert err["error"] == "boom"
+        assert err["state"] == "failed"
+        assert err["failure_reason"] == "boom"
+        assert err["fields"] == {}
+        for obsolete in ("status", "final_fields", "writeback"):
+            assert obsolete not in err
 
 
 @pytest.mark.asyncio
@@ -170,12 +235,11 @@ class TestHandleConvergeOdoo:
         ):
             result = await handle_converge("plasticos", _odoo_payload(max_passes=2))
 
-        assert result["status"] == "ok"
-        assert result["final_fields"]["website"] == "https://enriched.example"
-        assert "city" not in result["final_fields"]  # already in snapshot
-        assert result["writeback"]["partner_fields"] == result["final_fields"]
+        assert result["state"] == "completed"
+        assert result["fields"]["website"] == "https://enriched.example"
+        assert "city" not in result["fields"]  # already in snapshot
         assert result["run_id"].startswith("eie-")
-        assert set(result["final_fields"]).issubset(PARTNER_WRITEBACK_FIELD_ALLOWLIST)
+        assert set(result["fields"]).issubset(PARTNER_WRITEBACK_FIELD_ALLOWLIST)
 
         kwargs = loop.await_args.kwargs
         assert kwargs["convergence_config"].max_passes == 2
@@ -187,9 +251,9 @@ class TestHandleConvergeOdoo:
             "plasticos",
             {"entity_snapshot": {"name": "X"}, "domain": "plasticos"},
         )
-        assert result["status"] == "error"
-        assert "entity_id" in result["error"]
-        assert result["final_fields"] == {}
+        assert result["state"] == "failed"
+        assert "entity identity is required" in result["failure_reason"]
+        assert result["fields"] == {}
 
     async def test_timeout_raises_for_odoo_fallback(self) -> None:
         async def _slow(*_a: Any, **_k: Any) -> EnrichResponse:

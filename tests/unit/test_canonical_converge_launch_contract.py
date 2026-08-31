@@ -104,13 +104,34 @@ def _payload() -> dict[str, Any]:
 
 
 def _odoo_request() -> dict[str, Any]:
+    """The exact wire payload the live Odoo builder emits.
+
+    Structurally copied from IB-Odoo_19 (PR #163):
+      plasticos_gate/services/gate_builders.py::build_converge_request
+        -> plasticos_gate/services/gate_contracts.py::ConvergeRequest.to_dict
+
+    Identity rides ON the entity (``id`` canonical, ``_odoo_entity_id`` the
+    compatibility alias). There is no top-level ``entity_id`` and no
+    ``entity_snapshot`` — the earlier fixture invented both, which is why the
+    hardened path was never exercised by anything resembling production.
+    ``object_type`` carries the domain, and passes arrive as ``max_variations``.
+    """
     return {
-        "entity_id": "res.partner:55",
-        "domain": "plasticos",
-        "entity_snapshot": {"name": "Acme Recycling", "city": "Charlotte"},
+        "entity": {
+            "name": "Acme Recycling",
+            "city": "Charlotte",
+            "id": "res.partner:55",
+            "_odoo_entity_id": "res.partner:55",
+        },
+        "object_type": "plasticos",
+        "objective": "Full entity enrichment and inference",
+        "max_variations": 5,
         "odoo": {
             "model": "plasticos.enrichment.run",
             "record_id": 7,
+            "company_id": 1,
+            "user_id": 2,
+            "db_name": "plasticos",
             "correlation_id": "plasticos.enrichment.run:7",
         },
     }
@@ -342,18 +363,26 @@ async def test_canonical_payload_reaches_the_active_runtime_path(canonical_conve
     result = await _handle_odoo_converge("acme", _odoo_request())
 
     assert canonical_converge_probes["loop"].await_count == 1
-    assert result["status"] == "ok"
+    assert result["state"] == "completed"
 
 
-async def test_canonical_response_shape_is_unchanged(canonical_converge_probes):
-    """The Odoo-facing contract keeps state (status) and fields (final_fields)."""
+async def test_canonical_response_matches_the_live_odoo_mapper(canonical_converge_probes):
+    """The response carries exactly what Odoo's mapper reads.
+
+    IB-Odoo_19 plasticos_gate/services/gate_mappers.py::map_converge_response
+    reads `state`, `failure_reason` and `fields`, and derives its own `status`
+    from `state == "completed"`. It never reads status/final_fields/writeback.
+    """
     result = await _handle_odoo_converge("acme", _odoo_request())
 
-    assert result["status"] == "ok"
-    assert result["final_fields"] == {"website": "https://acme.example", "zip": "28202"}
-    assert result["writeback"] == {"partner_fields": result["final_fields"]}
-    for key in ("run_id", "pass_count", "total_tokens", "total_cost_usd"):
+    assert result["state"] == "completed"
+    assert result["fields"] == {"website": "https://acme.example", "zip": "28202"}
+    for key in ("run_id", "pass_count", "tokens_used", "confidence", "failure_reason"):
         assert key in result
+    # The obsolete envelope must not come back: Odoo would read state=None off it
+    # and downgrade a completed convergence to "failed".
+    for obsolete in ("status", "final_fields", "writeback", "total_cost_usd"):
+        assert obsolete not in result
 
 
 async def test_successful_canonical_convergence_makes_zero_graph_calls(
