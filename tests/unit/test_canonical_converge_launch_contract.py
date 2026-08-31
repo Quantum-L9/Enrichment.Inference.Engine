@@ -6,6 +6,12 @@ Odoo waits 30 s. These tests pin the three properties that budget depends on:
 2. EIE is the only retry owner — the Perplexity SDK adds none;
 3. a successful canonical convergence makes zero Graph calls.
 
+Every handler test here enters through `handle_converge` — the function the
+Gate_SDK runtime actually dispatches to — with the exact payload the live Odoo
+builder emits. Calling a branch helper directly would prove only that the branch
+works, not that production reaches it; that gap is precisely how the hardening
+came to sit on a branch no real request ever took.
+
 The transport test deliberately does not assert against a mock that raises
 `APITimeoutError` on demand. That proves only that the code can catch an
 exception it was handed. The defect being regressed here was that the timeout
@@ -26,10 +32,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from perplexity import APITimeoutError, Perplexity
 
-from app.engines.handlers import _handle_odoo_converge
+from app.engines.handlers import handle_converge
 from app.models.schemas import EnrichResponse
 from app.services import perplexity_client
-from app.services.odoo_gate_converge import DEFAULT_CONVERGE_TIMEOUT_SECONDS
+from app.services.odoo_gate_converge import (
+    DEFAULT_CONVERGE_TIMEOUT_SECONDS,
+    is_odoo_compat_converge_payload,
+)
 from app.services.request_deadline import (
     CANONICAL_CONVERGE_BUDGET_SECONDS,
     RESPONSE_RESERVE_SECONDS,
@@ -358,38 +367,87 @@ def canonical_converge_probes():
         get_side_effect_coordinator().reset_for_tests()
 
 
-async def test_canonical_payload_reaches_the_active_runtime_path(canonical_converge_probes):
-    """The Odoo wire format routes to the Odoo converge branch, not the legacy one."""
-    result = await _handle_odoo_converge("acme", _odoo_request())
+async def test_live_odoo_payload_selects_the_canonical_branch(canonical_converge_probes):
+    """EIE3 — the exact production payload must reach the canonical branch.
 
+    Not the compatibility adapter. That adapter is lossy against this shape: it
+    drops `entity["id"]`, substitutes its own objective and object_type, and
+    truncates the response fields to the partner allowlist.
+    """
+    assert is_odoo_compat_converge_payload(_odoo_request()) is False
+
+    with patch(
+        "app.engines.handlers._handle_odoo_compat_converge", new_callable=AsyncMock
+    ) as compat:
+        result = await handle_converge("acme", _odoo_request())
+
+    assert compat.await_count == 0, "the live payload was claimed by the compat adapter"
     assert canonical_converge_probes["loop"].await_count == 1
     assert result["state"] == "completed"
 
 
+async def test_canonical_request_preserves_the_odoo_contract_verbatim(
+    canonical_converge_probes,
+):
+    """EIE1/EIE4 — EnrichRequest reaches the loop untranslated, identity intact."""
+    await handle_converge("acme", _odoo_request())
+
+    request = canonical_converge_probes["loop"].await_args.kwargs["request"]
+    assert request.entity["id"] == "res.partner:55"
+    assert request.entity["_odoo_entity_id"] == "res.partner:55"
+    assert request.entity["name"] == "Acme Recycling"
+    assert request.object_type == "plasticos"
+    assert request.objective == "Full entity enrichment and inference"
+    assert request.max_variations == 5
+    # The compat dialect's required keys are not required here.
+    payload = _odoo_request()
+    assert "entity_snapshot" not in payload
+    assert "entity_id" not in payload
+
+
 async def test_canonical_response_matches_the_live_odoo_mapper(canonical_converge_probes):
-    """The response carries exactly what Odoo's mapper reads.
+    """EIE2 — the response is an EnrichResponse, which is what Odoo reads.
 
     IB-Odoo_19 plasticos_gate/services/gate_mappers.py::map_converge_response
     reads `state`, `failure_reason` and `fields`, and derives its own `status`
     from `state == "completed"`. It never reads status/final_fields/writeback.
     """
-    result = await _handle_odoo_converge("acme", _odoo_request())
+    result = await handle_converge("acme", _odoo_request())
 
+    assert result == _completed_response().model_dump()
     assert result["state"] == "completed"
     assert result["fields"] == {"website": "https://acme.example", "zip": "28202"}
-    for key in ("run_id", "pass_count", "tokens_used", "confidence", "failure_reason"):
+    for key in ("pass_count", "tokens_used", "confidence", "failure_reason"):
         assert key in result
-    # The obsolete envelope must not come back: Odoo would read state=None off it
+    # The bespoke envelope must not come back: Odoo would read state=None off it
     # and downgrade a completed convergence to "failed".
     for obsolete in ("status", "final_fields", "writeback", "total_cost_usd"):
         assert obsolete not in result
 
 
+async def test_canonical_fields_are_not_truncated_to_the_partner_allowlist(
+    canonical_converge_probes,
+):
+    """EnrichResponse.fields passes through whole; Odoo filters on its own side.
+
+    `partner_writeback_from_converge` applies the allowlist in Odoo. Filtering
+    here too would silently discard everything the canonical contract carries
+    for any consumer that is not a partner writeback.
+    """
+    canonical_converge_probes["loop"].return_value = _completed_response(
+        fields={"website": "https://acme.example", "annual_tonnage": 4200}
+    )
+
+    result = await handle_converge("acme", _odoo_request())
+
+    assert result["fields"]["annual_tonnage"] == 4200
+
+
 async def test_successful_canonical_convergence_makes_zero_graph_calls(
     canonical_converge_probes,
 ):
-    """E11 — the launch invariant."""
-    await _handle_odoo_converge("acme", _odoo_request())
+    """EIE14 — the launch invariant, on the branch production actually takes."""
+    await handle_converge("acme", _odoo_request())
 
     assert canonical_converge_probes["router"].notify_graph_sync.await_count == 0
 
@@ -397,10 +455,34 @@ async def test_successful_canonical_convergence_makes_zero_graph_calls(
 async def test_canonical_convergence_still_persists_before_responding(
     canonical_converge_probes,
 ):
-    """E13 — Graph is excluded; required EIE persistence is not."""
-    await _handle_odoo_converge("acme", _odoo_request())
+    """EIE16 — Graph is excluded; required EIE persistence is not."""
+    await handle_converge("acme", _odoo_request())
 
     assert canonical_converge_probes["persist"].call_count == 1
+
+
+async def test_canonical_provider_attempts_are_bound_by_the_shared_deadline(
+    canonical_converge_probes,
+):
+    """EIE5/EIE7 — the deadline is installed for the provider layer, not just the loop.
+
+    The provider reads its transport timeout off the request deadline through a
+    ContextVar. If the canonical branch does not install one, every attempt
+    silently falls back to the configured ceiling and the 25 s budget is
+    unenforceable below the handler.
+    """
+    seen: list[float | None] = []
+
+    async def _observe(**kwargs: Any) -> EnrichResponse:
+        seen.append(provider_attempt_timeout(999.0))
+        return _completed_response()
+
+    canonical_converge_probes["loop"].side_effect = _observe
+    await handle_converge("acme", _odoo_request())
+
+    assert seen and seen[0] is not None
+    assert seen[0] <= CANONICAL_CONVERGE_BUDGET_SECONDS - RESPONSE_RESERVE_SECONDS
+    assert seen[0] != 999.0, "no deadline was installed for the provider layer"
 
 
 async def test_canonical_request_exits_within_the_complete_budget():
@@ -414,16 +496,21 @@ async def test_canonical_request_exits_within_the_complete_budget():
     with (
         patch("app.engines.handlers.run_convergence_loop", _never_finishes),
         patch("app.engines.handlers.DEFAULT_CONVERGE_TIMEOUT_SECONDS", budget),
-        # The guard below is the test's own ceiling. A handler that respects its
-        # deadline raises its own "exceeded ... budget" TimeoutError first; one
-        # that does not trips the guard, whose TimeoutError carries no message —
-        # so the match fails rather than the suite hanging.
-        pytest.raises(TimeoutError, match="budget"),
     ):
-        await asyncio.wait_for(
-            _handle_odoo_converge("acme", _odoo_request()),
+        # The guard below is the test's own ceiling. A handler that respects its
+        # deadline answers inside `budget`; one that does not hangs and trips the
+        # guard's TimeoutError, which is a failure rather than a passing result.
+        result = await asyncio.wait_for(
+            handle_converge("acme", _odoo_request()),
             timeout=budget + 0.5,
         )
+
+    # EIE2/PATCH 17: exhaustion is reported in EnrichResponse semantics, not as a
+    # bespoke error envelope. Odoo's mapper reads state != "completed" and routes
+    # the run to its own degraded handling.
+    assert result["state"] == "failed"
+    assert "budget" in result["failure_reason"]
+    assert result["fields"] == {}
 
 
 async def test_persistence_is_inside_the_outer_deadline():
@@ -440,12 +527,14 @@ async def test_persistence_is_inside_the_outer_deadline():
     ):
         loop.return_value = _completed_response()
         # Same guard: persistence outside the deadline would hang here, so the
-        # guard's unmatched TimeoutError is what marks the regression.
-        with pytest.raises(TimeoutError, match="budget"):
-            await asyncio.wait_for(
-                _handle_odoo_converge("acme", _odoo_request()),
-                timeout=budget + 0.5,
-            )
+        # guard's TimeoutError escaping is what marks the regression.
+        result = await asyncio.wait_for(
+            handle_converge("acme", _odoo_request()),
+            timeout=budget + 0.5,
+        )
+
+    assert result["state"] == "failed"
+    assert "budget" in result["failure_reason"]
 
 
 # ── 10. Graph-dependent workflows still reach Graph ────────

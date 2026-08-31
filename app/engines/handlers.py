@@ -5,9 +5,11 @@ Chassis Handlers — register_handler("enrich", ...) bridge.
 Handler signature (L9 contract):
     async def handle_<action>(tenant: str, payload: dict) -> dict
 
-handle_converge speaks the Odoo plasticos_gate ConvergeRequest wire format
-(entity_snapshot + source_urls) and returns map_converge_response-shaped
-payloads with allowlisted partner fields for live CRM writeback.
+handle_converge serves the canonical converge contract: an EnrichRequest in,
+an EnrichResponse out, with no translation. That is what the live Odoo producer
+emits (IB-Odoo_19 build_converge_request) and what its mapper reads. The
+pre-canonical `entity_snapshot` dialect survives only behind
+`is_odoo_compat_converge_payload`; see app/services/odoo_gate_converge.py.
 
 Integration fixes applied (PR#21/PR#22 merge pass):
     GAP-5: ResultStore.persist_enrich_response called after handle_enrich and handle_converge
@@ -27,7 +29,7 @@ from ..engines.convergence_controller import run_convergence_loop
 from ..engines.domain_yaml_reader import DomainYamlReader
 from ..engines.enrichment_orchestrator import enrich_batch, enrich_entity
 from ..engines.schema_discovery import SchemaDiscoveryEngine
-from ..models.schemas import BatchEnrichRequest, EnrichRequest
+from ..models.schemas import BatchEnrichRequest, EnrichRequest, EnrichResponse
 from ..services.crm.base import CRMType
 from ..services.crm.writeback import WriteBackOrchestrator
 from ..services.idempotency import IdempotencyStore
@@ -38,7 +40,7 @@ from ..services.odoo_gate_converge import (
     build_enrich_request,
     build_odoo_converge_error,
     build_odoo_converge_response,
-    is_odoo_converge_payload,
+    is_odoo_compat_converge_payload,
     new_run_id,
     parse_odoo_converge_request,
 )
@@ -135,22 +137,156 @@ async def handle_enrichbatch(tenant: str, payload: dict[str, Any]) -> dict[str, 
 async def handle_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     """SDK handler for action='converge'.
 
-    Primary wire format is Odoo plasticos_gate ConvergeRequest -> map_converge_response.
-    Legacy EnrichRequest payloads (entity/object_type/objective) remain supported for
-    internal callers.
+    The canonical contract is EnrichRequest in, EnrichResponse out — the shape
+    the live Odoo producer emits and its mapper reads, carried untranslated.
+    Only the pre-canonical `entity_snapshot` / top-level `entity_id` dialect
+    takes the compatibility branch.
     """
-    if is_odoo_converge_payload(payload):
-        return await _handle_odoo_converge(tenant, payload)
-    return await _handle_legacy_converge(tenant, payload)
+    if is_odoo_compat_converge_payload(payload):
+        return await _handle_odoo_compat_converge(tenant, payload)
+    return await _handle_canonical_converge(tenant, payload)
 
 
-async def _handle_odoo_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Odoo Gate converge path — allowlisted partner fields, bounded end-to-end.
+async def _handle_canonical_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Canonical converge — EnrichRequest in, EnrichResponse out, bounded.
 
-    Odoo waits 30 s. One deadline of DEFAULT_CONVERGE_TIMEOUT_SECONDS governs
-    the *complete* operation — domain context, convergence, persistence, and
-    response assembly — not just the convergence loop, and every provider
-    attempt underneath derives its transport timeout from what is left of it.
+    Odoo waits 30 s on the Gate hop. One deadline of
+    DEFAULT_CONVERGE_TIMEOUT_SECONDS governs the *complete* operation —
+    validation, domain context, convergence, provider attempts and their retry
+    sleeps, persistence, and response assembly — not just the convergence loop.
+    Every provider attempt underneath derives its transport timeout from what
+    is left of it, via the deadline installed here.
+    """
+    import asyncio
+
+    deadline = Deadline.start(DEFAULT_CONVERGE_TIMEOUT_SECONDS)
+
+    try:
+        request = EnrichRequest.model_validate(payload)
+    except Exception as exc:
+        logger.warning("handlers.converge_parse_failed", tenant=tenant, error=str(exc))
+        return _canonical_failure(f"invalid converge request: {exc}")
+
+    entity_id = _canonical_entity_id(payload)
+
+    try:
+        with deadline_scope(deadline):
+            return await asyncio.wait_for(
+                _run_canonical_converge(tenant, payload, request, deadline),
+                timeout=max(deadline.remaining(), 0.0),
+            )
+    except TimeoutError:
+        logger.warning(
+            "handlers.converge_timeout",
+            tenant=tenant,
+            entity_id=entity_id,
+            timeout_s=DEFAULT_CONVERGE_TIMEOUT_SECONDS,
+        )
+        # The response reserve exists so a timing-out request still answers in
+        # EnrichResponse semantics. Odoo's mapper derives status from `state`,
+        # so a non-completed state routes it to its own degraded handling —
+        # no Odoo-specific error envelope is invented here.
+        return _canonical_failure(
+            f"converge exceeded {DEFAULT_CONVERGE_TIMEOUT_SECONDS:.0f}s budget for {entity_id}"
+        )
+    except Exception as exc:
+        logger.exception(
+            "handlers.converge_failed",
+            tenant=tenant,
+            entity_id=entity_id,
+            error=str(exc),
+        )
+        raise
+
+
+async def _run_canonical_converge(
+    tenant: str,
+    payload: dict[str, Any],
+    request: EnrichRequest,
+    deadline: Deadline,
+) -> dict[str, Any]:
+    """The complete canonical operation, run under the outer deadline."""
+    settings = get_settings()
+
+    # `object_type` is where the live Odoo builder carries the domain
+    # (`object_type=str(domain)`), so it is the last fallback for the hints
+    # lookup. A non-domain object_type simply misses; the loader fails soft.
+    domain_id = (
+        payload.get("domain_id")
+        or payload.get("domain")
+        or request.kb_context
+        or request.object_type
+    )
+    domain_hints, inference_rules = await _load_domain_convergence_context(
+        domain_id=domain_id,
+        node_label=payload.get("node_label"),
+    )
+
+    loop_kwargs: dict[str, Any] = {}
+    max_passes = payload.get("max_passes")
+    if max_passes is not None:
+        loop_kwargs["convergence_config"] = ConvergenceConfig(max_passes=int(max_passes))
+
+    response = await run_convergence_loop(
+        request=request,
+        settings=settings,
+        kb_resolver=_kb,
+        idem_store=_idem,
+        inference_rules=inference_rules,
+        domain_hints=domain_hints,
+        **loop_kwargs,
+    )
+    result = response.model_dump()
+
+    if response.state == ODOO_COMPLETED_STATE:
+        persist_payload = {**payload, "domain": domain_id or settings.default_domain}
+        # E14: zero Graph calls on the canonical path. Graph sync awaits up to
+        # three Gate attempts at 30 s each with backoff between them — 93 s in
+        # the worst case, against a caller that waits 30 s. Persistence stays
+        # synchronous because the response depends on it; Graph does not.
+        await _persist_and_sync(
+            tenant,
+            persist_payload,
+            result,
+            request.object_type,
+            graph_sync=False,
+        )
+
+    logger.info(
+        "handlers.converge_ok",
+        tenant=tenant,
+        entity_id=_canonical_entity_id(payload),
+        fields=sorted(result.get("fields", {}).keys()),
+        pass_count=result.get("pass_count"),
+        state=result.get("state"),
+        remaining_s=round(deadline.remaining(), 3),
+    )
+    return result
+
+
+def _canonical_entity_id(payload: dict[str, Any]) -> str:
+    """Canonical identity: `entity["id"]` — e.g. "res.partner:55" from Odoo."""
+    entity = payload.get("entity")
+    if isinstance(entity, dict):
+        for key in ("id", "_odoo_entity_id"):
+            value = entity.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return "unknown"
+
+
+def _canonical_failure(reason: str) -> dict[str, Any]:
+    """A non-completed EnrichResponse — the canonical way to report failure."""
+    return EnrichResponse(state="failed", failure_reason=reason).model_dump()
+
+
+async def _handle_odoo_compat_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility branch for the pre-canonical `entity_snapshot` dialect.
+
+    Reached only for payloads the canonical branch cannot serve: identity at the
+    top level, or an `entity_snapshot` block. The live Odoo producer emits
+    neither. Same 25 s budget and same Graph exclusion as the canonical branch —
+    a compatibility caller is not a reason to drop the launch invariants.
     """
     import asyncio
 
@@ -160,18 +296,18 @@ async def _handle_odoo_converge(tenant: str, payload: dict[str, Any]) -> dict[st
     try:
         parsed = parse_odoo_converge_request(payload)
     except ValueError as exc:
-        logger.warning("handlers.converge_parse_failed", tenant=tenant, error=str(exc))
+        logger.warning("handlers.converge_compat_parse_failed", tenant=tenant, error=str(exc))
         return build_odoo_converge_error(error=str(exc), run_id=run_id)
 
     try:
         with deadline_scope(deadline):
             return await asyncio.wait_for(
-                _run_odoo_converge(tenant, payload, parsed, run_id),
+                _run_odoo_compat_converge(tenant, payload, parsed, run_id),
                 timeout=max(deadline.remaining(), 0.0),
             )
     except TimeoutError:
         logger.warning(
-            "handlers.converge_timeout",
+            "handlers.converge_compat_timeout",
             tenant=tenant,
             entity_id=parsed["entity_id"],
             timeout_s=DEFAULT_CONVERGE_TIMEOUT_SECONDS,
@@ -184,7 +320,7 @@ async def _handle_odoo_converge(tenant: str, payload: dict[str, Any]) -> dict[st
         ) from None
     except Exception as exc:
         logger.exception(
-            "handlers.converge_failed",
+            "handlers.converge_compat_failed",
             tenant=tenant,
             entity_id=parsed["entity_id"],
             run_id=run_id,
@@ -193,13 +329,13 @@ async def _handle_odoo_converge(tenant: str, payload: dict[str, Any]) -> dict[st
         raise
 
 
-async def _run_odoo_converge(
+async def _run_odoo_compat_converge(
     tenant: str,
     payload: dict[str, Any],
     parsed: dict[str, Any],
     run_id: str,
 ) -> dict[str, Any]:
-    """Complete canonical converge operation, run under the outer deadline."""
+    """Complete compatibility converge operation, run under the outer deadline."""
     settings = get_settings()
     request = build_enrich_request(parsed)
     domain_hints, inference_rules = await _load_domain_convergence_context(
@@ -224,8 +360,6 @@ async def _run_odoo_converge(
         run_id=run_id,
     )
 
-    # Odoo's mapper derives its status from `state`; raise on non-completed
-    # convergence so the hub error path triggers Odoo's degraded handling.
     if result.get("state") != ODOO_COMPLETED_STATE:
         raise RuntimeError(result.get("failure_reason") or "converge did not complete")
 
@@ -237,10 +371,6 @@ async def _run_odoo_converge(
             "entity": request.entity,
             "idempotency_key": request.idempotency_key,
         }
-        # E11: zero Graph calls on the canonical Odoo path. Graph sync awaits up
-        # to three Gate attempts at 30 s each with backoff between them — 93 s in
-        # the worst case, against a caller that waits 30 s. Persistence stays
-        # synchronous because Odoo's response depends on it; Graph does not.
         await _persist_and_sync(
             tenant,
             persist_payload,
@@ -256,7 +386,7 @@ async def _run_odoo_converge(
         )
 
     logger.info(
-        "handlers.converge_odoo_ok",
+        "handlers.converge_compat_ok",
         tenant=tenant,
         entity_id=parsed["entity_id"],
         run_id=run_id,
@@ -264,34 +394,6 @@ async def _run_odoo_converge(
         pass_count=result.get("pass_count"),
         state=result.get("state"),
     )
-    return result
-
-
-async def _handle_legacy_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Legacy EnrichRequest-shaped converge (internal / pre-Odoo-gate callers)."""
-    settings = get_settings()
-    request = EnrichRequest.model_validate(payload)
-
-    domain_id = payload.get("domain_id") or payload.get("domain")
-    node_label = payload.get("node_label")
-    domain_hints, inference_rules = await _load_domain_convergence_context(
-        domain_id=domain_id,
-        node_label=node_label,
-    )
-
-    response = await run_convergence_loop(
-        request=request,
-        settings=settings,
-        kb_resolver=_kb,
-        idem_store=_idem,
-        inference_rules=inference_rules,
-        domain_hints=domain_hints,
-    )
-    result = response.model_dump()
-
-    if response.state == "completed":
-        await _persist_and_sync(tenant, payload, result, request.object_type)
-
     return result
 
 
