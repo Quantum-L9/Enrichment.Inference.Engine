@@ -34,18 +34,44 @@ L9_META:
 
 from __future__ import annotations
 
+import importlib.util
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.engines.handlers import handle_converge
 from app.models.schemas import EnrichRequest, EnrichResponse
 from app.services.odoo_gate_converge import is_odoo_compat_converge_payload
 
 pytestmark = pytest.mark.asyncio
 
 ENTITY_REF = "res.partner:55"
+
+# `app.engines.handlers` reaches the Perplexity SDK transitively (handlers ->
+# enrichment_orchestrator -> perplexity_client -> `import perplexity`). The
+# constitution gate runs `tests/contracts/` in an environment that installs only
+# constellation-node-sdk — it prints "SKIP: No module named 'app'" for its own
+# attestation step, so an unimportable app runtime is expected there, not a
+# defect. Importing it at module scope would therefore break collection of every
+# test in this file, including the ones that need no runtime at all.
+#
+# So: the payload/model contracts below run everywhere, and the dispatch tests
+# import the handler lazily and declare the runtime they need. They are NOT
+# marked `unit` (that marker means "no external dependencies"), so the gate
+# deselects them and the full `pytest tests/` job — which installs the project —
+# runs them. Removal trigger: the gate installing the project's runtime deps.
+_HAS_PROVIDER_RUNTIME = importlib.util.find_spec("perplexity") is not None
+requires_app_runtime = pytest.mark.skipif(
+    not _HAS_PROVIDER_RUNTIME,
+    reason="app.engines.handlers needs the Perplexity SDK; not installed in the contract gate env",
+)
+
+
+def _handle_converge():
+    """Import the live dispatch entry point lazily. See the note above."""
+    from app.engines.handlers import handle_converge
+
+    return handle_converge
 
 
 def _live_producer_payload(**overrides: Any) -> dict[str, Any]:
@@ -113,26 +139,45 @@ def converge_runtime():
         get_side_effect_coordinator().reset_for_tests()
 
 
+@pytest.mark.unit
 async def test_live_payload_is_not_claimed_by_the_compatibility_adapter() -> None:
     """One canonical contract: the adapter cannot answer for a canonical payload."""
     assert is_odoo_compat_converge_payload(_live_producer_payload()) is False
 
 
+@pytest.mark.unit
+async def test_live_payload_validates_as_a_canonical_enrich_request() -> None:
+    """EIE1/EIE4 — the wire payload IS an EnrichRequest, identity included.
+
+    Needs no app runtime, so it runs in the contract gate too: if the canonical
+    branch could not accept this payload directly, the whole rail is wrong
+    regardless of what dispatch does with it.
+    """
+    request = EnrichRequest.model_validate(_live_producer_payload())
+    assert request.entity["id"] == ENTITY_REF
+    assert request.entity["_odoo_entity_id"] == ENTITY_REF
+    assert request.object_type == "plasticos"
+    assert request.objective == "Full entity enrichment and inference"
+    assert request.max_variations == 5
+
+
+@requires_app_runtime
 async def test_dispatch_routes_the_live_payload_to_the_canonical_branch(
     converge_runtime,
 ) -> None:
     with patch(
         "app.engines.handlers._handle_odoo_compat_converge", new_callable=AsyncMock
     ) as compat:
-        await handle_converge("plasticos", _live_producer_payload())
+        await _handle_converge()("plasticos", _live_producer_payload())
 
     assert compat.await_count == 0
     assert converge_runtime["loop"].await_count == 1
 
 
+@requires_app_runtime
 async def test_request_reaches_the_convergence_loop_untranslated(converge_runtime) -> None:
     """EIE4 — identity survives, and so does everything else the caller chose."""
-    await handle_converge("plasticos", _live_producer_payload())
+    await _handle_converge()("plasticos", _live_producer_payload())
 
     request = converge_runtime["loop"].await_args.kwargs["request"]
     assert isinstance(request, EnrichRequest)
@@ -144,9 +189,10 @@ async def test_request_reaches_the_convergence_loop_untranslated(converge_runtim
     assert request.max_variations == 5
 
 
+@requires_app_runtime
 async def test_response_is_exactly_an_enrich_response(converge_runtime) -> None:
     """EIE2 — no envelope, no field loss, no partner-allowlist truncation."""
-    result = await handle_converge("plasticos", _live_producer_payload())
+    result = await _handle_converge()("plasticos", _live_producer_payload())
 
     assert result == _converged().model_dump()
     assert result["state"] == "completed"
@@ -155,14 +201,16 @@ async def test_response_is_exactly_an_enrich_response(converge_runtime) -> None:
         assert obsolete not in result
 
 
+@requires_app_runtime
 async def test_canonical_converge_makes_zero_graph_calls(converge_runtime) -> None:
     """EIE14 — Graph is off the latency-bounded path; persistence is not."""
-    await handle_converge("plasticos", _live_producer_payload())
+    await _handle_converge()("plasticos", _live_producer_payload())
 
     assert converge_runtime["router"].notify_graph_sync.await_count == 0
     assert converge_runtime["persist"].call_count == 1
 
 
+@requires_app_runtime
 async def test_compatibility_dialect_still_has_a_home(converge_runtime) -> None:
     """EIE20 — the compatibility branch is quarantined, not deleted."""
     payload = {
@@ -176,6 +224,6 @@ async def test_compatibility_dialect_still_has_a_home(converge_runtime) -> None:
         "app.engines.handlers._handle_odoo_compat_converge", new_callable=AsyncMock
     ) as compat:
         compat.return_value = {"state": "completed", "fields": {}}
-        await handle_converge("plasticos", payload)
+        await _handle_converge()("plasticos", payload)
 
     assert compat.await_count == 1
