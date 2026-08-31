@@ -25,6 +25,7 @@ from ..core.config import Settings
 from ..models.loop_schemas import PassContext
 from ..models.schemas import EnrichRequest, EnrichResponse
 from ..services.idempotency import IdempotencyStore
+from ..services.request_deadline import current_deadline
 from .convergence.confidence_tracker import ConfidenceTracker  # NEW
 from .convergence.convergence_config import ConvergenceConfig  # NEW
 from .convergence.cost_tracker import CostTracker
@@ -182,6 +183,20 @@ async def run_convergence_loop(
             known_fields=len(state.known_fields),
             inferred_fields=len(state.inferred_fields),
         )
+
+        # ── Deadline check ────────────────────────────────
+        # E5 at pass granularity: a shared request deadline stops the loop
+        # before it opens a pass it cannot finish and still respond.
+        deadline = current_deadline()
+        if deadline is not None and deadline.attempt_timeout() is None:
+            logger.info(
+                "deadline_exhausted",
+                pass_number=pass_num,
+                remaining_s=round(deadline.remaining(), 3),
+            )
+            state.converged = True
+            state.convergence_reason = "deadline_exhausted"
+            break
 
         # ── Budget check ──────────────────────────────────
         if not cost_tracker.can_continue():
