@@ -51,6 +51,19 @@ REAL RUNTIME:
   provider:   NOT_RUN (no credential; deterministic seam at the outermost
               Perplexity SDK client object only - NOT a full production runtime)
 
+CI (head, after the contract-gate round):
+  Contract-Bound Change Gate: SUCCESS (was the round-1 failure)
+  Security Scanning:          FAILURE - external, Gate_SDK cryptography ceiling
+                              (green on main; see EXTERNAL RELEASE DEBT)
+  SonarCloud:                 FAILURE - quality gate also fails on main, where
+                              new_security_rating is 3 (C) vs 2 (B) here. The
+                              three findings in this PR's own new code were
+                              fixed: a malformed NOSONAR suppression on the
+                              cluster-internal URL default (so the suppression
+                              never applied) and two over-broad pytest.raises
+                              blocks.
+  everything else:            SUCCESS
+
 MAKE PR:
   result:             FAIL
   failed_phase_if_any: phase 0 - the pipeline script itself is absent.
@@ -128,6 +141,18 @@ NON_BLOCKING:
     canonical response path.
 
 EXTERNAL RELEASE DEBT:
+  - BLOCKER, owned by Gate_SDK. bfe6642 added "cryptography>=43.0.0,<45"; the
+    predecessor a770e853 had no upper bound. That ceiling resolves EIE to
+    cryptography 44.0.3, which pip-audit reports with 7 known vulnerabilities
+    (PYSEC-2026-3552, a Bleichenbacher oracle in pkcs7_decrypt_*, plus 6 more;
+    fixes land in 46.0.5 / 46.0.6 / 48.0.1 / 49.0.0 / 50.0.0 - all above the
+    ceiling). Introduced by THIS PR: "Security Scanning" is green on main and
+    red here. EIE cannot fix it - adding cryptography>=46 gives
+    ResolutionImpossible against the SDK, and pinning around it would fork the
+    revision, destroying the one-SDK-across-the-rail property this change
+    exists to establish. Smallest required change: relax the ceiling in
+    Gate_SDK, cut a revision, re-pin Gate PR #14 and EIE together.
+    Does not affect any behaviour proven above.
   - Constellation.Gate PR #14 is not yet merged. This branch is proven against
     its exact head (ce34c9e8), so the two land together or Gate first.
 
@@ -146,7 +171,8 @@ VERDICT:
   registration: GO
   runtime:      GO
   merge:        APPROVE
-  release_set:  GO (sequenced behind Constellation.Gate PR #14)
+  release_set:  BLOCKED on Gate_SDK (cryptography ceiling), then sequenced
+                behind Constellation.Gate PR #14. EIE's own integration is GO.
 
 NEXT STRAIGHT_LINE_MOVE:
   Update IB-Odoo_19 to exact Gate_SDK bfe6642, remove its shadow transport,

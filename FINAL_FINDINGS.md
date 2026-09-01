@@ -353,8 +353,55 @@ None. The three found during this work are fixed and re-proven.
 
 ## External Release Blockers
 
-None from EIE. Constellation.Gate PR #14 is not yet merged; this branch is
-proven against its exact head, so the two must land together or Gate first.
+## External Release Blocker — Gate_SDK caps `cryptography` on a vulnerable line
+
+**Found by CI on this PR, and introduced by this PR.** `Security Scanning`
+(`pip-audit`) **passes on `main`** and fails here.
+
+`bfe6642` added an upper bound its predecessor did not have:
+
+| revision | constraint | resolves to | pip-audit |
+|---|---|---|---|
+| `a770e853` (old) | `cryptography>=43.0.0` | latest | clean |
+| `bfe6642` (new) | `cryptography>=43.0.0,<45` | `44.0.3` | **7 known vulnerabilities** |
+
+Fixed upstream in `46.0.5` / `46.0.6` / `48.0.1` / `49.0.0` / `50.0.0` —
+every fix is above the SDK's ceiling. Highest-impact is PYSEC-2026-3552, a
+Bleichenbacher oracle against the content-encryption key in `pkcs7_decrypt_*`,
+introduced in 44.0.0 and fixed in 50.0.0.
+
+**EIE cannot fix this.** Adding `cryptography>=46` to EIE's own dependencies is
+not a workaround, it is unresolvable:
+
+```
+ERROR: Cannot install constellation-node-sdk==1.0.1 and cryptography>=46
+       because these package versions have conflicting dependencies.
+ERROR: ResolutionImpossible
+```
+
+Pinning around it would mean forking the SDK revision, which breaks the one
+property this whole change exists to establish: Gate and EIE running the *same*
+SDK commit. So it is reported rather than papered over, per the contract's stop
+rule.
+
+```
+status:                  BLOCKED (external)
+blocking_invariant:      no known-vulnerable dependency in the release set
+evidence:                pip-audit, 7 findings, cryptography 44.0.3;
+                         Security Scanning green on main, red here;
+                         ResolutionImpossible when EIE tries to override
+smallest_required_change: relax `cryptography>=43.0.0,<45` in Gate_SDK
+                         pyproject.toml to admit >=50, cut a new SDK revision,
+                         and re-pin Gate PR #14 and EIE together
+owner:                   Quantum-L9/Gate_SDK
+```
+
+This does not affect any behaviour proven above: the transport, registration,
+deadline, persistence and idempotency evidence all stand. It is a supply-chain
+constraint on the revision, not a defect in the integration.
+
+Also: Constellation.Gate PR #14 is not yet merged; this branch is proven against
+its exact head, so the two must land together or Gate first.
 
 ## Scope Drift Audit
 
@@ -376,7 +423,10 @@ untouched.
 
 ## Release-Set Recommendation
 
-**GO**, sequenced behind Constellation.Gate PR #14.
+**BLOCKED**, on Gate_SDK — not on EIE. The integration is proven; the release
+set carries 7 known `cryptography` vulnerabilities that only Gate_SDK can lift,
+and it must then be re-pinned in Gate PR #14 and here together. Sequencing
+behind Gate PR #14 still applies.
 
 ## Next Straight-Line Move
 
@@ -445,6 +495,7 @@ validation:
   lint: PASS
   format: PASS
   make_pr: FAIL
+  security_scan: FAIL (external: Gate_SDK cryptography ceiling, see above)
 blocking_defects: []
 non_blocking_defects:
   - "make pr dead: local_pr_pipeline/pr_pipeline.sh absent, never existed"
@@ -453,14 +504,20 @@ non_blocking_defects:
   - "requires-python >=3.11 looser than the SDK's >=3.12 and CI's 3.12"
   - "EIE side-effect packets trip Gate replay guard, off the canonical response path"
 external_release_blockers:
+  - "Gate_SDK bfe6642 caps cryptography <45, pinning EIE to 44.0.3 with 7 known
+     vulnerabilities (PYSEC-2026-3552 et al, fixed in 46.0.5-50.0.0). pip-audit
+     is green on main and red here. EIE cannot override it: ResolutionImpossible.
+     Owner Gate_SDK; smallest fix is relaxing the ceiling and re-cutting the
+     revision Gate PR #14 and EIE both pin."
   - "Constellation.Gate PR #14 not yet merged; must land together or Gate first"
 verdict:
   local: GO
+  supply_chain: BLOCKED_EXTERNAL (Gate_SDK cryptography ceiling)
   domain_contract: GO
   registration: GO
   runtime: GO
-  merge: APPROVE
-  release_set: GO
+  merge: APPROVE (the integration is sound; the dependency ceiling is Gate_SDK's)
+  release_set: BLOCKED until Gate_SDK relaxes the cryptography ceiling
 next_move: >
   Bring IB-Odoo_19 onto this same exact Gate_SDK revision, delete
   its remaining shadow transport, then execute the complete real

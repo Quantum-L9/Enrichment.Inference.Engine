@@ -76,8 +76,9 @@ async def _commit(coordinator, store, **kwargs):
 
 async def test_required_persistence_failure_raises_rather_than_reporting_success():
     coordinator = SideEffectCoordinator()
+    store = _BoomStore()
     with pytest.raises(PersistenceRequiredError, match="database unavailable"):
-        await _commit(coordinator, _BoomStore(), idempotency_key="k1", require_persistence=True)
+        await _commit(coordinator, store, idempotency_key="k1", require_persistence=True)
 
 
 async def test_persistence_failure_stays_fire_and_forward_by_default():
@@ -136,17 +137,18 @@ async def test_no_side_effect_fires_when_required_persistence_fails():
     ):
         router.return_value.notify_score_invalidate = AsyncMock()
         emitter.return_value.emit_enrichment_completed = AsyncMock()
+        commit = coordinator.commit_after_enrich(
+            tenant="acme",
+            entity_id="res.partner:1",
+            object_type="res.partner",
+            domain="plastics",
+            response_dict=_response(),
+            settings=object(),
+            idempotency_key="k4",
+            require_persistence=True,
+        )
         with pytest.raises(PersistenceRequiredError):
-            await coordinator.commit_after_enrich(
-                tenant="acme",
-                entity_id="res.partner:1",
-                object_type="res.partner",
-                domain="plastics",
-                response_dict=_response(),
-                settings=object(),
-                idempotency_key="k4",
-                require_persistence=True,
-            )
+            await commit
         router.return_value.notify_score_invalidate.assert_not_awaited()
         emitter.return_value.emit_enrichment_completed.assert_not_awaited()
 

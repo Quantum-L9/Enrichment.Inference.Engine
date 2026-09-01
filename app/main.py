@@ -164,7 +164,12 @@ ADVERTISED_ACTIONS: tuple[str, ...] = (
     "enrich",
     "enrich-and-sync",
 )
-_DEFAULT_INTERNAL_URL = f"http://{NODE_NAME}:8000"  # NOSONAR(S5332): cluster-internal default
+# Cluster-internal service address, reached over the container network rather
+# than the public internet, and Gate's registration schema accepts both schemes
+# for exactly that reason. A deployment terminating TLS between nodes sets
+# GATE_INTERNAL_URL explicitly; hard-coding https here would break every node
+# that does not. Overridden by settings.gate_internal_url in build_node_registration.
+_DEFAULT_INTERNAL_URL = f"http://{NODE_NAME}:8000"  # NOSONAR
 
 # The node cap Gate applies when it bounds a worker attempt
 # (min(remaining packet budget, node cap)). It is EIE's own complete-operation
