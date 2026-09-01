@@ -125,9 +125,15 @@ async def save_enrichment_result(
     written in the same transaction.
     """
     if idempotency_key:
-        existing = await get_enrichment_result_by_idempotency_key(idempotency_key)
+        existing = await get_enrichment_result_by_idempotency_key(
+            idempotency_key, tenant_id=tenant_id
+        )
         if existing:
-            logger.debug("enrichment_result_idempotent_hit", idempotency_key=idempotency_key)
+            logger.debug(
+                "enrichment_result_idempotent_hit",
+                idempotency_key=idempotency_key,
+                tenant_id=tenant_id,
+            )
             return existing
 
     record = EnrichmentResult(
@@ -193,10 +199,22 @@ async def get_enrichment_result(result_id: uuid.UUID) -> EnrichmentResult | None
 
 async def get_enrichment_result_by_idempotency_key(
     idempotency_key: str,
+    tenant_id: str,
 ) -> EnrichmentResult | None:
-    """Look up an existing result by caller-supplied idempotency key."""
+    """Look up an existing result by caller-supplied idempotency key, per tenant.
+
+    `tenant_id` is required, not optional. An idempotency key is chosen by the
+    caller and is only unique within that caller's own tenant: two tenants
+    picking the same string is ordinary, not a collision to resolve. Matching on
+    the key alone returned one tenant's stored enrichment to another — a
+    cross-tenant read, and a silently dropped write for the second tenant, whose
+    own operation was reported complete against a record it does not own.
+    """
     async with get_session() as session:
-        stmt = select(EnrichmentResult).where(EnrichmentResult.idempotency_key == idempotency_key)
+        stmt = select(EnrichmentResult).where(
+            EnrichmentResult.idempotency_key == idempotency_key,
+            EnrichmentResult.tenant_id == tenant_id,
+        )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 

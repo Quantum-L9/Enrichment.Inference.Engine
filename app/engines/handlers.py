@@ -50,6 +50,7 @@ from ..services.request_deadline import (
     effective_budget_seconds,
     packet_timeout_ms,
 )
+from ..services.side_effect_coordinator import PersistenceRequiredError
 from ..services.simulation_bridge import (
     analyze_leverage,
     brief_to_dict,
@@ -82,10 +83,16 @@ async def _persist_and_sync(
     object_type: str,
     *,
     graph_sync: bool = True,
+    require_persistence: bool = False,
 ) -> None:
     """
     Delegate post-enrich side effects to the single SideEffectCoordinator (TASK-021).
-    Fire-and-forward — never raises; failures are logged inside the coordinator.
+
+    Fire-and-forward by default — failures are logged inside the coordinator.
+    With `require_persistence=True` a persist failure raises
+    PersistenceRequiredError instead, so a caller about to answer `completed`
+    can refuse to. Nothing is recorded for the key in that case, leaving the
+    same logical operation retryable.
 
     `graph_sync=False` keeps the Gate->GRAPH round trip off a latency-bounded
     caller's path. Persistence still happens synchronously; only the Graph leg
@@ -110,6 +117,7 @@ async def _persist_and_sync(
         idempotency_key=payload.get("idempotency_key"),
         emit_event=True,
         graph_sync=graph_sync,
+        require_persistence=require_persistence,
     )
 
 
@@ -270,13 +278,33 @@ async def _run_canonical_converge(
         # three Gate attempts at 30 s each with backoff between them — 93 s in
         # the worst case, against a caller that waits 30 s. Persistence stays
         # synchronous because the response depends on it; Graph does not.
-        await _persist_and_sync(
-            tenant,
-            persist_payload,
-            result,
-            request.object_type,
-            graph_sync=False,
-        )
+        #
+        # require_persistence=True is what makes `completed` mean durable. The
+        # producer treats a completed EnrichResponse as the authoritative record
+        # of this operation and does not ask again, so answering `completed` on
+        # a result no store holds loses the work silently — the enrichment is
+        # gone, and the once-per-key guard suppresses the retry that would have
+        # recovered it.
+        try:
+            await _persist_and_sync(
+                tenant,
+                persist_payload,
+                result,
+                request.object_type,
+                graph_sync=False,
+                require_persistence=True,
+            )
+        except PersistenceRequiredError as exc:
+            logger.error(
+                "handlers.converge_persistence_failed",
+                tenant=tenant,
+                entity_id=_canonical_entity_id(payload),
+                error=str(exc),
+            )
+            # Reported in EnrichResponse semantics: the producer's mapper reads
+            # state != "completed" and routes the run to its own degraded
+            # handling, leaving the logical operation retryable.
+            return _canonical_failure(f"result not durable: {exc}")
 
     logger.info(
         "handlers.converge_ok",

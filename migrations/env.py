@@ -43,15 +43,29 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def do_run_migrations(connection) -> None:
+    """Configure and run, in one sync callable, inside one transaction.
+
+    Both halves must share the same sync Connection, and `run_migrations()`
+    must be wrapped in `context.begin_transaction()` — that block is what
+    commits. Without it `alembic upgrade head` logs "Running upgrade -> ..."
+    and then rolls the DDL back at connection exit, so the command reports
+    success against a database where nothing was created. Splitting configure
+    and run across two `run_sync` calls hides the same bug, because the second
+    callable discards the connection it is handed.
+
+    Shape follows alembic's own templates/async/env.py.
+    """
+    context.configure(connection=connection, target_metadata=target_metadata)
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
 async def run_async_migrations() -> None:
     engine = create_async_engine(get_url())
     async with engine.connect() as connection:
-        await connection.run_sync(
-            lambda sync_conn: context.configure(
-                connection=sync_conn, target_metadata=target_metadata
-            )
-        )
-        await connection.run_sync(lambda _: context.run_migrations())
+        await connection.run_sync(do_run_migrations)
     await engine.dispose()
 
 
