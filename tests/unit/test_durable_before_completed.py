@@ -137,18 +137,21 @@ async def test_no_side_effect_fires_when_required_persistence_fails():
     ):
         router.return_value.notify_score_invalidate = AsyncMock()
         emitter.return_value.emit_enrichment_completed = AsyncMock()
-        commit = coordinator.commit_after_enrich(
-            tenant="acme",
-            entity_id="res.partner:1",
-            object_type="res.partner",
-            domain="plastics",
-            response_dict=_response(),
-            settings=object(),
-            idempotency_key="k4",
-            require_persistence=True,
-        )
+        # Argument construction is hoisted out so the `raises` block contains
+        # exactly one invocation — the one expected to raise.
+        response = _response()
+        settings = object()
         with pytest.raises(PersistenceRequiredError):
-            await commit
+            await coordinator.commit_after_enrich(
+                tenant="acme",
+                entity_id="res.partner:1",
+                object_type="res.partner",
+                domain="plastics",
+                response_dict=response,
+                settings=settings,
+                idempotency_key="k4",
+                require_persistence=True,
+            )
         router.return_value.notify_score_invalidate.assert_not_awaited()
         emitter.return_value.emit_enrichment_completed.assert_not_awaited()
 

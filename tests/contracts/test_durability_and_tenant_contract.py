@@ -145,6 +145,8 @@ async def test_a_non_durable_operation_stays_retryable():
     ):
         router.return_value.notify_score_invalidate = AsyncMock()
         emitter.return_value.emit_enrichment_completed = AsyncMock()
+        # Hoisted so the `raises` block holds exactly one invocation.
+        settings = object()
         with pytest.raises(PersistenceRequiredError):
             await coordinator.commit_after_enrich(
                 tenant="acme",
@@ -152,7 +154,7 @@ async def test_a_non_durable_operation_stays_retryable():
                 object_type="res.partner",
                 domain="plastics",
                 response_dict={"fields": {}, "state": "completed"},
-                settings=object(),
+                settings=settings,
                 idempotency_key="op-2",
                 require_persistence=True,
             )
