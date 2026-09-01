@@ -1,4 +1,9 @@
-"""Tests for explicit Gate registration (TASK-003).
+"""Gate registration boundary: EIE owns the values, Gate_SDK owns the transport.
+
+EIE's bespoke registration client is gone. What remains testable here is the
+half EIE still owns — node identity, advertised actions, health endpoint, owner,
+and the node cap it advertises — plus proof that the wire body the SDK renders
+from it is semantically what the Gate previously accepted.
 
 Hermetic: all HTTP is mocked via respx. No real network is contacted.
 """
@@ -24,7 +29,13 @@ import respx
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
-from app.services.gate_registration import build_payload, register_with_gate
+from app.main import (
+    ADVERTISED_ACTIONS,
+    NODE_TIMEOUT_MS,
+    _register_with_gate,
+    build_node_registration,
+)
+from app.services.request_deadline import CANONICAL_CONVERGE_BUDGET_SECONDS
 
 GATE_URL = "http://gate.test"
 REGISTER_URL = f"{GATE_URL}/v1/admin/register"
@@ -40,62 +51,142 @@ def _settings(**overrides) -> Settings:
     return Settings(**base)
 
 
-def test_build_payload_shape():
-    payload = build_payload(_settings())
-    assert set(payload.keys()) == {"enrichment-engine"}
-    node = payload["enrichment-engine"]
-    assert "converge" in node["supported_actions"]
-    assert node["health_endpoint"] == "/api/v1/health"
-    assert node["metadata"]["owner"] == "eie"
-    assert node["internal_url"].startswith("http")
-    # Forbidden fields the Gate never accepts.
+# --------------------------------------------------------------------------
+# EIE's half: the values
+# --------------------------------------------------------------------------
+
+
+def test_registration_carries_eie_semantics():
+    reg = build_node_registration(_settings())
+    assert reg.node_name == "enrichment-engine"
+    assert reg.owner == "eie"
+    assert reg.node_type == "enrichment"
+    assert reg.version == "2.3.0"
+    assert reg.health_endpoint == "/api/v1/health"
+    assert "converge" in reg.supported_actions
+    assert reg.internal_url == "http://enrichment-engine:8000"
+
+
+def test_advertised_node_cap_equals_eie_operation_ceiling():
+    """Gate bounds a worker with min(remaining budget, node cap).
+
+    Advertising a cap larger than EIE's own complete-operation ceiling would
+    tell Gate to wait on time EIE has already given up on — a second clock.
+    """
+    reg = build_node_registration(_settings())
+    assert reg.timeout_ms == NODE_TIMEOUT_MS
+    assert reg.timeout_ms == int(CANONICAL_CONVERGE_BUDGET_SECONDS * 1000) == 25_000
+
+
+def test_advertised_actions_are_a_subset_of_runtime_allowed():
+    """advertised ⊆ runtime_allowed — never auto-advertise everything permitted."""
+    from app.main import _build_runtime_config
+
+    allowed = set(_build_runtime_config().allowed_actions)
+    advertised = set(ADVERTISED_ACTIONS)
+    assert advertised <= allowed, f"advertised beyond runtime: {advertised - allowed}"
+    assert advertised < allowed, "advertising every runtime-allowed action is the drift"
+
+
+def test_advertised_actions_are_all_implemented():
+    """advertised ⊆ implemented — never advertise an action EIE cannot serve."""
+    from constellation_node_sdk.runtime.handlers import clear_handlers, registered_actions
+
+    from app.engines.orchestration_layer import register as register_orchestration
+    from app.services.chassis_handlers import register_all_handlers
+
+    clear_handlers()
+    try:
+        register_orchestration(kb=None, idem_store=None)
+        register_all_handlers()
+        implemented = set(registered_actions())
+    finally:
+        clear_handlers()
+
+    missing = set(ADVERTISED_ACTIONS) - implemented
+    assert not missing, f"advertised but not implemented: {sorted(missing)}"
+
+
+# --------------------------------------------------------------------------
+# The SDK's half: the wire body, and semantic equivalence with the old client
+# --------------------------------------------------------------------------
+
+# The exact body the deleted bespoke client sent, and the Gate accepted.
+_LEGACY_NODE_BODY = {
+    "internal_url": "http://enrichment-engine:8000",
+    "supported_actions": ["converge", "graph-inference-result", "enrich", "enrich-and-sync"],
+    "health_endpoint": "/api/v1/health",
+    "metadata": {"owner": "eie", "version": "2.3.0", "type": "enrichment"},
+}
+
+
+def test_sdk_payload_is_semantically_equivalent_to_the_deleted_client():
+    """Every field the Gate resolved identity/routing from is unchanged.
+
+    Byte equality is not required: the SDK legitimately adds control-plane
+    metadata (`generated_by`) and explicit routing defaults the old body left
+    to the Gate. What must not move is anything Gate reads to decide *who owns
+    which action and where to reach them*.
+    """
+    node = build_node_registration(_settings()).to_payload()["enrichment-engine"]
+
+    for key in ("internal_url", "supported_actions", "health_endpoint"):
+        assert node[key] == _LEGACY_NODE_BODY[key], f"{key} drifted"
+    for key in ("owner", "version", "type"):
+        assert node["metadata"][key] == _LEGACY_NODE_BODY["metadata"][key], (
+            f"metadata.{key} drifted"
+        )
+
+    # SDK-added control-plane metadata is permitted, and identified.
+    assert node["metadata"]["generated_by"] == "constellation-node-sdk"
+
+    # Fields the Gate rejects outright must still be absent.
     assert "execute_path" not in node
     assert "health_path" not in node
-    assert "owner" not in node
+    assert "owner" not in node  # owner is metadata.owner, never top-level
 
 
 @respx.mock
 async def test_register_posts_canonical_payload():
     route = respx.post(REGISTER_URL).mock(return_value=httpx.Response(200))
-    result = await register_with_gate(_settings())
-    assert result is True
+    assert await _register_with_gate(_settings()) is True
 
     request = route.calls.last.request
     assert request.url.params.get("overwrite") == "true"
-    body = json.loads(request.content)
-    assert "enrichment-engine" in body
-    node = body["enrichment-engine"]
-    assert "converge" in node["supported_actions"]
-    assert node["health_endpoint"] == "/api/v1/health"
+    node = json.loads(request.content)["enrichment-engine"]
     assert node["metadata"]["owner"] == "eie"
-    assert node["internal_url"].startswith("http")
+    assert node["health_endpoint"] == "/api/v1/health"
+    assert "converge" in node["supported_actions"]
+    assert node["timeout_ms"] == 25_000
 
 
 @respx.mock
 async def test_admin_token_header_sent_when_configured():
     route = respx.post(REGISTER_URL).mock(return_value=httpx.Response(200))
-    await register_with_gate(_settings(gate_admin_token="secret-token"))
+    await _register_with_gate(_settings(gate_admin_token="secret-token"))
     assert route.calls.last.request.headers.get("X-Admin-Token") == "secret-token"
 
 
 async def test_disabled_returns_none_and_no_http():
     # No respx router active; a real POST would raise, proving no call is made.
-    result = await register_with_gate(_settings(gate_registration_enabled=False))
-    assert result is None
+    assert await _register_with_gate(_settings(gate_registration_enabled=False)) is None
+
+
+async def test_no_gate_url_returns_none_and_no_http():
+    assert await _register_with_gate(_settings(gate_url="")) is None
 
 
 @respx.mock
 async def test_rejection_returns_false():
     respx.post(REGISTER_URL).mock(return_value=httpx.Response(422))
-    result = await register_with_gate(_settings())
-    assert result is False
+    assert await _register_with_gate(_settings()) is False
 
 
 @respx.mock
 async def test_transport_error_is_non_fatal():
+    """Gate unreachable degrades readiness; it never raises into startup."""
     respx.post(REGISTER_URL).mock(side_effect=httpx.ConnectError("boom"))
-    result = await register_with_gate(_settings())
-    assert result is False
+    assert await _register_with_gate(_settings()) is False
 
 
 @pytest.mark.parametrize(
@@ -103,6 +194,7 @@ async def test_transport_error_is_non_fatal():
     [(None, "ok"), (True, "ok"), (False, "degraded")],
 )
 def test_health_surfaces_gate_registered(monkeypatch, registered, expected_status):
+    """Liveness is not routability: an unregistered node reports degraded."""
     import app.main as main
 
     monkeypatch.setattr(main, "_gate_registered", registered)

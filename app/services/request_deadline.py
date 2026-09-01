@@ -82,6 +82,45 @@ class Deadline:
         return budget
 
 
+def effective_budget_seconds(
+    packet_timeout_ms: int | None,
+    ceiling_seconds: float = CANONICAL_CONVERGE_BUDGET_SECONDS,
+) -> float:
+    """The budget for one complete operation: min(EIE ceiling, packet budget).
+
+    Gate hands a worker the *bounded remaining* budget of the operation in the
+    dispatch packet's ``header.timeout_ms`` — not a fresh full timeout — and the
+    SDK worker runtime bounds the handler with that same number. So there is one
+    budget hierarchy, and EIE's ceiling is a cap within it, never a floor beneath
+    it: starting a fresh 25 s operation on a packet that says 2 s remain would
+    promise Gate work it has already stopped waiting for.
+
+    ``None`` (no packet, e.g. a direct in-process call) means no upstream bound,
+    so the ceiling stands alone.
+    """
+    if packet_timeout_ms is None:
+        return ceiling_seconds
+    packet_seconds = packet_timeout_ms / 1000.0
+    if packet_seconds <= 0.0:
+        return 0.0
+    return min(ceiling_seconds, packet_seconds)
+
+
+def packet_timeout_ms(packet: object | None) -> int | None:
+    """Read ``header.timeout_ms`` off a transport packet, tolerating absence.
+
+    The SDK hands the packet to a three-parameter handler; a direct caller passes
+    None. Reading it defensively keeps the domain free of a transport import.
+    """
+    if packet is None:
+        return None
+    header = getattr(packet, "header", None)
+    value = getattr(header, "timeout_ms", None)
+    if isinstance(value, int) and value > 0:
+        return value
+    return None
+
+
 _deadline: ContextVar[Deadline | None] = ContextVar("eie_request_deadline", default=None)
 
 
