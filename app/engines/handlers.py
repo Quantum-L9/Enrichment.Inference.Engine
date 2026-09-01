@@ -44,7 +44,13 @@ from ..services.odoo_gate_converge import (
     new_run_id,
     parse_odoo_converge_request,
 )
-from ..services.request_deadline import Deadline, deadline_scope
+from ..services.request_deadline import (
+    Deadline,
+    deadline_scope,
+    effective_budget_seconds,
+    packet_timeout_ms,
+)
+from ..services.side_effect_coordinator import PersistenceRequiredError
 from ..services.simulation_bridge import (
     analyze_leverage,
     brief_to_dict,
@@ -77,10 +83,16 @@ async def _persist_and_sync(
     object_type: str,
     *,
     graph_sync: bool = True,
+    require_persistence: bool = False,
 ) -> None:
     """
     Delegate post-enrich side effects to the single SideEffectCoordinator (TASK-021).
-    Fire-and-forward — never raises; failures are logged inside the coordinator.
+
+    Fire-and-forward by default — failures are logged inside the coordinator.
+    With `require_persistence=True` a persist failure raises
+    PersistenceRequiredError instead, so a caller about to answer `completed`
+    can refuse to. Nothing is recorded for the key in that case, leaving the
+    same logical operation retryable.
 
     `graph_sync=False` keeps the Gate->GRAPH round trip off a latency-bounded
     caller's path. Persistence still happens synchronously; only the Graph leg
@@ -105,6 +117,7 @@ async def _persist_and_sync(
         idempotency_key=payload.get("idempotency_key"),
         emit_event=True,
         graph_sync=graph_sync,
+        require_persistence=require_persistence,
     )
 
 
@@ -134,20 +147,38 @@ async def handle_enrichbatch(tenant: str, payload: dict[str, Any]) -> dict[str, 
     }
 
 
-async def handle_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def handle_converge(
+    tenant: str,
+    payload: dict[str, Any],
+    packet: Any = None,
+) -> dict[str, Any]:
     """SDK handler for action='converge'.
 
     The canonical contract is EnrichRequest in, EnrichResponse out — the shape
     the live Odoo producer emits and its mapper reads, carried untranslated.
     Only the pre-canonical `entity_snapshot` / top-level `entity_id` dialect
     takes the compatibility branch.
+
+    The third parameter is the SDK's own invocation contract, not a transport
+    surface EIE implements: a handler declaring more than two parameters is
+    called as `(tenant, payload, packet)`. EIE reads exactly one field off it —
+    the operation budget Gate bounded — and never decodes, validates or signs
+    it. A direct in-process caller passes nothing and gets the ceiling.
     """
+    budget = effective_budget_seconds(
+        packet_timeout_ms(packet),
+        ceiling_seconds=DEFAULT_CONVERGE_TIMEOUT_SECONDS,
+    )
     if is_odoo_compat_converge_payload(payload):
-        return await _handle_odoo_compat_converge(tenant, payload)
-    return await _handle_canonical_converge(tenant, payload)
+        return await _handle_odoo_compat_converge(tenant, payload, budget)
+    return await _handle_canonical_converge(tenant, payload, budget)
 
 
-async def _handle_canonical_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def _handle_canonical_converge(
+    tenant: str,
+    payload: dict[str, Any],
+    budget_seconds: float | None = None,
+) -> dict[str, Any]:
     """Canonical converge — EnrichRequest in, EnrichResponse out, bounded.
 
     Odoo waits 30 s on the Gate hop. One deadline of
@@ -159,7 +190,12 @@ async def _handle_canonical_converge(tenant: str, payload: dict[str, Any]) -> di
     """
     import asyncio
 
-    deadline = Deadline.start(DEFAULT_CONVERGE_TIMEOUT_SECONDS)
+    # Resolved here, not as a default argument: a default binds at import time,
+    # which would freeze the module constant and silently ignore any later
+    # reassignment of it.
+    if budget_seconds is None:
+        budget_seconds = DEFAULT_CONVERGE_TIMEOUT_SECONDS
+    deadline = Deadline.start(budget_seconds)
 
     try:
         request = EnrichRequest.model_validate(payload)
@@ -180,15 +216,13 @@ async def _handle_canonical_converge(tenant: str, payload: dict[str, Any]) -> di
             "handlers.converge_timeout",
             tenant=tenant,
             entity_id=entity_id,
-            timeout_s=DEFAULT_CONVERGE_TIMEOUT_SECONDS,
+            timeout_s=budget_seconds,
         )
         # The response reserve exists so a timing-out request still answers in
         # EnrichResponse semantics. Odoo's mapper derives status from `state`,
         # so a non-completed state routes it to its own degraded handling —
         # no Odoo-specific error envelope is invented here.
-        return _canonical_failure(
-            f"converge exceeded {DEFAULT_CONVERGE_TIMEOUT_SECONDS:.0f}s budget for {entity_id}"
-        )
+        return _canonical_failure(f"converge exceeded {budget_seconds:.0f}s budget for {entity_id}")
     except Exception as exc:
         logger.exception(
             "handlers.converge_failed",
@@ -244,13 +278,33 @@ async def _run_canonical_converge(
         # three Gate attempts at 30 s each with backoff between them — 93 s in
         # the worst case, against a caller that waits 30 s. Persistence stays
         # synchronous because the response depends on it; Graph does not.
-        await _persist_and_sync(
-            tenant,
-            persist_payload,
-            result,
-            request.object_type,
-            graph_sync=False,
-        )
+        #
+        # require_persistence=True is what makes `completed` mean durable. The
+        # producer treats a completed EnrichResponse as the authoritative record
+        # of this operation and does not ask again, so answering `completed` on
+        # a result no store holds loses the work silently — the enrichment is
+        # gone, and the once-per-key guard suppresses the retry that would have
+        # recovered it.
+        try:
+            await _persist_and_sync(
+                tenant,
+                persist_payload,
+                result,
+                request.object_type,
+                graph_sync=False,
+                require_persistence=True,
+            )
+        except PersistenceRequiredError as exc:
+            logger.error(
+                "handlers.converge_persistence_failed",
+                tenant=tenant,
+                entity_id=_canonical_entity_id(payload),
+                error=str(exc),
+            )
+            # Reported in EnrichResponse semantics: the producer's mapper reads
+            # state != "completed" and routes the run to its own degraded
+            # handling, leaving the logical operation retryable.
+            return _canonical_failure(f"result not durable: {exc}")
 
     logger.info(
         "handlers.converge_ok",
@@ -280,7 +334,11 @@ def _canonical_failure(reason: str) -> dict[str, Any]:
     return EnrichResponse(state="failed", failure_reason=reason).model_dump()
 
 
-async def _handle_odoo_compat_converge(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def _handle_odoo_compat_converge(
+    tenant: str,
+    payload: dict[str, Any],
+    budget_seconds: float | None = None,
+) -> dict[str, Any]:
     """Compatibility branch for the pre-canonical `entity_snapshot` dialect.
 
     Reached only for payloads the canonical branch cannot serve: identity at the
@@ -291,7 +349,9 @@ async def _handle_odoo_compat_converge(tenant: str, payload: dict[str, Any]) -> 
     import asyncio
 
     run_id = new_run_id()
-    deadline = Deadline.start(DEFAULT_CONVERGE_TIMEOUT_SECONDS)
+    if budget_seconds is None:
+        budget_seconds = DEFAULT_CONVERGE_TIMEOUT_SECONDS
+    deadline = Deadline.start(budget_seconds)
 
     try:
         parsed = parse_odoo_converge_request(payload)
@@ -310,13 +370,12 @@ async def _handle_odoo_compat_converge(tenant: str, payload: dict[str, Any]) -> 
             "handlers.converge_compat_timeout",
             tenant=tenant,
             entity_id=parsed["entity_id"],
-            timeout_s=DEFAULT_CONVERGE_TIMEOUT_SECONDS,
+            timeout_s=budget_seconds,
             run_id=run_id,
         )
         # Raise so the hub returns an error packet and Odoo falls back to local.
         raise TimeoutError(
-            f"converge exceeded {DEFAULT_CONVERGE_TIMEOUT_SECONDS:.0f}s budget "
-            f"for {parsed['entity_id']}"
+            f"converge exceeded {budget_seconds:.0f}s budget for {parsed['entity_id']}"
         ) from None
     except Exception as exc:
         logger.exception(

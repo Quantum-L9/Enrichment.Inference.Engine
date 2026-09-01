@@ -4,10 +4,14 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PIN = "a770e8531dc1c59ce01e1dbb0f4162785d9dda89"
+# The exact Gate_SDK revision consumed by green Constellation.Gate PR #14.
+# Gate pins the same commit, so both processes on the rail run one SDK.
+PIN = "bfe6642062a85a720ad8c25e96446d4df1c299ac"
 errors: list[str] = []
 
-for rel in ["pyproject.toml", "requirements.txt", "poetry.lock"]:
+# requirements-ci.txt is where CI resolves the SDK from; omitting it let the
+# two pin sites drift without the validator noticing.
+for rel in ["pyproject.toml", "requirements.txt", "requirements-ci.txt", "poetry.lock"]:
     path = ROOT / rel
     if not path.exists():
         continue

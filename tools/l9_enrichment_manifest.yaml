@@ -5,7 +5,7 @@ description: Active transport/runtime contract manifest for Enrichment.Inference
 contracts:
   active_transport_runtime:
   - path: app/main.py
-    sha256: 58a50f4bc83301fa46c3214290bfc57e5b04795b4d2bfe92def2acf73f795df5
+    sha256: 70963f998339dbc2c33278868fd98a52790a7d122011c8fbafcb46466d1010d1
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
@@ -34,7 +34,7 @@ contracts:
     - EXECUTION_FLOWS.md
     description: Canonical SDK action registration and orchestration wiring
   - path: app/engines/handlers.py
-    sha256: d5d4d4c33608688c5eb5cc335a2fcb4112c60f31f40169d381206a426d93cb58
+    sha256: 78f8b3d25fcc0427fc396523ad971d6271f4d11e42ece5aadf5a9ea721f87802
     required_refs:
     - AGENTS.md
     - AI_AGENT_REVIEW_CHECKLIST.md

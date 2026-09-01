@@ -45,6 +45,15 @@ def semantic_side_effect_key(
     return f"hash:{digest}"
 
 
+class PersistenceRequiredError(RuntimeError):
+    """Durability was a precondition of the answer, and it did not hold.
+
+    Raised only when a caller passed ``require_persistence=True``. It is not an
+    enrichment failure — the result was computed — it is a refusal to report
+    that result as durable when no store accepted it.
+    """
+
+
 @dataclass
 class SideEffectReport:
     key: str
@@ -79,6 +88,7 @@ class SideEffectCoordinator:
         idempotency_key: str | None = None,
         emit_event: bool = True,
         graph_sync: bool = True,
+        require_persistence: bool = False,
     ) -> SideEffectReport:
         """Commit post-enrich side effects once per semantic key.
 
@@ -86,6 +96,13 @@ class SideEffectCoordinator:
         itself answering a latency-bounded request uses it: `notify_graph_sync`
         awaits up to three Gate attempts at 30 s each with backoff between, which
         no synchronous caller budget can absorb.
+
+        `require_persistence=True` makes durability a precondition of the answer
+        rather than a side effect of it: the persist failure is re-raised, and
+        the semantic key is NOT recorded, so the same logical operation can be
+        retried. Without it a caller that reports `completed` on the strength of
+        a computed result would acknowledge work no store holds, and the
+        once-per-key guard would then suppress every retry of it.
         """
         key = semantic_side_effect_key(
             tenant=tenant,
@@ -115,9 +132,22 @@ class SideEffectCoordinator:
                 idempotency_key=idempotency_key,
             )
             report.persisted = True
-        except Exception as exc:  # noqa: BLE001 — fire-and-forward
+        except Exception as exc:  # noqa: BLE001 — fire-and-forward unless required
             report.errors.append(f"persist:{exc}")
             logger.warning("side_effect_persist_failed", entity_id=entity_id, error=str(exc))
+            if require_persistence:
+                # Raise before any downstream effect fires and before the key is
+                # recorded: an un-persisted result must leave no completion
+                # marker, or the retry is skipped as a duplicate.
+                logger.error(
+                    "side_effect_persist_required_failed",
+                    key=key,
+                    entity_id=entity_id,
+                    error=str(exc),
+                )
+                raise PersistenceRequiredError(
+                    f"required persistence failed for {entity_id}: {exc}"
+                ) from exc
 
         # 2) Graph sync once (Gate-only PacketRouter), unless excluded
         if not graph_sync:

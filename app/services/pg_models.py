@@ -55,9 +55,10 @@ class EnrichmentResult(Base):
     entity_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     object_type: Mapped[str] = mapped_column(String(128), nullable=False)
     domain: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    idempotency_key: Mapped[str | None] = mapped_column(
-        String(256), nullable=True, unique=True, index=True
-    )
+    # Not globally unique: an idempotency key is caller-chosen and is only
+    # unique inside the tenant that chose it. See the tenant-scoped
+    # UniqueConstraint in __table_args__.
+    idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
     fields: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     confidence: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
     uncertainty_score: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False)
@@ -98,6 +99,15 @@ class EnrichmentResult(Base):
     __table_args__ = (
         Index("ix_enrichment_results_tenant_entity", "tenant_id", "entity_id"),
         Index("ix_enrichment_results_tenant_created", "tenant_id", "created_at"),
+        # Idempotency is per tenant. A UNIQUE on idempotency_key alone made one
+        # tenant's key collide with another's: the second tenant's own operation
+        # either resolved to the first tenant's stored row (a cross-tenant read)
+        # or failed to insert. Two tenants picking the same string is ordinary.
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_enrichment_results_tenant_idempotency_key",
+        ),
     )
 
 
