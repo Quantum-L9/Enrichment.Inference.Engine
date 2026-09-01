@@ -28,6 +28,18 @@ GATE #14:
   real_dispatch:    PASS (Gate-derived child packet over real HTTP to
                     EIE /v1/execute; exactly 1 dispatch per converge)
 
+HANDLER METADATA (section 17 re-audit vs bfe6642):
+  handler_receives_transport_idempotency_directly: true
+    The SDK dispatches by handler arity: 2 params get (tenant, payload), but
+    3+ params get (tenant, payload, packet). handle_converge now takes three,
+    which is what closes the deadline seam and also makes the transport key
+    reachable. EIE reads exactly one field, header.timeout_ms.
+  domain_idempotency_source: EnrichRequest.idempotency_key (payload)
+  packet_id_used_as_business_key: false
+    Informational, as the contract specifies: no change required, because the
+    canonical producer supplies the logical key. Deriving the domain ID from
+    packet_id would make every retry a new operation.
+
 DOMAIN:
   canonical_contract:       PASS (EnrichRequest in / EnrichResponse out,
                             untranslated; no alternate dialect on this path)

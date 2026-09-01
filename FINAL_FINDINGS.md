@@ -239,6 +239,43 @@ key and answers a repeat from its own cache without ever calling EIE. A replay
 test that reuses the transport key proves nothing about EIE. The retry above
 uses a fresh transport packet carrying the same logical key.
 
+## Handler Transport Metadata (§17 re-audit against bfe6642)
+
+The previous finding recorded that the SDK's two-parameter handler invocation
+exposed only `tenant` and `payload`, never the packet header. Re-audited against
+the exact installed revision, that is still true *of the two-parameter form* —
+but it is a property of the arity the handler chooses, not a limit of the SDK:
+
+```
+len(parameters) == 1  -> handler(packet)
+len(parameters) == 2  -> handler(packet.tenant.org_id, packet.payload)
+len(parameters) == 0  -> handler()
+otherwise             -> handler(packet.tenant.org_id, packet.payload, packet)
+```
+
+`handle_converge` now declares three parameters, so it receives the packet. That
+is what closes the deadline seam — EIE reads `header.timeout_ms` off it — and it
+means the transport idempotency key is *available* to the handler. It is
+deliberately not used as the business key.
+
+```yaml
+handler_receives_transport_idempotency_directly: true   # via the 3-param form
+domain_idempotency_source: EnrichRequest.idempotency_key  # payload, caller-supplied
+packet_id_used_as_business_key: false
+transport_key_read_by_the_domain: false
+```
+
+The domain operation ID stays `EnrichRequest.idempotency_key`, supplied by the
+canonical producer, and the durable row is keyed `(tenant_id, idempotency_key)`.
+The transport key is Gate's dedup key and is a different thing: Gate answers a
+repeat of the same transport key from its own cache without ever calling EIE,
+which is exactly why a replay test must mint a new transport packet carrying the
+same logical key. Deriving the domain ID from `packet_id` would make every
+retry a new operation and defeat the durability guarantee above.
+
+This is informational, as the contract specifies: nothing here requires a
+change, because the canonical producer supplies the logical key.
+
 ## Concurrent Same-Key State
 
 Six concurrent canonical converges sharing one logical key through the real
@@ -496,6 +533,8 @@ persistence:
   completion_on_failure: false
   real_postgres: PASS
 idempotency:
+  handler_receives_transport_idempotency_directly: true
+  domain_idempotency_source: EnrichRequest.idempotency_key
   logical_operation_primary: true
   tenant_scoped: true
   packet_id_primary: false
