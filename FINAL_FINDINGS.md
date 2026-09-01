@@ -350,6 +350,22 @@ None. The three found during this work are fixed and re-proven.
    (fire-and-forward, after the answer) and benign in this harness, where no
    CEG node is registered to own `score-invalidate`. Worth a look; not this
    PR's scope.
+6. **`alembic` is not a declared dependency.** `alembic.ini` and `migrations/`
+   exist and `alembic upgrade head` is the documented way to apply the schema,
+   but `alembic` appears in no `pyproject.toml` extra and no `requirements*.txt`.
+   A fresh install therefore cannot run migrations, and CI has no alembic at
+   all — which is how the migration guard, written to execute the module,
+   failed there. The guard is now static; the missing declaration is not fixed
+   here because adding a dependency is a wider call than this PR should make.
+7. **CI installs a third Gate_SDK revision.** `.github/workflows/pr-pipeline.yml`
+   hard-codes `Gate_SDK.git@ead0f48166f510683e9dec6ff7383258cc4307f2` for the
+   packet/envelope gates — neither the old pin nor `bfe6642`. So the gate step
+   validates against an SDK the repository does not pin, and
+   `scripts/validate_sdk_pin.py` does not look at workflow files, so the drift
+   is invisible to it. Incidentally this is what proves the `cryptography`
+   finding above: `ead0f481` carries no upper bound and resolves to
+   `cryptography 50.0.1` in the very same CI run where `bfe6642` resolves to the
+   vulnerable `44.0.3`.
 
 ## External Release Blockers
 
@@ -503,6 +519,8 @@ non_blocking_defects:
   - "mypy 44 errors, identical count on unmodified main, advisory"
   - "requires-python >=3.11 looser than the SDK's >=3.12 and CI's 3.12"
   - "EIE side-effect packets trip Gate replay guard, off the canonical response path"
+  - "alembic is not a declared dependency though alembic.ini and migrations/ exist"
+  - "CI pr-pipeline.yml hard-codes a third Gate_SDK revision (ead0f481), unseen by validate_sdk_pin.py"
 external_release_blockers:
   - "Gate_SDK bfe6642 caps cryptography <45, pinning EIE to 44.0.3 with 7 known
      vulnerabilities (PYSEC-2026-3552 et al, fixed in 46.0.5-50.0.0). pip-audit

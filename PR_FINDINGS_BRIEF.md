@@ -139,6 +139,15 @@ NON_BLOCKING:
   - requires-python ">=3.11" is looser than the SDK's ">=3.12" and CI's 3.12.
   - EIE post-response side-effect packets trip Gate's replay guard; off the
     canonical response path.
+  - alembic is not declared in pyproject.toml or any requirements file, though
+    alembic.ini and migrations/ exist and "alembic upgrade head" is the
+    documented way to apply the schema. A fresh install cannot run migrations.
+  - .github/workflows/pr-pipeline.yml hard-codes a THIRD Gate_SDK revision
+    (ead0f481...) for the packet/envelope gates - neither the old pin nor
+    bfe6642 - and validate_sdk_pin.py does not inspect workflow files, so that
+    drift is invisible to it. It is also the control that proves the
+    cryptography finding: ead0f481 has no ceiling and pulls cryptography 50.0.1
+    in the same CI run where bfe6642 pulls the vulnerable 44.0.3.
 
 EXTERNAL RELEASE DEBT:
   - BLOCKER, owned by Gate_SDK. bfe6642 added "cryptography>=43.0.0,<45"; the
