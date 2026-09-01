@@ -51,18 +51,38 @@ REAL RUNTIME:
   provider:   NOT_RUN (no credential; deterministic seam at the outermost
               Perplexity SDK client object only - NOT a full production runtime)
 
-CI (head, after the contract-gate round):
-  Contract-Bound Change Gate: SUCCESS (was the round-1 failure)
+CI (final state):
+  Test Suite:                 SUCCESS
+  Test (pytest + coverage):   SUCCESS
+  L9 Constitution Gate:       SUCCESS
+  Contract-Bound Change Gate: SUCCESS
+  SonarCloud:                 SUCCESS - "Quality Gate passed, 0 New issues"
+  Baseline Ratchet:           SUCCESS (Required Tests, Quarantined Debt,
+                              Workflow Integrity, Verdict)
+  PR Size & Review Policy:    SUCCESS (the bot's "BLOCKED" comment is advisory
+                              text; its own check passes)
   Security Scanning:          FAILURE - external, Gate_SDK cryptography ceiling
                               (green on main; see EXTERNAL RELEASE DEBT)
-  SonarCloud:                 FAILURE - quality gate also fails on main, where
-                              new_security_rating is 3 (C) vs 2 (B) here. The
-                              three findings in this PR's own new code were
-                              fixed: a malformed NOSONAR suppression on the
-                              cluster-internal URL default (so the suppression
-                              never applied) and two over-broad pytest.raises
-                              blocks.
+  CI Gate / PR Pipeline Gate: FAILURE - aggregators only; both fail on
+                              "security: failure" and nothing else
   everything else:            SUCCESS
+
+  Four CI rounds were needed. Every failure except the cryptography one was
+  this PR's and was fixed, not worked around:
+   1. Contract-Bound Change Gate - contract-bound surfaces changed with no
+      corresponding tests/contracts change. Closed by a real contract test.
+   2. SonarCloud - a malformed "# NOSONAR(S5332)" suppression, which is why
+      Sonar reported the suppression syntax AND the rule it was meant to
+      suppress; plus two over-broad pytest.raises blocks.
+   3. Test Suite - the migration guard executed the migration module, which
+      imports alembic, undeclared in this project and absent in CI; and the
+      contract test imported SQLAlchemy at module scope, breaking collection
+      in the constitution gate's SDK-only environment.
+   4. github-code-quality - a bare "await commit" introduced by fix 2. Hoisting
+      the argument-constructing calls satisfies both rules at once.
+  Several earlier "failures" were cancellations from my own pushes superseding
+  in-flight runs; the ratchet is fail-closed on cancellation, so they cleared
+  once a run completed un-superseded.
 
 MAKE PR:
   result:             FAIL

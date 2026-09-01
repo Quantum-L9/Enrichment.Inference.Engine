@@ -313,6 +313,11 @@ same way against their exact original shapes.
 | zero-sync-Graph through Gate | PASS |
 | architecture no-bespoke-registration guard | PASS (mutation-checked) |
 | `mypy` (advisory) | 44 errors — **identical count on unmodified main** |
+| CI: Test Suite / pytest+coverage | PASS |
+| CI: L9 Constitution Gate, Contract-Bound Change Gate | PASS |
+| CI: SonarCloud quality gate | PASS — "0 New issues" |
+| CI: Baseline Ratchet (all four jobs) | PASS |
+| CI: Security Scanning | **FAIL** — external, see the release blocker below |
 
 ## make pr Result
 
