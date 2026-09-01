@@ -428,6 +428,17 @@ every fix is above the SDK's ceiling. Highest-impact is PYSEC-2026-3552, a
 Bleichenbacher oracle against the content-encryption key in `pkcs7_decrypt_*`,
 introduced in 44.0.0 and fixed in 50.0.0.
 
+Tracked as **Quantum-L9/Gate_SDK#41**, which carries the full analysis.
+
+The ceiling is not an oversight: Gate_SDK#39 added it because Odoo.sh ships a
+stale pyOpenSSL whose compiled bindings crash the entire Odoo registry when a
+newer `cryptography` wheel lands beside them — an 8-day outage. What has changed
+is that IB-Odoo_19 now carries `cryptography==43.0.3` in both `requirements.txt`
+and `constraints.txt`, so that consumer protects itself with an exact pin and
+the library-wide cap is now the redundant layer — the one propagating 7 CVEs
+into consumers that never touch pyOpenSSL. The SDK's own `cryptography` surface
+is five Ed25519/PEM symbols, verified working unchanged on 50.0.1.
+
 **EIE cannot fix this.** Adding `cryptography>=46` to EIE's own dependencies is
 not a workaround, it is unresolvable:
 
@@ -448,10 +459,16 @@ blocking_invariant:      no known-vulnerable dependency in the release set
 evidence:                pip-audit, 7 findings, cryptography 44.0.3;
                          Security Scanning green on main, red here;
                          ResolutionImpossible when EIE tries to override
-smallest_required_change: relax `cryptography>=43.0.0,<45` in Gate_SDK
-                         pyproject.toml to admit >=50, cut a new SDK revision,
-                         and re-pin Gate PR #14 and EIE together
+smallest_required_change: DROP the upper bound in Gate_SDK pyproject.toml
+                         (`cryptography>=43.0.0,<45` -> `cryptography>=43.0.0`),
+                         keeping the floor; cut a revision; re-pin Gate PR #14
+                         and EIE together. NOT `>=50`: IB-Odoo_19 pins
+                         cryptography==43.0.3 exactly, so raising the floor is
+                         ResolutionImpossible for that consumer. Dropping the
+                         ceiling leaves Odoo on 43.0.3 via its own exact pin
+                         and lets EIE/Gate float to 50.0.1.
 owner:                   Quantum-L9/Gate_SDK
+tracked_as:              Quantum-L9/Gate_SDK#41
 ```
 
 This does not affect any behaviour proven above: the transport, registration,
@@ -569,8 +586,9 @@ external_release_blockers:
   - "Gate_SDK bfe6642 caps cryptography <45, pinning EIE to 44.0.3 with 7 known
      vulnerabilities (PYSEC-2026-3552 et al, fixed in 46.0.5-50.0.0). pip-audit
      is green on main and red here. EIE cannot override it: ResolutionImpossible.
-     Owner Gate_SDK; smallest fix is relaxing the ceiling and re-cutting the
-     revision Gate PR #14 and EIE both pin."
+     Owner Gate_SDK, tracked as Quantum-L9/Gate_SDK#41. Smallest fix is to DROP
+     the upper bound and keep the floor - not raise it to >=50, which is
+     ResolutionImpossible against IB-Odoo_19's exact cryptography==43.0.3 pin."
   - "Constellation.Gate PR #14 not yet merged; must land together or Gate first"
 verdict:
   local: GO

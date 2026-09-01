@@ -191,9 +191,17 @@ EXTERNAL RELEASE DEBT:
     red here. EIE cannot fix it - adding cryptography>=46 gives
     ResolutionImpossible against the SDK, and pinning around it would fork the
     revision, destroying the one-SDK-across-the-rail property this change
-    exists to establish. Smallest required change: relax the ceiling in
-    Gate_SDK, cut a revision, re-pin Gate PR #14 and EIE together.
-    Does not affect any behaviour proven above.
+    exists to establish. Tracked as Quantum-L9/Gate_SDK#41.
+    Smallest required change: DROP the upper bound in Gate_SDK
+    (cryptography>=43.0.0,<45 -> cryptography>=43.0.0), keep the floor, cut a
+    revision, re-pin Gate PR #14 and EIE together. NOT ">=50": IB-Odoo_19 pins
+    cryptography==43.0.3 exactly, so raising the floor is ResolutionImpossible
+    for that consumer, while dropping the ceiling leaves Odoo on 43.0.3 via its
+    own pin and lets EIE/Gate resolve 50.0.1. The cap is not an oversight -
+    Gate_SDK#39 added it after an 8-day Odoo.sh registry crash - but the
+    consumer now carries an exact pin in requirements.txt AND constraints.txt,
+    so the library-wide cap is the redundant layer, and it is the one
+    propagating the CVEs. Does not affect any behaviour proven above.
   - Constellation.Gate PR #14 is not yet merged. This branch is proven against
     its exact head (ce34c9e8), so the two land together or Gate first.
 
