@@ -9,7 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Gate registration is owned by the Gate_SDK.** The SDK pin moves to
+  `bfe6642062a85a720ad8c25e96446d4df1c299ac`, the exact revision consumed by
+  green Constellation.Gate PR #14, and `app/services/gate_registration.py` is
+  deleted. EIE no longer implements a `POST /v1/admin/register` client, an
+  admin-header construction, a registration retry loop, or a Gate status-code
+  taxonomy: it supplies node values to `NodeRegistration` and hands them to
+  `register_node()`. `metadata.owner=eie` — the sole reason the bespoke client
+  existed — is now a first-class SDK field. Explicit lifecycle registration and
+  the `gate_registered` readiness signal are unchanged.
+- **The node cap EIE advertises to Gate is its own 25 s ceiling**, not the SDK's
+  30 s default. Gate bounds a worker with `min(remaining budget, node cap)`, so
+  the previous default told Gate to wait on time EIE had already abandoned.
+
 ### Fixed
+- **`completed` now means durable.** A canonical converge whose PostgreSQL write
+  failed still answered `state="completed"` with no `failure_reason`, because
+  `_persist_and_sync` was fire-and-forward and the side-effect coordinator
+  swallowed the persist exception — Gate turned that into a success and the
+  enrichment was lost silently. The once-per-key guard recorded the key anyway,
+  suppressing the retry that would have recovered it. Persistence is now a
+  precondition of the canonical answer: the failure propagates, no downstream
+  effect fires, no completion marker is left, and the handler returns a
+  non-completed `EnrichResponse`. Non-canonical callers keep the previous
+  fire-and-forward behaviour.
+- **Idempotency is scoped to the tenant.** `enrichment_results.idempotency_key`
+  carried a global `UNIQUE` and was looked up by key alone. An idempotency key is
+  caller-chosen and unique only within its own tenant, so two tenants using the
+  same string collided: the second tenant's converge resolved to the first
+  tenant's stored enrichment and was reported complete against a row it does not
+  own. Migration `002` replaces `UNIQUE(idempotency_key)` with
+  `UNIQUE(tenant_id, idempotency_key)`, and the lookup now requires a tenant.
+- **`alembic upgrade head` now commits.** `run_async_migrations` configured the
+  context in one `run_sync` call and ran the migrations in a second lambda that
+  discarded its connection, with no `context.begin_transaction()` — alembic
+  logged `Running upgrade  -> 001` and exited 0 against a database left with zero
+  tables. The shape now follows alembic's own async template.
+- **EIE honours the upstream operation budget.** `handle_converge` called
+  `Deadline.start(25)` unconditionally, so a dispatch packet carrying 2 s of
+  remaining budget still opened a fresh 25 s operation. The effective budget is
+  now `min(EIE ceiling, packet budget)`, read from the `header.timeout_ms` Gate
+  bounds and the SDK passes to a three-parameter handler.
+- **`scripts/validate_sdk_pin.py`** enforced the retired `a770e853` pin and never
+  checked `requirements-ci.txt`, where CI resolves the SDK from.
 - **The canonical converge contract is EnrichRequest in, EnrichResponse out.**
   `handle_converge` serves the payload the live Odoo producer emits
   (`entity` + `object_type` + `objective` + `max_variations`, identity on
