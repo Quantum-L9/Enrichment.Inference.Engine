@@ -2,7 +2,8 @@
 
 ```
 HEAD:
-  candidate: a2b85619448381f0da9e4f1ec357f4bbaabb85b4
+  candidate: branch tip of claude/eie-gate-sdk-adoption-rpw476
+  last_code: 6e5ebb3cfc08b73400ada6d14d09eceac1c83017
   base:      origin/main @ cfda45043477bfe4a0f2a8c249ff9be30d1705aa
 
 GATE_SDK:
@@ -62,11 +63,18 @@ REMOTE PR:
   created:     yes
   number:      201
   url:         https://github.com/Quantum-L9/Enrichment.Inference.Engine/pull/201
-  remote_head: a2b85619448381f0da9e4f1ec357f4bbaabb85b4
+  remote_head: 6e5ebb3cfc08b73400ada6d14d09eceac1c83017
+  ci_rounds:   round 1 failed "Contract-Bound Change Gate" - this branch changed
+               app/engines/ and app/services/ with no corresponding change under
+               docs/contracts/, tests/contracts/ or the constitution verifier.
+               The gate was right: both fixed behaviours are contract-level.
+               Closed by tests/contracts/test_durability_and_tenant_contract.py,
+               which pins what a caller is promised rather than restating the
+               unit mechanics. Not worked around.
 
 TEST EVIDENCE:
   - command: pytest (full suite, coverage)
-    result:  PASS - 1633 passed, 4 xfailed, 74.53% (gate 71%)
+    result:  PASS - 1639 passed, 4 xfailed, 74.53% (gate 71%)
   - command: ruff check .
     result:  PASS
   - command: ruff format --check .

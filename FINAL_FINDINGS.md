@@ -23,7 +23,7 @@ of them was a cross-tenant data defect. All three are fixed and re-proven here.
 |---|---|
 | repository | Quantum-L9/Enrichment.Inference.Engine |
 | branch | `claude/eie-gate-sdk-adoption-rpw476` |
-| candidate HEAD | `774c9d2fac69545be29f39f50b04ff2706a485bd` |
+| candidate HEAD | branch tip of `claude/eie-gate-sdk-adoption-rpw476`; last code-bearing commit `6e5ebb3cfc08b73400ada6d14d09eceac1c83017` |
 | base | `origin/main` @ `cfda45043477bfe4a0f2a8c249ff9be30d1705aa` |
 | python | 3.12.3 (matches CI; SDK requires >=3.12) |
 | postgres | 16.13, real cluster, port 55432 |
@@ -295,7 +295,7 @@ same way against their exact original shapes.
 
 | command | result |
 |---|---|
-| `pytest` (full suite, coverage) | **1633 passed, 4 xfailed, 74.53%** (gate 71%) |
+| `pytest` (full suite, coverage) | **1639 passed, 4 xfailed, 74.53%** (gate 71%) |
 | `ruff check .` | PASS |
 | `ruff format --check .` | PASS (311 files) |
 | `make verify` (contract manifest) | PASS — 10/10 |
@@ -389,7 +389,8 @@ Odoo → Gate → EIE → PostgreSQL → Gate → Odoo release rail.
 ```yaml
 repository: Quantum-L9/Enrichment.Inference.Engine
 branch: "claude/eie-gate-sdk-adoption-rpw476"
-candidate_head: "774c9d2fac69545be29f39f50b04ff2706a485bd"
+candidate_head: "branch tip of claude/eie-gate-sdk-adoption-rpw476"
+last_code_commit: "6e5ebb3cfc08b73400ada6d14d09eceac1c83017"
 gate_sdk:
   required_sha: "bfe6642062a85a720ad8c25e96446d4df1c299ac"
   installed_sha: "bfe6642062a85a720ad8c25e96446d4df1c299ac"
