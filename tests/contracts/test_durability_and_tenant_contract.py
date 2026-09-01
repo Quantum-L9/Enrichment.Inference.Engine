@@ -31,18 +31,31 @@ L9_META:
 
 from __future__ import annotations
 
+import importlib.util
 import inspect
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import UniqueConstraint
 
-from app.models.schemas import EnrichResponse
-from app.services import pg_store
-from app.services.pg_models import EnrichmentResult
-from app.services.side_effect_coordinator import (
-    PersistenceRequiredError,
-    semantic_side_effect_key,
+# The constitution gate runs `tests/contracts/` in an environment that installs
+# only constellation-node-sdk, so neither SQLAlchemy nor the Perplexity SDK is
+# present there. Importing the app runtime at module scope would break
+# collection of this whole file in that environment. Same convention as
+# test_canonical_converge_runtime_contract.py: import the runtime lazily, guard
+# on a real capability probe, and do NOT mark these `unit` — that marker means
+# "no external dependencies", so the gate deselects them and the full
+# `pytest tests/` job, which installs the project, runs them.
+# Removal trigger: the gate installing the project's runtime deps.
+_HAS_DB_RUNTIME = importlib.util.find_spec("sqlalchemy") is not None
+_HAS_PROVIDER_RUNTIME = importlib.util.find_spec("perplexity") is not None
+
+requires_db_runtime = pytest.mark.skipif(
+    not _HAS_DB_RUNTIME,
+    reason="the persistence models need SQLAlchemy; not installed in the contract gate env",
+)
+requires_app_runtime = pytest.mark.skipif(
+    not (_HAS_DB_RUNTIME and _HAS_PROVIDER_RUNTIME),
+    reason="app.engines.handlers needs the app runtime; not installed in the contract gate env",
 )
 
 ENTITY_REF = "res.partner:55"
@@ -62,9 +75,12 @@ def _payload(idempotency_key: str | None = None) -> dict:
 # ── Contract 1: `state="completed"` is a durability claim ──────────────
 
 
+@requires_app_runtime
 @pytest.mark.asyncio
 async def test_completed_is_never_returned_for_a_result_no_store_holds():
     from app.engines import handlers
+    from app.models.schemas import EnrichResponse
+    from app.services.side_effect_coordinator import PersistenceRequiredError
 
     async def _persist_fails(*_a, **_kw):
         raise PersistenceRequiredError("store unavailable")
@@ -84,10 +100,12 @@ async def test_completed_is_never_returned_for_a_result_no_store_holds():
     assert result["failure_reason"], "a non-completed state must say why"
 
 
+@requires_app_runtime
 @pytest.mark.asyncio
 async def test_the_canonical_branch_demands_durability_rather_than_hoping_for_it():
     """The guarantee has to be requested at the call site, not left to chance."""
     from app.engines import handlers
+    from app.models.schemas import EnrichResponse
 
     seen: dict = {}
 
@@ -104,10 +122,15 @@ async def test_the_canonical_branch_demands_durability_rather_than_hoping_for_it
     assert seen.get("require_persistence") is True
 
 
+@requires_app_runtime
 @pytest.mark.asyncio
 async def test_a_non_durable_operation_stays_retryable():
     """No completion marker, or the recovery attempt is dropped as a duplicate."""
-    from app.services.side_effect_coordinator import SideEffectCoordinator
+    from app.services.side_effect_coordinator import (
+        PersistenceRequiredError,
+        SideEffectCoordinator,
+        semantic_side_effect_key,
+    )
 
     coordinator = SideEffectCoordinator()
 
@@ -143,7 +166,12 @@ async def test_a_non_durable_operation_stays_retryable():
 # ── Contract 2: a tenant boundary is a boundary ────────────────────────
 
 
+@requires_db_runtime
 def test_an_idempotency_key_is_unique_only_within_its_own_tenant():
+    from sqlalchemy import UniqueConstraint
+
+    from app.services.pg_models import EnrichmentResult
+
     uniques = [c for c in EnrichmentResult.__table__.constraints if isinstance(c, UniqueConstraint)]
     columns = [{col.name for col in c.columns} for c in uniques]
 
@@ -157,7 +185,10 @@ def test_an_idempotency_key_is_unique_only_within_its_own_tenant():
     assert not EnrichmentResult.__table__.columns["idempotency_key"].unique
 
 
+@requires_db_runtime
 def test_a_replay_lookup_cannot_be_made_without_naming_a_tenant():
+    from app.services import pg_store
+
     sig = inspect.signature(pg_store.get_enrichment_result_by_idempotency_key)
     assert "tenant_id" in sig.parameters
     assert sig.parameters["tenant_id"].default is inspect.Parameter.empty, (
@@ -165,9 +196,12 @@ def test_a_replay_lookup_cannot_be_made_without_naming_a_tenant():
     )
 
 
+@requires_db_runtime
 @pytest.mark.asyncio
 async def test_one_tenants_replay_never_resolves_to_another_tenants_record():
     """The lookup is asked for the tenant being written, not for the key alone."""
+    from app.services import pg_store
+
     with patch.object(
         pg_store, "get_enrichment_result_by_idempotency_key", new_callable=AsyncMock
     ) as lookup:

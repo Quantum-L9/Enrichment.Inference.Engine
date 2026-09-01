@@ -99,8 +99,14 @@ async def test_persist_scopes_its_replay_lookup_to_the_writing_tenant():
 
 
 def test_migration_replaces_the_global_constraint():
-    """Load the migration module and check what it actually declares."""
-    import importlib.util
+    """Read the migration statically — it must not need alembic to be checked.
+
+    Executing the module would import `alembic`, which this project does not
+    declare as a dependency, so the check would silently become "skipped
+    wherever alembic is absent" — including CI. Parsing the source keeps the
+    guard true on every runner, the same way the sibling env.py guard does.
+    """
+    import ast
     from pathlib import Path
 
     path = (
@@ -109,27 +115,52 @@ def test_migration_replaces_the_global_constraint():
         / "versions"
         / "002_tenant_scoped_idempotency.py"
     )
-    spec = importlib.util.spec_from_file_location("_mig002", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    tree = ast.parse(path.read_text(encoding="utf-8"))
 
-    assert module.revision == "002"
-    assert module.down_revision == "001", "must chain onto the initial schema"
-    assert module._OLD_UNIQUE == "enrichment_results_idempotency_key_key"
-    assert module._NEW_UNIQUE == "uq_enrichment_results_tenant_idempotency_key"
+    # Module-level string constants, by name.
+    consts: dict[str, str] = {
+        node.targets[0].id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
 
-    # Record the SQL the migration issues, without a database.
-    statements: list[str] = []
-    original = module.op
-    try:
-        module.op = type("_Op", (), {"execute": staticmethod(statements.append)})()
-        module.upgrade()
-    finally:
-        module.op = original
+    assert consts.get("revision") == "002"
+    assert consts.get("down_revision") == "001", "must chain onto the initial schema"
+    assert consts.get("_OLD_UNIQUE") == "enrichment_results_idempotency_key_key"
+    assert consts.get("_NEW_UNIQUE") == "uq_enrichment_results_tenant_idempotency_key"
 
-    sql = " ".join(statements)
-    assert f"DROP CONSTRAINT IF EXISTS {module._OLD_UNIQUE}" in sql
-    assert "UNIQUE (tenant_id, idempotency_key)" in sql
-    assert "CREATE INDEX IF NOT EXISTS" in sql, (
+    upgrade = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "upgrade")
+
+    # Reconstruct each op.execute(...) argument, resolving the f-string
+    # placeholders back through the constants above.
+    def render(node: ast.AST) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            out = ""
+            for part in node.values:
+                if isinstance(part, ast.Constant):
+                    out += str(part.value)
+                elif isinstance(part, ast.FormattedValue) and isinstance(part.value, ast.Name):
+                    out += consts.get(part.value.id, "")
+            return out
+        return ""
+
+    statements = " ".join(
+        render(call.args[0])
+        for call in ast.walk(upgrade)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "execute"
+        and call.args
+    )
+
+    assert f"DROP CONSTRAINT IF EXISTS {consts['_OLD_UNIQUE']}" in statements
+    assert "UNIQUE (tenant_id, idempotency_key)" in statements
+    assert "CREATE INDEX IF NOT EXISTS" in statements, (
         "dropping the constraint drops its backing index; the lookup index must be recreated"
     )
