@@ -196,9 +196,11 @@ async def test_route_does_not_retry_a_gate_4xx(monkeypatch):
         sleeps.append(seconds)
 
     monkeypatch.setattr(pr_module.asyncio, "sleep", record_sleep)
-    with patch.object(router._client, "send_to_gate", side_effect=send):
-        with pytest.raises(NodeUnreachableError):
-            await router.route(NodeTarget.SCORE, "score-invalidate", "tenant-x", {"entity_id": "e"})
+    with (
+        patch.object(router._client, "send_to_gate", side_effect=send),
+        pytest.raises(NodeUnreachableError),
+    ):
+        await router.route(NodeTarget.SCORE, "score-invalidate", "tenant-x", {"entity_id": "e"})
 
     assert calls["n"] == 1
     assert sleeps == []
@@ -221,8 +223,10 @@ async def test_route_still_retries_a_gate_5xx(monkeypatch):
         return None
 
     monkeypatch.setattr(pr_module.asyncio, "sleep", no_sleep)
-    with patch.object(router._client, "send_to_gate", side_effect=send):
-        with pytest.raises(NodeUnreachableError):
-            await router.route(NodeTarget.SCORE, "score-invalidate", "tenant-x", {"entity_id": "e"})
+    with (
+        patch.object(router._client, "send_to_gate", side_effect=send),
+        pytest.raises(NodeUnreachableError),
+    ):
+        await router.route(NodeTarget.SCORE, "score-invalidate", "tenant-x", {"entity_id": "e"})
 
     assert calls["n"] == 3
