@@ -289,7 +289,8 @@ def _env_key_map(name: str) -> dict[str, str]:
         return {}
     parsed = json.loads(raw)
     if not isinstance(parsed, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip() for k, v in parsed.items()
+        isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip()
+        for k, v in parsed.items()
     ):
         raise ValueError(f"{name} must be a JSON object of non-blank string keys and values")
     return {k.strip(): v.strip() for k, v in parsed.items()}

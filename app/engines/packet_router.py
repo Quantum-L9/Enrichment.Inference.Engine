@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Any
 
 import structlog
-from constellation_node_sdk.gate import GateClient, GateClientConfig
+from constellation_node_sdk.gate import GateClient, GateClientConfig, GateHTTPError
 from constellation_node_sdk.transport import TransportPacket, create_transport_packet
 
 logger = structlog.get_logger("packet_router")
@@ -118,6 +118,13 @@ class PacketRouter:
                     attempt=attempt,
                     error=str(exc),
                 )
+                # A 4xx from Gate (no route for the action, policy rejection,
+                # bad packet) does not change on a retry; only transport and
+                # 5xx failures are retried. Without this every background
+                # score-invalidate against a Gate with no score owner burned
+                # three Gate calls and two backoff sleeps per converge.
+                if isinstance(exc, GateHTTPError) and exc.is_client_error:
+                    break
                 if attempt < _RETRY_ATTEMPTS:
                     await asyncio.sleep(2**attempt)
 

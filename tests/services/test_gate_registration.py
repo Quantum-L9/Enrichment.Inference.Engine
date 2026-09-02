@@ -300,7 +300,12 @@ def test_runtime_signs_responses_when_key_material_is_present(monkeypatch):
 def test_runtime_is_unsigned_without_key_material(monkeypatch):
     from app.main import _build_runtime_config
 
-    for name in ("L9_SIGNING_KEY", "L9_SIGNING_SECRET", "L9_SIGNING_KEY_ID", "L9_VERIFYING_KEYS_JSON"):
+    for name in (
+        "L9_SIGNING_KEY",
+        "L9_SIGNING_SECRET",
+        "L9_SIGNING_KEY_ID",
+        "L9_VERIFYING_KEYS_JSON",
+    ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("L9_REQUIRE_SIGNATURE", "false")
     config = _build_runtime_config()

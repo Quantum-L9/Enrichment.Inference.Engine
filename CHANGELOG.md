@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variations, not a token total.
 - **Packet router retries send a fresh packet.** Gate's replay guard rejects a
   reused `packet_id`, so every retry of the same packet was a guaranteed 400.
+  A 4xx from Gate is no longer retried at all: a missing route or a policy
+  rejection does not change on a retry, and every background
+  `score-invalidate` against a Gate with no score owner burned three calls
+  and two backoff sleeps per converge.
 - **`create_all()` works on a fresh database.** `ConvergenceRun.state` declared
   both `index=True` and an explicit `Index("ix_convergence_runs_state")`,
   emitting two indexes with one name.
