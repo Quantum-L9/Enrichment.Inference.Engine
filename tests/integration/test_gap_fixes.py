@@ -63,78 +63,6 @@ class TestResultStoreWiring:
             assert result_id == "uuid-123"
 
 
-class TestGraphSyncAndScoreInvalidationHooks:
-    """GAP #22 — graph sync + score invalidation fire on converge."""
-
-    @pytest.mark.asyncio
-    async def test_trigger_graph_sync_posts_to_graph_url(self, monkeypatch) -> None:
-        from app.core.config import Settings
-        from app.services import graph_sync_hooks
-
-        mock_settings = Settings(gate_url="https://gate-node:8080", perplexity_api_key="")
-        monkeypatch.setattr(graph_sync_hooks, "get_settings", lambda: mock_settings)
-        mock_response = MagicMock()
-        mock_response.header.packet_id = "pkt-response"
-        with patch.object(graph_sync_hooks, "GateClient") as mock_client:
-            instance = MagicMock()
-            instance.send_to_gate = AsyncMock(return_value=mock_response)
-            mock_client.return_value = instance
-            await graph_sync_hooks.trigger_graph_sync(
-                entity_id="e1",
-                tenant_id="t1",
-                enriched_fields={"hdpe_grade": "prime"},
-                confidence=0.92,
-                lineage_id="lin_001",
-                packet_id="pkt_001",
-            )
-        instance.send_to_gate.assert_awaited_once()
-        sent_packet = instance.send_to_gate.await_args.args[0]
-        assert sent_packet.header.action == "graph-sync"
-        assert sent_packet.payload["lineage_id"] == "lin_001"
-
-    @pytest.mark.asyncio
-    async def test_trigger_graph_sync_skips_when_no_url(self, monkeypatch) -> None:
-        from app.core.config import Settings
-        from app.services import graph_sync_hooks
-
-        monkeypatch.setattr(
-            graph_sync_hooks, "get_settings", lambda: Settings(gate_url="", perplexity_api_key="")
-        )
-        with patch.object(graph_sync_hooks, "GateClient") as mock_client:
-            await graph_sync_hooks.trigger_graph_sync(
-                entity_id="e1",
-                tenant_id="t1",
-                enriched_fields={},
-                confidence=0.5,
-                lineage_id="l",
-                packet_id="p",
-            )
-            mock_client.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_invalidate_score_cache_posts_to_score_url(self, monkeypatch) -> None:
-        from app.core.config import Settings
-        from app.services import graph_sync_hooks
-
-        mock_settings = Settings(gate_url="https://gate-node:8080", perplexity_api_key="")
-        monkeypatch.setattr(graph_sync_hooks, "get_settings", lambda: mock_settings)
-        mock_response = MagicMock()
-        mock_response.header.packet_id = "pkt-response"
-        with patch.object(graph_sync_hooks, "GateClient") as mock_client:
-            instance = MagicMock()
-            instance.send_to_gate = AsyncMock(return_value=mock_response)
-            mock_client.return_value = instance
-            await graph_sync_hooks.invalidate_score_cache(
-                entity_id="e1",
-                tenant_id="t1",
-                lineage_id="lin_002",
-                packet_id="pkt_002",
-            )
-        instance.send_to_gate.assert_awaited_once()
-        sent_packet = instance.send_to_gate.await_args.args[0]
-        assert sent_packet.header.action == "score-invalidate"
-
-
 class TestConvergeEndpointExecutesController:
     """GAP #03 — /v1/converge invokes run_convergence_loop()."""
 
@@ -210,10 +138,11 @@ class TestCriticalImportPaths:
 
         assert callable(getattr(ResultStore, "persist_enrich_response", None))
 
-    def test_graph_sync_hooks_imports(self) -> None:
-        from app.services.graph_sync_hooks import trigger_graph_sync
+    def test_packet_router_owns_gate_routed_graph_sync(self) -> None:
+        """GAP #22 successor: graph sync is Gate-routed through PacketRouter."""
+        from app.engines.packet_router import PacketRouter
 
-        assert callable(trigger_graph_sync)
+        assert callable(getattr(PacketRouter, "notify_graph_sync", None))
 
     def test_converge_endpoint_imports(self) -> None:
         from app.api.v1.converge import router

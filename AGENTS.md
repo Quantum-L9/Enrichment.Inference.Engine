@@ -3,7 +3,7 @@
 ## What This Repo Is
 
 Universal domain-aware entity enrichment API.
-Stack: Python 3.12 / FastAPI app surface / SDK transport runtime / Perplexity LLM / Neo4j graph / Redis cache / PostgreSQL state.
+Stack: Python 3.12 / FastAPI app surface / SDK transport runtime / Perplexity LLM / graph via Constellation Gate → CEG (no graph driver) / Redis cache / PostgreSQL state.
 
 ---
 
@@ -40,6 +40,8 @@ This document defines the rules of engagement for AI agents (Manus, Copilot, Cur
 | `app/engines/orchestration_layer.py` | T4 | Canonical SDK handler registration + cross-node orchestration wiring |
 | `app/engines/handlers.py` | T4 | Engine action handlers — must stay aligned with runtime registrations |
 | `app/engines/graph_sync_client.py` | T4 | Gate transport contract |
+| `app/engines/packet_router.py` | T4 | Gate-only egress for graph `sync` / score invalidation (retry discipline) |
+| `app/services/gate_client.py` | T4 | Single signed GateClient factory — the only place outbound Gate config is built |
 | `app/models/` (all files) | T5 | Pydantic schema — downstream breaking change risk (`app/models/loop_schemas.py`, `app/models/field_confidence.py`) |
 | `app/score/score_models.py` | T5 | Score schema contract |
 | `app/health/health_models.py` | T5 | Health schema contract |
@@ -78,6 +80,8 @@ Before any modification, run the 5 Gates:
 | `app/engines/orchestration_layer.py` | Platform team | T4+ |
 | `app/engines/handlers.py` | Platform team | T4+ |
 | `app/engines/graph_sync_client.py` | Platform team | T4+ |
+| `app/engines/packet_router.py` | Platform team | T4+ |
+| `app/services/gate_client.py` | Platform team | T4+ |
 | `app/main.py` | Platform team | T4+ |
 | `app/models/` | Schema team | T5 |
 | `app/score/` | Score team | T3+ |
@@ -170,7 +174,7 @@ All PRs must pass:
 | C-10 | Zero hardcoded credentials — env vars via pydantic-settings only | CRITICAL |
 | C-11 | `TransportPacket` and SDK transport objects are immutable at boundaries — never mutate in place. Deprecated local chassis dict envelopes are not part of production dispatch. | CRITICAL |
 | C-12 | No `Field(alias=...)` in Pydantic models | HIGH |
-| C-13 | Transport contract lockstep: `app/main.py`, `app/api/v1/chassis_endpoint.py`, `app/services/chassis_handlers.py`, `app/engines/orchestration_layer.py`, `app/engines/handlers.py`, and `app/engines/graph_sync_client.py` must stay aligned | CRITICAL |
+| C-13 | Transport contract lockstep: `app/main.py`, `app/api/v1/chassis_endpoint.py`, `app/services/chassis_handlers.py`, `app/engines/orchestration_layer.py`, `app/engines/handlers.py`, `app/engines/graph_sync_client.py`, `app/engines/packet_router.py`, and `app/services/gate_client.py` must stay aligned | CRITICAL |
 | C-14 | New SDK action registration requires corresponding handler + test in same PR | HIGH |
 | C-15 | Coverage >= 71% — never lower the threshold | HIGH |
 | C-16 | Python 3.12+ — no backports, no 3.11-only APIs | CRITICAL |

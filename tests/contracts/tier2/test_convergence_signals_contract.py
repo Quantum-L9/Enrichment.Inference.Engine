@@ -77,18 +77,15 @@ def test_graph_inference_event_model():
     assert event.graph_confidence == 0.88
 
 
-def test_graph_inference_consumer_instantiates():
-    """GraphInferenceConsumer must instantiate with Settings."""
-    from unittest.mock import MagicMock
+def test_graph_inference_results_arrive_through_gate_not_a_shared_stream():
+    """Seam audit 2026-09-02: the Redis-stream consumer of GRAPH inference
+    output was a shared-cache message bus between the two domain nodes. The
+    governed path is the Gate-routed `graph-inference-result` action."""
+    from app.services import workers
+    from app.services.chassis_handlers import handle_graph_inference_result
 
-    from app.services.workers import GraphInferenceConsumer
-
-    mock_settings = MagicMock()
-    mock_settings.redis_url = "redis://localhost:6379/0"
-
-    consumer = GraphInferenceConsumer(settings=mock_settings)
-    assert consumer is not None
-    assert consumer._running is False
+    assert not hasattr(workers, "GraphInferenceConsumer")
+    assert callable(handle_graph_inference_result)
 
 
 def test_schema_promotion_worker_instantiates():
@@ -110,5 +107,5 @@ def test_workers_module_exports():
     """Workers module must export expected classes."""
     from app.services import workers
 
-    assert hasattr(workers, "GraphInferenceConsumer")
     assert hasattr(workers, "SchemaPromotionWorker")
+    assert not hasattr(workers, "GraphInferenceConsumer")

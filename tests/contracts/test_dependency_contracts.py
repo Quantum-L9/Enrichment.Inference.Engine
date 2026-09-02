@@ -23,10 +23,19 @@ EXPECTED_DEPS = {
     "hubspot-crm": {"env_key": "HUBSPOT_ACCESS_TOKEN", "type": "external"},
     "redis": {"env_key": "REDIS_URL", "type": "internal"},
     "postgresql": {"env_key": None, "type": "internal"},
-    "neo4j": {"env_key": None, "type": "internal"},
+    # Seam audit 2026-09-02: EIE has no graph-store client. Its graph dependency
+    # is Constellation.Gate (Gate-routed `sync` / `match` / `outcomes` to CEG).
+    "constellation-gate": {"env_key": "GATE_URL", "type": "internal"},
 }
 
 REQUIRED_FIELDS = ["service_name", "type", "protocol", "auth_method"]
+
+
+@pytest.mark.unit
+def test_direct_graph_store_dependency_is_retired() -> None:
+    assert not (DEPS_DIR / "neo4j.yaml").exists(), (
+        "EIE reaches the graph only through Gate; a Neo4j dependency contract is a side door"
+    )
 
 
 @pytest.mark.unit

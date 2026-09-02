@@ -4,9 +4,10 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-# The exact Gate_SDK revision consumed by green Constellation.Gate PR #14.
-# Gate pins the same commit, so both processes on the rail run one SDK.
-PIN = "bfe6642062a85a720ad8c25e96446d4df1c299ac"
+# The exact Gate_SDK revision the whole EIE <-> CEG seam runs (Gate_SDK main;
+# src/ byte-identical to the previously pinned PR head bfe6642). Gate and CEG
+# pin the same commit, so every process on the rail runs one SDK.
+PIN = "a0827f2b94e77a981c6d6be88653e4975cf631ef"
 errors: list[str] = []
 
 # requirements-ci.txt is where CI resolves the SDK from; omitting it let the

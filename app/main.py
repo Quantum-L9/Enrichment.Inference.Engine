@@ -5,7 +5,8 @@ POST /api/v1/enrich         single entity (Salesforce + Odoo)
 POST /api/v1/enrich/batch   batch up to 50
 GET  /api/v1/health         health + KB + circuit breaker
 POST /v1/execute            SDK TransportPacket execution surface
-POST /v1/outcomes           match outcome feedback
+(Outcome feedback flows CEG -> Gate -> EIE as a TransportPacket; the
+ former POST /v1/outcomes peer ingress was retired 2026-09-02.)
 
 Integration fix applied (PR#22 merge pass):
     GAP-3: converge.configure() called in startup with LoopStateStore,
@@ -14,7 +15,6 @@ Integration fix applied (PR#22 merge pass):
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Annotated
 
@@ -24,6 +24,7 @@ from constellation_node_sdk import (
     NodeRegistration,
     NodeRuntimeConfig,
     create_node_app,
+    get_runtime_config,
     register_node,
 )
 from constellation_node_sdk.runtime.handlers import clear_handlers
@@ -217,36 +218,52 @@ async def _register_with_gate(settings: Settings) -> bool | None:
     )
 
 
+RUNTIME_ALLOWED_ACTIONS: tuple[str, ...] = (
+    "community-export",
+    "converge",
+    "discover",
+    "enrich",
+    "enrich-and-sync",
+    "enrichbatch",
+    "graph-inference-result",
+    "schema-proposal",
+    "simulate",
+    "writeback",
+)
+
+
 def _build_runtime_config() -> NodeRuntimeConfig:
+    """EIE's SDK runtime configuration.
+
+    The SDK environment contract (`get_runtime_config`: L9_REQUIRE_SIGNATURE,
+    L9_SIGNING_KEY / _KEY_ID / _ALGORITHM, L9_VERIFYING_KEYS_JSON,
+    L9_ENFORCE_GATE_ONLY_INGRESS, ...) is the base. Building the config from a
+    hand-written field list dropped every signing field, so outside `local` the
+    SDK preflight rejected startup: Gate-only ingress requires a verified
+    signature and none was configured (seam audit 2026-09-02, EIE-DEPLOY-01).
+    EIE overrides only what EIE owns -- its identity, its action surface, and
+    its attachment policy -- through the validated constructor, never a copy
+    that skips validators.
+    """
     settings = get_settings()
-    environment = os.getenv("L9_ENVIRONMENT", "local").strip().lower() or "local"
+    base = get_runtime_config()
+    environment = base.environment
     return NodeRuntimeConfig(
-        environment=environment,
-        node_name="enrichment-engine",
-        service_name="enrichment-engine",
-        service_version="2.3.0",
-        dev_mode=environment in {"local", "dev", "test"},
-        gate_url=settings.gate_url,
-        allowed_actions=(
-            "community-export",
-            "converge",
-            "discover",
-            "enrich",
-            "enrich-and-sync",
-            "enrichbatch",
-            "graph-inference-result",
-            "schema-proposal",
-            "simulate",
-            "writeback",
-        ),
-        max_attachments=0,
-        # The SDK's field defaults are mutually inconsistent (attachment
-        # default 10 MiB > packet default 256 KiB), so building the config
-        # without explicit sizes raises a ValidationError at import time.
-        # EIE disables attachments (max_attachments=0), so pin the
-        # attachment ceiling to zero and keep the packet default explicit.
-        max_packet_bytes=262_144,
-        max_attachment_size_bytes=0,
+        **{
+            **base.model_dump(),
+            "environment": environment,
+            "node_name": NODE_NAME,
+            "service_name": NODE_NAME,
+            "service_version": NODE_VERSION,
+            # Local/dev/test run unsigned by default; the SDK forbids dev_mode
+            # in staging/prod, where L9_REQUIRE_SIGNATURE must be set.
+            "dev_mode": base.dev_mode or environment in {"local", "dev", "test"},
+            "gate_url": settings.gate_url or None,
+            "allowed_actions": RUNTIME_ALLOWED_ACTIONS,
+            "max_attachments": 0,
+            "max_packet_bytes": base.max_packet_bytes,
+            "max_attachment_size_bytes": 0,
+        }
     )
 
 

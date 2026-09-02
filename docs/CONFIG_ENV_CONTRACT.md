@@ -19,7 +19,7 @@
 > **Machine SSOT:** [`docs/contracts/config/env-contract.yaml`](docs/contracts/config/env-contract.yaml) — full variable list, defaults, GitHub Actions mappings, and `required_for_*` checklists.
 > **Human template:** [`.env.example`](.env.example) — copy to `.env` / `.env.local` (`.env.local` overrides and is gitignored).
 
-`app/core/config.py` (`Settings`, pydantic-settings) loads **uppercase env names** derived from field names (e.g. `neo4j_uri` → `NEO4J_URI`). There is **no** `L9_` prefix on Neo4j or database settings in `Settings`; use the names below.
+`app/core/config.py` (`Settings`, pydantic-settings) loads **uppercase env names** derived from field names (e.g. `gate_url` → `GATE_URL`). There is **no** `L9_` prefix on database settings in `Settings`; the `L9_*` names below are read by the Gate SDK, not by `Settings`.
 
 ---
 
@@ -32,9 +32,9 @@ PERPLEXITY_API_KEY=pplx-your-key-here
 API_KEY_HASH=<sha256-hex-of-your-client-api-key>
 REDIS_URL=redis://localhost:6379/0
 DATABASE_URL=postgresql+asyncpg://enrich:changeme@localhost:5432/enrich
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your-neo4j-password
+GATE_URL=http://localhost:8080
+L9_NODE_NAME=enrichment-engine
+L9_ENVIRONMENT=local
 ```
 
 `API_SECRET_KEY` exists on `Settings` but is **not** used for client auth; `X-API-Key` is verified against `API_KEY_HASH` (see `app/core/auth.py`).
@@ -51,9 +51,10 @@ NEO4J_PASSWORD=your-neo4j-password
 | `API_SECRET_KEY` | Optional reserved field (see yaml contract) |
 | `REDIS_URL` | Idempotency / rate limiting |
 | `DATABASE_URL` | Async SQLAlchemy URL (`asyncpg`) |
-| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` | Graph (optional per deployment) |
 | `KB_DIR`, `DOMAINS_DIR`, `DEFAULT_DOMAIN` | KB and domain packs |
-| `GATE_URL`, `CEG_BASE_URL`, `INTER_NODE_SECRET` | Constellation / gate integration |
+| `GATE_URL`, `GATE_REGISTRATION_ENABLED`, `GATE_INTERNAL_URL`, `GATE_ADMIN_TOKEN` | Constellation Gate — the only peer transport (no peer URLs) |
+| `L9_NODE_NAME`, `L9_ENVIRONMENT`, `L9_REQUIRE_SIGNATURE`, `L9_SIGNING_KEY`, `L9_SIGNING_KEY_ID`, `L9_SIGNING_ALGORITHM`, `L9_VERIFYING_KEYS_JSON` | Gate SDK identity + packet signing (read by SDK) |
+| `GRAPH_SYNC_ENTITY_TYPE`, `GRAPH_SYNC_ID_PROPERTY` | CEG `sync` row shape |
 | `DEFAULT_CONSENSUS_THRESHOLD`, `DEFAULT_MAX_VARIATIONS`, `DEFAULT_TIMEOUT_SECONDS` | Enrichment defaults |
 | `MAX_CONCURRENT_VARIATIONS`, `MAX_ENTITIES_PER_BATCH` | Concurrency / batch caps |
 | `CB_FAILURE_THRESHOLD`, `CB_COOLDOWN_SECONDS` | Circuit breaker |

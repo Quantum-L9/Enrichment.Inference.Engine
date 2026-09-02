@@ -6,7 +6,10 @@ services:
     env_file:
       - .env
     environment:
-      - CEG_BASE_URL=${CEG_BASE_URL:-http://graph-engine:8001}
+      # Gate-only egress/ingress: EIE never addresses CEG directly.
+      - GATE_URL=${GATE_URL:-http://gate:9000}
+      - L9_NODE_NAME=enrichment-engine
+      - L9_ENVIRONMENT=${L9_ENVIRONMENT:-local}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=enrichment-engine
     volumes:

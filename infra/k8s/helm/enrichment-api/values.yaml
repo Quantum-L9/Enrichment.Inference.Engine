@@ -58,8 +58,21 @@ config:
   MAX_CONCURRENT_VARIATIONS: "3"
   CB_FAILURE_THRESHOLD: "5"
   CB_COOLDOWN_SECONDS: "60"
+  # Constellation seam — Gate is the only peer transport (no peer URLs).
+  GATE_URL: "http://constellation-gate:8080"
+  GATE_INTERNAL_URL: "http://constellation-gate:8080"
+  GATE_REGISTRATION_ENABLED: "true"
+  L9_ENVIRONMENT: "production"
+  L9_NODE_NAME: "enrichment-engine"
+  L9_REQUIRE_SIGNATURE: "true"
+  L9_SIGNING_ALGORITHM: "hmac-sha256"
+  L9_SIGNING_KEY_ID: "enrichment-engine-prod"
+  GRAPH_SYNC_ENTITY_TYPE: "facilities"
+  GRAPH_SYNC_ID_PROPERTY: "facility_id"
 
 secrets:
+  # Keys: perplexity-api-key, api-secret-key, api-key-hash,
+  #       l9-signing-key (Gate packet signing), gate-admin-token (registration)
   existingSecret: enrichment-credentials
 
 redis:

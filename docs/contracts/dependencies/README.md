@@ -18,5 +18,5 @@
 | HubSpot | External | Optional | Bearer token | CRM consumer #3 |
 | Redis | Internal | Optional | None | Idempotency + events |
 | PostgreSQL | Internal | Optional | Connection URL | Persistence |
-| Neo4j | Internal | Optional | Bolt credentials | Knowledge graph |
+| Constellation Gate | Internal | Required | Packet signature (`L9_SIGNING_KEY`) | Sole route to CEG (`sync`, `outcomes`) and ingress for `enrich`/`converge` |
 

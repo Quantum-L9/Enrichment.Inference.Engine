@@ -21,7 +21,6 @@ Source: `app/core/auth.py` — SHA-256 constant-time comparison.
 | POST | `/api/v1/enrich` | ✅ | Enrich single entity |
 | POST | `/api/v1/enrich/batch` | ✅ | Batch enrichment (≤50) |
 | POST | `/v1/execute` | ✅ | Chassis PacketEnvelope |
-| POST | `/v1/outcomes` | ✅ | Match outcome feedback |
 | POST | `/v1/converge` | ✅ | Convergence loop |
 | POST | `/v1/converge/batch` | ✅ | Batch convergence |
 | GET | `/v1/converge/{run_id}` | ✅ | Loop status |

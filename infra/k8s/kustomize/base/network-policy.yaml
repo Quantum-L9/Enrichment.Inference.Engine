@@ -28,6 +28,14 @@ spec:
       ports:
         - port: 443
           protocol: TCP
+    # Allow Constellation Gate in-cluster (sole peer transport; no CEG egress)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: constellation-gate
+      ports:
+        - port: 8080
+          protocol: TCP
     # Allow Redis in-cluster
     - to:
         - podSelector:

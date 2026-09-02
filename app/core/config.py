@@ -61,22 +61,21 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
 
-    ceg_base_url: str = "http://localhost:8001"
-
+    # ── Constellation (Gate-only egress; seam audit 2026-09-02) ──────────
+    # Gate is the only peer EIE addresses. There is no direct CEG / GRAPH /
+    # SCORE / ROUTE URL and no inter-node shared secret: every outbound packet
+    # goes to GATE_URL, signed with the SDK's L9_SIGNING_* material, and Gate
+    # resolves the destination by action.
     gate_url: str = "http://localhost:8080"
     # Explicit Gate registration (TASK-003). Registration is opt-in and non-fatal.
     gate_registration_enabled: bool = False
     gate_internal_url: str = ""  # URL the Gate dispatches to; empty → derived default
     gate_admin_token: str = ""
-    # Legacy direct peer URLs retained for backward-compatible config loading only.
-    graph_node_url: str = "http://localhost:8001"
-    score_node_url: str = "http://localhost:8002"
-    route_node_url: str = "http://localhost:8003"
-    inter_node_secret: str = "dev-inter-node-secret"
-
-    neo4j_uri: str = "bolt://localhost:7687"
-    neo4j_user: str = "neo4j"
-    neo4j_password: str = "changeme"
+    # CEG `sync` contract projection for post-enrichment graph sync: the CEG sync
+    # endpoint suffix and its id property (Cognitive.Engine.Graphs domain spec
+    # `sync.endpoints`). Defaults match the plasticos domain.
+    graph_sync_entity_type: str = "facilities"
+    graph_sync_id_property: str = "facility_id"
 
     database_url: str = "postgresql+asyncpg://enrich:changeme@localhost:5432/enrich"
 

@@ -59,8 +59,7 @@ dependencies:
     type: internal
     required: false
 
-  - name: Neo4j
-    file: neo4j.yaml
+  - name: ConstellationGate
+    file: constellation-gate.yaml
     type: internal
-    required: false
-
+    required: true

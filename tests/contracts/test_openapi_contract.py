@@ -45,7 +45,6 @@ REQUIRED_PATHS = [
     ("POST", "/api/v1/enrich"),
     ("POST", "/api/v1/enrich/batch"),
     ("POST", "/v1/execute"),
-    ("POST", "/v1/outcomes"),
     ("POST", "/v1/converge"),
     ("POST", "/v1/converge/batch"),
     ("GET", "/v1/converge/{run_id}"),
@@ -58,6 +57,12 @@ REQUIRED_PATHS = [
     ("GET", "/api/v1/fields/{entity_id}"),
     ("GET", "/api/v1/fields/{entity_id}/{field_name}/history"),  # {field_name} not {field}
 ]
+
+
+@pytest.mark.unit
+def test_retired_peer_ingress_is_not_documented(spec: dict) -> None:
+    """Seam audit 2026-09-02: /v1/outcomes was a node-to-node side door."""
+    assert "/v1/outcomes" not in spec.get("paths", {})
 
 
 @pytest.mark.unit
