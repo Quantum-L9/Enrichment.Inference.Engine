@@ -89,10 +89,13 @@ class PacketRouter:
         """
         Dispatch a transport packet through Gate.
         """
-        packet = _build_envelope(action, tenant_id, payload, correlation_id)
-
         last_exc: Exception | None = None
         for attempt in range(_RETRY_ATTEMPTS + 1):
+            # A fresh packet per attempt. Gate's replay guard rejects a
+            # packet_id it has already seen inside its window, so re-sending
+            # the same packet turned every retry into a guaranteed 400 and the
+            # retry loop could never succeed after the first attempt failed.
+            packet = _build_envelope(action, tenant_id, payload, correlation_id)
             try:
                 response = await self._client.send_to_gate(packet)
                 data = dict(response.payload)

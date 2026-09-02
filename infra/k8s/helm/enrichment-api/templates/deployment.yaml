@@ -51,6 +51,12 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret }}
                   key: api-key-hash
+            - name: GATE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: gate-admin-token
+                  optional: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           livenessProbe:

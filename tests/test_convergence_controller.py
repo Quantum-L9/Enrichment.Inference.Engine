@@ -505,3 +505,38 @@ class TestSonarConfigSerialization:
         params = config.to_api_params()
         assert params["model"] == "sonar"
         assert "web_search_options" in params
+
+
+class TestVariationCountIsAVariationCount:
+    def test_variation_count_sums_search_plan_variations_not_tokens(self):
+        from app.engines.convergence_controller import (
+            ConvergenceState,
+            PassResult,
+            _assemble_convergence_response,
+        )
+        from app.engines.meta_prompt_planner import PromptPlan
+        from app.models.schemas import EnrichRequest
+
+        def plan(n: int, pass_number: int) -> PromptPlan:
+            return PromptPlan(
+                mode="discovery",
+                priority_fields=[],
+                kb_fragment_ids=[],
+                variation_count=n,
+                pass_number=pass_number,
+            )
+
+        state = ConvergenceState()
+        state.pass_results = [
+            PassResult(pass_number=1, tokens_used=1_800, search_plan=plan(5, 1), confidence=0.8),
+            PassResult(pass_number=2, tokens_used=2_200, search_plan=plan(3, 2), confidence=0.9),
+            PassResult(pass_number=3, tokens_used=900, search_plan=None, confidence=0.9),
+        ]
+        request = EnrichRequest(
+            entity={"Name": "Test Corp"},
+            object_type="Account",
+            objective="Enrich",
+        )
+        response = _assemble_convergence_response(state, request, elapsed=10)
+        assert response.variation_count == 8
+        assert response.pass_count == 3

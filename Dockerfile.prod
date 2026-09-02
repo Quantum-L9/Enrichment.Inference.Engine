@@ -1,20 +1,32 @@
+# Production image. The previous version installed poetry and copied a
+# `poetry.lock` that does not exist in this repository (the project is
+# PEP 621 / setuptools, see pyproject.toml), and had no `git` for the
+# git+https constellation-node-sdk dependency, so the build could not succeed.
 FROM python:3.14-slim AS base
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
-RUN pip install poetry==1.8.5 && poetry config virtualenvs.create false
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl git \
+    && rm -rf /var/lib/apt/lists/*
 
 FROM base AS deps
-COPY pyproject.toml poetry.lock* ./
-RUN poetry install --only=main --no-root
+COPY pyproject.toml ./
+# Resolve runtime dependencies only (no dev extras) from the project metadata.
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && mkdir -p app tools && touch app/__init__.py tools/__init__.py \
+    && python -m pip install . \
+    && python -m pip uninstall -y domain-enrichment-api
 
 FROM deps AS prod
 COPY . .
-RUN poetry install --only=main
+RUN python -m pip install --no-deps .
 RUN adduser --disabled-password --gecos "" appuser && chown -R appuser /app
 USER appuser
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:8000/health || exit 1
+  CMD curl -f http://localhost:8000/api/v1/health || exit 1
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

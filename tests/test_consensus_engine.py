@@ -119,3 +119,23 @@ class TestConsensusEdgeCases:
         result = synthesize_consensus(payloads, threshold=0.0)
         # Should handle type mismatch gracefully
         assert "x" in result["fields"]
+
+
+class TestResponseMetadataIsNotAField:
+    """`confidence` is attached to every normalized variation as metadata.
+
+    Before the fix it won consensus on every pass and reached consumers as an
+    enriched field named "confidence" (seen on the live Odoo -> Gate -> EIE rail).
+    """
+
+    def test_confidence_does_not_leak_into_fields(self):
+        payloads = [
+            {"confidence": 0.9, "polymer_type": "HDPE"},
+            {"confidence": 0.8, "polymer_type": "HDPE"},
+            {"confidence": 0.7, "polymer_type": "HDPE"},
+        ]
+        result = synthesize(payloads, threshold=0.5)
+        assert "confidence" not in result["fields"]
+        assert "confidence" not in result["per_field_confidence"]
+        assert result["fields"]["polymer_type"] == "HDPE"
+        assert isinstance(result["confidence"], float)

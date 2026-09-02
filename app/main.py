@@ -14,6 +14,7 @@ Integration fix applied (PR#22 merge pass):
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from typing import Annotated
@@ -60,6 +61,8 @@ _idem: IdempotencyStore | None = None
 # Gate registration outcome (TASK-003): None = not attempted/disabled,
 # True = accepted, False = rejected or errored (non-fatal).
 _gate_registered: bool | None = None
+# Periodic re-registration task (None when disabled or not started).
+_reregistration_task: asyncio.Task[None] | None = None
 
 
 class EnrichmentLifecycle(LifecycleHook):
@@ -131,11 +134,21 @@ class EnrichmentLifecycle(LifecycleHook):
             _gate_registered = await _register_with_gate(settings)
             logger.info("gate_registration_attempted", result=_gate_registered)
 
+        # Gate marks this worker unhealthy on a connection failure; besides
+        # Gate's own health re-probe, a fresh registration is what restores
+        # routing. Re-registering on a cadence makes recovery independent of a
+        # process restart and heals a Gate that restarted with an empty
+        # registry.
+        global _reregistration_task
+        _reregistration_task = start_reregistration_loop(settings)
+
         logger.info("api_started", version="2.3.0")
 
     async def shutdown(self) -> None:
-        global _kb, _idem, _gate_registered
+        global _kb, _idem, _gate_registered, _reregistration_task
 
+        await stop_reregistration_loop()
+        _reregistration_task = None
         if _idem:
             await _idem.close()
         from .services import pg_store as _pg
@@ -215,6 +228,51 @@ async def _register_with_gate(settings: Settings) -> bool | None:
         admin_token=settings.gate_admin_token,
         overwrite=True,
     )
+
+
+def start_reregistration_loop(settings: Settings) -> asyncio.Task[None] | None:
+    """Start the periodic Gate re-registration task, or return None when disabled.
+
+    Disabled when registration itself is disabled, no gate_url is configured,
+    or ``gate_reregistration_interval_seconds`` is 0. Each cycle re-runs the
+    same SDK ``register_node`` call as startup (overwrite=True) and updates the
+    readiness verdict.
+    """
+    if not settings.gate_registration_enabled or not settings.gate_url:
+        return None
+    interval = settings.gate_reregistration_interval_seconds
+    if interval <= 0:
+        return None
+    task = asyncio.create_task(_reregistration_loop(settings, interval))
+    logger.info("gate_reregistration_loop_started", interval_seconds=interval)
+    return task
+
+
+async def stop_reregistration_loop() -> None:
+    task = _reregistration_task
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def _reregistration_loop(settings: Settings, interval: float) -> None:
+    global _gate_registered
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            result = await _register_with_gate(settings)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the loop must outlive any one attempt
+            logger.warning("gate_reregistration_error", error=str(exc))
+            result = False
+        if result != _gate_registered:
+            logger.info("gate_registration_changed", previous=_gate_registered, result=result)
+        _gate_registered = result
 
 
 def _build_runtime_config() -> NodeRuntimeConfig:

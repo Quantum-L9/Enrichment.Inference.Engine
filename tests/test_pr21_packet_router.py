@@ -129,3 +129,43 @@ def test_get_router_returns_singleton():
     r1 = get_router(settings)
     r2 = get_router(settings)
     assert r1 is r2, "get_router must be a singleton (lru_cache)"
+
+
+@pytest.mark.asyncio
+async def test_route_builds_a_fresh_packet_per_attempt(monkeypatch):
+    """Gate's replay guard rejects a reused packet_id, so a retry must not resend the same packet."""
+    from app.engines import packet_router as pr_module
+
+    router = PacketRouter(gate_url="https://gate-node:9000")
+    seen: list[str] = []
+
+    response_packet = create_transport_packet(
+        action="graph-sync",
+        payload={"status": "synced"},
+        tenant="tenant-acme",
+        source_node="gate",
+        destination_node="enrichment-engine",
+        reply_to="gate",
+    )
+
+    async def send(packet):
+        seen.append(str(packet.header.packet_id))
+        if len(seen) == 1:
+            raise RuntimeError("transient")
+        return response_packet
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(pr_module.asyncio, "sleep", no_sleep)
+    with patch.object(router._client, "send_to_gate", side_effect=send):
+        result = await router.route(
+            NodeTarget.GRAPH,
+            "graph-sync",
+            "tenant-acme",
+            {"entity_id": "ent-001"},
+        )
+
+    assert result["status"] == "synced"
+    assert len(seen) == 2
+    assert seen[0] != seen[1], "retry reused the packet_id Gate's replay guard already saw"

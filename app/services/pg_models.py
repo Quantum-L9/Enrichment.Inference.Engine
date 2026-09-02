@@ -128,7 +128,11 @@ class ConvergenceRun(Base):
     domain: Mapped[str] = mapped_column(String(128), nullable=False)
     domain_yaml_version_before: Mapped[str | None] = mapped_column(String(64), nullable=True)
     domain_yaml_version_after: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    state: Mapped[str] = mapped_column(String(32), nullable=False, default="running", index=True)
+    # No column-level index=True here: the explicit Index("ix_convergence_runs_state")
+    # in __table_args__ is the one index on this column. Declaring both emitted two
+    # CREATE INDEX statements with the same name, so create_all() failed on a
+    # fresh database with DuplicateTableError.
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
     convergence_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     current_pass: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_passes: Mapped[int] = mapped_column(Integer, nullable=False, default=5)

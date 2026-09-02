@@ -63,11 +63,23 @@ class Settings(BaseSettings):
 
     ceg_base_url: str = "http://localhost:8001"
 
-    gate_url: str = "http://localhost:8080"
-    # Explicit Gate registration (TASK-003). Registration is opt-in and non-fatal.
+    # Constellation.Gate listens on 9000 in every shipped Gate deployment asset
+    # (its .env.example, compose, terraform and entrypoint); 8080 matched nothing.
+    gate_url: str = "http://localhost:9000"
+    # Explicit Gate registration (TASK-003). Registration is opt-in and non-fatal
+    # to process startup; readiness degrades when it fails. Every deployment
+    # manifest in infra/k8s enables it — without registration Gate has no
+    # `converge` route and Odoo's enrichment path is a deterministic 404.
     gate_registration_enabled: bool = False
     gate_internal_url: str = ""  # URL the Gate dispatches to; empty → derived default
+    # Required by Gate in staging/prod (unauthenticated registration is refused
+    # there). Supplied via env / secret, never committed.
     gate_admin_token: str = ""
+    # Re-registration cadence. Gate marks a worker unhealthy on a connection
+    # failure and only a fresh registration (or its own health re-probe)
+    # restores routing; re-registering periodically makes recovery independent
+    # of a process restart. 0 disables the loop (a single registration at startup).
+    gate_reregistration_interval_seconds: float = 60.0
     # Legacy direct peer URLs retained for backward-compatible config loading only.
     graph_node_url: str = "http://localhost:8001"
     score_node_url: str = "http://localhost:8002"

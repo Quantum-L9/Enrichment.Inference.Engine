@@ -8,6 +8,9 @@ set -euo pipefail
 
 NS="${1:?Usage: generate-secrets.sh <namespace> <perplexity-api-key>}"
 PPLX_KEY="${2:?Provide Perplexity API key as second argument}"
+# Gate admin token for /v1/admin/register (required by Gate in staging/prod).
+# Read from the environment so it is never typed into a shell history line.
+GATE_ADMIN_TOKEN="${GATE_ADMIN_TOKEN:-}"
 
 # Generate API credentials
 API_SECRET_KEY=$(openssl rand -hex 32)
@@ -31,6 +34,7 @@ kubectl create secret generic enrichment-credentials \
   --from-literal=perplexity-api-key="$PPLX_KEY" \
   --from-literal=api-secret-key="$API_SECRET_KEY" \
   --from-literal=api-key-hash="$API_KEY_HASH" \
+  --from-literal=gate-admin-token="$GATE_ADMIN_TOKEN" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo ""

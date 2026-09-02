@@ -42,6 +42,12 @@ spec:
                 secretKeyRef:
                   name: enrichment-credentials
                   key: api-key-hash
+            - name: GATE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: enrichment-credentials
+                  key: gate-admin-token
+                  optional: true
           resources:
             requests:
               cpu: 100m
