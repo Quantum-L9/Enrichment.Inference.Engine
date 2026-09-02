@@ -560,6 +560,10 @@ other_runtime_env:
   description: |
     Not loaded by app/core/config.py Settings. Examples: OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_SERVICE_NAME, ENVIRONMENT, VERSION — see app/core/telemetry.py.
+    Node-runtime signing (app/main.py::_runtime_signing_kwargs, same names the
+    SDK's get_runtime_config reads): L9_REQUIRE_SIGNATURE (bool), L9_SIGNING_KEY
+    (secret, HMAC material), L9_SIGNING_KEY_ID, L9_SIGNING_ALGORITHM
+    (default hmac-sha256), L9_VERIFYING_KEYS_JSON (JSON object key_id -> key).
 
 # ═══════════════════════════════════════════════════════════════
 # GitHub Actions — secrets & variables (CI / deploy / review bots)

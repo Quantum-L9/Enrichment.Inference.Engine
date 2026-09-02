@@ -274,3 +274,45 @@ async def test_reregistration_loop_survives_a_raising_attempt(monkeypatch):
 
     assert calls["n"] >= 2
     assert main_module._gate_registered is True
+
+
+# --------------------------------------------------------------------------
+# Node-runtime signing posture comes from the environment (SDK L9_* names)
+# --------------------------------------------------------------------------
+
+
+def test_runtime_signs_responses_when_key_material_is_present(monkeypatch):
+    from app.main import _build_runtime_config
+
+    monkeypatch.setenv("L9_SIGNING_KEY", "worker-material")
+    monkeypatch.setenv("L9_SIGNING_KEY_ID", "eie-k1")
+    monkeypatch.setenv("L9_VERIFYING_KEYS_JSON", '{"gate-k1": "gate-material"}')
+    monkeypatch.setenv("L9_REQUIRE_SIGNATURE", "true")
+    monkeypatch.delenv("L9_SIGNING_ALGORITHM", raising=False)
+    config = _build_runtime_config()
+    assert config.signing_key == "worker-material"
+    assert config.signing_key_id == "eie-k1"
+    assert config.signing_algorithm == "hmac-sha256"
+    assert config.require_signature is True
+    assert config.verifying_keys == {"gate-k1": "gate-material"}
+
+
+def test_runtime_is_unsigned_without_key_material(monkeypatch):
+    from app.main import _build_runtime_config
+
+    for name in ("L9_SIGNING_KEY", "L9_SIGNING_SECRET", "L9_SIGNING_KEY_ID", "L9_VERIFYING_KEYS_JSON"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("L9_REQUIRE_SIGNATURE", "false")
+    config = _build_runtime_config()
+    assert config.signing_key is None
+    assert config.signing_key_id is None
+    assert config.require_signature is False
+    assert config.verifying_keys == {}
+
+
+def test_malformed_verifying_keys_fail_closed(monkeypatch):
+    from app.main import _build_runtime_config
+
+    monkeypatch.setenv("L9_VERIFYING_KEYS_JSON", '["not", "a", "map"]')
+    with pytest.raises(ValueError, match="L9_VERIFYING_KEYS_JSON"):
+        _build_runtime_config()

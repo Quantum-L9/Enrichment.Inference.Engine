@@ -15,9 +15,10 @@ Integration fix applied (PR#22 merge pass):
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
-from typing import Annotated
+from typing import Annotated, Any
 
 import structlog
 from constellation_node_sdk import (
@@ -275,6 +276,44 @@ async def _reregistration_loop(settings: Settings, interval: float) -> None:
         _gate_registered = result
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_key_map(name: str) -> dict[str, str]:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return {}
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip() for k, v in parsed.items()
+    ):
+        raise ValueError(f"{name} must be a JSON object of non-blank string keys and values")
+    return {k.strip(): v.strip() for k, v in parsed.items()}
+
+
+def _runtime_signing_kwargs() -> dict[str, Any]:
+    """Node-runtime signing posture, from the same L9_* variables the SDK's own
+    ``get_runtime_config`` reads.
+
+    Without this the runtime never signed a response, so a Gate that verifies
+    worker responses (every Gate with ``L9_REQUIRE_SIGNATURE=true``) rejected
+    every EIE answer, and a Gate that required signed ingress could not be
+    fronted by this worker at all. Key material is read from the environment
+    only; it is never logged or placed in Settings.
+    """
+    return {
+        "require_signature": _env_flag("L9_REQUIRE_SIGNATURE", False),
+        "signing_algorithm": (os.getenv("L9_SIGNING_ALGORITHM") or "hmac-sha256").strip().lower(),
+        "signing_key": os.getenv("L9_SIGNING_KEY") or os.getenv("L9_SIGNING_SECRET") or None,
+        "signing_key_id": (os.getenv("L9_SIGNING_KEY_ID") or "").strip() or None,
+        "verifying_keys": _env_key_map("L9_VERIFYING_KEYS_JSON"),
+    }
+
+
 def _build_runtime_config() -> NodeRuntimeConfig:
     settings = get_settings()
     environment = os.getenv("L9_ENVIRONMENT", "local").strip().lower() or "local"
@@ -285,6 +324,7 @@ def _build_runtime_config() -> NodeRuntimeConfig:
         service_version="2.3.0",
         dev_mode=environment in {"local", "dev", "test"},
         gate_url=settings.gate_url,
+        **_runtime_signing_kwargs(),
         allowed_actions=(
             "community-export",
             "converge",

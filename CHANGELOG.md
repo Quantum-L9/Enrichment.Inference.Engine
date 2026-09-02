@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `poetry.lock` that does not exist and could not build.
   - `contracts/converge_request.json` is the exact payload the live Odoo
     builder emits, enforced by a test.
+  - The node runtime reads its signing posture from `L9_REQUIRE_SIGNATURE`,
+    `L9_SIGNING_KEY`, `L9_SIGNING_KEY_ID`, `L9_SIGNING_ALGORITHM` and
+    `L9_VERIFYING_KEYS_JSON`. It never signed a response before, so a Gate
+    that verifies worker responses rejected every EIE answer.
 
 ### Fixed
 - **`confidence` no longer leaks into enriched fields.** Every normalized
