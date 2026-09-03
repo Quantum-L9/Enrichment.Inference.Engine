@@ -3,14 +3,17 @@
 # PEP 621 / setuptools, see pyproject.toml), and had no `git` for the
 # git+https constellation-node-sdk dependency, so the build could not succeed.
 #
-# Dependencies are installed from requirements.lock, which pins every resolved
-# version (regenerate with
-# `uv pip compile pyproject.toml --python-version 3.12 -o requirements.lock`).
-# The base is the interpreter the lock was resolved for and CI runs on.
-FROM python:3.12-slim AS base
+# Supply chain: the base image is pinned by digest; PyPI dependencies are
+# installed from requirements.lock with `--require-hashes`; the SDK (a VCS
+# dependency, which pip cannot hash-verify) is installed separately, pinned to
+# the release commit named in Gate_SDK's RELEASE_IDENTITY_LEDGER. Both lock
+# files are regenerated with `bash tools/lock_requirements.sh`. The app runs
+# from /app on PYTHONPATH; nothing is pip-installed from the working tree.
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS base
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN apt-get update \
@@ -18,13 +21,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base AS deps
-COPY requirements.lock ./
-RUN python -m pip install --no-deps -r requirements.lock
+COPY requirements.lock requirements-sdk.lock ./
+RUN python -m pip install --require-hashes --no-deps -r requirements.lock \
+    && python -m pip install --no-deps -r requirements-sdk.lock
 
 FROM deps AS prod
 COPY . .
-RUN python -m pip install --no-deps . \
-    && adduser --disabled-password --gecos "" appuser \
+RUN adduser --disabled-password --gecos "" appuser \
     && chown -R appuser /app
 USER appuser
 
