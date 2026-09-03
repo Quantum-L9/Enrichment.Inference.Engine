@@ -257,7 +257,11 @@ async def stop_reregistration_loop() -> None:
     try:
         await task
     except asyncio.CancelledError:
-        pass
+        # The cancellation we just requested is expected; a cancellation of
+        # the CURRENT task (shutdown itself being cancelled) must propagate.
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
 
 
 async def _reregistration_loop(settings: Settings, interval: float) -> None:

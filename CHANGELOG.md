@@ -25,9 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `GATE_ADMIN_TOKEN` from the `enrichment-credentials` secret; without
     registration Gate had no route to this worker. `.env.example` and the
     env contract document the registration variables.
-  - `Dockerfile.prod` builds from `pyproject.toml` with pip and installs
-    `git` for the git+https SDK dependency; it previously copied a
-    `poetry.lock` that does not exist and could not build.
+  - `Dockerfile.prod` installs from a pinned `requirements.lock` (resolved for
+    Python 3.12, the interpreter CI runs on) and installs `git` for the
+    git+https SDK dependency; it previously copied a `poetry.lock` that does
+    not exist and could not build.
   - `contracts/converge_request.json` is the exact payload the live Odoo
     builder emits, enforced by a test.
   - The node runtime reads its signing posture from `L9_REQUIRE_SIGNATURE`,
