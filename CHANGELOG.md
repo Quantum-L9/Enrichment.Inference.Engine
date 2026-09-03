@@ -27,8 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     env contract document the registration variables.
   - `Dockerfile.prod` pins its base image by digest and installs PyPI
     dependencies from a hash-locked `requirements.lock`
-    (`pip install --require-hashes`), with the SDK git pin in
-    `requirements-sdk.lock`; both come from `tools/lock_requirements.sh`. It
+    (`pip install --require-hashes`) that carries the SDK as the hash-verified
+    source archive of its release commit; `tools/lock_requirements.sh`
+    regenerates it. It
     previously copied a `poetry.lock` that does not exist and could not build.
   - `contracts/converge_request.json` is the exact payload the live Odoo
     builder emits, enforced by a test.
