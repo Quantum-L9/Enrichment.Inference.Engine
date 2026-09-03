@@ -37,7 +37,7 @@ while i < len(src):
 # unchanged; the file is simply ~20x fewer lines, which keeps a lock refresh
 # from dominating a pull request's line count.
 compact, current = [], ""
-for raw in out:
+for raw in "".join(out).splitlines(keepends=True):
     if raw.startswith("#") and not current:
         continue
     if raw.startswith("    #"):
