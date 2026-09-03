@@ -21,4 +21,3 @@ File: `.env` (see `.env.example` at repo root)
 | `L9_SIGNING_KEY`, `L9_SIGNING_KEY_ID` | **YES** (staging/prod) | Gate packet signing |
 
 All other variables have defaults and are optional.
-

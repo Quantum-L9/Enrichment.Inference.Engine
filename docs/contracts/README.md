@@ -211,4 +211,3 @@ python tools/verify_contracts.py --contracts docs/contracts/ --source app/
 4. **Event consumers** → read `events/asyncapi.yaml` for Redis Streams event shapes.
 5. **Ops / DevOps** → read `config/env-contract.yaml` for all required env vars.
 6. **Integration teams** → read `dependencies/` for each external service contract.
-

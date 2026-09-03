@@ -108,4 +108,3 @@ kge_models:
 
 # TODO: Run `CALL db.schema.visualization()` on the Neo4j instance to extract
 # the exact label and relationship type inventory from live data.
-

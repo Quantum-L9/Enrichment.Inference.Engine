@@ -35,4 +35,3 @@ Source: `app/core/auth.py` — SHA-256 constant-time comparison.
 
 ## Full Spec
 See `openapi.yaml` for the complete OpenAPI 3.1.0 specification.
-

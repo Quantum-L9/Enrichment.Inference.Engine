@@ -19,4 +19,3 @@
 | Redis | Internal | Optional | None | Idempotency + events |
 | PostgreSQL | Internal | Optional | Connection URL | Persistence |
 | Constellation Gate | Internal | Required | Packet signature (`L9_SIGNING_KEY`) | Sole route to CEG (`sync`, `outcomes`) and ingress for `enrich`/`converge` |
-
