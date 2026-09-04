@@ -42,6 +42,32 @@ spec:
                 secretKeyRef:
                   name: enrichment-credentials
                   key: api-key-hash
+            - name: GATE_URL
+              value: "http://constellation-gate:8080"
+            - name: GATE_INTERNAL_URL
+              value: "http://enrichment-api:8000"
+            - name: GATE_REGISTRATION_ENABLED
+              value: "true"
+            - name: L9_ENVIRONMENT
+              value: "prod"
+            - name: L9_NODE_NAME
+              value: "enrichment-engine"
+            - name: L9_REQUIRE_SIGNATURE
+              value: "true"
+            - name: L9_SIGNING_ALGORITHM
+              value: "hmac-sha256"
+            - name: L9_SIGNING_KEY_ID
+              value: "enrichment-engine-prod"
+            - name: L9_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: enrichment-credentials
+                  key: l9-signing-key
+            - name: GATE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: enrichment-credentials
+                  key: gate-admin-token
           resources:
             requests:
               cpu: 100m

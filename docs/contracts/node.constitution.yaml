@@ -101,8 +101,8 @@ actions:
     replay_safe: true
     required_dependencies:
       - PerplexitySONAR
-    optional_dependencies:
       - ConstellationGate
+    optional_dependencies:
       - Redis
       - PostgreSQL
     event_class: coordination

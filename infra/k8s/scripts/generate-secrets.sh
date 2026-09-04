@@ -13,6 +13,8 @@ PPLX_KEY="${2:?Provide Perplexity API key as second argument}"
 API_SECRET_KEY=$(openssl rand -hex 32)
 CLIENT_API_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
 API_KEY_HASH=$(echo -n "$CLIENT_API_KEY" | sha256sum | awk '{print $1}')
+L9_SIGNING_KEY=$(openssl rand -hex 32)
+GATE_ADMIN_TOKEN=$(openssl rand -hex 24)
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Enrichment API — Secret Generation"
@@ -31,6 +33,8 @@ kubectl create secret generic enrichment-credentials \
   --from-literal=perplexity-api-key="$PPLX_KEY" \
   --from-literal=api-secret-key="$API_SECRET_KEY" \
   --from-literal=api-key-hash="$API_KEY_HASH" \
+  --from-literal=l9-signing-key="$L9_SIGNING_KEY" \
+  --from-literal=gate-admin-token="$GATE_ADMIN_TOKEN" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo ""

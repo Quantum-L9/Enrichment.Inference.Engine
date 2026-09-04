@@ -86,8 +86,8 @@ async def test_notify_graph_sync_sends_ceg_sync_contract_to_gate():
     )
 
     with patch.object(
-        router._client, "send_to_gate", new_callable=AsyncMock, return_value=response_packet
-    ) as mock_send:
+        router._client, "execute", new_callable=AsyncMock, return_value=response_packet
+    ) as mock_exec:
         result = await router.notify_graph_sync(
             tenant_id="tenant-acme",
             entity_id="ent-001",
@@ -96,18 +96,14 @@ async def test_notify_graph_sync_sends_ceg_sync_contract_to_gate():
         )
         assert result["status"] == "success"
         assert "packet_id" in result
-        sent_packet = mock_send.await_args.args[0]
-    assert isinstance(sent_packet, TransportPacket)
-    assert sent_packet.header.action == "sync"
-    assert sent_packet.address.destination_node == "gate"
-    assert sent_packet.address.source_node == "enrichment-engine"
-    assert sent_packet.provenance.origin_kind == "node"
-    assert sent_packet.tenant.org_id == "tenant-acme"
-    assert sent_packet.payload["entity_type"] == "facilities"
-    assert sent_packet.payload["batch"][0]["facility_id"] == "ent-001"
-    assert sent_packet.payload["batch"][0]["domain"] == "plastics"
-    assert sent_packet.header.idempotency_key.startswith("eie:sync:tenant-acme:ent-001:")
-    assert sent_packet.header.timeout_ms == 10_000
+        kwargs = mock_exec.await_args.kwargs
+    assert kwargs["action"] == "sync"
+    assert kwargs["tenant"] == "tenant-acme"
+    assert kwargs["payload"]["entity_type"] == "facilities"
+    assert kwargs["payload"]["batch"][0]["facility_id"] == "ent-001"
+    assert kwargs["payload"]["batch"][0]["domain"] == "plastics"
+    assert kwargs["idempotency_key"].startswith("eie:sync:tenant-acme:ent-001:")
+    assert kwargs["timeout_ms"] == 10_000
 
 
 def test_retry_discipline_never_multiplies_a_domain_effect():
@@ -136,13 +132,13 @@ async def test_unknown_route_fails_closed_without_direct_fallback():
     router = PacketRouter(gate_url="https://gate-node:8080")
     with patch.object(
         router._client,
-        "send_to_gate",
+        "execute",
         new_callable=AsyncMock,
         side_effect=GateHTTPError("no route", status_code=404),
-    ) as mock_send:
+    ) as mock_exec:
         with pytest.raises(NodeUnreachableError):
             await router.route(NodeTarget.SCORE, "score-invalidate", "t", {"entity_id": "e"})
-        assert mock_send.await_count == 1
+        assert mock_exec.await_count == 1
 
 
 def test_notify_score_invalidate_is_fire_and_forget():

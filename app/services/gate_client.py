@@ -51,25 +51,21 @@ def build_gate_client_config(
     if not normalized_url:
         raise ValueError("gate_url must be configured for Gate-only egress")
 
-    if os.getenv("GATE_URL", "").strip():
-        # Read via the SDK contract, then pin EIE's identity and this call's
-        # operation budget. `GATE_URL` in the environment and settings.gate_url
-        # are the same variable; the explicit argument wins so a caller
-        # constructed from Settings never diverges from what it was given.
-        base = get_gate_client_config_from_env()
-        return GateClientConfig(
-            **{
-                **base.model_dump(),
-                "gate_url": normalized_url,
-                "local_node": EIE_NODE_NAME,
-                "timeout_seconds": float(timeout_seconds),
-            }
-        )
+    # Settings may load GATE_URL / L9_SIGNING_* from .env into process config
+    # without exporting them to os.environ. Mirror GATE_URL into the environment
+    # so get_gate_client_config_from_env() sees the same plane as Settings and
+    # still picks up sibling L9_SIGNING_* keys that *are* already exported.
+    if not os.getenv("GATE_URL", "").strip():
+        os.environ["GATE_URL"] = normalized_url
 
+    base = get_gate_client_config_from_env()
     return GateClientConfig(
-        gate_url=normalized_url,
-        local_node=EIE_NODE_NAME,
-        timeout_seconds=float(timeout_seconds),
+        **{
+            **base.model_dump(),
+            "gate_url": normalized_url,
+            "local_node": EIE_NODE_NAME,
+            "timeout_seconds": float(timeout_seconds),
+        }
     )
 
 

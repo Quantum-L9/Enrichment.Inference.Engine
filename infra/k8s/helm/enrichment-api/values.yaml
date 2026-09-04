@@ -60,9 +60,9 @@ config:
   CB_COOLDOWN_SECONDS: "60"
   # Constellation seam — Gate is the only peer transport (no peer URLs).
   GATE_URL: "http://constellation-gate:8080"
-  GATE_INTERNAL_URL: "http://constellation-gate:8080"
+  GATE_INTERNAL_URL: "http://enrichment-api:8000"
   GATE_REGISTRATION_ENABLED: "true"
-  L9_ENVIRONMENT: "production"
+  L9_ENVIRONMENT: "prod"
   L9_NODE_NAME: "enrichment-engine"
   L9_REQUIRE_SIGNATURE: "true"
   L9_SIGNING_ALGORITHM: "hmac-sha256"

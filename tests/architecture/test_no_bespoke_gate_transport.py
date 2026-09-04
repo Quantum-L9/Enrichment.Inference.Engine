@@ -156,9 +156,10 @@ def test_no_peer_ingress_routes_outside_sdk_runtime():
     offenders = [
         _rel(p)
         for p, src in _sources()
-        if "/v1/outcomes" in src
-        and not src.lstrip().startswith('"""')
-        or re.search(r"@router\.post\(\s*[\"']/v1/(outcomes|sync|match|execute)", src)
+        if (
+            ("/v1/outcomes" in src and not src.lstrip().startswith('"""'))
+            or re.search(r"@router\.post\(\s*[\"']/v1/(outcomes|sync|match|execute)", src)
+        )
     ]
     assert offenders == [], f"peer ingress routes outside the SDK runtime: {offenders}"
 
