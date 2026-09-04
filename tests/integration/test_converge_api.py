@@ -47,11 +47,20 @@ async def test_converge_single_entity(mock_llm, api_client):
     from app.services.kb_resolver import KBResolver
     from app.services.perplexity_client import SonarResponse
 
+    # The pass schema is built from the planner's priority fields, which with
+    # no domain spec are the entity's own keys; a provider answer that omits
+    # them is dropped by schema validation. Before the consensus engine
+    # stopped treating the `confidence` metadata key as an enriched field,
+    # this test passed on that leaked key alone.
     mock_llm.return_value = SonarResponse(
         data={
+            "id": "test-001",
+            "company_name": "Alpha Recyclers Inc.",
+            "materials_handled": ["HDPE", "PP"],
             "material_grade": "A",
             "contamination_tolerance_pct": 0.02,
             "facility_tier": "tier_1",
+            "confidence": 0.9,
         },
         tokens_used=1200,
         citations=["https://example.com/alpha-recyclers"],

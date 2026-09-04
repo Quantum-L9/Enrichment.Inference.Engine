@@ -58,6 +58,11 @@ config:
   MAX_CONCURRENT_VARIATIONS: "3"
   CB_FAILURE_THRESHOLD: "5"
   CB_COOLDOWN_SECONDS: "60"
+  # Gate routing (GATE_ADMIN_TOKEN is read from secrets.existingSecret).
+  GATE_URL: "http://constellation-gate.gate.svc.cluster.local:9000"
+  GATE_REGISTRATION_ENABLED: "true"
+  GATE_INTERNAL_URL: "http://enrichment-api.enrichment.svc.cluster.local:8000"
+  GATE_REREGISTRATION_INTERVAL_SECONDS: "60"
 
 secrets:
   existingSecret: enrichment-credentials

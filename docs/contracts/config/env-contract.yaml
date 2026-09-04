@@ -1,8 +1,8 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: Environment Variable Contract
 # Source:   app/core/config.py:Settings (pydantic-settings BaseSettings)
-# Version:  2.6.0
-# Updated:  2026-05-24
+# Version:  2.7.0
+# Updated:  2026-09-02
 # ═══════════════════════════════════════════════════════════════
 #
 # Scope: variables below map 1:1 to Settings fields. Env names follow Pydantic
@@ -378,8 +378,40 @@ variables:
   - name: GATE_URL
     type: url
     required: false
-    default: http://localhost:8080
-    description: Gate service base URL for SDK runtime and Gate-only egress.
+    default: http://localhost:9000
+    description: Gate service base URL for SDK runtime and Gate-only egress (Gate listens on 9000).
+    sensitive: false
+    source: env
+
+  - name: GATE_REGISTRATION_ENABLED
+    type: boolean
+    required: false
+    default: false
+    description: Register this node with Gate at startup (and periodically). Off means Gate has no converge route for this worker.
+    sensitive: false
+    source: env
+
+  - name: GATE_INTERNAL_URL
+    type: url
+    required: false
+    default: ""
+    description: URL Gate dispatches packets to for this node; empty derives a default.
+    sensitive: false
+    source: env
+
+  - name: GATE_ADMIN_TOKEN
+    type: secret
+    required: false
+    default: ""
+    description: Admin token presented on /v1/admin/register; Gate requires it in staging/prod.
+    sensitive: true
+    source: env
+
+  - name: GATE_REREGISTRATION_INTERVAL_SECONDS
+    type: float
+    required: false
+    default: 60.0
+    description: Cadence of periodic Gate re-registration; 0 registers once at startup only.
     sensitive: false
     source: env
 
@@ -528,6 +560,10 @@ other_runtime_env:
   description: |
     Not loaded by app/core/config.py Settings. Examples: OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_SERVICE_NAME, ENVIRONMENT, VERSION — see app/core/telemetry.py.
+    Node-runtime signing (app/main.py::_runtime_signing_kwargs, same names the
+    SDK's get_runtime_config reads): L9_REQUIRE_SIGNATURE (bool), L9_SIGNING_KEY
+    (secret, HMAC material), L9_SIGNING_KEY_ID, L9_SIGNING_ALGORITHM
+    (default hmac-sha256), L9_VERIFYING_KEYS_JSON (JSON object key_id -> key).
 
 # ═══════════════════════════════════════════════════════════════
 # GitHub Actions — secrets & variables (CI / deploy / review bots)

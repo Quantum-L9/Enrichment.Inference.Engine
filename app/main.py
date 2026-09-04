@@ -14,9 +14,11 @@ Integration fix applied (PR#22 merge pass):
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import time
-from typing import Annotated
+from typing import Annotated, Any
 
 import structlog
 from constellation_node_sdk import (
@@ -60,6 +62,8 @@ _idem: IdempotencyStore | None = None
 # Gate registration outcome (TASK-003): None = not attempted/disabled,
 # True = accepted, False = rejected or errored (non-fatal).
 _gate_registered: bool | None = None
+# Periodic re-registration task (None when disabled or not started).
+_reregistration_task: asyncio.Task[None] | None = None
 
 
 class EnrichmentLifecycle(LifecycleHook):
@@ -131,11 +135,21 @@ class EnrichmentLifecycle(LifecycleHook):
             _gate_registered = await _register_with_gate(settings)
             logger.info("gate_registration_attempted", result=_gate_registered)
 
+        # Gate marks this worker unhealthy on a connection failure; besides
+        # Gate's own health re-probe, a fresh registration is what restores
+        # routing. Re-registering on a cadence makes recovery independent of a
+        # process restart and heals a Gate that restarted with an empty
+        # registry.
+        global _reregistration_task
+        _reregistration_task = start_reregistration_loop(settings)
+
         logger.info("api_started", version="2.3.0")
 
     async def shutdown(self) -> None:
-        global _kb, _idem, _gate_registered
+        global _kb, _idem, _gate_registered, _reregistration_task
 
+        await stop_reregistration_loop()
+        _reregistration_task = None
         if _idem:
             await _idem.close()
         from .services import pg_store as _pg
@@ -217,6 +231,94 @@ async def _register_with_gate(settings: Settings) -> bool | None:
     )
 
 
+def start_reregistration_loop(settings: Settings) -> asyncio.Task[None] | None:
+    """Start the periodic Gate re-registration task, or return None when disabled.
+
+    Disabled when registration itself is disabled, no gate_url is configured,
+    or ``gate_reregistration_interval_seconds`` is 0. Each cycle re-runs the
+    same SDK ``register_node`` call as startup (overwrite=True) and updates the
+    readiness verdict.
+    """
+    if not settings.gate_registration_enabled or not settings.gate_url:
+        return None
+    interval = settings.gate_reregistration_interval_seconds
+    if interval <= 0:
+        return None
+    task = asyncio.create_task(_reregistration_loop(settings, interval))
+    logger.info("gate_reregistration_loop_started", interval_seconds=interval)
+    return task
+
+
+async def stop_reregistration_loop() -> None:
+    task = _reregistration_task
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        # The cancellation we just requested is expected; a cancellation of
+        # the CURRENT task (shutdown itself being cancelled) must propagate.
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
+
+
+async def _reregistration_loop(settings: Settings, interval: float) -> None:
+    global _gate_registered
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            result = await _register_with_gate(settings)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the loop must outlive any one attempt
+            logger.warning("gate_reregistration_error", error=str(exc))
+            result = False
+        if result != _gate_registered:
+            logger.info("gate_registration_changed", previous=_gate_registered, result=result)
+        _gate_registered = result
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_key_map(name: str) -> dict[str, str]:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return {}
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip()
+        for k, v in parsed.items()
+    ):
+        raise ValueError(f"{name} must be a JSON object of non-blank string keys and values")
+    return {k.strip(): v.strip() for k, v in parsed.items()}
+
+
+def _runtime_signing_kwargs() -> dict[str, Any]:
+    """Node-runtime signing posture, from the same L9_* variables the SDK's own
+    ``get_runtime_config`` reads.
+
+    Without this the runtime never signed a response, so a Gate that verifies
+    worker responses (every Gate with ``L9_REQUIRE_SIGNATURE=true``) rejected
+    every EIE answer, and a Gate that required signed ingress could not be
+    fronted by this worker at all. Key material is read from the environment
+    only; it is never logged or placed in Settings.
+    """
+    return {
+        "require_signature": _env_flag("L9_REQUIRE_SIGNATURE", False),
+        "signing_algorithm": (os.getenv("L9_SIGNING_ALGORITHM") or "hmac-sha256").strip().lower(),
+        "signing_key": os.getenv("L9_SIGNING_KEY") or os.getenv("L9_SIGNING_SECRET") or None,
+        "signing_key_id": (os.getenv("L9_SIGNING_KEY_ID") or "").strip() or None,
+        "verifying_keys": _env_key_map("L9_VERIFYING_KEYS_JSON"),
+    }
+
+
 def _build_runtime_config() -> NodeRuntimeConfig:
     settings = get_settings()
     environment = os.getenv("L9_ENVIRONMENT", "local").strip().lower() or "local"
@@ -227,6 +329,7 @@ def _build_runtime_config() -> NodeRuntimeConfig:
         service_version="2.3.0",
         dev_mode=environment in {"local", "dev", "test"},
         gate_url=settings.gate_url,
+        **_runtime_signing_kwargs(),
         allowed_actions=(
             "community-export",
             "converge",

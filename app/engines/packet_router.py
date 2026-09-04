@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Any
 
 import structlog
-from constellation_node_sdk.gate import GateClient, GateClientConfig
+from constellation_node_sdk.gate import GateClient, GateClientConfig, GateHTTPError
 from constellation_node_sdk.transport import TransportPacket, create_transport_packet
 
 logger = structlog.get_logger("packet_router")
@@ -89,10 +89,13 @@ class PacketRouter:
         """
         Dispatch a transport packet through Gate.
         """
-        packet = _build_envelope(action, tenant_id, payload, correlation_id)
-
         last_exc: Exception | None = None
         for attempt in range(_RETRY_ATTEMPTS + 1):
+            # A fresh packet per attempt. Gate's replay guard rejects a
+            # packet_id it has already seen inside its window, so re-sending
+            # the same packet turned every retry into a guaranteed 400 and the
+            # retry loop could never succeed after the first attempt failed.
+            packet = _build_envelope(action, tenant_id, payload, correlation_id)
             try:
                 response = await self._client.send_to_gate(packet)
                 data = dict(response.payload)
@@ -115,6 +118,13 @@ class PacketRouter:
                     attempt=attempt,
                     error=str(exc),
                 )
+                # A 4xx from Gate (no route for the action, policy rejection,
+                # bad packet) does not change on a retry; only transport and
+                # 5xx failures are retried. Without this every background
+                # score-invalidate against a Gate with no score owner burned
+                # three Gate calls and two backoff sleeps per converge.
+                if isinstance(exc, GateHTTPError) and exc.is_client_error:
+                    break
                 if attempt < _RETRY_ATTEMPTS:
                     await asyncio.sleep(2**attempt)
 

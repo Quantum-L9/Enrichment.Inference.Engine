@@ -16,7 +16,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from constellation_node_sdk.transport import TransportPacket, create_transport_packet
 
-from app.engines.packet_router import NodeTarget, PacketRouter, _build_envelope, get_router
+from app.engines.packet_router import (
+    NodeTarget,
+    NodeUnreachableError,
+    PacketRouter,
+    _build_envelope,
+    get_router,
+)
 
 
 def test_dispatch_to_score_symbol_absent():
@@ -129,3 +135,98 @@ def test_get_router_returns_singleton():
     r1 = get_router(settings)
     r2 = get_router(settings)
     assert r1 is r2, "get_router must be a singleton (lru_cache)"
+
+
+@pytest.mark.asyncio
+async def test_route_builds_a_fresh_packet_per_attempt(monkeypatch):
+    """Gate's replay guard rejects a reused packet_id, so a retry must not resend the same packet."""
+    from app.engines import packet_router as pr_module
+
+    router = PacketRouter(gate_url="https://gate-node:9000")
+    seen: list[str] = []
+
+    response_packet = create_transport_packet(
+        action="graph-sync",
+        payload={"status": "synced"},
+        tenant="tenant-acme",
+        source_node="gate",
+        destination_node="enrichment-engine",
+        reply_to="gate",
+    )
+
+    async def send(packet):
+        seen.append(str(packet.header.packet_id))
+        if len(seen) == 1:
+            raise RuntimeError("transient")
+        return response_packet
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(pr_module.asyncio, "sleep", no_sleep)
+    with patch.object(router._client, "send_to_gate", side_effect=send):
+        result = await router.route(
+            NodeTarget.GRAPH,
+            "graph-sync",
+            "tenant-acme",
+            {"entity_id": "ent-001"},
+        )
+
+    assert result["status"] == "synced"
+    assert len(seen) == 2
+    assert seen[0] != seen[1], "retry reused the packet_id Gate's replay guard already saw"
+
+
+@pytest.mark.asyncio
+async def test_route_does_not_retry_a_gate_4xx(monkeypatch):
+    """A 404 (no owner for the action) is not transient; retrying it only burns Gate calls."""
+    from constellation_node_sdk.gate import GateHTTPError
+
+    from app.engines import packet_router as pr_module
+
+    router = PacketRouter(gate_url="https://gate-node:9000")
+    calls = {"n": 0}
+    sleeps: list[float] = []
+
+    async def send(packet):
+        calls["n"] += 1
+        raise GateHTTPError("no route", status_code=404, response_text="{}")
+
+    async def record_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(pr_module.asyncio, "sleep", record_sleep)
+    with (
+        patch.object(router._client, "send_to_gate", side_effect=send),
+        pytest.raises(NodeUnreachableError),
+    ):
+        await router.route(NodeTarget.SCORE, "score-invalidate", "tenant-x", {"entity_id": "e"})
+
+    assert calls["n"] == 1
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_route_still_retries_a_gate_5xx(monkeypatch):
+    from constellation_node_sdk.gate import GateHTTPError
+
+    from app.engines import packet_router as pr_module
+
+    router = PacketRouter(gate_url="https://gate-node:9000")
+    calls = {"n": 0}
+
+    async def send(packet):
+        calls["n"] += 1
+        raise GateHTTPError("gateway timeout", status_code=504, response_text="{}")
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(pr_module.asyncio, "sleep", no_sleep)
+    with (
+        patch.object(router._client, "send_to_gate", side_effect=send),
+        pytest.raises(NodeUnreachableError),
+    ):
+        await router.route(NodeTarget.SCORE, "score-invalidate", "tenant-x", {"entity_id": "e"})
+
+    assert calls["n"] == 3

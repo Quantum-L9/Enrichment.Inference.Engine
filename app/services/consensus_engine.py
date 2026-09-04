@@ -132,11 +132,23 @@ def _calculate_field_confidence(values: list[Any], total_attempted: int) -> floa
     return max(0.2, confidence)
 
 
+# Keys `validate_response` attaches to every normalized variation that are
+# response metadata, not enriched domain fields. `confidence` in particular is
+# guaranteed present on each variation, so without this exclusion it wins
+# consensus on every pass and reaches consumers as an enriched field named
+# "confidence" (observed on the live Odoo -> Gate -> EIE rail).
+_RESPONSE_META_KEYS: frozenset[str] = frozenset({"confidence"})
+
+
 def _get_all_fields(variations: list[dict[str, Any]]) -> set[str]:
-    """Extract unique field names across all variations."""
+    """Extract unique enriched field names across all variations.
+
+    Response metadata keys are excluded: they describe the variation, they are
+    not values the caller asked to enrich.
+    """
     fields: set[str] = set()
     for v in variations:
-        fields.update(v.keys())
+        fields.update(k for k in v if k not in _RESPONSE_META_KEYS)
     return fields
 
 
