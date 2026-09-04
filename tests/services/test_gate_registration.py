@@ -202,3 +202,122 @@ def test_health_surfaces_gate_registered(monkeypatch, registered, expected_statu
     body = client.get("/api/v1/health").json()
     assert body["gate_registered"] is registered
     assert body["status"] == expected_status
+
+
+# --------------------------------------------------------------------------
+# Periodic re-registration: routing recovery without a process restart
+# --------------------------------------------------------------------------
+
+import asyncio  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+from app import main as main_module  # noqa: E402
+from app.main import start_reregistration_loop, stop_reregistration_loop  # noqa: E402
+
+
+def test_reregistration_loop_is_off_when_registration_is_off():
+    assert start_reregistration_loop(_settings(gate_registration_enabled=False)) is None
+    assert start_reregistration_loop(_settings(gate_url="")) is None
+
+
+@pytest.mark.asyncio
+async def test_reregistration_loop_is_off_at_zero_interval():
+    assert start_reregistration_loop(_settings(gate_reregistration_interval_seconds=0)) is None
+
+
+@pytest.mark.asyncio
+async def test_reregistration_loop_reregisters_and_updates_readiness(monkeypatch):
+    """Each cycle re-runs the SDK registration and the verdict feeds readiness."""
+    verdicts = iter([False, True, True, True, True])
+    fake = AsyncMock(side_effect=lambda settings: next(verdicts))
+    monkeypatch.setattr(main_module, "_register_with_gate", fake)
+    monkeypatch.setattr(main_module, "_gate_registered", None)
+
+    task = start_reregistration_loop(_settings(gate_reregistration_interval_seconds=0.01))
+    assert task is not None
+    monkeypatch.setattr(main_module, "_reregistration_task", task)
+    try:
+        for _ in range(200):
+            if fake.await_count >= 2:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await stop_reregistration_loop()
+
+    assert fake.await_count >= 2
+    assert task.done()
+    assert main_module._gate_registered is True
+
+
+@pytest.mark.asyncio
+async def test_reregistration_loop_survives_a_raising_attempt(monkeypatch):
+    calls = {"n": 0}
+
+    async def flaky(settings):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("gate exploded")
+        return True
+
+    monkeypatch.setattr(main_module, "_register_with_gate", flaky)
+    monkeypatch.setattr(main_module, "_gate_registered", None)
+    task = start_reregistration_loop(_settings(gate_reregistration_interval_seconds=0.01))
+    assert task is not None
+    monkeypatch.setattr(main_module, "_reregistration_task", task)
+    try:
+        for _ in range(200):
+            if calls["n"] >= 2:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await stop_reregistration_loop()
+
+    assert calls["n"] >= 2
+    assert main_module._gate_registered is True
+
+
+# --------------------------------------------------------------------------
+# Node-runtime signing posture comes from the environment (SDK L9_* names)
+# --------------------------------------------------------------------------
+
+
+def test_runtime_signs_responses_when_key_material_is_present(monkeypatch):
+    from app.main import _build_runtime_config
+
+    monkeypatch.setenv("L9_SIGNING_KEY", "worker-material")
+    monkeypatch.setenv("L9_SIGNING_KEY_ID", "eie-k1")
+    monkeypatch.setenv("L9_VERIFYING_KEYS_JSON", '{"gate-k1": "gate-material"}')
+    monkeypatch.setenv("L9_REQUIRE_SIGNATURE", "true")
+    monkeypatch.delenv("L9_SIGNING_ALGORITHM", raising=False)
+    config = _build_runtime_config()
+    assert config.signing_key == "worker-material"
+    assert config.signing_key_id == "eie-k1"
+    assert config.signing_algorithm == "hmac-sha256"
+    assert config.require_signature is True
+    assert config.verifying_keys == {"gate-k1": "gate-material"}
+
+
+def test_runtime_is_unsigned_without_key_material(monkeypatch):
+    from app.main import _build_runtime_config
+
+    for name in (
+        "L9_SIGNING_KEY",
+        "L9_SIGNING_SECRET",
+        "L9_SIGNING_KEY_ID",
+        "L9_VERIFYING_KEYS_JSON",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("L9_REQUIRE_SIGNATURE", "false")
+    config = _build_runtime_config()
+    assert config.signing_key is None
+    assert config.signing_key_id is None
+    assert config.require_signature is False
+    assert config.verifying_keys == {}
+
+
+def test_malformed_verifying_keys_fail_closed(monkeypatch):
+    from app.main import _build_runtime_config
+
+    monkeypatch.setenv("L9_VERIFYING_KEYS_JSON", '["not", "a", "map"]')
+    with pytest.raises(ValueError, match="L9_VERIFYING_KEYS_JSON"):
+        _build_runtime_config()

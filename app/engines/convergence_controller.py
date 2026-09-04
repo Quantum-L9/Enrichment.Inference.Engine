@@ -470,7 +470,14 @@ def _assemble_convergence_response(
     return EnrichResponse(
         fields=final_fields,
         confidence=round(avg_confidence, 4),
-        variation_count=sum(pr.tokens_used for pr in state.pass_results),
+        # Variations are provider calls, not tokens: each pass ran the number
+        # of variations its search plan budgeted. The previous expression
+        # summed tokens_used, which put a token total into a field the
+        # consumer reads as a variation count.
+        variation_count=sum(
+            (pr.search_plan.variation_count if pr.search_plan is not None else 0)
+            for pr in state.pass_results
+        ),
         uncertainty_score=state.uncertainty_score,  # Actual uncertainty metric
         pass_count=len(state.pass_results),  # Number of passes executed
         inference_version="v3.0.0-convergence",

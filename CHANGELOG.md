@@ -10,6 +10,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Seam-audit repairs (IB-Odoo_19 -> Gate_SDK -> Constellation.Gate -> EIE).**
+  - SDK pin moves to the 1.1.0 release commit
+    `2b2f53a28a59bbfb2fa45f5eac32b722d802209a`; every consumer of the
+    coordinated set pins the same commit.
+  - `GATE_URL` default is `http://localhost:9000`, the port every shipped Gate
+    deployment asset uses; `8080` matched nothing.
+  - Periodic Gate re-registration (`GATE_REREGISTRATION_INTERVAL_SECONDS`,
+    default 60; 0 = register once). A worker Gate marked unhealthy on a
+    connection failure recovers without a process restart, and a Gate that
+    restarted with an empty registry regains the `converge` route.
+  - Kubernetes (kustomize + helm) manifests carry `GATE_URL`,
+    `GATE_REGISTRATION_ENABLED=true`, `GATE_INTERNAL_URL` and read
+    `GATE_ADMIN_TOKEN` from the `enrichment-credentials` secret; without
+    registration Gate had no route to this worker. `.env.example` and the
+    env contract document the registration variables.
+  - `Dockerfile.prod` pins its base image by digest and installs PyPI
+    dependencies from a hash-locked `requirements.lock`
+    (`pip install --require-hashes`) that carries the SDK as the hash-verified
+    source archive of its release commit; `tools/lock_requirements.sh`
+    regenerates it. It
+    previously copied a `poetry.lock` that does not exist and could not build.
+  - `contracts/converge_request.json` is the exact payload the live Odoo
+    builder emits, enforced by a test.
+  - The node runtime reads its signing posture from `L9_REQUIRE_SIGNATURE`,
+    `L9_SIGNING_KEY`, `L9_SIGNING_KEY_ID`, `L9_SIGNING_ALGORITHM` and
+    `L9_VERIFYING_KEYS_JSON`. It never signed a response before, so a Gate
+    that verifies worker responses rejected every EIE answer.
+
+### Fixed
+- **`confidence` no longer leaks into enriched fields.** Every normalized
+  variation carries a `confidence` metadata key, so it won consensus on every
+  pass and reached Odoo as an enriched field named `confidence`.
+- **`variation_count` is a variation count**, the sum of each pass's planned
+  variations, not a token total.
+- **Packet router retries send a fresh packet.** Gate's replay guard rejects a
+  reused `packet_id`, so every retry of the same packet was a guaranteed 400.
+  A 4xx from Gate is no longer retried at all: a missing route or a policy
+  rejection does not change on a retry, and every background
+  `score-invalidate` against a Gate with no score owner burned three calls
+  and two backoff sleeps per converge.
+- **`create_all()` works on a fresh database.** `ConvergenceRun.state` declared
+  both `index=True` and an explicit `Index("ix_convergence_runs_state")`,
+  emitting two indexes with one name.
+
+### Changed (earlier)
 - **Gate registration is owned by the Gate_SDK.** The SDK pin moves to
   `bfe6642062a85a720ad8c25e96446d4df1c299ac`, the exact revision consumed by
   green Constellation.Gate PR #14, and `app/services/gate_registration.py` is
