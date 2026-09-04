@@ -99,9 +99,12 @@ def test_supplemental_transport_route_does_not_own_execute() -> None:
     content = endpoint_module.read_text(encoding="utf-8")
 
     assert '"/v1/execute"' not in content, "chassis_endpoint.py must not define /v1/execute"
-    assert '"/v1/outcomes"' in content, (
-        "supplemental transport-adjacent routes must remain explicit"
+    # Seam audit 2026-09-02: /v1/outcomes was a peer-facing ingress relaying
+    # node traffic into CEG around Gate. It stays retired.
+    assert '"/v1/outcomes"' not in content, (
+        "POST /v1/outcomes is a retired node-to-node side door; peers send `outcomes` to Gate"
     )
+    assert "@router.post(" not in content, "no peer-facing routes may be mounted here"
 
 
 def test_active_runtime_bundle_does_not_import_deprecated_router_or_registry() -> None:

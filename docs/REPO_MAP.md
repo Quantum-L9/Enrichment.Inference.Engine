@@ -71,6 +71,8 @@ These are not part of the active production dispatch path.
 | app/engines/handlers.py | Engine action handlers | Platform | T4 | @cryptoxdog |
 | app/engines/orchestration_layer.py | Canonical SDK handler registration + orchestration wiring | Platform | T4 | @cryptoxdog |
 | app/engines/graph_sync_client.py | Gate transport client | Platform | T4 | @cryptoxdog |
+| app/engines/packet_router.py | Gate-only egress (graph `sync`, score invalidation) | Platform | T4 | @cryptoxdog |
+| app/services/gate_client.py | Signed GateClient factory (sole outbound config site) | Platform | T4 | @cryptoxdog |
 | app/models/ | Pydantic v2 schemas (frozen) | Schema team | T5 | @cryptoxdog |
 | app/score/ | Scoring engine | Score team | T3+ | @cryptoxdog |
 | app/health/ | Health check logic | Health team | T3+ | @cryptoxdog |
@@ -114,6 +116,8 @@ These are not part of the active production dispatch path.
 | `app/engines/orchestration_layer.py` | Canonical SDK action registration | Lockstep with handlers/runtime |
 | `app/engines/handlers.py` | Action implementations | Must match registered runtime actions |
 | `app/engines/graph_sync_client.py` | Gate-only outbound transport | No raw peer HTTP |
+| `app/engines/packet_router.py` | Gate-only egress with bounded retry | Retries only with idempotency key; never 4xx |
+| `app/services/gate_client.py` | Single signed GateClient factory | No other `GateClientConfig(...)` in app/ |
 | `engine/utils/security.py` | sanitize_label() | Always use for Cypher labels |
 | `tools/audit_engine.py` | 27-rule audit engine | Run via `make audit` |
 | `tools/verify_contracts.py` | Contract verification | Run via `make verify` |

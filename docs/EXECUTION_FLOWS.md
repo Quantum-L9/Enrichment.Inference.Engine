@@ -80,7 +80,7 @@ Examples:
 * `POST /api/v1/enrich`
 * `POST /api/v1/enrich/batch`
 * `GET /api/v1/health`
-* `POST /v1/outcomes`
+* `POST /v1/execute` (Gate-authored TransportPackets only)
 
 ---
 

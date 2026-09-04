@@ -56,7 +56,7 @@ repos:
         args: [--ignore-missing-imports, "--exclude=app/engines/field_classifier\\.py", "--exclude=app/engines/inference_bridge_v2\\.py"]
         additional_dependencies: [pydantic, pydantic-settings, types-PyYAML, structlog, httpx, types-aiofiles]
         language_version: python3.12
-        exclude: ^(tests/|tools/|docs/|kb/|readme/|LEAD ENRICHMENT|Enrichment-Deployment-pack/|Current Work/|app/engines/field_classifier\.py|app/engines/inference_bridge_v2\.py|engine/kge/rotate3d\.py|app/engines/search_optimizer\.py|app/agents/data_hygiene\.py|plastics_enrichment_client\.py|app/models/schemas\.py|app/services/score/|app/services/perplexity_client\.py|app/services/crm/odoo_client\.py|app/services/crm/salesforce_client\.py|app/services/crm/hubspot_client\.py|app/core/config\.py|chassis/node_client\.py|app/services/enrichment/sources/apollo\.py|app/engines/graph_sync_client\.py)
+        exclude: ^(tests/|tools/|docs/|kb/|readme/|LEAD ENRICHMENT|Enrichment-Deployment-pack/|Current Work/|app/engines/field_classifier\.py|app/engines/inference_bridge_v2\.py|engine/kge/rotate3d\.py|app/engines/search_optimizer\.py|app/agents/data_hygiene\.py|plastics_enrichment_client\.py|app/models/schemas\.py|app/services/score/|app/services/perplexity_client\.py|app/services/crm/odoo_client\.py|app/services/crm/salesforce_client\.py|app/services/crm/hubspot_client\.py|app/core/config\.py|app/services/enrichment/sources/apollo\.py|app/engines/graph_sync_client\.py)
 
   # ── Unit tests (fast subset for pre-commit) ─────────────────────────
   - repo: local

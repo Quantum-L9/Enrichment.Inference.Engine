@@ -56,7 +56,7 @@ EXPECTED_FILES = [
     "dependencies/hubspot-crm.yaml",
     "dependencies/redis.yaml",
     "dependencies/postgresql.yaml",
-    "dependencies/neo4j.yaml",
+    "dependencies/constellation-gate.yaml",
     "_templates/api-endpoint.template.yaml",
     "_templates/tool-schema.template.json",
     "_templates/prompt-contract.template.yaml",

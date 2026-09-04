@@ -7,7 +7,7 @@ Primary sources:
 - docs/contracts/dependencies/_index.yaml
 - docs/contracts/dependencies/redis.yaml
 - docs/contracts/dependencies/postgresql.yaml
-- docs/contracts/dependencies/neo4j.yaml
+- docs/contracts/dependencies/constellation-gate.yaml
 - docs/contracts/dependencies/perplexity-sonar.yaml
 - docs/contracts/dependencies/odoo-crm.yaml
 - docs/contracts/dependencies/salesforce-crm.yaml
@@ -33,13 +33,13 @@ class MockEIEService:
         *,
         redis_available: bool = True,
         postgres_available: bool = True,
-        neo4j_available: bool = True,
+        gate_available: bool = True,
         providers: list[str] | None = None,
         crm_available: bool = True,
     ) -> None:
         self.redis_available = redis_available
         self.postgres_available = postgres_available
-        self.neo4j_available = neo4j_available
+        self.gate_available = gate_available
         self.providers = providers if providers is not None else ["perplexity", "clearbit"]
         self.crm_available = crm_available
 
@@ -75,10 +75,10 @@ class MockEIEService:
         return {"run_id": run_id, "state": "resumed"}
 
     def enrich_and_sync(self, request: dict[str, Any]) -> dict[str, Any]:
-        if not self.neo4j_available:
+        if not self.gate_available:
             return {
                 "state": "partial",
-                "failure_reason": "neo4j_unavailable",
+                "failure_reason": "gate_unavailable",
                 "enriched": True,
                 "graph_synced": False,
             }
@@ -153,16 +153,16 @@ class TestPostgresFailure:
         assert result["failure_reason"] == "postgres_unavailable"
 
 
-class TestNeo4jFailure:
-    def test_neo4j_down_degrades_enrich_and_sync_explicitly(self) -> None:
-        service = MockEIEService(neo4j_available=False)
+class TestGateFailure:
+    def test_gate_down_degrades_enrich_and_sync_explicitly(self) -> None:
+        service = MockEIEService(gate_available=False)
         result = service.enrich_and_sync(make_enrich_request())
         assert result["state"] == "partial"
         assert result["graph_synced"] is False
-        assert result["failure_reason"] == "neo4j_unavailable"
+        assert result["failure_reason"] == "gate_unavailable"
 
-    def test_neo4j_down_does_not_block_enrichment(self) -> None:
-        service = MockEIEService(neo4j_available=False)
+    def test_gate_down_does_not_block_enrichment(self) -> None:
+        service = MockEIEService(gate_available=False)
         result = service.enrich_and_sync(make_enrich_request())
         assert result["enriched"] is True
 

@@ -303,7 +303,12 @@ def _governance_truth(spec: dict[str, Any]) -> TruthResult:
                 },
                 "Redis": {"required": False, "ready": True, "env_vars": [], "missing_env": []},
                 "PostgreSQL": {"required": False, "ready": True, "env_vars": [], "missing_env": []},
-                "Neo4j": {"required": False, "ready": True, "env_vars": [], "missing_env": []},
+                "ConstellationGate": {
+                    "required": True,
+                    "ready": True,
+                    "env_vars": [],
+                    "missing_env": [],
+                },
                 "OdooCRM": {"required": False, "ready": False, "env_vars": [], "missing_env": []},
                 "SalesforceCRM": {
                     "required": False,

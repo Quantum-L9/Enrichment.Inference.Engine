@@ -1,8 +1,8 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: Environment Variable Contract
 # Source:   app/core/config.py:Settings (pydantic-settings BaseSettings)
-# Version:  2.7.0
-# Updated:  2026-09-02
+# Version:  2.6.0
+# Updated:  2026-05-24
 # ═══════════════════════════════════════════════════════════════
 #
 # Scope: variables below map 1:1 to Settings fields. Env names follow Pydantic
@@ -366,28 +366,24 @@ variables:
     sensitive: true
     source: env
 
-  # ── Constellation / sibling nodes ───────────────────────────
-  - name: CEG_BASE_URL
-    type: url
-    required: false
-    default: http://localhost:8001
-    description: Cognitive Engine Graph base URL.
-    sensitive: false
-    source: env
-
+  # ── Constellation (Gate-only) ───────────────────────────────
+  # Seam audit 2026-09-02: EIE addresses Gate only. The former direct peer
+  # variables (CEG_BASE_URL, GRAPH_NODE_URL, SCORE_NODE_URL, ROUTE_NODE_URL,
+  # INTER_NODE_SECRET) and the Neo4j client variables (NEO4J_URI, NEO4J_USER,
+  # NEO4J_PASSWORD) are retired: EIE has no graph-store client and no peer URL.
   - name: GATE_URL
     type: url
     required: false
-    default: http://localhost:9000
-    description: Gate service base URL for SDK runtime and Gate-only egress (Gate listens on 9000).
+    default: http://localhost:8080
+    description: Gate service base URL for SDK runtime and Gate-only egress (the only peer EIE addresses).
     sensitive: false
     source: env
 
   - name: GATE_REGISTRATION_ENABLED
     type: boolean
     required: false
-    default: false
-    description: Register this node with Gate at startup (and periodically). Off means Gate has no converge route for this worker.
+    default: "false"
+    description: Register this node with Gate at startup via Gate_SDK register_node (Settings gate_registration_enabled). Required for Gate to route converge/enrich to EIE.
     sensitive: false
     source: env
 
@@ -395,7 +391,7 @@ variables:
     type: url
     required: false
     default: ""
-    description: URL Gate dispatches packets to for this node; empty derives a default.
+    description: Cluster-internal URL Gate dispatches to (Settings gate_internal_url). Empty derives http://enrichment-engine:8000.
     sensitive: false
     source: env
 
@@ -403,76 +399,83 @@ variables:
     type: secret
     required: false
     default: ""
-    description: Admin token presented on /v1/admin/register; Gate requires it in staging/prod.
+    description: Gate admin token presented on registration (Settings gate_admin_token).
     sensitive: true
     source: env
 
-  - name: GATE_REREGISTRATION_INTERVAL_SECONDS
-    type: float
-    required: false
-    default: 60.0
-    description: Cadence of periodic Gate re-registration; 0 registers once at startup only.
-    sensitive: false
-    source: env
-
-  - name: GRAPH_NODE_URL
-    type: url
-    required: false
-    default: http://localhost:8001
-    description: Legacy direct GRAPH node URL. Deprecated in favor of GATE_URL.
-    sensitive: false
-    source: env
-
-  - name: SCORE_NODE_URL
-    type: url
-    required: false
-    default: http://localhost:8002
-    description: Legacy direct SCORE node URL. Deprecated in favor of GATE_URL.
-    sensitive: false
-    source: env
-
-  - name: ROUTE_NODE_URL
-    type: url
-    required: false
-    default: http://localhost:8003
-    description: Legacy direct ROUTE node URL. Deprecated in favor of GATE_URL.
-    sensitive: false
-    source: env
-
-  - name: INTER_NODE_SECRET
-    type: secret
-    required: false
-    default: dev-inter-node-secret
-    description: Shared secret for node-to-node calls.
-    sensitive: true
-    source: env
-
-  # ── Neo4j ───────────────────────────────────────────────────
-  - name: NEO4J_URI
-    type: url
-    required: false
-    default: bolt://localhost:7687
-    description: Neo4j Bolt URI.
-    sensitive: false
-    source: env
-
-  - name: NEO4J_USER
+  - name: GRAPH_SYNC_ENTITY_TYPE
     type: string
     required: false
-    default: neo4j
-    description: Neo4j username (Settings field neo4j_user).
+    default: facilities
+    description: CEG `sync` endpoint suffix the post-enrichment graph sync targets (Settings graph_sync_entity_type).
     sensitive: false
     source: env
 
-  - name: NEO4J_PASSWORD
+  - name: GRAPH_SYNC_ID_PROPERTY
+    type: string
+    required: false
+    default: facility_id
+    description: Id property of that CEG sync endpoint (Settings graph_sync_id_property).
+    sensitive: false
+    source: env
+
+  # ── Gate_SDK runtime / client contract (read by constellation_node_sdk, not Settings) ──
+  - name: L9_ENVIRONMENT
+    type: string
+    required: false
+    default: local
+    description: SDK runtime environment (local|dev|test|staging|prod). staging/prod require L9_REQUIRE_SIGNATURE=true.
+    sensitive: false
+    source: env
+
+  - name: L9_NODE_NAME
+    type: string
+    required: false
+    default: enrichment-engine
+    description: SDK node identity for Gate_SDK client config; must equal the registered node name.
+    sensitive: false
+    source: env
+
+  - name: L9_REQUIRE_SIGNATURE
+    type: boolean
+    required: false
+    default: "false"
+    description: Require verified transport signatures on Gate-only ingress and sign outbound packets.
+    sensitive: false
+    source: env
+
+  - name: L9_SIGNING_ALGORITHM
+    type: string
+    required: false
+    default: hmac-sha256
+    description: Transport signing algorithm (hmac-sha256|ed25519).
+    sensitive: false
+    source: env
+
+  - name: L9_SIGNING_KEY
     type: secret
     required: false
-    default: changeme
-    description: Neo4j password.
+    default: ""
+    description: HMAC signing key shared with Gate (sensitive; never committed).
     sensitive: true
     source: env
 
-  # ── PostgreSQL ───────────────────────────────────────────────
+  - name: L9_SIGNING_KEY_ID
+    type: string
+    required: false
+    default: enrichment-engine-v1
+    description: Key id carried on signed packets.
+    sensitive: false
+    source: env
+
+  - name: L9_VERIFYING_KEYS_JSON
+    type: string
+    required: false
+    default: ""
+    description: JSON object mapping key_id to key for verifying Gate-signed packets.
+    sensitive: true
+    source: env
+
   - name: DATABASE_URL
     type: url
     required: false
@@ -560,10 +563,6 @@ other_runtime_env:
   description: |
     Not loaded by app/core/config.py Settings. Examples: OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_SERVICE_NAME, ENVIRONMENT, VERSION — see app/core/telemetry.py.
-    Node-runtime signing (app/main.py::_runtime_signing_kwargs, same names the
-    SDK's get_runtime_config reads): L9_REQUIRE_SIGNATURE (bool), L9_SIGNING_KEY
-    (secret, HMAC material), L9_SIGNING_KEY_ID, L9_SIGNING_ALGORITHM
-    (default hmac-sha256), L9_VERIFYING_KEYS_JSON (JSON object key_id -> key).
 
 # ═══════════════════════════════════════════════════════════════
 # GitHub Actions — secrets & variables (CI / deploy / review bots)

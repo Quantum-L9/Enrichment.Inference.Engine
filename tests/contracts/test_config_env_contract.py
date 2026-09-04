@@ -42,23 +42,12 @@ REQUIRED_ENV_VARS = {
     "HUNTER_API_KEY": {"type": "secret", "required": False, "sensitive": True},
     "OPENAI_API_KEY": {"type": "secret", "required": False, "sensitive": True},
     "ANTHROPIC_API_KEY": {"type": "secret", "required": False, "sensitive": True},
-    "CEG_BASE_URL": {"type": "url", "required": False, "sensitive": False},
     "GATE_URL": {"type": "url", "required": False, "sensitive": False},
     "GATE_REGISTRATION_ENABLED": {"type": "boolean", "required": False, "sensitive": False},
     "GATE_INTERNAL_URL": {"type": "url", "required": False, "sensitive": False},
     "GATE_ADMIN_TOKEN": {"type": "secret", "required": False, "sensitive": True},
-    "GATE_REREGISTRATION_INTERVAL_SECONDS": {
-        "type": "float",
-        "required": False,
-        "sensitive": False,
-    },
-    "GRAPH_NODE_URL": {"type": "url", "required": False, "sensitive": False},
-    "SCORE_NODE_URL": {"type": "url", "required": False, "sensitive": False},
-    "ROUTE_NODE_URL": {"type": "url", "required": False, "sensitive": False},
-    "INTER_NODE_SECRET": {"type": "secret", "required": False, "sensitive": True},
-    "NEO4J_URI": {"type": "url", "required": False, "sensitive": False},
-    "NEO4J_USER": {"type": "string", "required": False, "sensitive": False},
-    "NEO4J_PASSWORD": {"type": "secret", "required": False, "sensitive": True},
+    "GRAPH_SYNC_ENTITY_TYPE": {"type": "string", "required": False, "sensitive": False},
+    "GRAPH_SYNC_ID_PROPERTY": {"type": "string", "required": False, "sensitive": False},
     "DATABASE_URL": {"type": "url", "required": False, "sensitive": True},
     "DOMAINS_DIR": {"type": "string", "required": False, "sensitive": False},
     "DEFAULT_DOMAIN": {"type": "string", "required": False, "sensitive": False},
@@ -124,6 +113,32 @@ def test_required_for_startup_lists_auth_and_enrichment(env_contract: dict) -> N
     startup = env_contract.get("required_for_startup", [])
     assert "API_KEY_HASH" in startup
     assert "PERPLEXITY_API_KEY" in startup
+
+
+# Seam audit 2026-09-02: direct peer addressing and the graph store are gone
+# from EIE's configuration surface. Gate is the only peer EIE addresses.
+RETIRED_SIDE_DOOR_VARS = {
+    "CEG_BASE_URL",
+    "GRAPH_NODE_URL",
+    "SCORE_NODE_URL",
+    "ROUTE_NODE_URL",
+    "INTER_NODE_SECRET",
+    "NEO4J_URI",
+    "NEO4J_USER",
+    "NEO4J_PASSWORD",
+}
+
+
+@pytest.mark.unit
+def test_retired_peer_variables_are_gone_from_settings_and_examples() -> None:
+    from app.core.config import Settings
+
+    fields = {name.upper() for name in Settings.model_fields}
+    assert not (fields & RETIRED_SIDE_DOOR_VARS), fields & RETIRED_SIDE_DOOR_VARS
+    for rel in (".env.example", ".env.local.example", "docker-compose.yml"):
+        text = (REPO_ROOT / rel).read_text()
+        for var in RETIRED_SIDE_DOOR_VARS:
+            assert f"{var}=" not in text and f"{var}:" not in text, f"{rel} still sets {var}"
 
 
 @pytest.mark.unit

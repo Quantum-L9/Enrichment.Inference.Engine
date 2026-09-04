@@ -60,8 +60,8 @@ STAGED_ARTIFACTS = {
 # they were invisible to the 0%-coverage audit that found the others, because
 # each has a dedicated test importing it directly. Coverage does not prove
 # reachability — app/services/outcome_delegator.py is 100% covered and still
-# imported by nothing under app/ (POST /v1/outcomes routes through
-# orchestration_layer.run_outcome_feedback instead).
+# imported by nothing under app/ (outcome feedback is produced through
+# orchestration_layer.run_outcome_feedback, a Gate-routed CEG `outcomes` call).
 #
 # This list may only shrink. Adding to it is a rule violation; removing from it
 # (by wiring the module up or deleting it) is the point. test_baseline_is_shrink_only
@@ -75,7 +75,6 @@ UNREACHABLE_BASELINE = {
     "app.engines.convergence.hierarchical_synthesis",
     "app.score.score_icp_plastics",
     "app.services.contract_enforcement",
-    "app.services.graph_sync_hooks",
     "app.services.inference_rule_registry",
     "app.services.outcome_delegator",
 }

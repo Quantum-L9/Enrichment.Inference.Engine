@@ -25,7 +25,6 @@ The **Enrichment Inference Engine** is a **Hybrid** (AI Agent Framework + Data P
 | `POST /api/v1/enrich/batch` | REST API | `app/main.py:106` | Batch enrichment (≤50) |
 | `GET /api/v1/health` | REST API | `app/main.py:81` | Health + KB + circuit breaker |
 | `POST /v1/execute` | REST API | `app/api/v1/chassis_endpoint.py:38` | L9 PacketEnvelope chassis ingress |
-| `POST /v1/outcomes` | REST API | `app/api/v1/chassis_endpoint.py:54` | Match outcome feedback |
 | `POST /v1/converge` | REST API | `app/api/v1/converge.py` | Single entity convergence loop |
 | `POST /v1/converge/batch` | REST API | `app/api/v1/converge.py` | Batch convergence |
 | `GET /v1/converge/{run_id}` | REST API | `app/api/v1/converge.py` | Convergence loop status |
@@ -79,7 +78,7 @@ graph LR
 
     EIE -->|XADD enrich:events:{tenant}| REDIS[(Redis Streams)]
     EIE -->|asyncpg| PG[(PostgreSQL)]
-    EIE -->|bolt| NEO4J[(Neo4j)]
+    EIE -->|TransportPacket sync/outcomes via Gate| CEG[Cognitive Engine Graphs]
 
     EIE -->|waterfall| PPLX[Perplexity Sonar]
     EIE -->|waterfall| CLEARBIT[Clearbit API]
@@ -169,7 +168,7 @@ docs/contracts/
 │   ├── hubspot-crm.yaml
 │   ├── redis.yaml
 │   ├── postgresql.yaml
-│   ├── neo4j.yaml
+│   ├── constellation-gate.yaml
 │   └── _index.yaml
 └── _templates/
     ├── api-endpoint.template.yaml
@@ -212,4 +211,3 @@ python tools/verify_contracts.py --contracts docs/contracts/ --source app/
 4. **Event consumers** → read `events/asyncapi.yaml` for Redis Streams event shapes.
 5. **Ops / DevOps** → read `config/env-contract.yaml` for all required env vars.
 6. **Integration teams** → read `dependencies/` for each external service contract.
-

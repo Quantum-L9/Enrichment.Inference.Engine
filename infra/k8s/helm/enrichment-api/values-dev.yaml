@@ -29,5 +29,8 @@ config:
   LOG_LEVEL: "DEBUG"
   DEFAULT_MAX_VARIATIONS: "2"
   MAX_CONCURRENT_VARIATIONS: "2"
+  L9_ENVIRONMENT: "dev"
+  L9_REQUIRE_SIGNATURE: "false"
+  L9_SIGNING_KEY_ID: "enrichment-engine-dev"
 
 affinity: {}

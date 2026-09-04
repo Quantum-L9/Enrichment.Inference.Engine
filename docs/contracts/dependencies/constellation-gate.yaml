@@ -1,0 +1,38 @@
+# ═══════════════════════════════════════════════════════════════
+# Contract: Constellation.Gate Dependency
+# Source:   app/services/gate_client.py, app/engines/packet_router.py,
+#           app/engines/graph_sync_client.py, app/main.py
+# Version:  1.0.0
+# Updated:  2026-09-02 (seam audit; replaces neo4j.yaml)
+# ═══════════════════════════════════════════════════════════════
+
+service_name: Constellation.Gate
+type: internal
+protocol: http  # canonical TransportPacket over POST /v1/execute (Gate_SDK)
+auth_method: Transport signatures (L9_SIGNING_KEY / L9_SIGNING_KEY_ID via Gate_SDK); admin token for registration
+connection_env: GATE_URL
+default_url: http://localhost:8080
+
+usages:
+  - purpose: Gate-only egress — post-enrichment graph sync (CEG action `sync`)
+    source_file: app/engines/packet_router.py
+    pattern: GateClient.execute(action="sync", payload={entity_type, batch})
+
+  - purpose: Gate-only egress — graph match / outcomes (CEG actions `match`, `outcomes`)
+    source_file: app/engines/graph_sync_client.py
+    pattern: GateClient.send_to_gate(TransportPacket destination=gate)
+
+  - purpose: Gate-only ingress — SDK runtime POST /v1/execute (converge, enrich, graph-inference-result)
+    source_file: app/main.py
+    pattern: create_node_app(config=NodeRuntimeConfig) with enforce_gate_only_ingress
+
+  - purpose: Node registration (control plane)
+    source_file: app/main.py
+    pattern: register_node(gate_url, NodeRegistration) -> POST /v1/admin/register
+
+invariants:
+  - EIE never addresses a peer node; every outbound packet targets Gate.
+  - EIE has no graph-store (Neo4j) client; the graph is reached only through Gate -> CEG.
+  - Gate unavailability fails closed; there is no direct node-to-node fallback.
+
+health_check: "GET {GATE_URL}/v1/health"

@@ -102,3 +102,105 @@ def test_no_locally_implemented_transport(pattern: str, what: str):
         f"EIE production code must not implement {what} — that is Gate_SDK's "
         f"create_node_app() runtime. Found in: {offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Seam guards (2026-09-02 forensic audit): EIE talks to peers only via Gate.
+# ---------------------------------------------------------------------------
+
+ROOT = APP.parent
+CHASSIS = ROOT / "chassis"
+
+_RETIRED_SIDE_DOORS = (
+    "chassis/node_client.py",
+    "app/services/graph_sync_hooks.py",
+    "app/services/workers/graph_inference_consumer.py",
+)
+
+_RETIRED_PEER_SETTINGS = (
+    "ceg_base_url",
+    "graph_node_url",
+    "score_node_url",
+    "route_node_url",
+    "inter_node_secret",
+)
+
+
+def _production_sources() -> list[tuple[Path, str]]:
+    out = list(_sources())
+    for path in sorted(CHASSIS.rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        if rel in _EXCLUDED:
+            continue
+        out.append((path, path.read_text(encoding="utf-8")))
+    return out
+
+
+@pytest.mark.parametrize("relative_path", _RETIRED_SIDE_DOORS)
+def test_retired_side_door_modules_stay_deleted(relative_path: str):
+    assert not (ROOT / relative_path).exists(), (
+        f"{relative_path} was removed as a Gate-bypassing side door; reintroducing it "
+        "restores node-to-node traffic outside Gate authority (SEAM-002)."
+    )
+
+
+def test_settings_carry_no_peer_url_or_shared_peer_secret():
+    """No peer awareness: EIE knows GATE_URL and nothing about CEG's address."""
+    src = (APP / "core" / "config.py").read_text(encoding="utf-8")
+    offenders = [name for name in _RETIRED_PEER_SETTINGS if re.search(rf"\b{name}\b", src)]
+    assert offenders == [], f"peer URL / shared-secret settings reintroduced: {offenders}"
+
+
+def test_no_peer_ingress_routes_outside_sdk_runtime():
+    """/v1/outcomes (and any other bespoke POST route) is not an EIE peer ingress."""
+    offenders = [
+        _rel(p)
+        for p, src in _sources()
+        if (
+            ("/v1/outcomes" in src and not src.lstrip().startswith('"""'))
+            or re.search(r"@router\.post\(\s*[\"']/v1/(outcomes|sync|match|execute)", src)
+        )
+    ]
+    assert offenders == [], f"peer ingress routes outside the SDK runtime: {offenders}"
+
+
+def test_every_authored_transport_packet_is_addressed_to_gate():
+    """Every create_transport_packet(...) call in EIE production code targets 'gate'."""
+    offenders: list[str] = []
+    for path, src in _production_sources():
+        if "create_transport_packet" not in src:
+            continue
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "id", getattr(node.func, "attr", ""))
+                == "create_transport_packet"
+            ):
+                continue
+            dest = next((kw.value for kw in node.keywords if kw.arg == "destination_node"), None)
+            if dest is None or not (isinstance(dest, ast.Constant) and dest.value == "gate"):
+                offenders.append(f"{_rel(path)}:{node.lineno}")
+    assert offenders == [], f"TransportPackets addressed to something other than Gate: {offenders}"
+
+
+def test_no_raw_http_post_to_execute_outside_sdk():
+    """Outbound /v1/execute traffic is the SDK's GateClient, never a hand-rolled httpx call."""
+    offenders = [
+        _rel(p)
+        for p, src in _production_sources()
+        if re.search(r"httpx\.(Async)?Client|requests\.(post|Session)", src)
+        and re.search(r"[\"']/v1/execute[\"']", src)
+    ]
+    assert offenders == [], f"raw HTTP transport to /v1/execute: {offenders}"
+
+
+def test_outbound_gate_config_has_a_single_factory():
+    """GateClientConfig(...) is constructed in exactly one production module."""
+    sites = sorted(
+        {_rel(p) for p, src in _production_sources() if re.search(r"\bGateClientConfig\s*\(", src)}
+    )
+    assert sites == ["app/services/gate_client.py"], (
+        "Outbound Gate configuration (URL, identity, signing) must be built only by "
+        f"app/services/gate_client.py; found GateClientConfig(...) in {sites}"
+    )

@@ -13,6 +13,8 @@ ingress:
 
 config:
   LOG_LEVEL: "INFO"
+  L9_ENVIRONMENT: "staging"
+  L9_SIGNING_KEY_ID: "enrichment-engine-staging"
 
 pdb:
   enabled: true

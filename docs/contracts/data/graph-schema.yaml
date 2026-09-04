@@ -25,9 +25,9 @@ description: |
   - 3D rotation embeddings (engine/kge/rotate3d.py)
   - Graph sync of enriched entities (app/engines/graph_sync_client.py)
 
-  The EIE writes enriched entity data to the graph via GraphSyncClient
-  after each enrichment. The Cognitive Engine Graph (CEG) at CEG_BASE_URL
-  is a sibling node that also reads from Neo4j.
+  The EIE never opens a Neo4j connection. Enriched entity rows are sent as
+  TransportPacket `sync` actions to Constellation Gate (GATE_URL), which
+  routes them to the Cognitive Engine Graphs (CEG) node that owns the graph.
 
 nodes:
   - label: Entity
@@ -108,4 +108,3 @@ kge_models:
 
 # TODO: Run `CALL db.schema.visualization()` on the Neo4j instance to extract
 # the exact label and relationship type inventory from live data.
-

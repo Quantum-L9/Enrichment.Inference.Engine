@@ -80,10 +80,10 @@ pairs:
     allowed_literals:
       - "sync"
       - "match"
-      - "outcome"
+      - "outcomes"
     dynamic_policy: "hybrid_warn"
     severity: "error"
-    description: "GraphSyncClient packet action must be from the canonical Gate transport action set"
+    description: "GraphSyncClient packet action must be a CEG-owned Gate action (Constellation.Gate CANONICAL_ACTION_OWNERS)"
 
   # ── ScoreDimension enum enforcement ─────────────────────────────
   - method: "ScoreDimensionResult"

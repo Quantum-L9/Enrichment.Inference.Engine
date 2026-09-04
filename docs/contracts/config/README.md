@@ -17,7 +17,7 @@ File: `.env` (see `.env.example` at repo root)
 | `API_SECRET_KEY` | **YES** | API authentication |
 | `DATABASE_URL` | Recommended | PostgreSQL persistence |
 | `REDIS_URL` | Recommended | Idempotency + event streaming |
-| `NEO4J_URI` | Recommended | Knowledge graph |
+| `GATE_URL` | **YES** (staging/prod) | Constellation Gate — sole peer transport |
+| `L9_SIGNING_KEY`, `L9_SIGNING_KEY_ID` | **YES** (staging/prod) | Gate packet signing |
 
 All other variables have defaults and are optional.
-

@@ -708,47 +708,6 @@ paths:
           $ref: "#/components/responses/InternalError"
       x-source-file: app/api/v1/chassis_endpoint.py:38
 
-  /v1/outcomes:
-    post:
-      operationId: receiveOutcome
-      summary: Receive match outcome for reinforcement feedback
-      description: |
-        Called by ROUTE/SCORE nodes to record whether an enrichment-driven match
-        was accepted or rejected. Feeds the outcome back to GRAPH for temporal
-        decay adjustment and community re-scoring.
-      tags: [chassis]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                tenant:
-                  type: string
-                  default: default
-                payload:
-                  type: object
-                  additionalProperties: true
-                parent_packet_id:
-                  type: string
-                  format: uuid
-                  nullable: true
-      responses:
-        "200":
-          description: Outcome recorded
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/InternalError"
-      x-source-file: app/api/v1/chassis_endpoint.py:54
-
-  # ── Convergence ────────────────────────────────────────────
   /v1/converge:
     post:
       operationId: convergeEntity

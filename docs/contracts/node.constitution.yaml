@@ -101,8 +101,8 @@ actions:
     replay_safe: true
     required_dependencies:
       - PerplexitySONAR
+      - ConstellationGate
     optional_dependencies:
-      - Neo4j
       - Redis
       - PostgreSQL
     event_class: coordination
@@ -242,12 +242,14 @@ dependencies:
       - persistence
       - not_resumable
 
-  Neo4j:
-    required: false
+  ConstellationGate:
+    required: true
     used_by:
       - enrich-and-sync
+      - converge
     degraded_modes:
       - graph_sync
+      - outcomes_feedback
 
 runtime_attestation:
   endpoint: /v1/attestation

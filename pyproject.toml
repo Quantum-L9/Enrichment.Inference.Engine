@@ -11,8 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "aiofiles>=23.0.0",
     "asyncpg",
-    "neo4j>=5.0,<7.0",
-    "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@2b2f53a28a59bbfb2fa45f5eac32b722d802209a",
+    "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@69c6c67060b08440734a61473c03663423709964",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "httpx>=0.27.0",

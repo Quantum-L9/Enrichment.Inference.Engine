@@ -61,34 +61,21 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
 
-    ceg_base_url: str = "http://localhost:8001"
-
-    # Constellation.Gate listens on 9000 in every shipped Gate deployment asset
-    # (its .env.example, compose, terraform and entrypoint); 8080 matched nothing.
-    gate_url: str = "http://localhost:9000"
-    # Explicit Gate registration (TASK-003). Registration is opt-in and non-fatal
-    # to process startup; readiness degrades when it fails. Every deployment
-    # manifest in infra/k8s enables it — without registration Gate has no
-    # `converge` route and Odoo's enrichment path is a deterministic 404.
+    # ── Constellation (Gate-only egress; seam audit 2026-09-02) ──────────
+    # Gate is the only peer EIE addresses. There is no direct CEG / GRAPH /
+    # SCORE / ROUTE URL and no inter-node shared secret: every outbound packet
+    # goes to GATE_URL, signed with the SDK's L9_SIGNING_* material, and Gate
+    # resolves the destination by action.
+    gate_url: str = "http://localhost:8080"
+    # Explicit Gate registration (TASK-003). Registration is opt-in and non-fatal.
     gate_registration_enabled: bool = False
     gate_internal_url: str = ""  # URL the Gate dispatches to; empty → derived default
-    # Required by Gate in staging/prod (unauthenticated registration is refused
-    # there). Supplied via env / secret, never committed.
     gate_admin_token: str = ""
-    # Re-registration cadence. Gate marks a worker unhealthy on a connection
-    # failure and only a fresh registration (or its own health re-probe)
-    # restores routing; re-registering periodically makes recovery independent
-    # of a process restart. 0 disables the loop (a single registration at startup).
-    gate_reregistration_interval_seconds: float = 60.0
-    # Legacy direct peer URLs retained for backward-compatible config loading only.
-    graph_node_url: str = "http://localhost:8001"
-    score_node_url: str = "http://localhost:8002"
-    route_node_url: str = "http://localhost:8003"
-    inter_node_secret: str = "dev-inter-node-secret"
-
-    neo4j_uri: str = "bolt://localhost:7687"
-    neo4j_user: str = "neo4j"
-    neo4j_password: str = "changeme"
+    # CEG `sync` contract projection for post-enrichment graph sync: the CEG sync
+    # endpoint suffix and its id property (Cognitive.Engine.Graphs domain spec
+    # `sync.endpoints`). Defaults match the plasticos domain.
+    graph_sync_entity_type: str = "facilities"
+    graph_sync_id_property: str = "facility_id"
 
     database_url: str = "postgresql+asyncpg://enrich:changeme@localhost:5432/enrich"
 

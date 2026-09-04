@@ -3,7 +3,7 @@ tests/test_pr21_packet_router.py
 
 Proves GAP-1 and GAP-6:
   - dispatch_to_score does NOT exist in packet_router (confirms broken ref is gone)
-  - notify_graph_sync builds a valid TransportPacket and sends it through Gate
+  - notify_graph_sync speaks CEG's `sync` contract and sends it through Gate
   - notify_score_invalidate fires a Gate-routed fire-and-forget packet with correct action
   - get_router() returns a singleton PacketRouter
   - orchestration_layer no longer imports the non-existent dispatch_to_score
@@ -20,7 +20,8 @@ from app.engines.packet_router import (
     NodeTarget,
     NodeUnreachableError,
     PacketRouter,
-    _build_envelope,
+    _graph_sync_row,
+    _retry_allowed,
     get_router,
 )
 
@@ -53,29 +54,31 @@ def test_orchestration_layer_does_not_import_dispatch_to_score():
                 )
 
 
-def test_build_envelope_structure():
-    """TransportPacket must contain canonical header, tenant, and security hashes."""
-    packet = _build_envelope(
-        action="graph-sync",
-        tenant_id="tenant-x",
-        payload={"entity_id": "ent-001", "fields": {"material_type": "HDPE"}},
+def test_graph_sync_row_is_a_ceg_sync_row_of_neo4j_primitives():
+    """Rows carry the CEG endpoint id property; nested values are JSON strings."""
+    row = _graph_sync_row(
+        entity_id="ent-001",
+        fields={"material_type": "HDPE", "nested": {"a": 1}, "tags": ["x", "y"]},
+        domain="plastics",
+        id_property="facility_id",
     )
-    assert isinstance(packet, TransportPacket)
-    assert packet.header.action == "graph-sync"
-    assert packet.tenant.org_id == "tenant-x"
-    assert packet.header.packet_id
-    assert packet.security.payload_hash
-    assert packet.security.transport_hash
+    assert row["facility_id"] == "ent-001"
+    assert row["entity_id"] == "ent-001"
+    assert row["domain"] == "plastics"
+    assert row["material_type"] == "HDPE"
+    assert row["tags"] == ["x", "y"]
+    assert row["nested"] == '{"a": 1}'
+    assert row["enriched_by"] == "enrichment-engine"
 
 
 @pytest.mark.asyncio
-async def test_notify_graph_sync_sends_to_gate():
-    """GAP-6: notify_graph_sync must send a TransportPacket to Gate."""
+async def test_notify_graph_sync_sends_ceg_sync_contract_to_gate():
+    """GAP-6 successor: graph sync is CEG's `sync` action, sent through Gate."""
     router = PacketRouter(gate_url="https://gate-node:8080")
 
     response_packet = create_transport_packet(
-        action="graph-sync",
-        payload={"status": "synced"},
+        action="sync",
+        payload={"status": "success", "entity_type": "facilities", "synced_count": 1},
         tenant="tenant-acme",
         source_node="gate",
         destination_node="enrichment-engine",
@@ -83,22 +86,59 @@ async def test_notify_graph_sync_sends_to_gate():
     )
 
     with patch.object(
-        router._client, "send_to_gate", new_callable=AsyncMock, return_value=response_packet
-    ) as mock_send:
+        router._client, "execute", new_callable=AsyncMock, return_value=response_packet
+    ) as mock_exec:
         result = await router.notify_graph_sync(
             tenant_id="tenant-acme",
             entity_id="ent-001",
             fields={"material_type": "HDPE", "mfi_range": "2-4"},
             domain="plastics",
         )
-        assert result["status"] == "synced"
+        assert result["status"] == "success"
         assert "packet_id" in result
-        sent_packet = mock_send.await_args.args[0]
-    assert isinstance(sent_packet, TransportPacket)
-    assert sent_packet.header.action == "graph-sync"
-    assert sent_packet.tenant.org_id == "tenant-acme"
-    assert sent_packet.payload["entity_id"] == "ent-001"
-    assert sent_packet.payload["domain"] == "plastics"
+        kwargs = mock_exec.await_args.kwargs
+    assert kwargs["action"] == "sync"
+    assert kwargs["tenant"] == "tenant-acme"
+    assert kwargs["payload"]["entity_type"] == "facilities"
+    assert kwargs["payload"]["batch"][0]["facility_id"] == "ent-001"
+    assert kwargs["payload"]["batch"][0]["domain"] == "plastics"
+    assert kwargs["idempotency_key"].startswith("eie:sync:tenant-acme:ent-001:")
+    assert kwargs["timeout_ms"] == 10_000
+
+
+def test_retry_discipline_never_multiplies_a_domain_effect():
+    """One retry owner (EIE), and only where a retry cannot duplicate work."""
+    from constellation_node_sdk.gate import (
+        GateConnectionError,
+        GateHTTPError,
+        GatePolicyError,
+        GateTimeoutError,
+    )
+
+    assert _retry_allowed(GateConnectionError("x"), has_idempotency_key=False)
+    assert not _retry_allowed(GateTimeoutError("x"), has_idempotency_key=False)
+    assert _retry_allowed(GateTimeoutError("x"), has_idempotency_key=True)
+    assert not _retry_allowed(GateHTTPError("x", status_code=404), has_idempotency_key=True)
+    assert not _retry_allowed(GateHTTPError("x", status_code=502), has_idempotency_key=False)
+    assert _retry_allowed(GateHTTPError("x", status_code=502), has_idempotency_key=True)
+    assert not _retry_allowed(GatePolicyError("x"), has_idempotency_key=True)
+
+
+@pytest.mark.asyncio
+async def test_unknown_route_fails_closed_without_direct_fallback():
+    """A 404 from Gate (no owner for the action) is terminal: one attempt, no peer call."""
+    from constellation_node_sdk.gate import GateHTTPError
+
+    router = PacketRouter(gate_url="https://gate-node:8080")
+    with patch.object(
+        router._client,
+        "execute",
+        new_callable=AsyncMock,
+        side_effect=GateHTTPError("no route", status_code=404),
+    ) as mock_exec:
+        with pytest.raises(NodeUnreachableError):
+            await router.route(NodeTarget.SCORE, "score-invalidate", "t", {"entity_id": "e"})
+        assert mock_exec.await_count == 1
 
 
 def test_notify_score_invalidate_is_fire_and_forget():
@@ -135,98 +175,3 @@ def test_get_router_returns_singleton():
     r1 = get_router(settings)
     r2 = get_router(settings)
     assert r1 is r2, "get_router must be a singleton (lru_cache)"
-
-
-@pytest.mark.asyncio
-async def test_route_builds_a_fresh_packet_per_attempt(monkeypatch):
-    """Gate's replay guard rejects a reused packet_id, so a retry must not resend the same packet."""
-    from app.engines import packet_router as pr_module
-
-    router = PacketRouter(gate_url="https://gate-node:9000")
-    seen: list[str] = []
-
-    response_packet = create_transport_packet(
-        action="graph-sync",
-        payload={"status": "synced"},
-        tenant="tenant-acme",
-        source_node="gate",
-        destination_node="enrichment-engine",
-        reply_to="gate",
-    )
-
-    async def send(packet):
-        seen.append(str(packet.header.packet_id))
-        if len(seen) == 1:
-            raise RuntimeError("transient")
-        return response_packet
-
-    async def no_sleep(_seconds):
-        return None
-
-    monkeypatch.setattr(pr_module.asyncio, "sleep", no_sleep)
-    with patch.object(router._client, "send_to_gate", side_effect=send):
-        result = await router.route(
-            NodeTarget.GRAPH,
-            "graph-sync",
-            "tenant-acme",
-            {"entity_id": "ent-001"},
-        )
-
-    assert result["status"] == "synced"
-    assert len(seen) == 2
-    assert seen[0] != seen[1], "retry reused the packet_id Gate's replay guard already saw"
-
-
-@pytest.mark.asyncio
-async def test_route_does_not_retry_a_gate_4xx(monkeypatch):
-    """A 404 (no owner for the action) is not transient; retrying it only burns Gate calls."""
-    from constellation_node_sdk.gate import GateHTTPError
-
-    from app.engines import packet_router as pr_module
-
-    router = PacketRouter(gate_url="https://gate-node:9000")
-    calls = {"n": 0}
-    sleeps: list[float] = []
-
-    async def send(packet):
-        calls["n"] += 1
-        raise GateHTTPError("no route", status_code=404, response_text="{}")
-
-    async def record_sleep(seconds):
-        sleeps.append(seconds)
-
-    monkeypatch.setattr(pr_module.asyncio, "sleep", record_sleep)
-    with (
-        patch.object(router._client, "send_to_gate", side_effect=send),
-        pytest.raises(NodeUnreachableError),
-    ):
-        await router.route(NodeTarget.SCORE, "score-invalidate", "tenant-x", {"entity_id": "e"})
-
-    assert calls["n"] == 1
-    assert sleeps == []
-
-
-@pytest.mark.asyncio
-async def test_route_still_retries_a_gate_5xx(monkeypatch):
-    from constellation_node_sdk.gate import GateHTTPError
-
-    from app.engines import packet_router as pr_module
-
-    router = PacketRouter(gate_url="https://gate-node:9000")
-    calls = {"n": 0}
-
-    async def send(packet):
-        calls["n"] += 1
-        raise GateHTTPError("gateway timeout", status_code=504, response_text="{}")
-
-    async def no_sleep(_seconds):
-        return None
-
-    monkeypatch.setattr(pr_module.asyncio, "sleep", no_sleep)
-    with (
-        patch.object(router._client, "send_to_gate", side_effect=send),
-        pytest.raises(NodeUnreachableError),
-    ):
-        await router.route(NodeTarget.SCORE, "score-invalidate", "tenant-x", {"entity_id": "e"})
-
-    assert calls["n"] == 3

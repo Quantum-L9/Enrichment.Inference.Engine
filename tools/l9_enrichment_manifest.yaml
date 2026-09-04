@@ -5,7 +5,7 @@ description: Active transport/runtime contract manifest for Enrichment.Inference
 contracts:
   active_transport_runtime:
   - path: app/main.py
-    sha256: 3c7e567ad637a881de954d5e9018b04ebbc272f48d407999b58ae4a4c48228cf
+    sha256: 68804f3e90c5fbe29342a5f38e15a1fb1919090baa9db7d814fafc61cc115ed4
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
@@ -13,12 +13,12 @@ contracts:
     - EXECUTION_FLOWS.md
     description: SDK transport runtime bootstrap and production ingress ownership
   - path: app/api/v1/chassis_endpoint.py
-    sha256: f905f320b9625e1e25005d904f08ce31fe6c22ebb3860d051fc6228f9bfc06c5
+    sha256: 03598f5225656afde80c09dc2ff1986613f7c28701e517114b6235ac599ac151
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
     - REPO_MAP.md
-    description: Transport-adjacent HTTP routes; `/v1/execute` is not defined here
+    description: Retired peer-ingress router (empty); `/v1/execute` and `/v1/outcomes` are not defined here
   - path: app/services/chassis_handlers.py
     sha256: b644efe87bc4d0c0a56a9bf216b2779f03f88a82ce5977b94636fe99916c105b
     required_refs:
@@ -41,12 +41,26 @@ contracts:
     - REPO_MAP.md
     description: Production action handlers aligned to runtime registrations
   - path: app/engines/graph_sync_client.py
-    sha256: 31df759cc522a312826ed46909863f1a6f32c2bd5a3b6af155d58385a0318fa8
+    sha256: d32bbcb76f251653afe89c022181fec064233a48c6e5f70cbf5393424cbe9118
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
     - REPO_MAP.md
     description: Gate-only outbound transport client
+  - path: app/engines/packet_router.py
+    sha256: 427ce3715069b062d0d2d27bf8c2aa653ca8e75f278eba6e9caba6c29d7d0cb1
+    required_refs:
+    - AGENTS.md
+    - ARCHITECTURE.md
+    - REPO_MAP.md
+    description: Gate-only egress for graph sync and score invalidation with bounded, key-gated retry
+  - path: app/services/gate_client.py
+    sha256: b87e0809639b57b0121b62e280b18c2973a3f790dd730fc1ac6f09ca0606c1c2
+    required_refs:
+    - AGENTS.md
+    - ARCHITECTURE.md
+    - REPO_MAP.md
+    description: Single signed GateClient factory; the only outbound Gate config site
   engine_level:
   - path: app/models/loop_schemas.py
     sha256: 91e633e4cb6c80a0b0dd52039fe962296e454c13dafa96ece8927cdce4a89346
@@ -69,6 +83,12 @@ contracts:
     - AGENTS.md
     description: Health schema contract
 deprecated_artifacts:
+- path: chassis/node_client.py
+  description: Removed 2026-09-02 (seam audit) — raw peer HTTP client; must not return
+- path: app/services/graph_sync_hooks.py
+  description: Removed 2026-09-02 (seam audit) — duplicate graph-sync path; must not return
+- path: app/services/workers/graph_inference_consumer.py
+  description: Removed 2026-09-02 (seam audit) — Redis-stream peer bus bypassing Gate; must not return
 - path: chassis/envelope.py
   description: Deprecated compatibility artifact; not part of production dispatch
 - path: chassis/router.py

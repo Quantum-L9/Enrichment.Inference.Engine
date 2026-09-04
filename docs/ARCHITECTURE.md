@@ -3,7 +3,7 @@
 ## System Purpose
 
 Universal domain-aware entity enrichment API for the L9 Constellation.
-Enriches CRM entity records (Odoo + Salesforce) with structured intelligence extracted from external sources via LLM inference, normalizes data, and syncs to Neo4j for graph-based matching.
+Enriches CRM entity records (Odoo + Salesforce) with structured intelligence extracted from external sources via LLM inference, normalizes data, and sends enriched rows to the Cognitive Engine Graphs node through Constellation Gate for graph-based matching (EIE holds no graph driver).
 
 ---
 
@@ -15,7 +15,7 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
 | API Framework | FastAPI 0.115+ |
 | Production Transport Ingress | constellation_node_sdk runtime |
 | LLM Inference | Perplexity sonar-reasoning |
-| Knowledge Graph | Neo4j 5.x |
+| Knowledge Graph | Owned by CEG; reached only via Constellation Gate (`sync` / `outcomes` TransportPackets) |
 | Cache | Redis 7 |
 | State Store | PostgreSQL 16 |
 | CRM Integration | Odoo 19 (PlasticOS) + Salesforce |
@@ -30,7 +30,7 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
 ┌─────────────────────────────────────────────────────────────────┐
 │  API Surface (app/main.py + app/api/)                          │
 │  FastAPI routes + mounted routers + supplemental HTTP routes   │
-│  `/api/v1/*`, `/v1/outcomes`                                   │
+│  `/api/v1/*` (client ingress); `/v1/execute` (Gate ingress)    │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
@@ -52,7 +52,8 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
 │  │     └── loop_state.py                                        │
 │  ├── inference_bridge_v2.py   (DAG-based inference)             │
 │  ├── meta_prompt_planner.py                                     │
-│  └── graph_sync_client.py     (Gate transport)                  │
+│  ├── graph_sync_client.py     (Gate transport)                  │
+│  └── packet_router.py         (Gate-only egress; app/services/gate_client.py builds the client) │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
               ┌────────────────┴─────────────────┐
@@ -68,7 +69,7 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Storage Layer                                                  │
-│  PostgreSQL (state) │ Neo4j (graph) │ Redis (cache)             │
+│  PostgreSQL (state) │ Gate → CEG (graph) │ Redis (cache)        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -86,7 +87,7 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
    b. Perplexity queries execute (concurrent, rate-limited)
    c. Inference bridge fires deterministic rules
    d. Confidence tracker updates per-field scores
-6. Graph sync pushes enriched entity to Neo4j via Gate transport
+6. Graph sync sends the enriched entity to CEG as a `sync` TransportPacket via Gate
 7. Response is returned through the runtime/app surface
 ```
 
@@ -99,7 +100,7 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
 | SDK transport dispatch | `app/main.py`, SDK runtime, registered handlers                 | Runtime bootstrap + handler registration |
 | Handler signature      | `app/engines/handlers.py`, `app/engines/orchestration_layer.py` | C-02 contract                            |
 | Tenant isolation       | All Neo4j queries                                               | `WHERE n.tenant_id = $tenant`            |
-| Graph/Gate transport   | `app/engines/graph_sync_client.py`                              | Gate SDK                                 |
+| Graph/Gate transport   | `app/engines/graph_sync_client.py`, `app/engines/packet_router.py`, `app/services/gate_client.py` | Gate SDK (single signed client factory) |
 | Coverage minimum       | CI pipeline                                                     | 71% coverage gate                        |
 
 ---
@@ -125,6 +126,8 @@ These files define the live production transport/runtime contract and must remai
 * `app/engines/orchestration_layer.py`
 * `app/engines/handlers.py`
 * `app/engines/graph_sync_client.py`
+* `app/engines/packet_router.py`
+* `app/services/gate_client.py`
 
 ---
 
@@ -152,6 +155,8 @@ They may remain temporarily for migration safety, historical reference, or isola
 | `app/engines/orchestration_layer.py` | Platform       | T4   |
 | `app/engines/handlers.py`            | Platform       | T4   |
 | `app/engines/graph_sync_client.py`   | Platform       | T4   |
+| `app/engines/packet_router.py`       | Platform       | T4   |
+| `app/services/gate_client.py`        | Platform       | T4   |
 | `app/models/`                        | Schema team    | T5   |
 | `kb/`                                | Knowledge team | T5   |
 
