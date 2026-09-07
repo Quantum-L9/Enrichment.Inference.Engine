@@ -8,7 +8,7 @@
 # archive of its release commit), is installed from requirements.lock with
 # `--require-hashes`. Regenerate the lock with `bash tools/lock_requirements.sh`.
 # The app runs from /app on PYTHONPATH; nothing is pip-installed from the tree.
-FROM python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS base
+FROM python@sha256:8edbf9e42c7fb168b9c523718ed907117e6d2e60f5889c0c499bbda3a787da53 AS base
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
