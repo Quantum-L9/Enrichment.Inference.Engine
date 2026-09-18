@@ -98,7 +98,7 @@ jobs:
 
       - name: Install validation tools
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: --upgrade pip
           pip install pyyaml
 
       - name: Check Python syntax
@@ -164,7 +164,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: --upgrade pip
           pip install -r requirements-ci.txt
 
       - name: Run Ruff linter
@@ -267,7 +267,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: --upgrade pip
           pip install -r requirements-ci.txt
           if ! pip install -e ".[dev]" 2>/dev/null && ! pip install -e . 2>/dev/null; then
             echo "editable install unavailable; proceeding with requirements-ci.txt deps" >&2
@@ -330,7 +330,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: --upgrade pip
           pip install -r requirements-ci.txt
 
       - name: Install gitleaks (binary — no org license required)
@@ -408,7 +408,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: --upgrade pip
           pip install -r requirements-ci.txt
 
       - name: Terminology Guard
@@ -480,7 +480,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: --upgrade pip
           if [ -n "${SDK_TOKEN:-}" ]; then
             git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
@@ -537,8 +537,11 @@ jobs:
           # governed Gate_SDK consumer like pyproject.toml and requirements-ci.txt,
           # so it carries the SAME immutable release SHA; scripts/validate_sdk_pin.py
           # checks this file so the pin can no longer drift here unnoticed.
-          python -m pip install \
-            "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@69c6c67060b08440734a61473c03663423709964"  # NOSONAR
+          # NOSONAR (githubactions:S8541): --only-binary cannot apply here. This is a
+          # git source dependency; pip/uv abort with "Building source distributions is
+          # disabled" under --only-binary=:all:. Integrity comes from the immutable
+          # commit SHA above, and production installs the hash-verified archive instead.
+          python -m pip install "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@69c6c67060b08440734a61473c03663423709964"  # NOSONAR
           python scripts/l9_contract_control.py select-gates --base "$BASE_REF" --head "$HEAD_REF" > gates.json
           python3 local_pr_pipeline/run_pr_select_gates.py gates.json
 
