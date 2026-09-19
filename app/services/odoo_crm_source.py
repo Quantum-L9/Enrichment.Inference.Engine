@@ -26,6 +26,7 @@ L9 Contract Compliance:
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 import httpx
@@ -67,7 +68,17 @@ _SAMPLEABLE_TYPES: frozenset[str] = frozenset(
 
 _MAX_SAMPLE_VALUES_PER_FIELD = 5
 _REQUEST_TIMEOUT_SECONDS = 10.0
-_USER_AGENT = "enrichment-inference-engine/2.3.0"
+
+
+def _user_agent() -> str:
+    """``User-Agent`` recommended by the Odoo JSON-2 docs; version owned by pyproject."""
+    try:
+        return f"enrichment-inference-engine/{version('domain-enrichment-api')}"
+    except PackageNotFoundError:
+        return "enrichment-inference-engine/unknown"
+
+
+_USER_AGENT = _user_agent()
 
 
 def _sampleable(field_meta: dict[str, Any]) -> bool:
