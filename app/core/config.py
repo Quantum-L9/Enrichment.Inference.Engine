@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     perplexity_api_key: str = ""
     perplexity_model: str = "sonar-reasoning"
 
+    # EIE-009: which source `enrich` actually asks. "perplexity" is the live
+    # paid provider. "deterministic" computes the answer locally from the entity
+    # and the target schema (app/services/deterministic_provider.py), so the
+    # whole business chain — enrich -> persist -> Gate -> CEG — is reproducible
+    # in CI without provider egress. It is selected explicitly and never as a
+    # fallback: a missing key, an outage, or an open circuit must still fail.
+    enrichment_provider: str = "perplexity"
+
     api_secret_key: str = ""
     api_key_hash: str = ""
 
@@ -110,6 +118,18 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_enrichment_provider(self) -> Settings:
+        """Refuse an unknown provider name rather than silently using the default."""
+        allowed = {"perplexity", "deterministic"}
+        if self.enrichment_provider not in allowed:
+            msg = (
+                f"ENRICHMENT_PROVIDER={self.enrichment_provider!r} is not one of "
+                f"{sorted(allowed)}"
+            )
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def align_legacy_token_budget(self) -> Settings:
