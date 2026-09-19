@@ -5,7 +5,7 @@ description: Active transport/runtime contract manifest for Enrichment.Inference
 contracts:
   active_transport_runtime:
   - path: app/main.py
-    sha256: 68804f3e90c5fbe29342a5f38e15a1fb1919090baa9db7d814fafc61cc115ed4
+    sha256: f1480bcb4f2fe882807cb0ec3154b7c229bd8d0ad15b076f6b6c7f0863d8d0da
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
@@ -27,14 +27,14 @@ contracts:
     - REPO_MAP.md
     description: Supplemental SDK inbound handler registration
   - path: app/engines/orchestration_layer.py
-    sha256: 39916e83512699869fea3d4b761968f06fb8dcd09d0cc68897663a06c29f5380
+    sha256: 90263f77db14fbdd29198f3fddb6835bf64fd598131ce73693eb675817b00c31
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
     - EXECUTION_FLOWS.md
     description: Canonical SDK action registration and orchestration wiring
   - path: app/engines/handlers.py
-    sha256: 78f8b3d25fcc0427fc396523ad971d6271f4d11e42ece5aadf5a9ea721f87802
+    sha256: 7d767ff3e5dfdca0a63add2794571fa77822b223ace8b311f5c5e831f5636d7b
     required_refs:
     - AGENTS.md
     - AI_AGENT_REVIEW_CHECKLIST.md
@@ -55,7 +55,7 @@ contracts:
     - REPO_MAP.md
     description: Gate-only egress for graph sync and score invalidation with bounded, key-gated retry
   - path: app/services/gate_client.py
-    sha256: b87e0809639b57b0121b62e280b18c2973a3f790dd730fc1ac6f09ca0606c1c2
+    sha256: 88abef853cb4f9abdd5fcb4428f004a2cc4db40d40583cb804e4acbcbbe5edd5
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
