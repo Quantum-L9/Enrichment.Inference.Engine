@@ -9,6 +9,7 @@ caller, and the mutation was invisible to anything reading configuration.
 from __future__ import annotations
 
 import os
+import threading
 
 import pytest
 
@@ -79,3 +80,46 @@ def test_an_exported_value_survives_an_exception(monkeypatch) -> None:
         raise RuntimeError("boom")
 
     assert os.environ["GATE_URL"] == "https://operator.test"
+
+
+def test_the_state_decision_happens_inside_the_lock(monkeypatch) -> None:
+    """PR #212 review (Codex P2): reading GATE_URL before acquiring was a race.
+
+    The interleaving, with two callers and no value exported by the operator:
+    thread A installs its URL; thread B reads GATE_URL, sees A's value, and
+    concludes the operator set it; B blocks on the lock; A exits and removes
+    the variable; B acquires, takes the `already_set` branch, and yields into a
+    window with no GATE_URL at all. `get_gate_client_config_from_env` then
+    raises ValueError("GATE_URL is required") — for the one caller that did
+    everything right.
+
+    Reproduced deterministically rather than with threads and sleeps: the lock
+    is replaced by one that performs A's teardown at the moment B acquires it.
+    Under the old ordering B has already read A's value by then and yields with
+    the variable absent; with the read inside the lock B sees the true state.
+    """
+    from app.services import gate_client as gc
+
+    class _LockThatTearsDownTheOtherWindow:
+        def __init__(self, inner: threading.Lock) -> None:
+            self._inner = inner
+
+        def __enter__(self) -> None:
+            self._inner.acquire()
+            # Thread A's finally-block, landing between B's read and B's entry.
+            os.environ.pop("GATE_URL", None)
+
+        def __exit__(self, *exc_info: object) -> None:
+            self._inner.release()
+
+    # Thread A is inside its window: its URL is what a reader would see now.
+    monkeypatch.setenv("GATE_URL", "https://gate-a.test")
+    monkeypatch.setattr(gc, "_ENV_WINDOW_LOCK", _LockThatTearsDownTheOtherWindow(threading.Lock()))
+
+    with gc._gate_url_visible_to_sdk("https://gate-b.test"):
+        assert os.environ.get("GATE_URL") == "https://gate-b.test", (
+            "B yielded into a window without its own GATE_URL — the state "
+            "decision was made before the lock was held"
+        )
+
+    assert "GATE_URL" not in os.environ, "B must still restore the absence it found"

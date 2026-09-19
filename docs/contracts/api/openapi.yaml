@@ -283,7 +283,24 @@ components:
           type: string
           enum: [closed, open, half-open]
           description: Circuit breaker state for external API calls.
-      x-source-file: app/models/schemas.py:128
+        gate_registered:
+          type: boolean
+          nullable: true
+          description: |
+            TASK-003. null = registration disabled or never attempted,
+            true = Gate accepted this node, false = Gate rejected it or the
+            attempt errored. Kept for clients that already read it; prefer
+            gate_registration, which distinguishes the two null cases.
+        gate_registration:
+          type: string
+          enum: [registered, failed, not_attempted, disabled]
+          example: registered
+          description: |
+            EIE-002. Names the registration state outright, because
+            `gate_registered is null` cannot tell "switched off" from "enabled
+            but never attempted" — and the second is a node Gate cannot route
+            to. `failed` and `not_attempted` both degrade `status`.
+      x-source-file: app/models/schemas.py:149
       additionalProperties: false
 
     PacketEnvelope:
@@ -535,6 +552,8 @@ paths:
                 kb_grades: 47
                 kb_rules: 23
                 circuit_breaker_state: closed
+                gate_registered: true
+                gate_registration: registered
       x-source-file: app/main.py:81
 
   /api/v1/enrich:

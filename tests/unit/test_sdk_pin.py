@@ -111,3 +111,70 @@ def test_rejects_an_unhashable_git_requirement_in_the_lock(tmp_path: Path) -> No
 @pytest.mark.parametrize("rel", ["pyproject.toml", "requirements-ci.txt", "requirements.lock"])
 def test_the_abandoned_fork_is_gone(rel: str) -> None:
     assert validator.FORBIDDEN_FORK not in (ROOT / rel).read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# --verify-tag: the moving tag's own failure mode
+#
+# PR #212 review (Codex P1). check_tree() proves the manifests say `v1` and
+# that the lock carries *a* hashed commit — never that the two name the same
+# SDK. Under a moving tag they diverge the moment `v1` advances: manifests
+# resolve the new commit for CI and dev, the lock keeps installing the old one
+# in the production image. That is EIE-001 reached from the other direction,
+# and no file-only check can see it. Mocked here; the real resolution is
+# network-bound and opt-in.
+# --------------------------------------------------------------------------
+
+_PINNED = "e9f829f982110be13752da8f18c7a9692e8ed908"
+_ADVANCED = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.fixture
+def _pinned_tree(tmp_path: Path) -> Path:
+    return _tree(tmp_path, manifest=f'  "{_SDK}v1",\n', lock=_GOOD_LOCK)
+
+
+def test_tag_agreement_passes_when_the_tag_still_points_at_the_lock(
+    _pinned_tree: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(validator, "tag_commit", lambda: _PINNED)
+    assert validator.check_tag_agreement(_pinned_tree) == []
+
+
+def test_tag_agreement_fails_once_the_tag_advances(_pinned_tree: Path, monkeypatch) -> None:
+    monkeypatch.setattr(validator, "tag_commit", lambda: _ADVANCED)
+    errors = validator.check_tag_agreement(_pinned_tree)
+    assert len(errors) == 1
+    # Both commits named, so the reader can see which way the drift went.
+    assert _ADVANCED in errors[0] and _PINNED in errors[0]
+    assert "lock_requirements.sh" in errors[0]
+
+
+def test_unresolvable_tag_is_an_error_not_a_pass(_pinned_tree: Path, monkeypatch) -> None:
+    """No network must never read as agreement — fail closed, not open."""
+
+    def _boom() -> str:
+        raise RuntimeError("could not resolve Quantum-L9/Gate_SDK@v1: offline")
+
+    monkeypatch.setattr(validator, "tag_commit", _boom)
+    errors = validator.check_tag_agreement(_pinned_tree)
+    assert errors and "could not resolve" in errors[0]
+
+
+def test_tag_agreement_needs_a_lock_to_compare_against(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(validator, "tag_commit", lambda: _PINNED)
+    tree = _tree(tmp_path, manifest=f'  "{_SDK}v1",\n', lock=None)
+    assert any("no resolved commit" in e for e in validator.check_tag_agreement(tree))
+
+
+def test_check_tree_stays_offline() -> None:
+    """The default path must not reach the network — pre-commit and CI run it.
+
+    Guarded by test rather than convention: folding the remote lookup into
+    check_tree() would make every offline run of this validator fail.
+    """
+    import inspect
+
+    source = inspect.getsource(validator.check_tree)
+    assert "tag_commit" not in source
+    assert "check_tag_agreement" not in source

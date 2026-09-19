@@ -55,7 +55,7 @@ contracts:
     - REPO_MAP.md
     description: Gate-only egress for graph sync and score invalidation with bounded, key-gated retry
   - path: app/services/gate_client.py
-    sha256: 83bd31247639abd5f0e3d6a81f9fb97b16b7fab8afa2169954f8437611295354
+    sha256: 74e35f73ac2e85c6cbf34454add774b5a37d226d7590e576c5a14451e866089e
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md

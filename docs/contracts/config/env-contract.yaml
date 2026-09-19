@@ -416,6 +416,24 @@ variables:
     sensitive: false
     source: env
 
+  - name: GATE_REREGISTRATION_INTERVAL_SECONDS
+    type: number
+    required: false
+    default: "300.0"
+    description: |
+      Seconds between periodic re-registration attempts (Settings
+      gate_reregistration_interval_seconds). One startup attempt is not enough
+      to keep a node routable: a Gate unreachable when this node started, or
+      one that restarted and lost its registry, would otherwise leave EIE
+      serving and unroutable until an operator noticed. Each cycle registers
+      with overwrite=true, so a successful re-register is idempotent and a
+      failed one only logs. Set to 0 to disable the loop entirely — the same
+      three conditions that skip the single startup registration
+      (GATE_REGISTRATION_ENABLED false, empty GATE_URL, zero interval) also
+      skip the loop.
+    sensitive: false
+    source: env
+
   - name: GATE_INTERNAL_URL
     type: url
     required: false

@@ -50,10 +50,18 @@ def _gate_url_visible_to_sdk(url: str) -> Iterator[None]:
     one, and nothing reading configuration could see why.
 
     Restores the previous state exactly, including absence.
+
+    Both the read and the decision happen inside the lock. Reading first was a
+    race (PR #212 review): thread A installs its URL, thread B then reads
+    ``previous`` as A's value and concludes ``already_set``, blocks on the lock,
+    and by the time it enters A has restored absence — so B yields into a window
+    with no GATE_URL at all and the SDK factory raises "GATE_URL is required".
+    The lock only serializes what it encloses, so the state decision has to be
+    inside it, not merely the mutation.
     """
-    previous = os.environ.get("GATE_URL")
-    already_set = bool((previous or "").strip())
     with _ENV_WINDOW_LOCK:
+        previous = os.environ.get("GATE_URL")
+        already_set = bool((previous or "").strip())
         if already_set:
             # The operator exported a value; touch nothing and restore nothing.
             yield
