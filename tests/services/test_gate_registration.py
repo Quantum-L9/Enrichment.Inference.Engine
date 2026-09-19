@@ -10,9 +10,11 @@ Hermetic: all HTTP is mocked via respx. No real network is contacted.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 os.environ.update(
     {
@@ -29,12 +31,15 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
+from app import main as main_module
 from app.core.config import Settings, get_settings
 from app.main import (
     ADVERTISED_ACTIONS,
     NODE_TIMEOUT_MS,
     _register_with_gate,
     build_node_registration,
+    start_reregistration_loop,
+    stop_reregistration_loop,
 )
 from app.services.request_deadline import CANONICAL_CONVERGE_BUDGET_SECONDS
 
@@ -254,12 +259,6 @@ def test_registration_default_matches_the_documented_contract():
 # --------------------------------------------------------------------------
 # Periodic re-registration: routing recovery without a process restart
 # --------------------------------------------------------------------------
-
-import asyncio  # noqa: E402
-from unittest.mock import AsyncMock  # noqa: E402
-
-from app import main as main_module  # noqa: E402
-from app.main import start_reregistration_loop, stop_reregistration_loop  # noqa: E402
 
 
 def test_reregistration_loop_is_off_when_registration_is_off():

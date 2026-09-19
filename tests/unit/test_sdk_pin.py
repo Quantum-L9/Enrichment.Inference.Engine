@@ -86,6 +86,18 @@ def test_rejects_the_original_split(tmp_path: Path) -> None:
     assert any("major tag" in e for e in errors), errors
 
 
+def test_accepts_the_release_set_shape(tmp_path: Path) -> None:
+    """The positive case — every other test here is a rejection.
+
+    `_GOOD_LOCK` existed but nothing consumed it, so the suite proved the
+    validator says no and never proved it says yes. A validator that rejected
+    everything would have passed all of them.
+    """
+    tree = _tree(tmp_path, manifest=f'  "{_SDK}v1",\n', lock=_GOOD_LOCK)
+    assert validator.check_tree(tree) == []
+    assert validator.resolved_commit(tree) == "e9f829f982110be13752da8f18c7a9692e8ed908"
+
+
 def test_rejects_a_missing_lock(tmp_path: Path) -> None:
     tree = _tree(tmp_path, manifest=f'  "{_SDK}v1",\n', lock=None)
     assert any("requirements.lock" in e for e in validator.check_tree(tree))

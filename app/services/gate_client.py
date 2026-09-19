@@ -109,7 +109,11 @@ def build_gate_client_config(
             **base.model_dump(),
             "gate_url": normalized_url,
             "local_node": EIE_NODE_NAME,
-            "timeout_seconds": float(timeout_seconds),
+            # No float() coercion: the parameter is annotated `float` and
+            # GateClientConfig validates the field. The redundant call tripped
+            # semgrep.float-requires-try-except, which reads any float() as a
+            # parse of untrusted input.
+            "timeout_seconds": timeout_seconds,
         }
     )
 

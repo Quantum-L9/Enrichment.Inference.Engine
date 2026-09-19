@@ -17,9 +17,11 @@ from app.services.gate_client import EIE_NODE_NAME, build_gate_client_config
 
 @pytest.fixture(autouse=True)
 def _clean_gate_url(monkeypatch):
+    # No yield: nothing needs to run after the test, and monkeypatch undoes both
+    # changes itself at teardown. A bare trailing `yield` only made this look
+    # like a fixture with cleanup it does not have (SonarQube S9100).
     monkeypatch.delenv("GATE_URL", raising=False)
     monkeypatch.setenv("L9_NODE_NAME", EIE_NODE_NAME)
-    yield
 
 
 def test_building_a_client_leaves_no_gate_url_behind() -> None:

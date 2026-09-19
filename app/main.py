@@ -264,7 +264,11 @@ def start_reregistration_loop(settings: Settings) -> asyncio.Task[None] | None:
     the interval is zero — the same three conditions under which a single
     startup registration is also skipped.
     """
-    interval = float(settings.gate_reregistration_interval_seconds)
+    # No float() coercion: Settings declares this field as `float`, so Pydantic
+    # has already validated and converted it. The redundant call also tripped
+    # semgrep.float-requires-try-except, which cannot tell a validated field
+    # from raw user input.
+    interval = settings.gate_reregistration_interval_seconds
     if not settings.gate_registration_enabled or not settings.gate_url or interval <= 0:
         return None
     return asyncio.create_task(_reregistration_loop(settings, interval))
@@ -279,10 +283,13 @@ async def stop_reregistration_loop() -> None:
         return
     _reregistration_task = None
     task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    # gather(..., return_exceptions=True) rather than catching CancelledError.
+    # The catch swallowed the task's cancellation, which is what we want — but
+    # it swallowed *our own* cancellation identically, so a shutdown path that
+    # was itself cancelled while awaiting here stopped propagating it. gather
+    # aggregates the child's CancelledError as a result and still re-raises
+    # when the awaiting task is the one being cancelled (SonarQube S7497).
+    await asyncio.gather(task, return_exceptions=True)
 
 
 RUNTIME_ALLOWED_ACTIONS: tuple[str, ...] = (

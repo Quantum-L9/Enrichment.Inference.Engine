@@ -5,7 +5,7 @@ description: Active transport/runtime contract manifest for Enrichment.Inference
 contracts:
   active_transport_runtime:
   - path: app/main.py
-    sha256: f1480bcb4f2fe882807cb0ec3154b7c229bd8d0ad15b076f6b6c7f0863d8d0da
+    sha256: 3703883683306febaaab96cba3882a2c89e48739a33ba93c7f0c8bd375702e1b
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
@@ -55,7 +55,7 @@ contracts:
     - REPO_MAP.md
     description: Gate-only egress for graph sync and score invalidation with bounded, key-gated retry
   - path: app/services/gate_client.py
-    sha256: 88abef853cb4f9abdd5fcb4428f004a2cc4db40d40583cb804e4acbcbbe5edd5
+    sha256: 83bd31247639abd5f0e3d6a81f9fb97b16b7fab8afa2169954f8437611295354
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
