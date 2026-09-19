@@ -55,10 +55,22 @@ class ImpactTier(StrEnum):
 
 @dataclass
 class CRMField:
+    """One source CRM field.
+
+    ``name`` is the source system's technical field name. ``source_system`` /
+    ``source_resource`` record which system and which resource (e.g. Odoo
+    ``res.partner`` vs ``crm.lead``) supplied the field, so identically named
+    fields from different resources stay distinguishable. ``fill_rate`` is a
+    *sample* fill rate over the bounded records the source adapter inspected,
+    never a database-global statistic; ``None`` means no observations.
+    """
+
     name: str
     field_type: str = "string"
     sample_values: list[Any] = field(default_factory=list)
     fill_rate: float | None = None
+    source_system: str | None = None
+    source_resource: str | None = None
 
 
 @dataclass
@@ -81,6 +93,8 @@ class FieldMapping:
     status: FieldMatchStatus
     type_compatible: bool = True
     impact_tier: ImpactTier = ImpactTier.NICE_TO_HAVE
+    source_system: str | None = None
+    source_resource: str | None = None
 
 
 @dataclass
@@ -368,6 +382,8 @@ def scan_crm_fields(
                     status=FieldMatchStatus.MATCHED,
                     type_compatible=_type_compatible(crm_field.field_type, prop.field_type),
                     impact_tier=_classify_impact(prop),
+                    source_system=crm_field.source_system,
+                    source_resource=crm_field.source_resource,
                 )
             )
         else:
@@ -376,6 +392,8 @@ def scan_crm_fields(
                     crm_field=crm_field.name,
                     domain_property=None,
                     status=FieldMatchStatus.UNMAPPED,
+                    source_system=crm_field.source_system,
+                    source_resource=crm_field.source_resource,
                 )
             )
 
@@ -394,7 +412,13 @@ def scan_crm_fields(
 
     total_domain = len(domain_properties)
     coverage = len(matched) / total_domain if total_domain > 0 else 0.0
-    scan_input = f"{domain_id}:{domain_version}:{sorted(f.name for f in crm_fields)}"
+    # Scan identity includes source provenance so identically named fields from
+    # different resources (res.partner.phone vs crm.lead.phone) hash independently.
+    # Legacy fields without provenance contribute empty markers and stay deterministic.
+    field_identities = sorted(
+        (f.source_system or "", f.source_resource or "", f.name, f.field_type) for f in crm_fields
+    )
+    scan_input = f"{domain_id}:{domain_version}:{field_identities}"
     scan_hash = hashlib.sha256(scan_input.encode()).hexdigest()[:16]
 
     result = ScanResult(
@@ -569,10 +593,19 @@ def scan_result_to_dict(result: ScanResult) -> dict[str, Any]:
                 "crm_field": m.crm_field,
                 "domain_property": m.domain_property,
                 "type_compatible": m.type_compatible,
+                "source_system": m.source_system,
+                "source_resource": m.source_resource,
             }
             for m in result.matched
         ],
-        "unmapped": [{"crm_field": m.crm_field} for m in result.unmapped],
+        "unmapped": [
+            {
+                "crm_field": m.crm_field,
+                "source_system": m.source_system,
+                "source_resource": m.source_resource,
+            }
+            for m in result.unmapped
+        ],
         "missing": [
             {"domain_property": m.domain_property, "impact_tier": m.impact_tier.value}
             for m in result.missing
