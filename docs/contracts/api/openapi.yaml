@@ -448,6 +448,14 @@ components:
               fill_rate:
                 type: number
                 nullable: true
+              source_system:
+                type: string
+                nullable: true
+                description: Optional source system that supplied the field (e.g. odoo).
+              source_resource:
+                type: string
+                nullable: true
+                description: Optional source resource within that system (e.g. res.partner, crm.lead).
         domain:
           type: string
           example: plasticos

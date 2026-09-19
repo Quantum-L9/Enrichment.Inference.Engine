@@ -149,6 +149,49 @@ def test_scan_synchronous_contract_and_classification(
     assert matched_props == {"polymer_type"}
 
 
+def test_scan_forwards_optional_source_provenance(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(converge_mod, "_domain_specs", {"plastics-recycling": DOMAIN_SPEC})
+
+    resp = client.post(
+        "/api/v1/scan",
+        json={
+            "fields": [
+                {
+                    "name": "polymer_type",
+                    "type": "string",
+                    "source_system": "odoo",
+                    "source_resource": "res.partner",
+                },
+                {
+                    "name": "polymer_type",
+                    "type": "string",
+                    "source_system": "odoo",
+                    "source_resource": "crm.lead",
+                },
+                {"name": "legacy_notes", "type": "string"},
+            ],
+            "domain": "plastics-recycling",
+            "tenant_id": "tenant-1",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # Both provenance-bearing matches survive; the domain property is covered once.
+    assert {(m["crm_field"], m["source_resource"]) for m in data["matched"]} == {
+        ("polymer_type", "res.partner"),
+        ("polymer_type", "crm.lead"),
+    }
+    assert all(m["source_system"] == "odoo" for m in data["matched"])
+    assert data["coverage_ratio"] == round(1 / 3, 4)  # scanner rounds to 4 dp
+    # Fields posted without provenance keep None (legacy callers unchanged).
+    assert data["unmapped"] == [
+        {"crm_field": "legacy_notes", "source_system": None, "source_resource": None}
+    ]
+
+
 def test_scan_unknown_domain_returns_404(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
