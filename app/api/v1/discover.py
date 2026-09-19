@@ -12,18 +12,21 @@ POST /api/v1/proposals/{proposal_id}/approve — human approval
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from app.utils.safe_convert import safe_float
 
 from ...core.auth import verify_api_key
+from ...core.config import get_settings
 from ...engines.handlers import handle_discover
 from ...services import pg_store
 from ...services.crm_field_scanner import CRMField, scan_crm_fields, scan_result_to_dict
+from ...services.crm_source import DEFAULT_SAMPLE_LIMIT, MAX_SAMPLE_LIMIT, CRMSourceError
+from ...services.odoo_crm_source import OdooCRMSource
 
 logger = structlog.get_logger("api.discover")
 router = APIRouter(tags=["discover"])
@@ -47,9 +50,19 @@ class CRMFieldInput(BaseModel):
 
 
 class ScanRequest(BaseModel):
-    fields: list[CRMFieldInput]
+    """CRM scan request. Exactly one of ``fields`` (manual) or ``source`` (live) is required."""
+
+    fields: list[CRMFieldInput] | None = None
+    source: Literal["odoo"] | None = None
+    sample_limit: int = Field(default=DEFAULT_SAMPLE_LIMIT, ge=1, le=MAX_SAMPLE_LIMIT)
     domain: str
     tenant_id: str
+
+    @model_validator(mode="after")
+    def require_fields_xor_source(self) -> ScanRequest:
+        if (self.fields is None) == (self.source is None):
+            raise ValueError("exactly one of 'fields' or 'source' must be supplied")
+        return self
 
 
 class ApprovalRequest(BaseModel):
@@ -92,11 +105,48 @@ async def discover_schema(request: DiscoverRequest) -> dict[str, Any]:
         ) from exc
 
 
+def _manual_fields(inputs: list[CRMFieldInput]) -> list[CRMField]:
+    return [
+        CRMField(
+            name=f.name,
+            field_type=f.type,
+            sample_values=f.sample_values or [],
+            fill_rate=f.fill_rate,
+        )
+        for f in inputs
+    ]
+
+
+async def _odoo_source_fields(sample_limit: int) -> list[CRMField]:
+    """Live discovery of res.partner + crm.lead via the read-only Odoo JSON-2 adapter."""
+    settings = get_settings()
+    if not settings.odoo_url or not settings.odoo_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Odoo CRM discovery requires ODOO_URL and ODOO_API_KEY",
+        )
+    source = OdooCRMSource(
+        base_url=settings.odoo_url,
+        api_key=settings.odoo_api_key,
+        database=settings.odoo_db,
+    )
+    try:
+        return await source.fields(sample_limit=sample_limit)
+    except CRMSourceError as exc:
+        # Messages carry provider/model/method/status only — never credentials
+        # or response bodies — so they are safe to surface to the API caller.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.post(
     "/api/v1/scan",
     dependencies=[Depends(verify_api_key)],
     summary="CRM field scan — Seed tier entry point",
-    responses={404: {"description": "Domain not found"}},
+    responses={
+        404: {"description": "Domain not found"},
+        502: {"description": "Live CRM source (Odoo) failed"},
+        503: {"description": "Live CRM source not configured"},
+    },
 )
 async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
     # scan_crm_fields is synchronous with the (crm_fields, domain_spec) contract.
@@ -111,15 +161,12 @@ async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
             detail=f"Domain '{request.domain}' not found. Available: {available}",
         )
     try:
-        crm_fields = [
-            CRMField(
-                name=f.name,
-                field_type=f.type,
-                sample_values=f.sample_values or [],
-                fill_rate=f.fill_rate,
-            )
-            for f in request.fields
-        ]
+        # Two intake paths (manual fields[] or live Odoo source) converge on the
+        # single existing scanner — there is exactly one scanning engine.
+        if request.fields is not None:
+            crm_fields = _manual_fields(request.fields)
+        else:
+            crm_fields = await _odoo_source_fields(request.sample_limit)
         result = scan_crm_fields(crm_fields, domain_spec)
         return scan_result_to_dict(result)
     except HTTPException:
