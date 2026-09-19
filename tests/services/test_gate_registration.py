@@ -198,9 +198,7 @@ async def test_transport_error_is_non_fatal():
         (False, "failed", "degraded"),
     ],
 )
-def test_health_surfaces_gate_registered(
-    monkeypatch, registered, expected_state, expected_status
-):
+def test_health_surfaces_gate_registered(monkeypatch, registered, expected_state, expected_status):
     """Liveness is not routability: an unregistered node reports degraded.
 
     EIE-002: `None` used to report "ok" here, so a deployment that never
