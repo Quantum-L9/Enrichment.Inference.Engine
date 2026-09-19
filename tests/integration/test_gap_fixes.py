@@ -20,6 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 
 class TestResultStoreWiring:
     """GAP #01 — ResultStore is wired: persist_enrich_response delegates to pg_store."""

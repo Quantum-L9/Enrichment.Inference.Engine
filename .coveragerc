@@ -8,6 +8,15 @@ omit =
     */migrations/*
 
 [report]
+# C-15 (AGENTS.md): coverage >= 71%, never lowered. The floor lives here, in
+# coverage.py's own config, so that ANY run producing a coverage report enforces
+# it — a workflow cannot drop the gate by forgetting --cov-fail-under on the
+# command line (sonarcloud.yml did exactly that and was covered only by
+# pytest.ini's addopts). A subset run passes no --cov at all, produces no report,
+# and is therefore unaffected: that is what keeps the subset make targets
+# runnable without weakening this threshold. --cov-fail-under on the CLI still
+# overrides this value, and the full-suite workflows pass 71 explicitly anyway.
+fail_under = 71
 precision = 2
 show_missing = True
 skip_covered = False
