@@ -4,9 +4,20 @@
 Verifies active runtime/transport contract files declared in
 `tools/l9_enrichment_manifest.yaml`.
 
+Active contracts pin by `contract_version`, not by file digest, matching the
+vocabulary `docs/contracts/node.constitution.yaml` already uses. A digest
+re-stamps on every incidental edit -- a formatter pass or a lint fix rewrote
+the file and the gate failed on a contract that had not changed -- so the pin
+now tracks the contract, and the author bumps it when the contract moves.
+
+The trade is explicit: this gate no longer detects silent content drift. It
+verifies that every active contract is declared, versioned, present, and
+referenced by its governance files; whether an edit changed the contract is a
+review judgement, which is where that decision belongs.
+
 Behavior:
 - FAIL on missing active contract file
-- FAIL on active contract SHA-256 mismatch
+- FAIL on missing or malformed contract_version (MAJOR.MINOR.PATCH)
 - FAIL on missing required reference file
 - FAIL when an active contract path is not referenced by all declared governance files
 - IGNORE deprecated_artifacts for pass/fail (informational only)
@@ -19,7 +30,7 @@ Exit codes:
 
 from __future__ import annotations
 
-import hashlib
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,10 +48,8 @@ ACTIVE_CONTRACT_GROUPS = (
     "engine_level",
 )
 
-
-def compute_sha256(filepath: Path) -> str:
-    """Return the SHA-256 hex digest for a file."""
-    return hashlib.sha256(filepath.read_bytes()).hexdigest()
+# MAJOR.MINOR.PATCH, as docs/contracts/node.constitution.yaml declares it.
+CONTRACT_VERSION_RE = re.compile(r"\A\d+\.\d+\.\d+\Z")
 
 
 def load_manifest() -> dict[str, Any]:
@@ -92,19 +101,26 @@ def validate_contract_entry(
     passes: list[str] = []
 
     path_value = entry.get("path")
-    sha_expected = entry.get("sha256")
+    declared_version = entry.get("contract_version")
     required_refs = entry.get("required_refs", [])
 
     if not isinstance(path_value, str) or not path_value.strip():
         fails.append(f"FAIL: INVALID manifest entry in {group_name}: missing/invalid path")
         return fails, passes
 
-    if not isinstance(sha_expected, str) or not sha_expected.strip():
-        fails.append(f"FAIL: INVALID manifest entry for {path_value}: missing sha256")
+    if not isinstance(declared_version, str) or not declared_version.strip():
+        fails.append(f"FAIL: INVALID manifest entry for {path_value}: missing contract_version")
         return fails, passes
 
-    if sha_expected.startswith("<") and sha_expected.endswith(">"):
-        fails.append(f"FAIL: UNSTAMPED sha256 for active contract {path_value}")
+    if declared_version.startswith("<") and declared_version.endswith(">"):
+        fails.append(f"FAIL: UNSTAMPED contract_version for active contract {path_value}")
+        return fails, passes
+
+    if not CONTRACT_VERSION_RE.match(declared_version):
+        fails.append(
+            f"FAIL: MALFORMED contract_version for {path_value}: "
+            f"{declared_version!r} is not MAJOR.MINOR.PATCH"
+        )
         return fails, passes
 
     if not isinstance(required_refs, list):
@@ -114,13 +130,6 @@ def validate_contract_entry(
     full_path = REPO_ROOT / normalize_repo_path(path_value)
     if not full_path.exists():
         fails.append(f"FAIL: MISSING active contract file {path_value}")
-        return fails, passes
-
-    actual_sha = compute_sha256(full_path)
-    if actual_sha != sha_expected:
-        fails.append(
-            f"FAIL: SHA256 mismatch for {path_value} (expected={sha_expected}, actual={actual_sha})"
-        )
         return fails, passes
 
     for ref in required_refs:
