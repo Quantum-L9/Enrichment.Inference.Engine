@@ -260,6 +260,37 @@ class TestSourceProvenance:
             }
         ]
 
+    def test_coverage_counts_unique_domain_properties(self):
+        # Both Odoo resources match domain 'phone'; both mappings survive but the
+        # domain property is covered once, so coverage never exceeds 1.0.
+        result = scan_crm_fields(self.ODOO_FIELDS, PLASTICS_DOMAIN_SPEC)
+        assert result.matched_count == 2
+        assert result.coverage_ratio == round(1 / 14, 4)  # scanner rounds to 4 dp
+        full = [
+            CRMField(name=p, field_type="string", source_system="odoo", source_resource=r)
+            for r in ("res.partner", "crm.lead")
+            for p in (
+                "name",
+                "city",
+                "phone",
+                "materials_handled",
+                "contamination_tolerance_pct",
+                "process_types",
+                "min_mfi",
+                "max_mfi",
+                "certifications",
+                "facility_size_sqft",
+                "annual_capacity_lbs",
+                "material_grade",
+                "facility_tier",
+                "buyer_class",
+            )
+        ]
+        saturated = scan_crm_fields(full, PLASTICS_DOMAIN_SPEC)
+        assert saturated.matched_count == 28
+        assert saturated.coverage_ratio == 1.0
+        assert saturated.missing_count == 0
+
     def test_missing_entries_carry_no_provenance(self):
         result = scan_crm_fields(self.ODOO_FIELDS, PLASTICS_DOMAIN_SPEC)
         assert all(m.source_system is None and m.source_resource is None for m in result.missing)

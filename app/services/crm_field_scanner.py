@@ -411,7 +411,10 @@ def scan_crm_fields(
     missing.sort(key=lambda m: _IMPACT_RANK.get(m.impact_tier, 99))
 
     total_domain = len(domain_properties)
-    coverage = len(matched) / total_domain if total_domain > 0 else 0.0
+    # Coverage counts unique domain properties covered, not mappings: two source
+    # resources both supplying `phone` keep both provenance-bearing mappings but
+    # cover the domain property once (ratio stays within [0, 1]).
+    coverage = len(matched_domain_keys) / total_domain if total_domain > 0 else 0.0
     # Scan identity includes source provenance so identically named fields from
     # different resources (res.partner.phone vs crm.lead.phone) hash independently.
     # Legacy fields without provenance contribute empty markers and stay deterministic.
