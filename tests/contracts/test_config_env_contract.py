@@ -29,6 +29,7 @@ REQUIRED_ENV_VARS = {
     "ODOO_DB": {"type": "string", "required": False, "sensitive": False},
     "ODOO_USERNAME": {"type": "string", "required": False, "sensitive": False},
     "ODOO_PASSWORD": {"type": "secret", "required": False, "sensitive": True},
+    "ODOO_API_KEY": {"type": "secret", "required": False, "sensitive": True},
     "CRM_MAPPING_PATH": {"type": "string", "required": False, "sensitive": False},
     "SALESFORCE_CLIENT_ID": {"type": "secret", "required": False, "sensitive": True},
     "SALESFORCE_CLIENT_SECRET": {"type": "secret", "required": False, "sensitive": True},

@@ -259,6 +259,17 @@ variables:
     sensitive: true
     source: env
 
+  - name: ODOO_API_KEY
+    type: secret
+    required: false
+    default: ""
+    description: >-
+      Odoo 19 JSON-2 bearer API key for a read-only integration user. Required together
+      with ODOO_URL for live CRM field discovery (POST /api/v1/scan with source="odoo");
+      ODOO_DB is optional for that path. Legacy XML-RPC paths keep ODOO_USERNAME/ODOO_PASSWORD.
+    sensitive: true
+    source: env
+
   - name: CRM_MAPPING_PATH
     type: string
     required: false

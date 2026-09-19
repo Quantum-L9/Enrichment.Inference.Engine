@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     odoo_db: str = ""
     odoo_username: str = ""
     odoo_password: str = ""
+    # Odoo 19 JSON-2 bearer API key — authoritative for live CRM field discovery
+    # (POST /api/v1/scan with source="odoo"). Username/password stay for legacy XML-RPC.
+    odoo_api_key: str = ""
     crm_mapping_path: str = "config/crm/odoo_mapping.yaml"
 
     # Legacy / direct CRM & enrichment providers (prefer gate/SDK for new integrations).
