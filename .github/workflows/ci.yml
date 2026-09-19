@@ -232,7 +232,13 @@ jobs:
             --exit-code 1
 
       - name: Run pip-audit
-        run: pip-audit --desc
+        # PYSEC-2026-3740 (nltk): no fixed release exists — 3.10.3 is the latest
+        # on PyPI, and safety 3.8.1 (latest) still requires nltk>=3.9. nltk is a
+        # transitive dependency of the `safety` scanner in requirements-ci.txt
+        # only: it is absent from pyproject.toml and from requirements.lock, so
+        # it never reaches a runtime or production image. Drop this flag once
+        # nltk publishes a fixed version.
+        run: pip-audit --desc --ignore-vuln PYSEC-2026-3740
       - name: Run Safety Check
         run: safety check || echo "Safety warnings are non-blocking"
       - name: Run Bandit

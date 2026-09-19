@@ -55,7 +55,7 @@ contracts:
     - REPO_MAP.md
     description: Gate-only egress for graph sync and score invalidation with bounded, key-gated retry
   - path: app/services/gate_client.py
-    contract_version: "1.0.0"
+    contract_version: "1.0.1"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md

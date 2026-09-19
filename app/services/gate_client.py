@@ -28,6 +28,8 @@ from constellation_node_sdk.gate import (
     get_gate_client_config_from_env,
 )
 
+from app.utils.safe_convert import safe_float
+
 # EIE's runtime node identity. It MUST match the name EIE registers with Gate
 # (app/main.py NODE_NAME) and the destination Gate dispatches to; the SDK's
 # outbound policy also requires packet.address.source_node == local_node.
@@ -64,7 +66,12 @@ def build_gate_client_config(
             **base.model_dump(),
             "gate_url": normalized_url,
             "local_node": EIE_NODE_NAME,
-            "timeout_seconds": float(timeout_seconds),
+            # safe_float, as app/engines/graph_sync_client.py already calls it: a
+            # bare float() raises on a loosely typed caller. Its 0.0 default is
+            # rejected by GateClientConfig.timeout_seconds (gt=0.0), so a bad
+            # budget fails closed at validation instead of becoming a silent
+            # zero-second timeout.
+            "timeout_seconds": safe_float(timeout_seconds),
         }
     )
 
