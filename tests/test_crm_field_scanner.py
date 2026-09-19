@@ -215,3 +215,77 @@ class TestDiscoveryReport:
         d = scan_result_to_dict(result)
         assert d["matched_count"] == 3
         assert len(d["missing"]) == 11
+
+
+# ── Source Provenance Tests ──────────────────────────────────
+
+
+class TestSourceProvenance:
+    ODOO_FIELDS = [
+        CRMField(
+            name="phone", field_type="char", source_system="odoo", source_resource="res.partner"
+        ),
+        CRMField(name="phone", field_type="char", source_system="odoo", source_resource="crm.lead"),
+        CRMField(
+            name="x_custom_material_notes",
+            field_type="text",
+            source_system="odoo",
+            source_resource="crm.lead",
+        ),
+    ]
+
+    def test_legacy_crm_field_has_no_provenance(self):
+        f = CRMField(name="phone")
+        assert f.source_system is None
+        assert f.source_resource is None
+        d = scan_result_to_dict(scan_crm_fields([f], PLASTICS_DOMAIN_SPEC))
+        assert d["matched"][0]["source_system"] is None
+        assert d["matched"][0]["source_resource"] is None
+
+    def test_scan_mapping_contains_source_resource(self):
+        result = scan_crm_fields(self.ODOO_FIELDS, PLASTICS_DOMAIN_SPEC)
+        assert result.matched_count == 2  # both phones match domain 'phone'
+        resources = {m.source_resource for m in result.matched}
+        assert resources == {"res.partner", "crm.lead"}
+        assert all(m.source_system == "odoo" for m in result.matched)
+        assert all(m.crm_field == "phone" for m in result.matched)  # name not rewritten
+
+    def test_unmapped_field_contains_source_resource(self):
+        d = scan_result_to_dict(scan_crm_fields(self.ODOO_FIELDS, PLASTICS_DOMAIN_SPEC))
+        assert d["unmapped"] == [
+            {
+                "crm_field": "x_custom_material_notes",
+                "source_system": "odoo",
+                "source_resource": "crm.lead",
+            }
+        ]
+
+    def test_missing_entries_carry_no_provenance(self):
+        result = scan_crm_fields(self.ODOO_FIELDS, PLASTICS_DOMAIN_SPEC)
+        assert all(m.source_system is None and m.source_resource is None for m in result.missing)
+        d = scan_result_to_dict(result)
+        assert set(d["missing"][0]) == {"domain_property", "impact_tier"}
+
+    def test_scan_hash_distinguishes_source_resource(self):
+        partner_only = [
+            CRMField(
+                name="phone", field_type="char", source_system="odoo", source_resource="res.partner"
+            )
+        ]
+        lead_only = [
+            CRMField(
+                name="phone", field_type="char", source_system="odoo", source_resource="crm.lead"
+            )
+        ]
+        h_partner = scan_crm_fields(partner_only, PLASTICS_DOMAIN_SPEC).scan_hash
+        h_lead = scan_crm_fields(lead_only, PLASTICS_DOMAIN_SPEC).scan_hash
+        h_legacy = scan_crm_fields(
+            [CRMField(name="phone", field_type="char")], PLASTICS_DOMAIN_SPEC
+        ).scan_hash
+        assert len({h_partner, h_lead, h_legacy}) == 3
+        assert (
+            h_legacy
+            == scan_crm_fields(
+                [CRMField(name="phone", field_type="char")], PLASTICS_DOMAIN_SPEC
+            ).scan_hash
+        )
