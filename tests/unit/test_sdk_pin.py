@@ -146,7 +146,8 @@ def test_tag_agreement_fails_once_the_tag_advances(_pinned_tree: Path, monkeypat
     errors = validator.check_tag_agreement(_pinned_tree)
     assert len(errors) == 1
     # Both commits named, so the reader can see which way the drift went.
-    assert _ADVANCED in errors[0] and _PINNED in errors[0]
+    assert _ADVANCED in errors[0]
+    assert _PINNED in errors[0]
     assert "lock_requirements.sh" in errors[0]
 
 
@@ -158,7 +159,8 @@ def test_unresolvable_tag_is_an_error_not_a_pass(_pinned_tree: Path, monkeypatch
 
     monkeypatch.setattr(validator, "tag_commit", _boom)
     errors = validator.check_tag_agreement(_pinned_tree)
-    assert errors and "could not resolve" in errors[0]
+    assert errors
+    assert "could not resolve" in errors[0]
 
 
 def test_tag_agreement_needs_a_lock_to_compare_against(tmp_path: Path, monkeypatch) -> None:

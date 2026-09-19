@@ -120,8 +120,11 @@ def tag_commit(timeout: float = 30.0) -> str:
     script could not perform must never read as agreement.
     """
     url = f"https://github.com/{CANONICAL_REPO}.git"
+    # S603/S607: fixed argv, no shell, and the URL is built from module
+    # constants — nothing here is caller-supplied. Rationale kept off the
+    # directive lines: prose after the codes is not valid `noqa` syntax.
     try:
-        out = subprocess.run(  # noqa: S603 — fixed argv, no shell, constant URL
+        out = subprocess.run(  # noqa: S603
             ["git", "ls-remote", url, MAJOR_TAG, f"refs/tags/{MAJOR_TAG}^{{}}"],  # noqa: S607
             capture_output=True,
             text=True,

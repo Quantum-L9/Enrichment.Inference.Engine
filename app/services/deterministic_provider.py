@@ -131,6 +131,13 @@ async def query_deterministic(
     No network, no key, no clock: the same entity and schema always produce the
     same response, so every variation in a multi-variation pass agrees and
     consensus synthesis behaves as it does with a cooperative live provider.
+
+    Deliberately ``async`` despite awaiting nothing (SonarQube S7503, kept):
+    this is a substitute for ``query_perplexity`` selected by a settings flag,
+    and the orchestrator's two ``_call`` branches are symmetric because both
+    sides are coroutines. Dropping ``async`` here would make the provider
+    choice visible in the call shape, and would have to be undone the first
+    time this reads a cache or a file.
     """
     data = build_deterministic_payload(entity, target_schema)
     logger.info(
