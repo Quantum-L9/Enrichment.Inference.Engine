@@ -15,7 +15,6 @@ import structlog
 from constellation_node_sdk.runtime.handlers import register_handler
 
 from app.core.config import get_settings
-from app.engines.graph_sync_client import GraphSyncClient
 from app.engines.handlers import (
     handle_converge,
     handle_discover,
@@ -28,11 +27,8 @@ from app.engines.handlers import (
 
 logger = structlog.get_logger(__name__)
 
-_graph_client: GraphSyncClient | None = None
-
 
 def register(kb, idem_store=None, domain_reader=None) -> None:
-    global _graph_client
     settings = get_settings()
 
     init_handlers(kb=kb, idem=idem_store, domain_reader=domain_reader)
@@ -44,11 +40,6 @@ def register(kb, idem_store=None, domain_reader=None) -> None:
     register_handler("simulate", handle_simulate)
     register_handler("writeback", handle_writeback)
     register_handler("enrich-and-sync", _make_enrich_and_sync_handler(kb, idem_store))
-
-    _graph_client = GraphSyncClient(
-        gate_url=settings.gate_url,
-        source_node="enrichment-engine",
-    )
 
     logger.info(
         "orchestration.registered",
@@ -87,20 +78,11 @@ def _make_enrich_and_sync_handler(kb, idem_store):
     return handle_enrich_and_sync
 
 
-async def run_outcome_feedback(
-    outcome: dict[str, Any],
-    tenant: str,
-    parent_packet: Any | None = None,
-) -> dict[str, Any]:
-    if not _graph_client:
-        logger.warning("orchestration.outcome_no_graph_client")
-        return {"status": "skipped", "reason": "no_graph_client"}
-    resp = await _graph_client.send_outcome(
-        outcome=outcome,
-        tenant=tenant,
-        parent_packet=parent_packet,
-    )
-    logger.info(
-        "orchestration.outcome_sent", entity_id=outcome.get("entity_id"), status=resp.get("status")
-    )
-    return resp
+# EIE-006: `run_outcome_feedback` lived here, built on a module-level
+# GraphSyncClient constructed in register(). Neither had a caller: the client was
+# instantiated at startup and none of its methods was reachable, while the live
+# EIE -> CEG egress is app/engines/packet_router.py. Keeping a second outbound
+# client wired but unused is worse than having none — CLAUDE.md listed it as part
+# of the active transport bundle, so a reader tracing egress landed on the module
+# that never sends anything. The construction is gone; graph_sync_client.py itself
+# stays as a declared staged artifact (tests/compliance/test_module_reachability.py).

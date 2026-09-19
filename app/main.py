@@ -15,6 +15,7 @@ Integration fix applied (PR#22 merge pass):
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Annotated
 
@@ -132,11 +133,23 @@ class EnrichmentLifecycle(LifecycleHook):
             _gate_registered = await _register_with_gate(settings)
             logger.info("gate_registration_attempted", result=_gate_registered)
 
+        # Reconcile periodically thereafter. Without this, a Gate that was down
+        # at startup (or that restarted and lost its registry) leaves this node
+        # serving traffic no route reaches until the process is restarted.
+        global _reregistration_task
+        _reregistration_task = start_reregistration_loop(settings)
+        logger.info(
+            "gate_reregistration_loop",
+            started=_reregistration_task is not None,
+            interval_seconds=settings.gate_reregistration_interval_seconds,
+        )
+
         logger.info("api_started", version="2.3.0")
 
     async def shutdown(self) -> None:
         global _kb, _idem, _gate_registered
 
+        await stop_reregistration_loop()
         if _idem:
             await _idem.close()
         from .services import pg_store as _pg
@@ -216,6 +229,60 @@ async def _register_with_gate(settings: Settings) -> bool | None:
         admin_token=settings.gate_admin_token,
         overwrite=True,
     )
+
+
+_reregistration_task: asyncio.Task[None] | None = None
+
+
+async def _reregistration_loop(settings: Settings, interval_seconds: float) -> None:
+    """Re-run registration forever, feeding each verdict into readiness.
+
+    One startup attempt is not enough to keep a node routable: a Gate that was
+    unreachable at this node's startup, or that restarted and lost its registry,
+    leaves the node serving and unroutable until an operator notices. Each cycle
+    is `overwrite=True`, so a successful re-register is idempotent.
+
+    An attempt that raises is swallowed deliberately — the loop is the recovery
+    mechanism, so it must outlive the failures it exists to recover from.
+    """
+    global _gate_registered
+
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            _gate_registered = await _register_with_gate(settings)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a failed cycle must not end the loop
+            logger.warning("gate_reregistration_failed", error=str(exc))
+
+
+def start_reregistration_loop(settings: Settings) -> asyncio.Task[None] | None:
+    """Start the re-registration loop, or return None when it does not apply.
+
+    Returns None when registration is disabled, no gate_url is configured, or
+    the interval is zero — the same three conditions under which a single
+    startup registration is also skipped.
+    """
+    interval = float(settings.gate_reregistration_interval_seconds)
+    if not settings.gate_registration_enabled or not settings.gate_url or interval <= 0:
+        return None
+    return asyncio.create_task(_reregistration_loop(settings, interval))
+
+
+async def stop_reregistration_loop() -> None:
+    """Cancel the loop and wait for it, so shutdown leaves no pending task."""
+    global _reregistration_task
+
+    task = _reregistration_task
+    if task is None:
+        return
+    _reregistration_task = None
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 RUNTIME_ALLOWED_ACTIONS: tuple[str, ...] = (
@@ -309,14 +376,34 @@ app.include_router(fields_router)
 app.include_router(score_router)
 
 
+GATE_REGISTRATION_DEGRADED: frozenset[str] = frozenset({"failed", "not_attempted"})
+
+
+def _gate_registration_state(settings: Settings) -> str:
+    """Name the registration state instead of leaving it to be inferred from None.
+
+    EIE-002: `_gate_registered is None` meant both "switched off" and "never
+    attempted", and health treated both as success. The second is a node Gate
+    holds no route to, which is exactly the condition an operator opens /health
+    to discover.
+    """
+    if not settings.gate_registration_enabled or not settings.gate_url:
+        return "disabled"
+    if _gate_registered is True:
+        return "registered"
+    if _gate_registered is False:
+        return "failed"
+    return "not_attempted"
+
+
 @app.get("/api/v1/health", response_model=HealthCheckResponse)
-async def health_check():
+async def health_check(settings: Annotated[Settings, Depends(get_settings)]):
     kb = _kb or KBResolver("/dev/null")
-    # A failed Gate registration degrades health; None (disabled/not attempted)
-    # keeps the node "ok".
-    status = "degraded" if _gate_registered is False else "ok"
+    registration = _gate_registration_state(settings)
+    status = "degraded" if registration in GATE_REGISTRATION_DEGRADED else "ok"
     return HealthCheckResponse(
         status=status,
+        gate_registration=registration,
         version="2.3.0",
         kb_loaded=kb.index.is_loaded,
         kb_polymers=len(kb.index.polymers),

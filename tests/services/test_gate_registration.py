@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 os.environ.update(
     {
@@ -28,7 +29,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.main import (
     ADVERTISED_ACTIONS,
     NODE_TIMEOUT_MS,
@@ -190,18 +191,66 @@ async def test_transport_error_is_non_fatal():
 
 
 @pytest.mark.parametrize(
-    ("registered", "expected_status"),
-    [(None, "ok"), (True, "ok"), (False, "degraded")],
+    ("registered", "expected_state", "expected_status"),
+    [
+        (None, "not_attempted", "degraded"),
+        (True, "registered", "ok"),
+        (False, "failed", "degraded"),
+    ],
 )
-def test_health_surfaces_gate_registered(monkeypatch, registered, expected_status):
-    """Liveness is not routability: an unregistered node reports degraded."""
+def test_health_surfaces_gate_registered(
+    monkeypatch, registered, expected_state, expected_status
+):
+    """Liveness is not routability: an unregistered node reports degraded.
+
+    EIE-002: `None` used to report "ok" here, so a deployment that never
+    attempted registration — the common case, because the code default was
+    False while .env.example set true — looked healthy while Gate held no
+    route to it. With registration enabled, an un-attempted registration is
+    now `not_attempted` and degrades.
+    """
     import app.main as main
 
     monkeypatch.setattr(main, "_gate_registered", registered)
-    client = TestClient(main.app)
-    body = client.get("/api/v1/health").json()
+    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "true")
+    monkeypatch.setenv("GATE_URL", GATE_URL)
+    get_settings.cache_clear()
+    try:
+        client = TestClient(main.app)
+        body = client.get("/api/v1/health").json()
+    finally:
+        get_settings.cache_clear()
     assert body["gate_registered"] is registered
+    assert body["gate_registration"] == expected_state
     assert body["status"] == expected_status
+
+
+@pytest.mark.parametrize("registered", [None, True, False])
+def test_health_reports_disabled_registration_as_ok(monkeypatch, registered):
+    """A node with registration switched off is not a node that failed to register."""
+    import app.main as main
+
+    monkeypatch.setattr(main, "_gate_registered", registered)
+    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "false")
+    get_settings.cache_clear()
+    try:
+        client = TestClient(main.app)
+        body = client.get("/api/v1/health").json()
+    finally:
+        get_settings.cache_clear()
+    assert body["gate_registration"] == "disabled"
+    assert body["status"] == "ok"
+
+
+def test_registration_default_matches_the_documented_contract():
+    """EIE-002: the code default and .env.example must not disagree.
+
+    They did — config said False, .env.example line 103 said true — so a
+    deployment that omitted the variable silently never registered.
+    """
+    env_example = Path(__file__).resolve().parents[2] / ".env.example"
+    assert "GATE_REGISTRATION_ENABLED=true" in env_example.read_text(encoding="utf-8")
+    assert Settings.model_fields["gate_registration_enabled"].default is True
 
 
 # --------------------------------------------------------------------------
@@ -281,6 +330,25 @@ async def test_reregistration_loop_survives_a_raising_attempt(monkeypatch):
 # --------------------------------------------------------------------------
 
 
+@pytest.fixture
+def fresh_runtime_config():
+    """Drop the SDK's cached runtime config so env changes are actually read.
+
+    ``get_runtime_config`` is ``@lru_cache``d, and ``app/main.py`` warms it at
+    import time (``app = create_node_app(config=_build_runtime_config())``).
+    Without this, every test below asserted against the config built at import
+    and the monkeypatched environment was never consulted — two of them failed
+    outright, and the third passed only because the cached value happened to
+    match what it expected.
+    """
+    from constellation_node_sdk.runtime.config import get_runtime_config
+
+    get_runtime_config.cache_clear()
+    yield
+    get_runtime_config.cache_clear()
+
+
+@pytest.mark.usefixtures("fresh_runtime_config")
 def test_runtime_signs_responses_when_key_material_is_present(monkeypatch):
     from app.main import _build_runtime_config
 
@@ -297,6 +365,7 @@ def test_runtime_signs_responses_when_key_material_is_present(monkeypatch):
     assert config.verifying_keys == {"gate-k1": "gate-material"}
 
 
+@pytest.mark.usefixtures("fresh_runtime_config")
 def test_runtime_is_unsigned_without_key_material(monkeypatch):
     from app.main import _build_runtime_config
 
@@ -315,6 +384,7 @@ def test_runtime_is_unsigned_without_key_material(monkeypatch):
     assert config.verifying_keys == {}
 
 
+@pytest.mark.usefixtures("fresh_runtime_config")
 def test_malformed_verifying_keys_fail_closed(monkeypatch):
     from app.main import _build_runtime_config
 

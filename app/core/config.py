@@ -67,10 +67,24 @@ class Settings(BaseSettings):
     # goes to GATE_URL, signed with the SDK's L9_SIGNING_* material, and Gate
     # resolves the destination by action.
     gate_url: str = "http://localhost:8080"
-    # Explicit Gate registration (TASK-003). Registration is opt-in and non-fatal.
-    gate_registration_enabled: bool = False
+    # Explicit Gate registration (TASK-003). Registration is non-fatal to process
+    # startup; a rejection degrades readiness, it does not stop the node serving.
+    #
+    # EIE-002: this default read False while .env.example line 103 sets
+    # GATE_REGISTRATION_ENABLED=true. A deployment that simply omitted the variable
+    # therefore never registered — no Gate route resolved to it — while /health
+    # stayed green, because an un-attempted registration is None and only an
+    # explicit False degraded. A node that is not registered is not usable, so the
+    # default now matches the documented deployment contract, and health reports
+    # the registration state by name (see app/main.py health_check).
+    gate_registration_enabled: bool = True
     gate_internal_url: str = ""  # URL the Gate dispatches to; empty → derived default
     gate_admin_token: str = ""
+    # Seconds between re-registration attempts. Registration is reconciliation,
+    # not a one-shot: a Gate that restarts, loses its registry, or was unreachable
+    # at this node's startup leaves the node running and unroutable until someone
+    # restarts the process. The loop closes that without a restart. 0 disables it.
+    gate_reregistration_interval_seconds: float = 300.0
     # CEG `sync` contract projection for post-enrichment graph sync: the CEG sync
     # endpoint suffix and its id property (Cognitive.Engine.Graphs domain spec
     # `sync.endpoints`). Defaults match the plasticos domain.

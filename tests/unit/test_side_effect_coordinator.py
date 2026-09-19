@@ -69,3 +69,49 @@ def test_semantic_key_prefers_packet_id() -> None:
     assert semantic_side_effect_key(
         tenant="t", entity_id="e", packet_id="p-1", idempotency_key="i-1"
     ).startswith("pkt:p-1")
+
+
+@pytest.mark.asyncio
+async def test_graph_sync_false_excludes_only_the_awaited_graph_hop() -> None:
+    """EIE-004: `graph_sync` means the Gate->GRAPH round trip, nothing wider.
+
+    The awaited hop to GRAPH is what a latency-bounded caller cannot absorb, so
+    that is what the flag excludes. Score invalidation is fire-and-forget to
+    SCORE and stays on: suppressing it would leave a stale score on an entity
+    that was just enriched, in exchange for no measurable time.
+    """
+    coord = SideEffectCoordinator()
+    settings = SimpleNamespace(gate_url="https://gate.example")
+    response = {"state": "completed", "fields": {"polymer_type": "HDPE"}, "confidence": 0.9}
+
+    router = MagicMock()
+    router.notify_graph_sync = AsyncMock(return_value={"status": "ok"})
+    router.notify_score_invalidate = AsyncMock()
+    emitter = MagicMock()
+    emitter.emit_enrichment_completed = AsyncMock()
+
+    with (
+        patch("app.models.schemas.EnrichResponse.model_validate", return_value=MagicMock()),
+        patch("app.services.result_store.ResultStore") as result_store_cls,
+        patch("app.engines.packet_router.get_router", return_value=router),
+        patch("app.services.event_emitter.get_emitter", return_value=emitter),
+    ):
+        result_store_cls.return_value.persist_enrich_response = AsyncMock()
+        report = await coord.commit_after_enrich(
+            tenant="t1",
+            entity_id="e1",
+            object_type="Contact",
+            domain="plasticos",
+            response_dict=response,
+            settings=settings,
+            idempotency_key="idem-bounded",
+            graph_sync=False,
+        )
+
+    assert report.graph_skipped is True
+    assert report.graph_synced is False
+    assert router.notify_graph_sync.await_count == 0, "the awaited GRAPH hop must be excluded"
+    assert report.score_invalidated is True
+    assert router.notify_score_invalidate.await_count == 1, (
+        "score invalidation is fire-and-forget to SCORE and is deliberately not gated"
+    )

@@ -3,13 +3,18 @@
 #
 # Every dependency is pinned to an exact version with sha256 hashes so the
 # image installs with `pip install --require-hashes`. constellation-node-sdk is
-# declared in pyproject.toml as a git dependency, which pip cannot hash-verify;
-# the lock therefore carries the SAME commit as GitHub's source archive URL
+# declared in pyproject.toml as a git dependency, which pip refuses outright in
+# hash-checking mode; the lock therefore carries GitHub's source archive URL
 # (github.com/<org>/<repo>/archive/<sha>.tar.gz) with the archive's sha256, so
-# the SDK is hash-verified like everything else and stays pinned to the release
-# commit named in Gate_SDK's RELEASE_IDENTITY_LEDGER.
+# the SDK is hash-verified like everything else.
 #
-# Usage: bash <this script>   (needs uv, curl, python3)
+# The manifest names the moving major tag (@v1). A tag is not a lockable
+# identity, so this script resolves it to the commit it points at RIGHT NOW via
+# `git ls-remote` and writes that 40-character sha into the lock. Re-running the
+# script is therefore the deliberate act of taking a new SDK revision, and the
+# lock is the record of which one every image actually installs.
+#
+# Usage: bash <this script>   (needs uv, git, python3)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 uv pip compile pyproject.toml --python-version 3.12 --generate-hashes -o requirements.lock.tmp
@@ -18,12 +23,33 @@ import hashlib, re, subprocess, sys, urllib.request
 from pathlib import Path
 src = Path("requirements.lock.tmp").read_text().splitlines(keepends=True)
 out, i = [], 0
-git_re = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+) @ git\+https://github\.com/(?P<org>[^/]+)/(?P<repo>[^/@.]+?)(?:\.git)?@(?P<sha>[0-9a-f]{40})")
+git_re = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+) @ git\+https://github\.com/(?P<org>[^/]+)/(?P<repo>[^/@.]+?)(?:\.git)?@(?P<ref>[^\s#]+)")
+
+
+def resolve_ref(org: str, repo: str, ref: str) -> str:
+    """Return the 40-char commit a manifest ref names, resolving tags/branches."""
+    if re.fullmatch(r"[0-9a-f]{40}", ref):
+        return ref
+    remote = f"https://github.com/{org}/{repo}.git"
+    out = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        ["git", "ls-remote", remote, ref, f"refs/tags/{ref}^{{}}"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    rows = [line.split("\t") for line in out.splitlines() if "\t" in line]
+    if not rows:
+        sys.exit(f"cannot resolve {org}/{repo}@{ref} — no such ref on the remote")
+    # An annotated tag reports both the tag object and, as `^{}`, the commit it
+    # points at. The commit is what pip must install, so prefer the peeled row.
+    peeled = [sha for sha, name in rows if name.endswith("^{}")]
+    return peeled[0] if peeled else rows[0][0]
+
+
 while i < len(src):
     line = src[i]
     m = git_re.match(line)
     if m:
-        url = f"https://github.com/{m['org']}/{m['repo']}/archive/{m['sha']}.tar.gz"
+        sha = resolve_ref(m["org"], m["repo"], m["ref"])
+        url = f"https://github.com/{m['org']}/{m['repo']}/archive/{sha}.tar.gz"
         with urllib.request.urlopen(url) as resp:  # noqa: S310 - fixed https host
             digest = hashlib.sha256(resp.read()).hexdigest()
         out.append(f"{m['name']} @ {url} \\\n    --hash=sha256:{digest}\n")

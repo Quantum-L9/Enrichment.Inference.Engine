@@ -157,3 +157,12 @@ class HealthCheckResponse(BaseModel):
     # TASK-003: None = registration disabled/not attempted, True = accepted,
     # False = rejected/errored (health reports "degraded").
     gate_registered: bool | None = None
+    # EIE-002: `gate_registered is None` cannot distinguish "registration is
+    # switched off" from "registration was never attempted", and the second is a
+    # node Gate cannot route to. This field names the state outright:
+    #   registered    — Gate accepted this node
+    #   failed        — Gate rejected it, or the attempt errored
+    #   not_attempted — enabled, but no attempt has been recorded
+    #   disabled      — switched off, or no gate_url configured
+    # `failed` and `not_attempted` both degrade `status`.
+    gate_registration: str = "disabled"

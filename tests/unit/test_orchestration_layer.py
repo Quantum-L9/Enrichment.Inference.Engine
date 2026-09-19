@@ -33,15 +33,28 @@ def test_register_wires_expected_actions():
     kb.index.total_grades = 0
     kb.index.total_rules = 0
 
-    with (
-        patch.object(orchestration_layer, "init_handlers"),
-        patch.object(orchestration_layer, "GraphSyncClient"),
-    ):
+    # EIE-006: no GraphSyncClient patch — register() no longer constructs one.
+    # It built an outbound client at startup whose methods nothing ever called.
+    with patch.object(orchestration_layer, "init_handlers"):
         orchestration_layer.register(kb=kb, idem_store=None)
 
     handlers = registered_actions()
     for action in ["enrich", "enrichbatch", "converge", "discover", "enrich-and-sync"]:
         assert action in handlers, f"Action '{action}' not registered"
+
+
+def test_register_constructs_no_second_outbound_client():
+    """EIE-006: PacketRouter is the live EIE -> CEG egress; there is not a second.
+
+    A client that is constructed but unreachable is worse than absent — CLAUDE.md
+    named it in the active transport bundle, sending readers to a module that
+    never sends anything.
+    """
+    from app.engines import orchestration_layer
+
+    assert not hasattr(orchestration_layer, "GraphSyncClient")
+    assert not hasattr(orchestration_layer, "_graph_client")
+    assert not hasattr(orchestration_layer, "run_outcome_feedback")
 
 
 @pytest.mark.asyncio

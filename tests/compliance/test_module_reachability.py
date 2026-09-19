@@ -53,6 +53,16 @@ STAGED_ARTIFACTS = {
         "engine), and it performs CREATE TABLE at startup, bypassing Alembic. "
         "See TODO.md Gap-5."
     ),
+    "app.engines.graph_sync_client": (
+        "EIE-006. Declared T4 transport-contract surface (AGENTS.md C-13, "
+        "docs/INVARIANTS.md) whose methods have no caller: the live EIE -> CEG "
+        "egress is app/engines/packet_router.py. orchestration_layer.register() "
+        "used to construct it at startup and orchestration_layer."
+        "run_outcome_feedback was its only reachable entry — itself uncalled — so "
+        "the module counted as 'imported' while nothing it offers could run. That "
+        "wiring is removed; the module is kept because C-13 names it as part of "
+        "the transport contract. Wire it or retire it under C-13, not ad hoc."
+    ),
 }
 
 # Pre-existing unreachable modules, recorded as a shrink-only baseline in the
@@ -60,8 +70,9 @@ STAGED_ARTIFACTS = {
 # they were invisible to the 0%-coverage audit that found the others, because
 # each has a dedicated test importing it directly. Coverage does not prove
 # reachability — app/services/outcome_delegator.py is 100% covered and still
-# imported by nothing under app/ (outcome feedback is produced through
-# orchestration_layer.run_outcome_feedback, a Gate-routed CEG `outcomes` call).
+# imported by nothing under app/. (This note used to say outcome feedback was
+# produced through orchestration_layer.run_outcome_feedback. It was not: that
+# function had no caller either, and it is gone — EIE-006.)
 #
 # This list may only shrink. Adding to it is a rule violation; removing from it
 # (by wiring the module up or deleting it) is the point. test_baseline_is_shrink_only
