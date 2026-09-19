@@ -55,3 +55,25 @@ def test_empty_gate_url_is_refused() -> None:
     with pytest.raises(ValueError, match="gate_url must be configured"):
         build_gate_client_config("   ", timeout_seconds=5.0)
     assert "GATE_URL" not in os.environ
+
+
+def test_an_exception_inside_the_window_still_propagates() -> None:
+    """Caught by ruff B012: a `return` in the finally block silenced whatever
+    was raised inside the window — including the SDK's own
+    ValueError("GATE_URL is required"), which the caller must see."""
+    from app.services.gate_client import _gate_url_visible_to_sdk
+
+    with pytest.raises(RuntimeError, match="boom"), _gate_url_visible_to_sdk("https://g.test"):
+        raise RuntimeError("boom")
+
+    assert "GATE_URL" not in os.environ, "the window must close even on failure"
+
+
+def test_an_exported_value_survives_an_exception(monkeypatch) -> None:
+    from app.services.gate_client import _gate_url_visible_to_sdk
+
+    monkeypatch.setenv("GATE_URL", "https://operator.test")
+    with pytest.raises(RuntimeError), _gate_url_visible_to_sdk("https://other.test"):
+        raise RuntimeError("boom")
+
+    assert os.environ["GATE_URL"] == "https://operator.test"

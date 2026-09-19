@@ -32,9 +32,10 @@ def test_same_input_always_yields_the_same_answer() -> None:
 
 def test_a_different_entity_yields_a_different_answer() -> None:
     other = build_deterministic_payload({**ENTITY, "id": "acct-43"}, SCHEMA)
-    assert other["fields"]["polymer_type"] != build_deterministic_payload(ENTITY, SCHEMA)[
-        "fields"
-    ]["polymer_type"]
+    assert (
+        other["fields"]["polymer_type"]
+        != build_deterministic_payload(ENTITY, SCHEMA)["fields"]["polymer_type"]
+    )
 
 
 def test_values_the_entity_already_carries_are_echoed_not_invented() -> None:
@@ -78,7 +79,7 @@ async def test_every_variation_agrees_so_consensus_holds() -> None:
 
 
 def test_confidence_clears_the_default_consensus_threshold() -> None:
-    assert DETERMINISTIC_CONFIDENCE >= Settings().default_consensus_threshold
+    assert Settings().default_consensus_threshold <= DETERMINISTIC_CONFIDENCE
 
 
 def test_provider_defaults_to_the_live_source() -> None:

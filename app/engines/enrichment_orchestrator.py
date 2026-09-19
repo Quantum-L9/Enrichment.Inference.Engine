@@ -26,9 +26,9 @@ from ..core.config import Settings
 from ..models.schemas import EnrichRequest, EnrichResponse
 from ..services.circuit_breaker import CircuitBreaker
 from ..services.consensus_engine import synthesize
-from ..services.idempotency import IdempotencyStore
 from ..services.deterministic_provider import PROVIDER_NAME as DETERMINISTIC_PROVIDER
 from ..services.deterministic_provider import query_deterministic
+from ..services.idempotency import IdempotencyStore
 from ..services.perplexity_client import SonarResponse, query_perplexity
 from ..services.prompt_builder import build_prompt, build_schema_hash
 from ..services.request_deadline import current_deadline, provider_attempt_timeout

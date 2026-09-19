@@ -125,8 +125,7 @@ class Settings(BaseSettings):
         allowed = {"perplexity", "deterministic"}
         if self.enrichment_provider not in allowed:
             msg = (
-                f"ENRICHMENT_PROVIDER={self.enrichment_provider!r} is not one of "
-                f"{sorted(allowed)}"
+                f"ENRICHMENT_PROVIDER={self.enrichment_provider!r} is not one of {sorted(allowed)}"
             )
             raise ValueError(msg)
         return self

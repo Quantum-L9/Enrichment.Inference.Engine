@@ -104,6 +104,27 @@ variables:
     source: env
     validation: "development | staging | production"
 
+  # ── Enrichment source selection ─────────────────────────────
+  - name: ENRICHMENT_PROVIDER
+    type: string
+    required: false
+    default: perplexity
+    description: |
+      Which source the `enrich` action asks (Settings enrichment_provider).
+      `perplexity` is the live paid provider. `deterministic` computes the
+      answer locally from the entity and the target schema
+      (app/services/deterministic_provider.py), so the full chain
+      enrich -> persist -> Gate -> CEG is reproducible in CI with no provider
+      egress and no key — EIE-009. Values it did not find on the entity are
+      prefixed `det:` so a synthesized value cannot be mistaken for a
+      researched one. Selected explicitly and never as a fallback: a missing
+      key, a provider outage and an open circuit all still fail, and an
+      unrecognised value is refused at settings validation.
+    sensitive: false
+    source: env
+    example: perplexity
+    validation: "perplexity | deterministic"
+
   # ── Perplexity Sonar ────────────────────────────────────────
   - name: PERPLEXITY_API_KEY
     type: secret
@@ -382,8 +403,16 @@ variables:
   - name: GATE_REGISTRATION_ENABLED
     type: boolean
     required: false
-    default: "false"
-    description: Register this node with Gate at startup via Gate_SDK register_node (Settings gate_registration_enabled). Required for Gate to route converge/enrich to EIE.
+    default: "true"
+    description: |
+      Register this node with Gate at startup via Gate_SDK register_node
+      (Settings gate_registration_enabled). Required for Gate to route
+      converge/enrich to EIE. EIE-002: this defaulted to false while
+      .env.example set true, so a deployment that omitted the variable never
+      registered — no Gate route resolved to it — and /health still reported
+      "ok", because only an explicit registration failure degraded. The default
+      now matches the documented deployment contract, and the health response
+      carries `gate_registration` naming the state.
     sensitive: false
     source: env
 

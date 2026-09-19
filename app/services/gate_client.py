@@ -54,17 +54,23 @@ def _gate_url_visible_to_sdk(url: str) -> Iterator[None]:
     previous = os.environ.get("GATE_URL")
     already_set = bool((previous or "").strip())
     with _ENV_WINDOW_LOCK:
-        if not already_set:
-            os.environ["GATE_URL"] = url
+        if already_set:
+            # The operator exported a value; touch nothing and restore nothing.
+            yield
+            return
+
+        os.environ["GATE_URL"] = url
         try:
             yield
         finally:
-            if already_set:
-                return
+            # No `return` in this block: it would discard an exception raised
+            # inside the window (ruff B012) — including the SDK's own
+            # ValueError, which the caller must see.
             if previous is None:
                 os.environ.pop("GATE_URL", None)
             else:
                 os.environ["GATE_URL"] = previous
+
 
 # EIE's runtime node identity. It MUST match the name EIE registers with Gate
 # (app/main.py NODE_NAME) and the destination Gate dispatches to; the SDK's
