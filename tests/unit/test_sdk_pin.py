@@ -33,6 +33,7 @@ check_lock = _MOD.check_lock
 check_tree = _MOD.check_tree
 lock_resolution = _MOD.lock_resolution
 compare_lock_to_tag = _MOD.compare_lock_to_tag
+safe_remote = _MOD.safe_remote
 MANIFESTS = _MOD.MANIFESTS
 
 CHANNEL_OBJECT = "e9f829f982110be13752da8f18c7a9692e8ed908"
@@ -169,3 +170,23 @@ def test_an_unresolvable_channel_fails_closed() -> None:
 def test_a_lock_with_no_resolution_fails_closed() -> None:
     errors = compare_lock_to_tag(None, CHANNEL_OBJECT)
     assert any("no concrete resolved object" in item for item in errors), errors
+
+
+# ── remote validation (SonarCloud pythonsecurity:S8705) ──────────────────────
+#
+# argv is a list and no shell is involved, which stops command injection but
+# not argument injection: `git ls-remote --upload-pack=<cmd> <repo>` executes
+# <cmd>, so a --remote beginning with `-` is an execution vector by itself.
+
+
+def test_a_canonical_remote_is_accepted() -> None:
+    url = "https://github.com/Quantum-L9/Gate_SDK.git"
+    assert safe_remote(url) == url
+    # Local paths are accepted so tests can resolve against a fixture repo.
+    assert safe_remote("/tmp/fixture-origin") == "/tmp/fixture-origin"
+
+
+@pytest.mark.parametrize("hostile", ["--upload-pack=touch /tmp/pwned", "-u", "--exec=sh", ""])
+def test_a_remote_git_would_read_as_an_option_is_refused(hostile: str) -> None:
+    with pytest.raises(ValueError, match="must not begin with"):
+        safe_remote(hostile)
