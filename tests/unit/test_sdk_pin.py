@@ -179,14 +179,19 @@ def test_a_lock_with_no_resolution_fails_closed() -> None:
 # <cmd>, so a --remote beginning with `-` is an execution vector by itself.
 
 
-def test_a_canonical_remote_is_accepted() -> None:
+def test_a_canonical_remote_is_accepted(tmp_path: Path) -> None:
     url = "https://github.com/Quantum-L9/Gate_SDK.git"
     assert safe_remote(url) == url
-    # Local paths are accepted so tests can resolve against a fixture repo.
-    assert safe_remote("/tmp/fixture-origin") == "/tmp/fixture-origin"
+    # An existing directory is accepted so tests can use a fixture repo.
+    assert safe_remote(str(tmp_path)) == str(tmp_path.resolve())
 
 
 @pytest.mark.parametrize("hostile", ["--upload-pack=touch /tmp/pwned", "-u", "--exec=sh", ""])
 def test_a_remote_git_would_read_as_an_option_is_refused(hostile: str) -> None:
     with pytest.raises(ValueError, match="must not begin with"):
         safe_remote(hostile)
+
+
+def test_a_non_canonical_remote_that_is_not_a_repository_is_refused() -> None:
+    with pytest.raises(ValueError, match="not canonical and not a local repository"):
+        safe_remote("https://example.invalid/evil/Gate_SDK.git")
