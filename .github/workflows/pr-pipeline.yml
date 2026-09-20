@@ -98,7 +98,7 @@ jobs:
 
       - name: Install validation tools
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: "pip==26.2.1"
           pip install pyyaml
 
       - name: Check Python syntax
@@ -164,7 +164,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: "pip==26.2.1"
           pip install -r requirements-ci.txt
 
       - name: Run Ruff linter
@@ -267,7 +267,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: "pip==26.2.1"
           pip install -r requirements-ci.txt
           if ! pip install -e ".[dev]" 2>/dev/null && ! pip install -e . 2>/dev/null; then
             echo "editable install unavailable; proceeding with requirements-ci.txt deps" >&2
@@ -330,7 +330,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: "pip==26.2.1"
           pip install -r requirements-ci.txt
 
       - name: Install gitleaks (binary — no org license required)
@@ -350,9 +350,15 @@ jobs:
             --redact \
             --exit-code 1
       - name: Run pip-audit (dependency vulnerabilities)
+        # PYSEC-2026-3740 (nltk): no fixed release exists — 3.10.3 is the latest
+        # on PyPI, and safety 3.8.1 (latest) still requires nltk>=3.9. nltk is a
+        # transitive dependency of the `safety` scanner in requirements-ci.txt
+        # only: it is absent from pyproject.toml and from requirements.lock, so
+        # it never reaches a runtime or production image. Drop this flag once
+        # nltk publishes a fixed version.
         run: |
           echo "Scanning dependencies for known vulnerabilities..."
-          pip-audit --desc
+          pip-audit --desc --ignore-vuln PYSEC-2026-3740
 
       - name: Run Safety check
         env:
@@ -408,7 +414,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: "pip==26.2.1"
           pip install -r requirements-ci.txt
 
       - name: Terminology Guard
@@ -480,7 +486,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: "pip==26.2.1"
           if [ -n "${SDK_TOKEN:-}" ]; then
             git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
@@ -533,13 +539,18 @@ jobs:
           if [ -n "${SDK_TOKEN:-}" ]; then
             git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
-          # Packet/envelope gates need the SDK transport types. This job
-          # installs a pinned wheel list rather than the repository
-          # dependency, so the SDK has to be named here — but it must name the
-          # same thing pyproject.toml and requirements-ci.txt do. It did not:
-          # this step ran ead0f48 while both manifests declared 69c6c67, so the
-          # gates validated packets against an SDK no other job used.
-          # Declare the moving major channel, same as every other surface.
+          # Packet/envelope gates need the SDK transport types. This job installs a
+          # pinned wheel list rather than the repository dependency, so the SDK has
+          # to be named here — but it must name the same thing pyproject.toml and
+          # requirements-ci.txt do. It did not: this step ran ead0f48 while both
+          # manifests declared 69c6c67, so the gates validated packets against an
+          # SDK no other job used. It is a governed Gate_SDK consumer like the
+          # manifests, and scripts/validate_sdk_pin.py now reads this file, so the
+          # declaration can no longer drift here unnoticed.
+          # NOSONAR (githubactions:S8541): --only-binary cannot apply here. This is a
+          # git source dependency; pip/uv abort with "Building source distributions is
+          # disabled" under --only-binary=:all:. Integrity comes from the channel's
+          # resolved object, and production installs the hash-verified archive instead.
           python -m pip install \
             "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@v1"  # NOSONAR
           python scripts/l9_contract_control.py select-gates --base "$BASE_REF" --head "$HEAD_REF" > gates.json

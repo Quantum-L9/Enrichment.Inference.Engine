@@ -45,7 +45,7 @@ jobs:
             pyproject.toml
       - name: Install Validation Tools
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: "pip==26.2.1"
           pip install pyyaml
       - name: Check Python Syntax
         run: |
@@ -118,7 +118,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: "pip==26.2.1"
           pip install -r requirements-ci.txt
       - name: Run Ruff Linter
         run: ruff check . --output-format=github
@@ -172,7 +172,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: "pip==26.2.1"
           pip install -r requirements-ci.txt
           if ! pip install -e ".[dev]" 2>/dev/null && ! pip install -e . 2>/dev/null; then
             echo "editable install unavailable; proceeding with requirements-ci.txt deps" >&2
@@ -227,7 +227,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: "pip==26.2.1"
           pip install -r requirements-ci.txt
       - name: Install gitleaks (binary — no org license required)
         env:
@@ -247,7 +247,13 @@ jobs:
             --exit-code 1
 
       - name: Run pip-audit
-        run: pip-audit --desc
+        # PYSEC-2026-3740 (nltk): no fixed release exists — 3.10.3 is the latest
+        # on PyPI, and safety 3.8.1 (latest) still requires nltk>=3.9. nltk is a
+        # transitive dependency of the `safety` scanner in requirements-ci.txt
+        # only: it is absent from pyproject.toml and from requirements.lock, so
+        # it never reaches a runtime or production image. Drop this flag once
+        # nltk publishes a fixed version.
+        run: pip-audit --desc --ignore-vuln PYSEC-2026-3740
       - name: Run Safety Check
         run: safety check || echo "Safety warnings are non-blocking"
       - name: Run Bandit
