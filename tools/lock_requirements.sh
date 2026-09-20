@@ -3,11 +3,17 @@
 #
 # Every dependency is pinned to an exact version with sha256 hashes so the
 # image installs with `pip install --require-hashes`. constellation-node-sdk is
-# declared in pyproject.toml as a git dependency, which pip cannot hash-verify;
-# the lock therefore carries the SAME commit as GitHub's source archive URL
-# (github.com/<org>/<repo>/archive/<sha>.tar.gz) with the archive's sha256, so
-# the SDK is hash-verified like everything else and stays pinned to the release
-# commit named in Gate_SDK's RELEASE_IDENTITY_LEDGER.
+# declared in pyproject.toml as a git dependency on the moving major channel
+# `v1`, which pip cannot hash-verify; `uv pip compile` resolves that channel to
+# a concrete commit, and the rewrite below turns it into GitHub's source archive
+# URL (github.com/<org>/<repo>/archive/<sha>.tar.gz) with the archive's sha256.
+#
+# The sha in the lock is therefore the commit the channel resolved to at
+# generation time — reproducibility evidence, not the compatibility contract.
+# The contract stays `@v1` in pyproject.toml. When Gate_SDK advances the
+# channel this lock goes stale, which is what
+# `python scripts/validate_sdk_pin.py --verify-tag` detects. Re-run this script
+# to refresh it; never hand-edit requirements.lock.
 #
 # Usage: bash <this script>   (needs uv, curl, python3)
 set -euo pipefail

@@ -56,6 +56,21 @@ jobs:
             -not -path "./build/*" \
             -not -path "./dist/*" \
             -exec python -m py_compile {} +
+
+      - name: Gate_SDK declares the v1 channel (offline)
+        # Covers pyproject.toml, requirements-ci.txt, the pr-pipeline packet
+        # gate's direct install, and requirements.lock. A surface that is
+        # absent FAILs — an un-enumerated install site is how a third Gate_SDK
+        # sha ran in CI unnoticed.
+        run: |
+          python scripts/validate_sdk_pin.py
+
+      - name: Gate_SDK lock agrees with the v1 channel (networked)
+        # The structural check cannot see a stale lock: `v1` moves inside
+        # Gate_SDK and nothing here changes. Fails closed when the canonical
+        # remote cannot be resolved.
+        run: |
+          python scripts/validate_sdk_pin.py --verify-tag
       - name: Validate YAML Files
         run: |
           python3 - <<'PY'
