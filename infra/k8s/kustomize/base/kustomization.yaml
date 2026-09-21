@@ -7,7 +7,9 @@ resources:
   - namespace.yaml
   - deployment.yaml
   - service.yaml
-  - hpa.yaml
+  # No HorizontalPodAutoscaler: GraphReturnChannel is process-local, so this
+  # Deployment runs exactly one replica (EIE-212-F001). Asserted by
+  # tests/unit/test_deployment_topology.py.
   - pdb.yaml
   - rbac.yaml
   - network-policy.yaml
@@ -32,4 +34,4 @@ configMapGenerator:
       - GATE_URL=http://constellation-gate.gate.svc.cluster.local:9000
       - GATE_REGISTRATION_ENABLED=true
       - GATE_INTERNAL_URL=http://enrichment-api.enrichment.svc.cluster.local:8000
-      - GATE_REREGISTRATION_INTERVAL_SECONDS=60
+      - L9_GATE_REREGISTRATION_INTERVAL_SECONDS=60

@@ -74,7 +74,9 @@ jobs:
           if [ "${{ inputs.environment }}" = "production" ]; then
             echo "namespace=${{ vars.PROD_NAMESPACE || format('{0}-prod', env.PROJECT) }}" >> $GITHUB_OUTPUT
             echo "release=${PREFIX}-prod" >> $GITHUB_OUTPUT
-            echo "replicas=${{ vars.PROD_REPLICAS || '3' }}" >> $GITHUB_OUTPUT
+            # EIE-212-F001: one replica while GraphReturnChannel is process-local
+            # (tests/unit/test_deployment_topology.py pins this default).
+            echo "replicas=${{ vars.PROD_REPLICAS || '1' }}" >> $GITHUB_OUTPUT
             echo "url=${{ vars.PROD_URL || format('https://{0}.example.com', env.PROJECT) }}" >> $GITHUB_OUTPUT
           else
             echo "namespace=${{ vars.STAGING_NAMESPACE || format('{0}-staging', env.PROJECT) }}" >> $GITHUB_OUTPUT

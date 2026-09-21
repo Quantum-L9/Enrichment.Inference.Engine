@@ -17,6 +17,9 @@ dependencies = [
     # Reproducibility lives in the generated requirements.lock, which records
     # the concrete object the channel resolved to plus that archive's sha256;
     # `python scripts/validate_sdk_pin.py --verify-tag` proves it is current.
+    # EIE-001 is what that split looks like when it goes unchecked: pyproject
+    # named 69c6c67 while the lock carried 2b2f53a2, and the two differ by the
+    # GateClientConfig fix that loads L9_VERIFYING_KEYS_JSON.
     "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@v1",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",

@@ -5,7 +5,7 @@ description: Active transport/runtime contract manifest for Enrichment.Inference
 contracts:
   active_transport_runtime:
   - path: app/main.py
-    contract_version: "1.0.0"
+    contract_version: "1.2.0"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
@@ -27,7 +27,7 @@ contracts:
     - REPO_MAP.md
     description: Supplemental SDK inbound handler registration
   - path: app/engines/orchestration_layer.py
-    contract_version: "1.0.0"
+    contract_version: "1.1.0"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
@@ -55,7 +55,7 @@ contracts:
     - REPO_MAP.md
     description: Gate-only egress for graph sync and score invalidation with bounded, key-gated retry
   - path: app/services/gate_client.py
-    contract_version: "1.0.1"
+    contract_version: "1.1.0"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md

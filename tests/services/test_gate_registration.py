@@ -10,8 +10,11 @@ Hermetic: all HTTP is mocked via respx. No real network is contacted.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+from pathlib import Path
+from unittest.mock import AsyncMock
 
 os.environ.update(
     {
@@ -28,12 +31,15 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from app.core.config import Settings
+from app import main as main_module
+from app.core.config import Settings, get_settings
 from app.main import (
     ADVERTISED_ACTIONS,
     NODE_TIMEOUT_MS,
     _register_with_gate,
     build_node_registration,
+    start_reregistration_loop,
+    stop_reregistration_loop,
 )
 from app.services.request_deadline import CANONICAL_CONVERGE_BUDGET_SECONDS
 
@@ -190,18 +196,197 @@ async def test_transport_error_is_non_fatal():
 
 
 @pytest.mark.parametrize(
-    ("registered", "expected_status"),
-    [(None, "ok"), (True, "ok"), (False, "degraded")],
+    ("registered", "expected_state", "expected_status"),
+    [
+        (None, "not_attempted", "degraded"),
+        (True, "registered", "ok"),
+        (False, "failed", "degraded"),
+    ],
 )
-def test_health_surfaces_gate_registered(monkeypatch, registered, expected_status):
-    """Liveness is not routability: an unregistered node reports degraded."""
-    import app.main as main
+def test_health_surfaces_gate_registered(monkeypatch, registered, expected_state, expected_status):
+    """Liveness is not routability: an unregistered node reports degraded.
 
-    monkeypatch.setattr(main, "_gate_registered", registered)
-    client = TestClient(main.app)
-    body = client.get("/api/v1/health").json()
+    EIE-002: `None` used to report "ok" here, so a deployment that never
+    attempted registration — the common case, because the code default was
+    False while .env.example set true — looked healthy while Gate held no
+    route to it. With registration enabled, an un-attempted registration is
+    now `not_attempted` and degrades.
+    """
+    monkeypatch.setattr(main_module, "_gate_registered", registered)
+    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "true")
+    monkeypatch.setenv("GATE_URL", GATE_URL)
+    get_settings.cache_clear()
+    try:
+        client = TestClient(main_module.app)
+        body = client.get("/api/v1/health").json()
+    finally:
+        get_settings.cache_clear()
     assert body["gate_registered"] is registered
+    assert body["gate_registration"] == expected_state
     assert body["status"] == expected_status
+
+
+# --------------------------------------------------------------------------
+# EIE-212-F003: readiness is a status code a probe can read, liveness stays 200
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("registered", "expected_state", "expected_http", "expected_ready"),
+    [
+        (None, "not_attempted", 503, False),
+        (False, "failed", 503, False),
+        (True, "registered", 200, True),
+    ],
+)
+def test_readiness_fails_at_http_level_while_liveness_stays_up(
+    monkeypatch, registered, expected_state, expected_http, expected_ready
+):
+    """The audit's counterexample: a readinessProbe reads the status code, not the body.
+
+    With registration enabled, `failed` and `not_attempted` must be non-2xx on
+    the readiness endpoint so Kubernetes stops routing to a pod Gate cannot
+    reach — while /api/v1/health keeps answering 200, because the process is
+    alive and a Gate outage must not become a restart loop.
+    """
+    monkeypatch.setattr(main_module, "_gate_registered", registered)
+    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "true")
+    monkeypatch.setenv("GATE_URL", GATE_URL)
+    get_settings.cache_clear()
+    try:
+        client = TestClient(main_module.app)
+        ready = client.get(main_module.READINESS_ENDPOINT)
+        live = client.get(main_module.HEALTH_ENDPOINT)
+    finally:
+        get_settings.cache_clear()
+
+    assert ready.status_code == expected_http
+    body = ready.json()
+    assert body["ready"] is expected_ready
+    assert body["status"] == ("ready" if expected_ready else "not_ready")
+    assert body["gate_registration"] == expected_state
+
+    assert live.status_code == 200
+    assert live.json()["gate_registration"] == expected_state
+
+
+@pytest.mark.parametrize("registered", [None, True, False])
+def test_readiness_is_ready_when_registration_is_disabled(monkeypatch, registered):
+    """Switched off is not failed: a node that never registers is ready to serve."""
+    monkeypatch.setattr(main_module, "_gate_registered", registered)
+    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "false")
+    get_settings.cache_clear()
+    try:
+        client = TestClient(main_module.app)
+        ready = client.get(main_module.READINESS_ENDPOINT)
+    finally:
+        get_settings.cache_clear()
+    assert ready.status_code == 200
+    assert ready.json() == {
+        "ready": True,
+        "status": "ready",
+        "gate_registration": "disabled",
+        "version": main_module.NODE_VERSION,
+    }
+
+
+def test_readiness_endpoint_is_distinct_from_the_registered_health_endpoint():
+    """Gate polls health_endpoint for liveness; the probe path must not alias it."""
+    assert main_module.READINESS_ENDPOINT == "/api/v1/ready"
+    assert main_module.READINESS_ENDPOINT != main_module.HEALTH_ENDPOINT
+    assert build_node_registration(_settings()).health_endpoint == main_module.HEALTH_ENDPOINT
+
+
+@pytest.mark.parametrize("registered", [None, True, False])
+def test_health_reports_disabled_registration_as_ok(monkeypatch, registered):
+    """A node with registration switched off is not a node that failed to register."""
+    monkeypatch.setattr(main_module, "_gate_registered", registered)
+    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "false")
+    get_settings.cache_clear()
+    try:
+        client = TestClient(main_module.app)
+        body = client.get("/api/v1/health").json()
+    finally:
+        get_settings.cache_clear()
+    assert body["gate_registration"] == "disabled"
+    assert body["status"] == "ok"
+
+
+def test_registration_default_matches_the_documented_contract():
+    """EIE-002: the code default and .env.example must not disagree.
+
+    They did — config said False, .env.example line 103 said true — so a
+    deployment that omitted the variable silently never registered.
+    """
+    env_example = Path(__file__).resolve().parents[2] / ".env.example"
+    assert "GATE_REGISTRATION_ENABLED=true" in env_example.read_text(encoding="utf-8")
+    assert Settings.model_fields["gate_registration_enabled"].default is True
+
+
+# --------------------------------------------------------------------------
+# Periodic re-registration: routing recovery without a process restart
+# --------------------------------------------------------------------------
+
+
+def test_reregistration_loop_is_off_when_registration_is_off():
+    assert start_reregistration_loop(_settings(gate_registration_enabled=False)) is None
+    assert start_reregistration_loop(_settings(gate_url="")) is None
+
+
+@pytest.mark.asyncio
+async def test_reregistration_loop_is_off_at_zero_interval():
+    assert start_reregistration_loop(_settings(l9_gate_reregistration_interval_seconds=0)) is None
+
+
+@pytest.mark.asyncio
+async def test_reregistration_loop_reregisters_and_updates_readiness(monkeypatch):
+    """Each cycle re-runs the SDK registration and the verdict feeds readiness."""
+    verdicts = iter([False, True, True, True, True])
+    fake = AsyncMock(side_effect=lambda settings: next(verdicts))
+    monkeypatch.setattr(main_module, "_register_with_gate", fake)
+    monkeypatch.setattr(main_module, "_gate_registered", None)
+
+    task = start_reregistration_loop(_settings(l9_gate_reregistration_interval_seconds=0.01))
+    assert task is not None
+    monkeypatch.setattr(main_module, "_reregistration_task", task)
+    try:
+        for _ in range(200):
+            if fake.await_count >= 2:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await stop_reregistration_loop()
+
+    assert fake.await_count >= 2
+    assert task.done()
+    assert main_module._gate_registered is True
+
+
+@pytest.mark.asyncio
+async def test_reregistration_loop_survives_a_raising_attempt(monkeypatch):
+    calls = {"n": 0}
+
+    async def flaky(settings):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("gate exploded")
+        return True
+
+    monkeypatch.setattr(main_module, "_register_with_gate", flaky)
+    monkeypatch.setattr(main_module, "_gate_registered", None)
+    task = start_reregistration_loop(_settings(l9_gate_reregistration_interval_seconds=0.01))
+    assert task is not None
+    monkeypatch.setattr(main_module, "_reregistration_task", task)
+    try:
+        for _ in range(200):
+            if calls["n"] >= 2:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await stop_reregistration_loop()
+
+    assert calls["n"] >= 2
+    assert main_module._gate_registered is True
 
 
 # --------------------------------------------------------------------------
@@ -213,11 +398,13 @@ def test_health_surfaces_gate_registered(monkeypatch, registered, expected_statu
 def fresh_runtime_config():
     """Make the environment -> config mapping observable.
 
-    The SDK's ``get_runtime_config`` is ``@lru_cache``d, so the first call in the
-    process pins the config for every later one and ``monkeypatch.setenv`` below
-    would be read against a config built before it ran. Caching is the intended
-    production behaviour -- the runtime must not re-read the environment per
-    packet -- so the cache is cleared here rather than removed there.
+    The SDK's ``get_runtime_config`` is ``@lru_cache``d, and ``app/main.py``
+    warms it at import time (``create_node_app(config=_build_runtime_config())``),
+    so the first call in the process pins the config for every later one and the
+    ``monkeypatch.setenv`` calls below would be read against a config built
+    before they ran. Caching is the intended production behaviour -- the runtime
+    must not re-read the environment per packet -- so the cache is cleared here
+    rather than removed there.
     """
     from constellation_node_sdk.runtime.config import get_runtime_config
 

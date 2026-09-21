@@ -3,7 +3,8 @@ Domain Enrichment API v2.3.0 — Constellation-wired
 ===================================================
 POST /api/v1/enrich         single entity (Salesforce + Odoo)
 POST /api/v1/enrich/batch   batch up to 50
-GET  /api/v1/health         health + KB + circuit breaker
+GET  /api/v1/health         liveness: health + KB + circuit breaker (always 200)
+GET  /api/v1/ready          readiness: 503 while Gate holds no route to this node
 POST /v1/execute            SDK TransportPacket execution surface
 (Outcome feedback flows CEG -> Gate -> EIE as a TransportPacket; the
  former POST /v1/outcomes peer ingress was retired 2026-09-02.)
@@ -15,6 +16,7 @@ Integration fix applied (PR#22 merge pass):
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Annotated
 
@@ -28,7 +30,7 @@ from constellation_node_sdk import (
     register_node,
 )
 from constellation_node_sdk.runtime.handlers import clear_handlers
-from fastapi import Depends
+from fastapi import Depends, Response
 
 from .api.v1.attestation import router as attestation_router
 from .api.v1.chassis_endpoint import router as chassis_router
@@ -48,6 +50,7 @@ from .models.schemas import (
     EnrichRequest,
     EnrichResponse,
     HealthCheckResponse,
+    ReadinessResponse,
 )
 from .score.score_api import router as score_router
 from .services.idempotency import IdempotencyStore
@@ -132,11 +135,23 @@ class EnrichmentLifecycle(LifecycleHook):
             _gate_registered = await _register_with_gate(settings)
             logger.info("gate_registration_attempted", result=_gate_registered)
 
+        # Reconcile periodically thereafter. Without this, a Gate that was down
+        # at startup (or that restarted and lost its registry) leaves this node
+        # serving traffic no route reaches until the process is restarted.
+        global _reregistration_task
+        _reregistration_task = start_reregistration_loop(settings)
+        logger.info(
+            "gate_reregistration_loop",
+            started=_reregistration_task is not None,
+            interval_seconds=settings.l9_gate_reregistration_interval_seconds,
+        )
+
         logger.info("api_started", version="2.3.0")
 
     async def shutdown(self) -> None:
         global _kb, _idem, _gate_registered
 
+        await stop_reregistration_loop()
         if _idem:
             await _idem.close()
         from .services import pg_store as _pg
@@ -159,6 +174,10 @@ NODE_VERSION = "2.3.0"
 NODE_TYPE = "enrichment"
 NODE_OWNER = "eie"
 HEALTH_ENDPOINT = "/api/v1/health"
+# EIE-212-F003: the endpoint Kubernetes readiness probes read. Kept apart from
+# HEALTH_ENDPOINT (liveness, and what Gate polls) so a Gate outage takes this
+# pod out of Service rotation without restarting it.
+READINESS_ENDPOINT = "/api/v1/ready"
 ADVERTISED_ACTIONS: tuple[str, ...] = (
     "converge",
     "graph-inference-result",
@@ -216,6 +235,67 @@ async def _register_with_gate(settings: Settings) -> bool | None:
         admin_token=settings.gate_admin_token,
         overwrite=True,
     )
+
+
+_reregistration_task: asyncio.Task[None] | None = None
+
+
+async def _reregistration_loop(settings: Settings, interval_seconds: float) -> None:
+    """Re-run registration forever, feeding each verdict into readiness.
+
+    One startup attempt is not enough to keep a node routable: a Gate that was
+    unreachable at this node's startup, or that restarted and lost its registry,
+    leaves the node serving and unroutable until an operator notices. Each cycle
+    is `overwrite=True`, so a successful re-register is idempotent.
+
+    An attempt that raises is swallowed deliberately — the loop is the recovery
+    mechanism, so it must outlive the failures it exists to recover from.
+    """
+    global _gate_registered
+
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            _gate_registered = await _register_with_gate(settings)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a failed cycle must not end the loop
+            logger.warning("gate_reregistration_failed", error=str(exc))
+
+
+def start_reregistration_loop(settings: Settings) -> asyncio.Task[None] | None:
+    """Start the re-registration loop, or return None when it does not apply.
+
+    Returns None when registration is disabled, no gate_url is configured, or
+    the interval is zero — the same three conditions under which a single
+    startup registration is also skipped.
+    """
+    # No float() coercion: Settings declares this field as `float`, so Pydantic
+    # has already validated and converted it. The redundant call also tripped
+    # semgrep.float-requires-try-except, which cannot tell a validated field
+    # from raw user input.
+    interval = settings.l9_gate_reregistration_interval_seconds
+    if not settings.gate_registration_enabled or not settings.gate_url or interval <= 0:
+        return None
+    return asyncio.create_task(_reregistration_loop(settings, interval))
+
+
+async def stop_reregistration_loop() -> None:
+    """Cancel the loop and wait for it, so shutdown leaves no pending task."""
+    global _reregistration_task
+
+    task = _reregistration_task
+    if task is None:
+        return
+    _reregistration_task = None
+    task.cancel()
+    # gather(..., return_exceptions=True) rather than catching CancelledError.
+    # The catch swallowed the task's cancellation, which is what we want — but
+    # it swallowed *our own* cancellation identically, so a shutdown path that
+    # was itself cancelled while awaiting here stopped propagating it. gather
+    # aggregates the child's CancelledError as a result and still re-raises
+    # when the awaiting task is the one being cancelled (SonarQube S7497).
+    await asyncio.gather(task, return_exceptions=True)
 
 
 RUNTIME_ALLOWED_ACTIONS: tuple[str, ...] = (
@@ -309,14 +389,34 @@ app.include_router(fields_router)
 app.include_router(score_router)
 
 
+GATE_REGISTRATION_DEGRADED: frozenset[str] = frozenset({"failed", "not_attempted"})
+
+
+def _gate_registration_state(settings: Settings) -> str:
+    """Name the registration state instead of leaving it to be inferred from None.
+
+    EIE-002: `_gate_registered is None` meant both "switched off" and "never
+    attempted", and health treated both as success. The second is a node Gate
+    holds no route to, which is exactly the condition an operator opens /health
+    to discover.
+    """
+    if not settings.gate_registration_enabled or not settings.gate_url:
+        return "disabled"
+    if _gate_registered is True:
+        return "registered"
+    if _gate_registered is False:
+        return "failed"
+    return "not_attempted"
+
+
 @app.get("/api/v1/health", response_model=HealthCheckResponse)
-async def health_check():
+async def health_check(settings: Annotated[Settings, Depends(get_settings)]):
     kb = _kb or KBResolver("/dev/null")
-    # A failed Gate registration degrades health; None (disabled/not attempted)
-    # keeps the node "ok".
-    status = "degraded" if _gate_registered is False else "ok"
+    registration = _gate_registration_state(settings)
+    status = "degraded" if registration in GATE_REGISTRATION_DEGRADED else "ok"
     return HealthCheckResponse(
         status=status,
+        gate_registration=registration,
         version="2.3.0",
         kb_loaded=kb.index.is_loaded,
         kb_polymers=len(kb.index.polymers),
@@ -324,6 +424,37 @@ async def health_check():
         kb_rules=kb.index.total_rules,
         circuit_breaker_state=breaker.state,
         gate_registered=_gate_registered,
+    )
+
+
+@app.get(
+    READINESS_ENDPOINT,
+    response_model=ReadinessResponse,
+    responses={
+        503: {"model": ReadinessResponse, "description": "Gate holds no route to this node"}
+    },
+)
+async def readiness_check(
+    settings: Annotated[Settings, Depends(get_settings)],
+    response: Response,
+):
+    """Readiness is routability, expressed as a status code a probe can read.
+
+    EIE-212-F003: health_check above reports `degraded` in JSON and still
+    returns 200, so a readinessProbe pointed at it marked an unroutable pod
+    Ready. This endpoint answers 503 for exactly the two states health calls
+    degraded — registration enabled but `failed` or `not_attempted` — and 200
+    for `registered` and `disabled`. The process stays alive either way; only
+    the Service stops sending it traffic Gate could not route anyway.
+    """
+    registration = _gate_registration_state(settings)
+    ready = registration not in GATE_REGISTRATION_DEGRADED
+    response.status_code = 200 if ready else 503
+    return ReadinessResponse(
+        ready=ready,
+        status="ready" if ready else "not_ready",
+        gate_registration=registration,
+        version=NODE_VERSION,
     )
 
 

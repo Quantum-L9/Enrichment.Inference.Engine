@@ -26,6 +26,8 @@ from ..core.config import Settings
 from ..models.schemas import EnrichRequest, EnrichResponse
 from ..services.circuit_breaker import CircuitBreaker
 from ..services.consensus_engine import synthesize
+from ..services.deterministic_provider import PROVIDER_NAME as DETERMINISTIC_PROVIDER
+from ..services.deterministic_provider import query_deterministic
 from ..services.idempotency import IdempotencyStore
 from ..services.perplexity_client import SonarResponse, query_perplexity
 from ..services.prompt_builder import build_prompt, build_schema_hash
@@ -176,14 +178,30 @@ async def enrich_entity(
 
         sem = asyncio.Semaphore(settings.max_concurrent_variations)
 
-        async def _call() -> SonarResponse:
-            async with sem:
-                return await query_perplexity(
-                    payload=payload,
-                    api_key=settings.perplexity_api_key,
-                    breaker=breaker,
-                    timeout=effective_timeout,
+        # EIE-009: the source is a configuration choice, never a fallback. The
+        # deterministic source computes the answer from the entity and the target
+        # schema, so `enrich` reaches state="completed" — and therefore
+        # _persist_and_sync, and therefore the Gate -> CEG leg — with no provider
+        # egress. A missing key or an open circuit still fails; nothing selects
+        # this implicitly.
+        if settings.l9_enrichment_provider == DETERMINISTIC_PROVIDER:
+
+            async def _call() -> SonarResponse:
+                return await query_deterministic(
+                    entity=request.entity,
+                    target_schema=target_schema,
                 )
+
+        else:
+
+            async def _call() -> SonarResponse:
+                async with sem:
+                    return await query_perplexity(
+                        payload=payload,
+                        api_key=settings.perplexity_api_key,
+                        breaker=breaker,
+                        timeout=effective_timeout,
+                    )
 
         tasks = [_call() for _ in range(variation_count)]
         results = await asyncio.gather(*tasks, return_exceptions=True)

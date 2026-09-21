@@ -283,7 +283,49 @@ components:
           type: string
           enum: [closed, open, half-open]
           description: Circuit breaker state for external API calls.
-      x-source-file: app/models/schemas.py:128
+        gate_registered:
+          type: boolean
+          nullable: true
+          description: |
+            TASK-003. null = registration disabled or never attempted,
+            true = Gate accepted this node, false = Gate rejected it or the
+            attempt errored. Kept for clients that already read it; prefer
+            gate_registration, which distinguishes the two null cases.
+        gate_registration:
+          type: string
+          enum: [registered, failed, not_attempted, disabled]
+          example: registered
+          description: |
+            EIE-002. Names the registration state outright, because
+            `gate_registered is null` cannot tell "switched off" from "enabled
+            but never attempted" — and the second is a node Gate cannot route
+            to. `failed` and `not_attempted` both degrade `status`.
+      x-source-file: app/models/schemas.py:149
+      additionalProperties: false
+
+    ReadinessResponse:
+      title: ReadinessResponse
+      type: object
+      description: |
+        EIE-212-F003. The routability signal a Kubernetes readinessProbe reads.
+        HealthCheckResponse names a degraded registration in its body but always
+        rides HTTP 200; a probe reads the status code, so an unroutable pod was
+        marked Ready. This body rides HTTP 503 when registration is enabled but
+        `failed` or `not_attempted`, and HTTP 200 when `registered` or `disabled`.
+      required: [ready, status, gate_registration]
+      properties:
+        ready:
+          type: boolean
+        status:
+          type: string
+          enum: [ready, not_ready]
+        gate_registration:
+          type: string
+          enum: [registered, failed, not_attempted, disabled]
+        version:
+          type: string
+          example: "2.3.0"
+      x-source-file: app/models/schemas.py:172
       additionalProperties: false
 
     PacketEnvelope:
@@ -514,15 +556,19 @@ paths:
   /api/v1/health:
     get:
       operationId: getHealth
-      summary: Health check — KB + circuit breaker status
+      summary: Liveness — KB + circuit breaker + Gate registration state
       description: |
-        Returns service health, API version, KB load status, and circuit breaker state.
+        Returns service health, API version, KB load status, circuit breaker state
+        and the Gate registration state. Always HTTP 200 while the process serves:
+        this is the liveness and startup probe target. A degraded registration is
+        reported in `status` / `gate_registration` but does not change the status
+        code — use /api/v1/ready for that (EIE-212-F003).
         Does NOT require authentication.
       tags: [health]
       security: []
       responses:
         "200":
-          description: Service is healthy
+          description: Process is alive (registration state in the body)
           content:
             application/json:
               schema:
@@ -535,7 +581,47 @@ paths:
                 kb_grades: 47
                 kb_rules: 23
                 circuit_breaker_state: closed
+                gate_registered: true
+                gate_registration: registered
       x-source-file: app/main.py:81
+
+  /api/v1/ready:
+    get:
+      operationId: getReadiness
+      summary: Readiness — 503 while Gate holds no route to this node
+      description: |
+        EIE-212-F003. Kubernetes readiness probe target. Answers HTTP 503 when Gate
+        registration is enabled but `failed` or `not_attempted` (the two states
+        /api/v1/health reports as degraded), and HTTP 200 when `registered` or
+        `disabled`. Liveness is unaffected: a Gate outage takes the pod out of
+        Service rotation without restarting it.
+        Does NOT require authentication.
+      tags: [health]
+      security: []
+      responses:
+        "200":
+          description: Node is routable (or registration is switched off)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+              example:
+                ready: true
+                status: ready
+                gate_registration: registered
+                version: "2.3.0"
+        "503":
+          description: Registration enabled but Gate holds no route to this node
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+              example:
+                ready: false
+                status: not_ready
+                gate_registration: not_attempted
+                version: "2.3.0"
+      x-source-file: app/main.py:424
 
   /api/v1/enrich:
     post:

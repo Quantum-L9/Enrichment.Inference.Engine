@@ -20,7 +20,10 @@ second retry plane, no peer URL.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import threading
+from collections.abc import Iterator
 
 from constellation_node_sdk.gate import (
     GateClient,
@@ -29,6 +32,55 @@ from constellation_node_sdk.gate import (
 )
 
 from app.utils.safe_convert import safe_float
+
+# Serialises the scoped GATE_URL window below. os.environ is process-global, so
+# two threads building clients for different Gates could otherwise observe each
+# other's value inside the window.
+_ENV_WINDOW_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _gate_url_visible_to_sdk(url: str) -> Iterator[None]:
+    """Make GATE_URL readable by the SDK factory for this call, and no longer.
+
+    ``get_gate_client_config_from_env`` raises ``ValueError("GATE_URL is
+    required")`` before reading anything else, so the variable has to be present
+    for the duration of that call. It must not be present afterwards:
+    EIE-005 — this module used to write ``os.environ["GATE_URL"]`` and leave it
+    there, so the first client ever constructed pinned GATE_URL for the whole
+    process. A later caller asking for a different Gate silently got the first
+    one, and nothing reading configuration could see why.
+
+    Restores the previous state exactly, including absence.
+
+    Both the read and the decision happen inside the lock. Reading first was a
+    race (PR #212 review): thread A installs its URL, thread B then reads
+    ``previous`` as A's value and concludes ``already_set``, blocks on the lock,
+    and by the time it enters A has restored absence — so B yields into a window
+    with no GATE_URL at all and the SDK factory raises "GATE_URL is required".
+    The lock only serializes what it encloses, so the state decision has to be
+    inside it, not merely the mutation.
+    """
+    with _ENV_WINDOW_LOCK:
+        previous = os.environ.get("GATE_URL")
+        already_set = bool((previous or "").strip())
+        if already_set:
+            # The operator exported a value; touch nothing and restore nothing.
+            yield
+            return
+
+        os.environ["GATE_URL"] = url
+        try:
+            yield
+        finally:
+            # No `return` in this block: it would discard an exception raised
+            # inside the window (ruff B012) — including the SDK's own
+            # ValueError, which the caller must see.
+            if previous is None:
+                os.environ.pop("GATE_URL", None)
+            else:
+                os.environ["GATE_URL"] = previous
+
 
 # EIE's runtime node identity. It MUST match the name EIE registers with Gate
 # (app/main.py NODE_NAME) and the destination Gate dispatches to; the SDK's
@@ -54,13 +106,14 @@ def build_gate_client_config(
         raise ValueError("gate_url must be configured for Gate-only egress")
 
     # Settings may load GATE_URL / L9_SIGNING_* from .env into process config
-    # without exporting them to os.environ. Mirror GATE_URL into the environment
-    # so get_gate_client_config_from_env() sees the same plane as Settings and
-    # still picks up sibling L9_SIGNING_* keys that *are* already exported.
-    if not os.getenv("GATE_URL", "").strip():
-        os.environ["GATE_URL"] = normalized_url
+    # without exporting them to os.environ. Show GATE_URL to the SDK factory for
+    # the length of that call only, so it sees the same plane as Settings and
+    # still picks up sibling L9_SIGNING_* keys that *are* already exported —
+    # without leaving a process-wide pin behind (EIE-005).
+    with _gate_url_visible_to_sdk(normalized_url):
+        base = get_gate_client_config_from_env()
 
-    base = get_gate_client_config_from_env()
+    # The caller's URL is authoritative regardless of what the environment held.
     return GateClientConfig(
         **{
             **base.model_dump(),

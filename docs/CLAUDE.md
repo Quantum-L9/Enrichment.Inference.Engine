@@ -35,12 +35,25 @@ Do NOT use vague language. Be specific.
 - `/v1/execute` is owned by the SDK runtime, not local `chassis/router.py`
 - `chassis/envelope.py`, `chassis/router.py`, and `chassis/registry.py` are deprecated compatibility artifacts
 - The active transport/runtime bundle is:
-  - `app/main.py`
-  - `app/api/v1/chassis_endpoint.py`
+  - `app/main.py` — node app, registration, health
   - `app/services/chassis_handlers.py`
-  - `app/engines/orchestration_layer.py`
+  - `app/engines/orchestration_layer.py` — action registration
   - `app/engines/handlers.py`
-  - `app/engines/graph_sync_client.py`
+  - `app/engines/packet_router.py` — **the** EIE → Gate → CEG egress
+  - `app/services/gate_client.py` — the single Gate client factory
+
+Two modules that this list used to name are governed by C-13 but carry no live
+traffic. Naming them as "active transport" sent readers tracing egress to files
+that send nothing (EIE-006, EIE-007):
+
+| Module | Reality |
+|---|---|
+| `app/api/v1/chassis_endpoint.py` | Mounts **zero** routes. `/v1/execute` belongs to the SDK runtime. The router is retained as a stable home for future transport-adjacent, non-peer routes. |
+| `app/engines/graph_sync_client.py` | No reachable method. Declared in `tests/compliance/test_module_reachability.py` `STAGED_ARTIFACTS`. `packet_router.py` is the live egress. |
+
+Both remain listed in AGENTS.md C-13 (transport-contract lockstep) and
+`docs/INVARIANTS.md`: they are part of the contract surface, not of the running
+path. Wire or retire them under C-13, not ad hoc.
 
 Do not describe deprecated local chassis dispatch as if it were the live production path.
 

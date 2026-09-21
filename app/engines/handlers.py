@@ -95,8 +95,11 @@ async def _persist_and_sync(
     same logical operation retryable.
 
     `graph_sync=False` keeps the Gate->GRAPH round trip off a latency-bounded
-    caller's path. Persistence still happens synchronously; only the Graph leg
-    is excluded.
+    caller's path. Persistence still happens synchronously; only the awaited
+    Graph leg is excluded. Score invalidation is NOT excluded — it is
+    fire-and-forget to SCORE and costs the caller nothing, so a bounded path
+    still leaves no stale score behind (EIE-004; see
+    app/services/side_effect_coordinator.py for the full reasoning).
     """
     settings = get_settings()
     entity_id = payload.get("entity_id", payload.get("entity", {}).get("id", "unknown"))

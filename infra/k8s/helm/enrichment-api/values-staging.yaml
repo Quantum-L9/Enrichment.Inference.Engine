@@ -1,4 +1,5 @@
-replicaCount: 2
+# EIE-212-F001: one replica in every environment (see values.yaml).
+replicaCount: 1
 
 image:
   tag: "rc-latest"

@@ -6,14 +6,12 @@ namespace: enrichment
 resources:
   - ../../base
 
+# Replica count is fixed at 1 in ../../base (EIE-212-F001); no overlay may raise it.
 patches:
   - target:
       kind: Deployment
       name: enrichment-api
     patch: |
-      - op: replace
-        path: /spec/replicas
-        value: 3
       - op: add
         path: /spec/template/spec/affinity
         value:
@@ -27,13 +25,6 @@ patches:
                         operator: In
                         values: ["enrichment-api"]
                   topologyKey: kubernetes.io/hostname
-  - target:
-      kind: PodDisruptionBudget
-      name: enrichment-api
-    patch: |
-      - op: replace
-        path: /spec/minAvailable
-        value: 2
 
 configMapGenerator:
   - name: enrichment-config

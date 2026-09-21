@@ -92,10 +92,25 @@ class SideEffectCoordinator:
     ) -> SideEffectReport:
         """Commit post-enrich side effects once per semantic key.
 
-        `graph_sync=False` excludes the Gate->GRAPH round trip. A caller that is
-        itself answering a latency-bounded request uses it: `notify_graph_sync`
-        awaits up to three Gate attempts at 30 s each with backoff between, which
-        no synchronous caller budget can absorb.
+        `graph_sync=False` excludes the Gate->GRAPH round trip, and ONLY that.
+        A caller that is itself answering a latency-bounded request uses it:
+        `notify_graph_sync` awaits up to three Gate attempts at 30 s each with
+        backoff between, which no synchronous caller budget can absorb.
+
+        EIE-004 read the score-invalidation call below as escaping this guard.
+        It does not need the guard, and the distinction is the reason the flag
+        is named `graph_sync` rather than `side_effects`:
+
+        * `notify_graph_sync` is **awaited**, and goes to GRAPH (CEG's `sync`).
+          Its latency lands on the caller. That is what the flag excludes.
+        * `notify_score_invalidate` is **fire-and-forget** (`route_fire_and_forget`
+          schedules a task and returns), and goes to SCORE, a different node. It
+          adds no measurable time to a bounded path, and suppressing it would
+          leave a stale score behind for an entity that was just enriched —
+          a correctness loss bought for no latency.
+
+        So a bounded caller still invalidates scores. Anything that becomes an
+        awaited Gate hop must move inside the guard, or take a flag of its own.
 
         `require_persistence=True` makes durability a precondition of the answer
         rather than a side effect of it: the persist failure is re-raised, and
@@ -169,7 +184,10 @@ class SideEffectCoordinator:
                 report.errors.append(f"graph_sync:{exc}")
                 logger.warning("side_effect_graph_sync_failed", entity_id=entity_id, error=str(exc))
 
-        # 3) Score invalidation once
+        # 3) Score invalidation once — deliberately OUTSIDE the graph_sync guard.
+        # Fire-and-forget to SCORE, not an awaited hop to GRAPH: it costs a
+        # bounded caller nothing, and skipping it would leave a stale score on an
+        # entity that was just enriched. See the docstring (EIE-004).
         try:
             from app.engines.packet_router import get_router
 

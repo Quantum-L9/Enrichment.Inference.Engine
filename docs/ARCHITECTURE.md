@@ -100,7 +100,7 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
 | SDK transport dispatch | `app/main.py`, SDK runtime, registered handlers                 | Runtime bootstrap + handler registration |
 | Handler signature      | `app/engines/handlers.py`, `app/engines/orchestration_layer.py` | C-02 contract                            |
 | Tenant isolation       | All Neo4j queries                                               | `WHERE n.tenant_id = $tenant`            |
-| Graph/Gate transport   | `app/engines/graph_sync_client.py`, `app/engines/packet_router.py`, `app/services/gate_client.py` | Gate SDK (single signed client factory) |
+| Graph/Gate transport   | `app/engines/packet_router.py` (**the** live egress), `app/services/gate_client.py` | Gate SDK (single signed client factory) |
 | Coverage minimum       | CI pipeline                                                     | 71% coverage gate                        |
 
 ---
@@ -125,9 +125,17 @@ These files define the live production transport/runtime contract and must remai
 * `app/services/chassis_handlers.py`
 * `app/engines/orchestration_layer.py`
 * `app/engines/handlers.py`
-* `app/engines/graph_sync_client.py`
+* `app/engines/graph_sync_client.py` — contract surface, **not** a live path
 * `app/engines/packet_router.py`
 * `app/services/gate_client.py`
+
+> EIE-006 / EIE-007: this list is the C-13 transport-contract lockstep set, not
+> the set of modules that carry traffic. Two of its entries carry none:
+> `app/api/v1/chassis_endpoint.py` mounts zero routes (`/v1/execute` belongs to
+> the SDK runtime), and `app/engines/graph_sync_client.py` has no reachable
+> method — it is declared in `tests/compliance/test_module_reachability.py`
+> `STAGED_ARTIFACTS`. `packet_router.py` is the EIE → Gate → CEG egress. Wire or
+> retire either one under C-13, not ad hoc.
 
 ---
 

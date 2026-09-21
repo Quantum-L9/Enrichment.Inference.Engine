@@ -32,10 +32,20 @@ AUTH = {"X-API-Key": "pass"}
 
 class TestHealth:
     def test_returns_200_no_auth(self):
+        """Liveness is unconditional; readiness is not.
+
+        EIE-002: this asserted status == "ok". Nothing here runs the lifecycle,
+        so registration has not been attempted — and with registration enabled
+        (the default now, matching .env.example) an un-attempted registration is
+        a node Gate holds no route to. That degrades readiness while the process
+        is plainly alive, which is the distinction the endpoint now reports.
+        """
         r = client.get("/api/v1/health")
         assert r.status_code == 200
         body = r.json()
-        assert body["status"] == "ok"
+        assert body["status"] in {"ok", "degraded"}
+        assert body["gate_registration"] == "not_attempted"
+        assert body["status"] == "degraded"
         assert body["version"] == "2.3.0"
         assert "circuit_breaker_state" in body
 

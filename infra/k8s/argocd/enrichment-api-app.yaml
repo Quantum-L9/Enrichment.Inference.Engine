@@ -29,8 +29,6 @@ spec:
         duration: 5s
         factor: 2
         maxDuration: 3m
-  ignoreDifferences:
-    - group: autoscaling
-      kind: HorizontalPodAutoscaler
-      jsonPointers:
-        - /status
+  # No HorizontalPodAutoscaler is rendered while GraphReturnChannel is
+  # process-local (EIE-212-F001), so there is no HPA status to ignore.
+  ignoreDifferences: []

@@ -15,10 +15,10 @@ ingress:
   tls: []
 
 autoscaling:
-  enabled: true
-  # Keep HPA floor aligned with replicaCount: 1
+  # EIE-212-F001: no HPA anywhere while GraphReturnChannel is process-local.
+  enabled: false
   minReplicas: 1
-  maxReplicas: 2
+  maxReplicas: 1
 
 pdb:
   enabled: true

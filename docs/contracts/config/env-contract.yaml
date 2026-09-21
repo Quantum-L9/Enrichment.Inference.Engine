@@ -104,6 +104,29 @@ variables:
     source: env
     validation: "development | staging | production"
 
+  # ── Enrichment source selection ─────────────────────────────
+  - name: L9_ENRICHMENT_PROVIDER
+    type: string
+    required: false
+    default: perplexity
+    description: |
+      Which source the `enrich` action asks (Settings l9_enrichment_provider;
+      C-09 name, EIE-212-F004). `perplexity` is the live paid provider.
+      `deterministic` computes the answer locally from the entity and the
+      target schema (app/services/deterministic_provider.py), so the full chain
+      enrich -> persist -> Gate -> CEG is reproducible in CI with no provider
+      egress and no key — EIE-009. Strings and lists it did not find on the
+      entity are prefixed `det:`; ints, floats and booleans cannot carry a
+      marker, so the payload lists them in `synthetic_fields` and settings
+      validation refuses `deterministic` unless L9_ENVIRONMENT is one of
+      local | dev | test (EIE-212-F002). Selected explicitly and never as a
+      fallback: a missing key, a provider outage and an open circuit all still
+      fail, and an unrecognised value is refused at settings validation.
+    sensitive: false
+    source: env
+    example: perplexity
+    validation: "perplexity | deterministic (deterministic only when L9_ENVIRONMENT in local|dev|test)"
+
   # ── Perplexity Sonar ────────────────────────────────────────
   - name: PERPLEXITY_API_KEY
     type: secret
@@ -382,8 +405,35 @@ variables:
   - name: GATE_REGISTRATION_ENABLED
     type: boolean
     required: false
-    default: "false"
-    description: Register this node with Gate at startup via Gate_SDK register_node (Settings gate_registration_enabled). Required for Gate to route converge/enrich to EIE.
+    default: "true"
+    description: |
+      Register this node with Gate at startup via Gate_SDK register_node
+      (Settings gate_registration_enabled). Required for Gate to route
+      converge/enrich to EIE. EIE-002: this defaulted to false while
+      .env.example set true, so a deployment that omitted the variable never
+      registered — no Gate route resolved to it — and /health still reported
+      "ok", because only an explicit registration failure degraded. The default
+      now matches the documented deployment contract, and the health response
+      carries `gate_registration` naming the state.
+    sensitive: false
+    source: env
+
+  - name: L9_GATE_REREGISTRATION_INTERVAL_SECONDS
+    type: number
+    required: false
+    default: "300.0"
+    description: |
+      Seconds between periodic re-registration attempts (Settings
+      l9_gate_reregistration_interval_seconds; C-09 name, EIE-212-F004 — the
+      GATE_* siblings predate C-09 and keep their names). One startup attempt is not enough
+      to keep a node routable: a Gate unreachable when this node started, or
+      one that restarted and lost its registry, would otherwise leave EIE
+      serving and unroutable until an operator noticed. Each cycle registers
+      with overwrite=true, so a successful re-register is idempotent and a
+      failed one only logs. Set to 0 to disable the loop entirely — the same
+      three conditions that skip the single startup registration
+      (GATE_REGISTRATION_ENABLED false, empty GATE_URL, zero interval) also
+      skip the loop.
     sensitive: false
     source: env
 
@@ -424,7 +474,11 @@ variables:
     type: string
     required: false
     default: local
-    description: SDK runtime environment (local|dev|test|staging|prod). staging/prod require L9_REQUIRE_SIGNATURE=true.
+    description: |
+      SDK runtime environment (local|dev|test|staging|prod). staging/prod require
+      L9_REQUIRE_SIGNATURE=true. Also read by Settings (l9_environment) so that
+      L9_ENRICHMENT_PROVIDER=deterministic is refused outside local|dev|test
+      (EIE-212-F002).
     sensitive: false
     source: env
 

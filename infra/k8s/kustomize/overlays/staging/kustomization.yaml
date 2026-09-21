@@ -6,15 +6,7 @@ namespace: enrichment-staging
 resources:
   - ../../base
 
-patches:
-  - target:
-      kind: Deployment
-      name: enrichment-api
-    patch: |
-      - op: replace
-        path: /spec/replicas
-        value: 2
-
+# Replica count is fixed at 1 in ../../base (EIE-212-F001); no overlay may raise it.
 configMapGenerator:
   - name: enrichment-config
     behavior: merge
