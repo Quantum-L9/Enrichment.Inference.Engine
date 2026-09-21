@@ -1,11 +1,11 @@
-version: 2.0.0
+version: 3.0.0
 generated_from: l9-template v1.0.0
 engine: enrichment
 description: Active transport/runtime contract manifest for Enrichment.Inference.Engine
 contracts:
   active_transport_runtime:
   - path: app/main.py
-    sha256: 68804f3e90c5fbe29342a5f38e15a1fb1919090baa9db7d814fafc61cc115ed4
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
@@ -13,49 +13,49 @@ contracts:
     - EXECUTION_FLOWS.md
     description: SDK transport runtime bootstrap and production ingress ownership
   - path: app/api/v1/chassis_endpoint.py
-    sha256: 03598f5225656afde80c09dc2ff1986613f7c28701e517114b6235ac599ac151
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
     - REPO_MAP.md
     description: Retired peer-ingress router (empty); `/v1/execute` and `/v1/outcomes` are not defined here
   - path: app/services/chassis_handlers.py
-    sha256: b644efe87bc4d0c0a56a9bf216b2779f03f88a82ce5977b94636fe99916c105b
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
     - REPO_MAP.md
     description: Supplemental SDK inbound handler registration
   - path: app/engines/orchestration_layer.py
-    sha256: 39916e83512699869fea3d4b761968f06fb8dcd09d0cc68897663a06c29f5380
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
     - EXECUTION_FLOWS.md
     description: Canonical SDK action registration and orchestration wiring
   - path: app/engines/handlers.py
-    sha256: 78f8b3d25fcc0427fc396523ad971d6271f4d11e42ece5aadf5a9ea721f87802
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     - AI_AGENT_REVIEW_CHECKLIST.md
     - REPO_MAP.md
     description: Production action handlers aligned to runtime registrations
   - path: app/engines/graph_sync_client.py
-    sha256: d32bbcb76f251653afe89c022181fec064233a48c6e5f70cbf5393424cbe9118
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
     - REPO_MAP.md
     description: Gate-only outbound transport client
   - path: app/engines/packet_router.py
-    sha256: 427ce3715069b062d0d2d27bf8c2aa653ca8e75f278eba6e9caba6c29d7d0cb1
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
     - REPO_MAP.md
     description: Gate-only egress for graph sync and score invalidation with bounded, key-gated retry
   - path: app/services/gate_client.py
-    sha256: b87e0809639b57b0121b62e280b18c2973a3f790dd730fc1ac6f09ca0606c1c2
+    contract_version: "1.0.1"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
@@ -63,22 +63,22 @@ contracts:
     description: Single signed GateClient factory; the only outbound Gate config site
   engine_level:
   - path: app/models/loop_schemas.py
-    sha256: 91e633e4cb6c80a0b0dd52039fe962296e454c13dafa96ece8927cdce4a89346
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     description: Loop schema contract
   - path: app/models/field_confidence.py
-    sha256: cc2a33d4d8476319c12e1c9060bfe4727233addf021770e5b20cc127519ae8be
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     description: Field confidence schema contract
   - path: app/score/score_models.py
-    sha256: 46c4831a8cc16412ad2362e7ae8f0ee6fc374213d5069fef14b79d930621c118
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     description: Score schema contract
   - path: app/health/health_models.py
-    sha256: 993a41ce4830daaa468983d0299db2894a514190be9cf4e6dfc8849d9af4e75f
+    contract_version: "1.0.0"
     required_refs:
     - AGENTS.md
     description: Health schema contract

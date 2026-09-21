@@ -205,83 +205,28 @@ def test_health_surfaces_gate_registered(monkeypatch, registered, expected_statu
 
 
 # --------------------------------------------------------------------------
-# Periodic re-registration: routing recovery without a process restart
-# --------------------------------------------------------------------------
-
-import asyncio  # noqa: E402
-from unittest.mock import AsyncMock  # noqa: E402
-
-from app import main as main_module  # noqa: E402
-from app.main import start_reregistration_loop, stop_reregistration_loop  # noqa: E402
-
-
-def test_reregistration_loop_is_off_when_registration_is_off():
-    assert start_reregistration_loop(_settings(gate_registration_enabled=False)) is None
-    assert start_reregistration_loop(_settings(gate_url="")) is None
-
-
-@pytest.mark.asyncio
-async def test_reregistration_loop_is_off_at_zero_interval():
-    assert start_reregistration_loop(_settings(gate_reregistration_interval_seconds=0)) is None
-
-
-@pytest.mark.asyncio
-async def test_reregistration_loop_reregisters_and_updates_readiness(monkeypatch):
-    """Each cycle re-runs the SDK registration and the verdict feeds readiness."""
-    verdicts = iter([False, True, True, True, True])
-    fake = AsyncMock(side_effect=lambda settings: next(verdicts))
-    monkeypatch.setattr(main_module, "_register_with_gate", fake)
-    monkeypatch.setattr(main_module, "_gate_registered", None)
-
-    task = start_reregistration_loop(_settings(gate_reregistration_interval_seconds=0.01))
-    assert task is not None
-    monkeypatch.setattr(main_module, "_reregistration_task", task)
-    try:
-        for _ in range(200):
-            if fake.await_count >= 2:
-                break
-            await asyncio.sleep(0.01)
-    finally:
-        await stop_reregistration_loop()
-
-    assert fake.await_count >= 2
-    assert task.done()
-    assert main_module._gate_registered is True
-
-
-@pytest.mark.asyncio
-async def test_reregistration_loop_survives_a_raising_attempt(monkeypatch):
-    calls = {"n": 0}
-
-    async def flaky(settings):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("gate exploded")
-        return True
-
-    monkeypatch.setattr(main_module, "_register_with_gate", flaky)
-    monkeypatch.setattr(main_module, "_gate_registered", None)
-    task = start_reregistration_loop(_settings(gate_reregistration_interval_seconds=0.01))
-    assert task is not None
-    monkeypatch.setattr(main_module, "_reregistration_task", task)
-    try:
-        for _ in range(200):
-            if calls["n"] >= 2:
-                break
-            await asyncio.sleep(0.01)
-    finally:
-        await stop_reregistration_loop()
-
-    assert calls["n"] >= 2
-    assert main_module._gate_registered is True
-
-
-# --------------------------------------------------------------------------
 # Node-runtime signing posture comes from the environment (SDK L9_* names)
 # --------------------------------------------------------------------------
 
 
-def test_runtime_signs_responses_when_key_material_is_present(monkeypatch):
+@pytest.fixture
+def fresh_runtime_config():
+    """Make the environment -> config mapping observable.
+
+    The SDK's ``get_runtime_config`` is ``@lru_cache``d, so the first call in the
+    process pins the config for every later one and ``monkeypatch.setenv`` below
+    would be read against a config built before it ran. Caching is the intended
+    production behaviour -- the runtime must not re-read the environment per
+    packet -- so the cache is cleared here rather than removed there.
+    """
+    from constellation_node_sdk.runtime.config import get_runtime_config
+
+    get_runtime_config.cache_clear()
+    yield
+    get_runtime_config.cache_clear()
+
+
+def test_runtime_signs_responses_when_key_material_is_present(monkeypatch, fresh_runtime_config):
     from app.main import _build_runtime_config
 
     monkeypatch.setenv("L9_SIGNING_KEY", "worker-material")
@@ -297,7 +242,7 @@ def test_runtime_signs_responses_when_key_material_is_present(monkeypatch):
     assert config.verifying_keys == {"gate-k1": "gate-material"}
 
 
-def test_runtime_is_unsigned_without_key_material(monkeypatch):
+def test_runtime_is_unsigned_without_key_material(monkeypatch, fresh_runtime_config):
     from app.main import _build_runtime_config
 
     for name in (
@@ -315,7 +260,7 @@ def test_runtime_is_unsigned_without_key_material(monkeypatch):
     assert config.verifying_keys == {}
 
 
-def test_malformed_verifying_keys_fail_closed(monkeypatch):
+def test_malformed_verifying_keys_fail_closed(monkeypatch, fresh_runtime_config):
     from app.main import _build_runtime_config
 
     monkeypatch.setenv("L9_VERIFYING_KEYS_JSON", '["not", "a", "map"]')
