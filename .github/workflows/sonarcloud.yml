@@ -37,6 +37,7 @@ jobs:
     env:
       PYTHON_VERSION: ${{ vars.PYTHON_VERSION || '3.12' }}
       TEST_DIR: ${{ vars.TEST_DIR || 'tests/' }}
+      COVERAGE_THRESHOLD: ${{ vars.COVERAGE_THRESHOLD || '71' }}
 
     steps:
       - name: Decide whether to run SonarCloud
@@ -93,6 +94,7 @@ jobs:
             --cov=engine \
             --cov-report=xml \
             --cov-report=term-missing \
+            --cov-fail-under=${{ env.COVERAGE_THRESHOLD }} \
             --timeout=300 \
             -q
 
