@@ -166,3 +166,21 @@ class HealthCheckResponse(BaseModel):
     #   disabled      — switched off, or no gate_url configured
     # `failed` and `not_attempted` both degrade `status`.
     gate_registration: str = "disabled"
+
+
+class ReadinessResponse(BaseModel):
+    """GET /api/v1/ready — the routability signal a readiness probe reads.
+
+    EIE-212-F003: /api/v1/health names a degraded registration in its body but
+    always answers HTTP 200, and a Kubernetes readinessProbe reads the status
+    code, not the body — so an unroutable pod was marked Ready. This response
+    rides HTTP 503 whenever registration is enabled but `failed` or
+    `not_attempted`, and HTTP 200 when `registered` or `disabled`. Liveness
+    stays on /api/v1/health, so a Gate outage degrades routing without
+    triggering restart loops.
+    """
+
+    ready: bool
+    status: str  # "ready" | "not_ready"
+    gate_registration: str
+    version: str = "2.3.0"

@@ -6,24 +6,8 @@ namespace: enrichment-dev
 resources:
   - ../../base
 
-patches:
-  - target:
-      kind: Deployment
-      name: enrichment-api
-    patch: |
-      - op: replace
-        path: /spec/replicas
-        value: 1
-  - target:
-      kind: HorizontalPodAutoscaler
-      name: enrichment-api
-    patch: |
-      $patch: delete
-      apiVersion: autoscaling/v2
-      kind: HorizontalPodAutoscaler
-      metadata:
-        name: enrichment-api
-
+# Replica count and the absence of an HPA are fixed in ../../base (EIE-212-F001);
+# no overlay may raise them.
 configMapGenerator:
   - name: enrichment-config
     behavior: merge

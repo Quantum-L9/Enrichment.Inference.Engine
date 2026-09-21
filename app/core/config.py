@@ -20,6 +20,13 @@ from functools import lru_cache
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ENRICHMENT_PROVIDERS: frozenset[str] = frozenset({"perplexity", "deterministic"})
+# EIE-212-F002: the deterministic source invents numeric and boolean values that
+# carry no marker, so the only place it can run is one that serves no real
+# tenant. The set matches the SDK's unsigned `dev_mode` environments in
+# app/main.py; staging and prod are signed, tenant-facing, and refused.
+DETERMINISTIC_PROVIDER_ENVIRONMENTS: frozenset[str] = frozenset({"local", "dev", "test"})
+
 
 class Settings(BaseSettings):
     perplexity_api_key: str = ""
@@ -31,7 +38,13 @@ class Settings(BaseSettings):
     # whole business chain — enrich -> persist -> Gate -> CEG — is reproducible
     # in CI without provider egress. It is selected explicitly and never as a
     # fallback: a missing key, an outage, or an open circuit must still fail.
-    enrichment_provider: str = "perplexity"
+    # C-09 (EIE-212-F004): a new application control, so the env name is
+    # L9_ENRICHMENT_PROVIDER.
+    l9_enrichment_provider: str = "perplexity"
+    # The SDK's runtime environment (local|dev|test|staging|prod). The SDK reads
+    # it for its own preflight; Settings reads the same variable so the provider
+    # guard below can refuse a synthetic source in a tenant-facing environment.
+    l9_environment: str = "local"
 
     api_secret_key: str = ""
     api_key_hash: str = ""
@@ -92,7 +105,8 @@ class Settings(BaseSettings):
     # not a one-shot: a Gate that restarts, loses its registry, or was unreachable
     # at this node's startup leaves the node running and unroutable until someone
     # restarts the process. The loop closes that without a restart. 0 disables it.
-    gate_reregistration_interval_seconds: float = 300.0
+    # C-09 (EIE-212-F004): env name L9_GATE_REREGISTRATION_INTERVAL_SECONDS.
+    l9_gate_reregistration_interval_seconds: float = 300.0
     # CEG `sync` contract projection for post-enrichment graph sync: the CEG sync
     # endpoint suffix and its id property (Cognitive.Engine.Graphs domain spec
     # `sync.endpoints`). Defaults match the plasticos domain.
@@ -121,11 +135,30 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_enrichment_provider(self) -> Settings:
-        """Refuse an unknown provider name rather than silently using the default."""
-        allowed = {"perplexity", "deterministic"}
-        if self.enrichment_provider not in allowed:
+        """Refuse an unknown provider, and refuse the synthetic one where it could persist.
+
+        EIE-212-F002: `deterministic` marks the strings and lists it invents, but
+        an int, a float or a bool cannot carry a prefix, so a synthetic
+        ``annual_tonnage`` or ``is_certified`` would be persisted and synced to
+        CEG indistinguishable from a researched value. Rather than a convention
+        nobody can check at read time, the configuration is rejected at startup
+        for every environment that serves tenants.
+        """
+        if self.l9_enrichment_provider not in ENRICHMENT_PROVIDERS:
             msg = (
-                f"ENRICHMENT_PROVIDER={self.enrichment_provider!r} is not one of {sorted(allowed)}"
+                f"L9_ENRICHMENT_PROVIDER={self.l9_enrichment_provider!r} "
+                f"is not one of {sorted(ENRICHMENT_PROVIDERS)}"
+            )
+            raise ValueError(msg)
+        if (
+            self.l9_enrichment_provider == "deterministic"
+            and self.l9_environment not in DETERMINISTIC_PROVIDER_ENVIRONMENTS
+        ):
+            msg = (
+                f"L9_ENRICHMENT_PROVIDER='deterministic' is refused for "
+                f"L9_ENVIRONMENT={self.l9_environment!r}: the deterministic source "
+                "synthesizes unmarked numeric and boolean values and is permitted only "
+                f"in {sorted(DETERMINISTIC_PROVIDER_ENVIRONMENTS)}"
             )
             raise ValueError(msg)
         return self

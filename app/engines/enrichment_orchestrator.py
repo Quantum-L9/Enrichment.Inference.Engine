@@ -184,7 +184,7 @@ async def enrich_entity(
         # _persist_and_sync, and therefore the Gate -> CEG leg — with no provider
         # egress. A missing key or an open circuit still fails; nothing selects
         # this implicitly.
-        if settings.enrichment_provider == DETERMINISTIC_PROVIDER:
+        if settings.l9_enrichment_provider == DETERMINISTIC_PROVIDER:
 
             async def _call() -> SonarResponse:
                 return await query_deterministic(

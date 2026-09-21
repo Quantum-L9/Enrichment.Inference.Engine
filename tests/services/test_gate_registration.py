@@ -228,6 +228,83 @@ def test_health_surfaces_gate_registered(monkeypatch, registered, expected_state
     assert body["status"] == expected_status
 
 
+# --------------------------------------------------------------------------
+# EIE-212-F003: readiness is a status code a probe can read, liveness stays 200
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("registered", "expected_state", "expected_http", "expected_ready"),
+    [
+        (None, "not_attempted", 503, False),
+        (False, "failed", 503, False),
+        (True, "registered", 200, True),
+    ],
+)
+def test_readiness_fails_at_http_level_while_liveness_stays_up(
+    monkeypatch, registered, expected_state, expected_http, expected_ready
+):
+    """The audit's counterexample: a readinessProbe reads the status code, not the body.
+
+    With registration enabled, `failed` and `not_attempted` must be non-2xx on
+    the readiness endpoint so Kubernetes stops routing to a pod Gate cannot
+    reach — while /api/v1/health keeps answering 200, because the process is
+    alive and a Gate outage must not become a restart loop.
+    """
+    import app.main as main
+
+    monkeypatch.setattr(main, "_gate_registered", registered)
+    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "true")
+    monkeypatch.setenv("GATE_URL", GATE_URL)
+    get_settings.cache_clear()
+    try:
+        client = TestClient(main.app)
+        ready = client.get(main.READINESS_ENDPOINT)
+        live = client.get(main.HEALTH_ENDPOINT)
+    finally:
+        get_settings.cache_clear()
+
+    assert ready.status_code == expected_http
+    body = ready.json()
+    assert body["ready"] is expected_ready
+    assert body["status"] == ("ready" if expected_ready else "not_ready")
+    assert body["gate_registration"] == expected_state
+
+    assert live.status_code == 200
+    assert live.json()["gate_registration"] == expected_state
+
+
+@pytest.mark.parametrize("registered", [None, True, False])
+def test_readiness_is_ready_when_registration_is_disabled(monkeypatch, registered):
+    """Switched off is not failed: a node that never registers is ready to serve."""
+    import app.main as main
+
+    monkeypatch.setattr(main, "_gate_registered", registered)
+    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "false")
+    get_settings.cache_clear()
+    try:
+        client = TestClient(main.app)
+        ready = client.get(main.READINESS_ENDPOINT)
+    finally:
+        get_settings.cache_clear()
+    assert ready.status_code == 200
+    assert ready.json() == {
+        "ready": True,
+        "status": "ready",
+        "gate_registration": "disabled",
+        "version": main.NODE_VERSION,
+    }
+
+
+def test_readiness_endpoint_is_distinct_from_the_registered_health_endpoint():
+    """Gate polls health_endpoint for liveness; the probe path must not alias it."""
+    from app.main import HEALTH_ENDPOINT, READINESS_ENDPOINT
+
+    assert READINESS_ENDPOINT == "/api/v1/ready"
+    assert READINESS_ENDPOINT != HEALTH_ENDPOINT
+    assert build_node_registration(_settings()).health_endpoint == HEALTH_ENDPOINT
+
+
 @pytest.mark.parametrize("registered", [None, True, False])
 def test_health_reports_disabled_registration_as_ok(monkeypatch, registered):
     """A node with registration switched off is not a node that failed to register."""
@@ -268,7 +345,7 @@ def test_reregistration_loop_is_off_when_registration_is_off():
 
 @pytest.mark.asyncio
 async def test_reregistration_loop_is_off_at_zero_interval():
-    assert start_reregistration_loop(_settings(gate_reregistration_interval_seconds=0)) is None
+    assert start_reregistration_loop(_settings(l9_gate_reregistration_interval_seconds=0)) is None
 
 
 @pytest.mark.asyncio
@@ -279,7 +356,7 @@ async def test_reregistration_loop_reregisters_and_updates_readiness(monkeypatch
     monkeypatch.setattr(main_module, "_register_with_gate", fake)
     monkeypatch.setattr(main_module, "_gate_registered", None)
 
-    task = start_reregistration_loop(_settings(gate_reregistration_interval_seconds=0.01))
+    task = start_reregistration_loop(_settings(l9_gate_reregistration_interval_seconds=0.01))
     assert task is not None
     monkeypatch.setattr(main_module, "_reregistration_task", task)
     try:
@@ -307,7 +384,7 @@ async def test_reregistration_loop_survives_a_raising_attempt(monkeypatch):
 
     monkeypatch.setattr(main_module, "_register_with_gate", flaky)
     monkeypatch.setattr(main_module, "_gate_registered", None)
-    task = start_reregistration_loop(_settings(gate_reregistration_interval_seconds=0.01))
+    task = start_reregistration_loop(_settings(l9_gate_reregistration_interval_seconds=0.01))
     assert task is not None
     monkeypatch.setattr(main_module, "_reregistration_task", task)
     try:

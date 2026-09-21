@@ -25,13 +25,16 @@ This module answers the same contract as `app/services/perplexity_client.py`
 downstream — validation, consensus synthesis, persistence, graph sync — runs
 exactly as it does in production.
 
-**It invents values, and says so.** Every field it did not find on the entity
-carries a `DETERMINISTIC_VALUE_PREFIX` marker, so a synthetic value can never be
-mistaken for a researched one in a store, a graph, or a log. Selecting it in a
-deployment that serves real tenants is a configuration error, not a fallback:
-`ENRICHMENT_PROVIDER` defaults to `perplexity` and nothing selects this
-implicitly — not a missing API key, not a provider outage, not a circuit-breaker
-trip.
+**It invents values, and says so where it can.** A string or list it did not
+find on the entity carries the `DETERMINISTIC_VALUE_PREFIX` marker. An int, a
+float or a bool cannot carry a prefix and stay type-correct, so those synthetic
+values are unmarked at the field level (EIE-212-F002); the payload names them in
+`synthetic_fields` instead, and the runtime refuses this provider outside the
+non-production environments listed in `app/core/config.py`
+(`DETERMINISTIC_PROVIDER_ENVIRONMENTS`). Selecting it where real tenants are
+served is therefore a startup error, not a fallback: `L9_ENRICHMENT_PROVIDER`
+defaults to `perplexity` and nothing selects this implicitly — not a missing API
+key, not a provider outage, not a circuit-breaker trip.
 """
 
 from __future__ import annotations
@@ -110,14 +113,25 @@ def build_deterministic_payload(
     schema = target_schema or {}
     entity_key = _entity_key(entity)
     fields: dict[str, Any] = {}
+    synthetic: list[str] = []
     for field, declared_type in schema.items():
         existing = _existing_value(entity, field)
-        fields[field] = (
-            existing
-            if existing not in (None, "")
-            else _synthesize(entity_key, str(field), str(declared_type))
-        )
-    return {"confidence": DETERMINISTIC_CONFIDENCE, "fields": fields}
+        if existing not in (None, ""):
+            fields[field] = existing
+        else:
+            fields[field] = _synthesize(entity_key, str(field), str(declared_type))
+            synthetic.append(str(field))
+    # `synthetic_fields` is the provider-level identity of every invented value,
+    # including the int/float/bool ones no prefix can mark. The validator keeps
+    # only `confidence` and `fields`, so this survives in the raw provider payload
+    # and in logs, not in the persisted field values — which is why production
+    # selection of this provider is refused at settings validation.
+    return {
+        "confidence": DETERMINISTIC_CONFIDENCE,
+        "fields": fields,
+        "provider": PROVIDER_NAME,
+        "synthetic_fields": synthetic,
+    }
 
 
 async def query_deterministic(
@@ -144,6 +158,7 @@ async def query_deterministic(
         "deterministic_enrichment_served",
         entity_key=_entity_key(entity),
         field_count=len(data["fields"]),
+        synthetic_fields=data["synthetic_fields"],
     )
     return SonarResponse(data=data, tokens_used=0, model=model, latency_ms=0)
 

@@ -46,6 +46,14 @@ REQUIRED_ENV_VARS = {
     "GATE_REGISTRATION_ENABLED": {"type": "boolean", "required": False, "sensitive": False},
     "GATE_INTERNAL_URL": {"type": "url", "required": False, "sensitive": False},
     "GATE_ADMIN_TOKEN": {"type": "secret", "required": False, "sensitive": True},
+    # C-09 names for the controls PR #212 introduced (EIE-212-F004).
+    "L9_ENRICHMENT_PROVIDER": {"type": "string", "required": False, "sensitive": False},
+    "L9_GATE_REREGISTRATION_INTERVAL_SECONDS": {
+        "type": "number",
+        "required": False,
+        "sensitive": False,
+    },
+    "L9_ENVIRONMENT": {"type": "string", "required": False, "sensitive": False},
     "GRAPH_SYNC_ENTITY_TYPE": {"type": "string", "required": False, "sensitive": False},
     "GRAPH_SYNC_ID_PROPERTY": {"type": "string", "required": False, "sensitive": False},
     "DATABASE_URL": {"type": "url", "required": False, "sensitive": True},
@@ -139,6 +147,59 @@ def test_retired_peer_variables_are_gone_from_settings_and_examples() -> None:
         text = (REPO_ROOT / rel).read_text()
         for var in RETIRED_SIDE_DOOR_VARS:
             assert f"{var}=" not in text and f"{var}:" not in text, f"{rel} still sets {var}"
+
+
+# C-09 (AGENTS.md): new application env vars carry the L9_ prefix. The
+# unprefixed legacy set predates the rule and is not migrated here; these are the
+# controls PR #212 added, so they must comply (EIE-212-F004).
+NEW_L9_CONTROLS = {
+    "l9_enrichment_provider": "L9_ENRICHMENT_PROVIDER",
+    "l9_gate_reregistration_interval_seconds": "L9_GATE_REREGISTRATION_INTERVAL_SECONDS",
+}
+RETIRED_UNPREFIXED_NAMES = ("ENRICHMENT_PROVIDER", "GATE_REREGISTRATION_INTERVAL_SECONDS")
+CONFIG_SURFACES = (
+    ".env.example",
+    "docs/contracts/config/env-contract.yaml",
+    "infra/k8s/kustomize/base/kustomization.yaml",
+)
+
+
+@pytest.mark.unit
+def test_new_controls_are_c09_compliant_settings_fields() -> None:
+    from app.core.config import Settings
+
+    for field, env_name in NEW_L9_CONTROLS.items():
+        assert field in Settings.model_fields, f"Settings.{field} missing"
+        assert field.upper() == env_name
+        assert env_name.startswith("L9_"), f"{env_name} violates C-09"
+    for field in ("enrichment_provider", "gate_reregistration_interval_seconds"):
+        assert field not in Settings.model_fields, f"unprefixed Settings.{field} still exists"
+
+
+@pytest.mark.unit
+def test_new_controls_are_read_from_their_l9_env_names(monkeypatch) -> None:
+    """pydantic-settings maps the field name to the env var; prove the external name works."""
+    from app.core.config import Settings
+
+    monkeypatch.setenv("L9_ENRICHMENT_PROVIDER", "deterministic")
+    monkeypatch.setenv("L9_ENVIRONMENT", "test")
+    monkeypatch.setenv("L9_GATE_REREGISTRATION_INTERVAL_SECONDS", "7.5")
+    settings = Settings(_env_file=None)
+    assert settings.l9_enrichment_provider == "deterministic"
+    assert settings.l9_gate_reregistration_interval_seconds == 7.5
+
+
+@pytest.mark.unit
+def test_retired_unprefixed_names_are_gone_from_config_surfaces() -> None:
+    for rel in CONFIG_SURFACES:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        for name in RETIRED_UNPREFIXED_NAMES:
+            # Match the bare name as a variable, not as the suffix of its L9_ form.
+            assert (
+                f"\n{name}=" not in text
+                and f"- {name}=" not in text
+                and f"name: {name}\n" not in text
+            ), f"{rel} still carries {name}"
 
 
 @pytest.mark.unit

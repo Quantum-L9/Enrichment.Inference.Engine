@@ -8,6 +8,10 @@ spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
+  # EIE-212-F001: Recreate so a rollout never runs two pods of a process-local
+  # GraphReturnChannel at once.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "enrichment-api.selectorLabels" . | nindent 6 }}
@@ -70,9 +74,11 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
+          # EIE-212-F003: readiness reads /api/v1/ready (503 while unroutable);
+          # liveness and startup stay on /api/v1/health.
           readinessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /api/v1/ready
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10

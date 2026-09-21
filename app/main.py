@@ -3,7 +3,8 @@ Domain Enrichment API v2.3.0 — Constellation-wired
 ===================================================
 POST /api/v1/enrich         single entity (Salesforce + Odoo)
 POST /api/v1/enrich/batch   batch up to 50
-GET  /api/v1/health         health + KB + circuit breaker
+GET  /api/v1/health         liveness: health + KB + circuit breaker (always 200)
+GET  /api/v1/ready          readiness: 503 while Gate holds no route to this node
 POST /v1/execute            SDK TransportPacket execution surface
 (Outcome feedback flows CEG -> Gate -> EIE as a TransportPacket; the
  former POST /v1/outcomes peer ingress was retired 2026-09-02.)
@@ -29,7 +30,7 @@ from constellation_node_sdk import (
     register_node,
 )
 from constellation_node_sdk.runtime.handlers import clear_handlers
-from fastapi import Depends
+from fastapi import Depends, Response
 
 from .api.v1.attestation import router as attestation_router
 from .api.v1.chassis_endpoint import router as chassis_router
@@ -49,6 +50,7 @@ from .models.schemas import (
     EnrichRequest,
     EnrichResponse,
     HealthCheckResponse,
+    ReadinessResponse,
 )
 from .score.score_api import router as score_router
 from .services.idempotency import IdempotencyStore
@@ -141,7 +143,7 @@ class EnrichmentLifecycle(LifecycleHook):
         logger.info(
             "gate_reregistration_loop",
             started=_reregistration_task is not None,
-            interval_seconds=settings.gate_reregistration_interval_seconds,
+            interval_seconds=settings.l9_gate_reregistration_interval_seconds,
         )
 
         logger.info("api_started", version="2.3.0")
@@ -172,6 +174,10 @@ NODE_VERSION = "2.3.0"
 NODE_TYPE = "enrichment"
 NODE_OWNER = "eie"
 HEALTH_ENDPOINT = "/api/v1/health"
+# EIE-212-F003: the endpoint Kubernetes readiness probes read. Kept apart from
+# HEALTH_ENDPOINT (liveness, and what Gate polls) so a Gate outage takes this
+# pod out of Service rotation without restarting it.
+READINESS_ENDPOINT = "/api/v1/ready"
 ADVERTISED_ACTIONS: tuple[str, ...] = (
     "converge",
     "graph-inference-result",
@@ -268,7 +274,7 @@ def start_reregistration_loop(settings: Settings) -> asyncio.Task[None] | None:
     # has already validated and converted it. The redundant call also tripped
     # semgrep.float-requires-try-except, which cannot tell a validated field
     # from raw user input.
-    interval = settings.gate_reregistration_interval_seconds
+    interval = settings.l9_gate_reregistration_interval_seconds
     if not settings.gate_registration_enabled or not settings.gate_url or interval <= 0:
         return None
     return asyncio.create_task(_reregistration_loop(settings, interval))
@@ -418,6 +424,37 @@ async def health_check(settings: Annotated[Settings, Depends(get_settings)]):
         kb_rules=kb.index.total_rules,
         circuit_breaker_state=breaker.state,
         gate_registered=_gate_registered,
+    )
+
+
+@app.get(
+    READINESS_ENDPOINT,
+    response_model=ReadinessResponse,
+    responses={
+        503: {"model": ReadinessResponse, "description": "Gate holds no route to this node"}
+    },
+)
+async def readiness_check(
+    settings: Annotated[Settings, Depends(get_settings)],
+    response: Response,
+):
+    """Readiness is routability, expressed as a status code a probe can read.
+
+    EIE-212-F003: health_check above reports `degraded` in JSON and still
+    returns 200, so a readinessProbe pointed at it marked an unroutable pod
+    Ready. This endpoint answers 503 for exactly the two states health calls
+    degraded — registration enabled but `failed` or `not_attempted` — and 200
+    for `registered` and `disabled`. The process stays alive either way; only
+    the Service stops sending it traffic Gate could not route anyway.
+    """
+    registration = _gate_registration_state(settings)
+    ready = registration not in GATE_REGISTRATION_DEGRADED
+    response.status_code = 200 if ready else 503
+    return ReadinessResponse(
+        ready=ready,
+        status="ready" if ready else "not_ready",
+        gate_registration=registration,
+        version=NODE_VERSION,
     )
 
 

@@ -12,16 +12,24 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.config import Settings
+from app.core.config import DETERMINISTIC_PROVIDER_ENVIRONMENTS, Settings
 from app.services.deterministic_provider import (
     DETERMINISTIC_CONFIDENCE,
     DETERMINISTIC_VALUE_PREFIX,
+    PROVIDER_NAME,
     build_deterministic_payload,
     query_deterministic,
 )
 
 ENTITY = {"id": "acct-42", "Name": "Northwind Polymers", "country": "PT"}
 SCHEMA = {"polymer_type": "string", "annual_tonnage": "integer", "country": "string"}
+# EIE-212-F002 counterexamples: the three declared types no prefix can ride on.
+UNMARKABLE_SCHEMA = {
+    "annual_tonnage": "integer",
+    "contamination_pct": "float",
+    "is_certified": "boolean",
+}
+TENANT_FACING_ENVIRONMENTS = ("staging", "prod", "production")
 
 
 def test_same_input_always_yields_the_same_answer() -> None:
@@ -84,12 +92,66 @@ def test_confidence_clears_the_default_consensus_threshold() -> None:
 
 def test_provider_defaults_to_the_live_source() -> None:
     """Deterministic enrichment is opt-in. Nothing may fall back to it."""
-    assert Settings().enrichment_provider == "perplexity"
+    assert Settings().l9_enrichment_provider == "perplexity"
 
 
 def test_an_unknown_provider_is_refused() -> None:
-    with pytest.raises(ValueError, match="ENRICHMENT_PROVIDER"):
-        Settings(enrichment_provider="wishful-thinking")
+    with pytest.raises(ValueError, match="L9_ENRICHMENT_PROVIDER"):
+        Settings(l9_enrichment_provider="wishful-thinking")
+
+
+# --------------------------------------------------------------------------
+# EIE-212-F002: synthetic identity survives, or production refuses the config.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_type"),
+    [("annual_tonnage", int), ("contamination_pct", float), ("is_certified", bool)],
+)
+def test_numeric_and_boolean_synthetic_values_carry_no_marker(
+    field: str, expected_type: type
+) -> None:
+    """The counterexample the audit found, pinned so nobody claims otherwise again.
+
+    A type-correct int, float or bool cannot start with ``det:``. The value that
+    reaches ``fields`` — and therefore persistence and the Gate -> CEG sync — is
+    indistinguishable from a researched one. That is why the guard below exists.
+    """
+    value = build_deterministic_payload(ENTITY, UNMARKABLE_SCHEMA)["fields"][field]
+    assert isinstance(value, expected_type)
+    assert not isinstance(value, str), "a marked value would be a string, and this is not"
+
+
+def test_payload_names_every_synthetic_field_including_the_unmarkable_ones() -> None:
+    """Provider-level identity: the payload says which fields it invented."""
+    payload = build_deterministic_payload(ENTITY, {**UNMARKABLE_SCHEMA, "country": "string"})
+    assert payload["provider"] == PROVIDER_NAME
+    assert payload["synthetic_fields"] == ["annual_tonnage", "contamination_pct", "is_certified"]
+    assert "country" not in payload["synthetic_fields"]  # echoed, not invented
+
+
+@pytest.mark.parametrize("environment", TENANT_FACING_ENVIRONMENTS)
+def test_deterministic_provider_is_refused_where_tenants_are_served(environment: str) -> None:
+    """Production mode rejects the configuration at startup, not by convention."""
+    with pytest.raises(ValueError, match="refused for L9_ENVIRONMENT"):
+        Settings(l9_enrichment_provider="deterministic", l9_environment=environment)
+
+
+@pytest.mark.parametrize("environment", sorted(DETERMINISTIC_PROVIDER_ENVIRONMENTS))
+def test_deterministic_provider_is_permitted_in_non_production(environment: str) -> None:
+    settings = Settings(l9_enrichment_provider="deterministic", l9_environment=environment)
+    assert settings.l9_enrichment_provider == "deterministic"
+
+
+def test_the_permitted_environments_are_exactly_the_sdk_unsigned_ones() -> None:
+    """The guard's allowlist must not drift from the runtime's own dev_mode set."""
+    assert frozenset({"local", "dev", "test"}) == DETERMINISTIC_PROVIDER_ENVIRONMENTS
+
+
+def test_live_provider_is_unaffected_by_the_environment_guard() -> None:
+    for environment in TENANT_FACING_ENVIRONMENTS:
+        assert Settings(l9_environment=environment).l9_enrichment_provider == "perplexity"
 
 
 # --------------------------------------------------------------------------
@@ -107,7 +169,8 @@ async def test_enrich_entity_completes_offline_and_calls_no_provider() -> None:
     from app.models.schemas import EnrichRequest
 
     settings = Settings(
-        enrichment_provider="deterministic",
+        l9_enrichment_provider="deterministic",
+        l9_environment="test",
         perplexity_api_key="",  # no key, deliberately
     )
     kb_resolver = MagicMock()

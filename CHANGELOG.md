@@ -10,14 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **PR #212 audit closure (EIE-212-F001..F004).**
+  - `GET /api/v1/ready` answers HTTP 503 while Gate registration is enabled
+    but `failed` or `not_attempted`, 200 when `registered` or `disabled`.
+    Kubernetes readiness probes (kustomize + helm) read it; liveness and
+    startup probes stay on `/api/v1/health`, which remains 200 (F003).
+  - The deployment topology is pinned to one replica while
+    `GraphReturnChannel` is process-local: kustomize base `replicas: 1` with
+    a `Recreate` strategy and no HorizontalPodAutoscaler, Helm
+    `replicaCount: 1` with autoscaling off, overlays and the deploy workflow
+    no longer raise it. `tests/unit/test_deployment_topology.py` fails if
+    any supported deployment re-enables horizontal scaling before the channel
+    moves to shared state (F001).
+  - `L9_ENRICHMENT_PROVIDER=deterministic` is refused at startup unless
+    `L9_ENVIRONMENT` is `local`, `dev` or `test`; the deterministic payload
+    names its invented fields in `synthetic_fields`, since an int, float or
+    bool cannot carry the `det:` marker (F002).
+  - The two application controls this branch introduced take C-09 names:
+    `L9_ENRICHMENT_PROVIDER` and `L9_GATE_REREGISTRATION_INTERVAL_SECONDS`
+    (F004). Pre-existing unprefixed variables are unchanged.
 - **Seam-audit repairs (IB-Odoo_19 -> Gate_SDK -> Constellation.Gate -> EIE).**
   - SDK pin moves to the 1.1.0 release commit
     `2b2f53a28a59bbfb2fa45f5eac32b722d802209a`; every consumer of the
     coordinated set pins the same commit.
   - `GATE_URL` default is `http://localhost:9000`, the port every shipped Gate
     deployment asset uses; `8080` matched nothing.
-  - Periodic Gate re-registration (`GATE_REREGISTRATION_INTERVAL_SECONDS`,
-    default 60; 0 = register once). A worker Gate marked unhealthy on a
+  - Periodic Gate re-registration (`L9_GATE_REREGISTRATION_INTERVAL_SECONDS`,
+    default 300; 0 = register once). A worker Gate marked unhealthy on a
     connection failure recovers without a process restart, and a Gate that
     restarted with an empty registry regains the `converge` route.
   - Kubernetes (kustomize + helm) manifests carry `GATE_URL`,

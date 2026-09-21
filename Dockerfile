@@ -21,7 +21,9 @@ EXPOSE 8000
 # invisible to the convergence loop draining the channel in another, so results
 # are dropped as a function of which worker the load balancer happened to pick —
 # and registration runs once per worker on top of that.
-# Scale this service horizontally (more replicas), not with --workers.
-# Lifting this requires moving the channel to shared state first; the invariant
-# is asserted by tests/unit/test_worker_singleton_invariant.py.
+# The same split-brain applies across pods (EIE-212-F001): every supported
+# deployment runs exactly one replica of this image. Lifting either limit
+# requires moving the channel to shared state first; the invariants are asserted
+# by tests/unit/test_worker_singleton_invariant.py and
+# tests/unit/test_deployment_topology.py.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
