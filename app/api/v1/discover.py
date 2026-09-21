@@ -44,6 +44,11 @@ class CRMFieldInput(BaseModel):
     type: str
     sample_values: list[Any] | None = None
     fill_rate: float | None = None
+    # Optional source provenance (which system / resource supplied the field);
+    # forwarded verbatim to CRMField so identically named fields from different
+    # resources stay distinguishable in the scan result.
+    source_system: str | None = None
+    source_resource: str | None = None
 
 
 class ScanRequest(BaseModel):
@@ -117,6 +122,8 @@ async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
                 field_type=f.type,
                 sample_values=f.sample_values or [],
                 fill_rate=f.fill_rate,
+                source_system=f.source_system,
+                source_resource=f.source_resource,
             )
             for f in request.fields
         ]

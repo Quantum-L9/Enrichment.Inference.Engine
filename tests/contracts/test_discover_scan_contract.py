@@ -54,3 +54,47 @@ def test_scan_result_is_dict_serializable() -> None:
     """The endpoint returns scan_result_to_dict(...), which must be a mapping."""
     result = scan_crm_fields([], {"domain": {"id": "t", "version": "0.0.0"}})
     assert isinstance(scan_result_to_dict(result), dict)
+
+
+# ── Source provenance contract (crm-schema-scan pack, PR-A) ─────────────────
+
+_PROVENANCE_DOMAIN = {
+    "domain": {"id": "t", "version": "0.0.0"},
+    "ontology": {"nodes": [{"label": "Partner", "properties": {"phone": {"type": "string"}}}]},
+}
+
+
+@pytest.mark.unit
+def test_crm_field_provenance_is_optional_and_defaults_to_none() -> None:
+    """Legacy callers construct CRMField without provenance; new callers may supply it."""
+    legacy = CRMField(name="phone", field_type="char")
+    assert legacy.source_system is None
+    assert legacy.source_resource is None
+    sourced = CRMField(
+        name="phone", field_type="char", source_system="odoo", source_resource="crm.lead"
+    )
+    assert (sourced.source_system, sourced.source_resource) == ("odoo", "crm.lead")
+
+
+@pytest.mark.unit
+def test_serialized_mappings_carry_provenance_keys() -> None:
+    """matched/unmapped entries expose source_system + source_resource; missing entries never do."""
+    fields = [
+        CRMField(
+            name="phone", field_type="char", source_system="odoo", source_resource="res.partner"
+        ),
+        CRMField(name="phone", field_type="char", source_system="odoo", source_resource="crm.lead"),
+        CRMField(
+            name="x_notes", field_type="text", source_system="odoo", source_resource="crm.lead"
+        ),
+    ]
+    data = scan_result_to_dict(scan_crm_fields(fields, _PROVENANCE_DOMAIN))
+    assert {m["source_resource"] for m in data["matched"]} == {"res.partner", "crm.lead"}
+    assert all(m["source_system"] == "odoo" for m in data["matched"])
+    assert data["unmapped"] == [
+        {"crm_field": "x_notes", "source_system": "odoo", "source_resource": "crm.lead"}
+    ]
+    assert data["missing"] == []
+    # Two provenance-bearing mappings cover one domain property exactly once.
+    assert data["matched_count"] == 2
+    assert data["coverage_ratio"] == 1.0
