@@ -212,14 +212,12 @@ def test_health_surfaces_gate_registered(monkeypatch, registered, expected_state
     route to it. With registration enabled, an un-attempted registration is
     now `not_attempted` and degrades.
     """
-    import app.main as main
-
-    monkeypatch.setattr(main, "_gate_registered", registered)
+    monkeypatch.setattr(main_module, "_gate_registered", registered)
     monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "true")
     monkeypatch.setenv("GATE_URL", GATE_URL)
     get_settings.cache_clear()
     try:
-        client = TestClient(main.app)
+        client = TestClient(main_module.app)
         body = client.get("/api/v1/health").json()
     finally:
         get_settings.cache_clear()
@@ -251,16 +249,14 @@ def test_readiness_fails_at_http_level_while_liveness_stays_up(
     reach — while /api/v1/health keeps answering 200, because the process is
     alive and a Gate outage must not become a restart loop.
     """
-    import app.main as main
-
-    monkeypatch.setattr(main, "_gate_registered", registered)
+    monkeypatch.setattr(main_module, "_gate_registered", registered)
     monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "true")
     monkeypatch.setenv("GATE_URL", GATE_URL)
     get_settings.cache_clear()
     try:
-        client = TestClient(main.app)
-        ready = client.get(main.READINESS_ENDPOINT)
-        live = client.get(main.HEALTH_ENDPOINT)
+        client = TestClient(main_module.app)
+        ready = client.get(main_module.READINESS_ENDPOINT)
+        live = client.get(main_module.HEALTH_ENDPOINT)
     finally:
         get_settings.cache_clear()
 
@@ -277,14 +273,12 @@ def test_readiness_fails_at_http_level_while_liveness_stays_up(
 @pytest.mark.parametrize("registered", [None, True, False])
 def test_readiness_is_ready_when_registration_is_disabled(monkeypatch, registered):
     """Switched off is not failed: a node that never registers is ready to serve."""
-    import app.main as main
-
-    monkeypatch.setattr(main, "_gate_registered", registered)
+    monkeypatch.setattr(main_module, "_gate_registered", registered)
     monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "false")
     get_settings.cache_clear()
     try:
-        client = TestClient(main.app)
-        ready = client.get(main.READINESS_ENDPOINT)
+        client = TestClient(main_module.app)
+        ready = client.get(main_module.READINESS_ENDPOINT)
     finally:
         get_settings.cache_clear()
     assert ready.status_code == 200
@@ -292,29 +286,25 @@ def test_readiness_is_ready_when_registration_is_disabled(monkeypatch, registere
         "ready": True,
         "status": "ready",
         "gate_registration": "disabled",
-        "version": main.NODE_VERSION,
+        "version": main_module.NODE_VERSION,
     }
 
 
 def test_readiness_endpoint_is_distinct_from_the_registered_health_endpoint():
     """Gate polls health_endpoint for liveness; the probe path must not alias it."""
-    from app.main import HEALTH_ENDPOINT, READINESS_ENDPOINT
-
-    assert READINESS_ENDPOINT == "/api/v1/ready"
-    assert READINESS_ENDPOINT != HEALTH_ENDPOINT
-    assert build_node_registration(_settings()).health_endpoint == HEALTH_ENDPOINT
+    assert main_module.READINESS_ENDPOINT == "/api/v1/ready"
+    assert main_module.READINESS_ENDPOINT != main_module.HEALTH_ENDPOINT
+    assert build_node_registration(_settings()).health_endpoint == main_module.HEALTH_ENDPOINT
 
 
 @pytest.mark.parametrize("registered", [None, True, False])
 def test_health_reports_disabled_registration_as_ok(monkeypatch, registered):
     """A node with registration switched off is not a node that failed to register."""
-    import app.main as main
-
-    monkeypatch.setattr(main, "_gate_registered", registered)
+    monkeypatch.setattr(main_module, "_gate_registered", registered)
     monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "false")
     get_settings.cache_clear()
     try:
-        client = TestClient(main.app)
+        client = TestClient(main_module.app)
         body = client.get("/api/v1/health").json()
     finally:
         get_settings.cache_clear()
