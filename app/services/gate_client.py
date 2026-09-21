@@ -31,6 +31,8 @@ from constellation_node_sdk.gate import (
     get_gate_client_config_from_env,
 )
 
+from app.utils.safe_convert import safe_float
+
 # Serialises the scoped GATE_URL window below. os.environ is process-global, so
 # two threads building clients for different Gates could otherwise observe each
 # other's value inside the window.
@@ -117,11 +119,12 @@ def build_gate_client_config(
             **base.model_dump(),
             "gate_url": normalized_url,
             "local_node": EIE_NODE_NAME,
-            # No float() coercion: the parameter is annotated `float` and
-            # GateClientConfig validates the field. The redundant call tripped
-            # semgrep.float-requires-try-except, which reads any float() as a
-            # parse of untrusted input.
-            "timeout_seconds": timeout_seconds,
+            # safe_float, as app/engines/graph_sync_client.py already calls it: a
+            # bare float() raises on a loosely typed caller. Its 0.0 default is
+            # rejected by GateClientConfig.timeout_seconds (gt=0.0), so a bad
+            # budget fails closed at validation instead of becoming a silent
+            # zero-second timeout.
+            "timeout_seconds": safe_float(timeout_seconds),
         }
     )
 

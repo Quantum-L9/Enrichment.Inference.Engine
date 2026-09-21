@@ -3,32 +3,27 @@
 #
 # Every dependency is pinned to an exact version with sha256 hashes so the
 # image installs with `pip install --require-hashes`. constellation-node-sdk is
-# declared in pyproject.toml as a git dependency, which pip refuses outright in
-# hash-checking mode; the lock therefore carries GitHub's source archive URL
-# (github.com/<org>/<repo>/archive/<sha>.tar.gz) with the archive's sha256, so
-# the SDK is hash-verified like everything else.
+# declared in pyproject.toml as a git dependency on the moving major channel
+# `v1`, which pip cannot hash-verify; `uv pip compile` resolves that channel to
+# a concrete commit, and the rewrite below turns it into GitHub's source archive
+# URL (github.com/<org>/<repo>/archive/<sha>.tar.gz) with the archive's sha256.
 #
-# The manifest names the moving major tag (@v1), which is not a lockable
-# identity — but nothing here has to resolve it. `uv pip compile` above already
-# emits the concrete 40-character commit the tag pointed at, so the rewrite
-# below reads a sha, never a ref. Re-running this script is therefore the
-# deliberate act of taking whatever @v1 points at now, and requirements.lock is
-# the record of which commit every image actually installs.
+# The sha in the lock is therefore the commit the channel resolved to at
+# generation time — reproducibility evidence, not the compatibility contract.
+# The contract stays `@v1` in pyproject.toml. When Gate_SDK advances the
+# channel this lock goes stale, which is what
+# `python scripts/validate_sdk_pin.py --verify-tag` detects. Re-run this script
+# to refresh it; never hand-edit requirements.lock.
 #
-# Usage: bash <this script>   (needs uv, python3)
+# Usage: bash <this script>   (needs uv, curl, python3)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 uv pip compile pyproject.toml --python-version 3.12 --generate-hashes -o requirements.lock.tmp
 python3 - <<'PY'
-import hashlib, re, urllib.request
+import hashlib, re, subprocess, sys, urllib.request
 from pathlib import Path
 src = Path("requirements.lock.tmp").read_text().splitlines(keepends=True)
 out, i = [], 0
-# uv has already resolved any tag or branch in pyproject.toml to a commit by
-# this point, so this matches a 40-character sha and nothing else. A line that
-# still carried a ref would not match, and would be left as a git+https
-# requirement that pip refuses under --require-hashes — a loud failure at
-# install time rather than a silently unpinned dependency.
 git_re = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+) @ git\+https://github\.com/(?P<org>[^/]+)/(?P<repo>[^/@.]+?)(?:\.git)?@(?P<sha>[0-9a-f]{40})")
 while i < len(src):
     line = src[i]

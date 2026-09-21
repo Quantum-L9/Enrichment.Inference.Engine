@@ -11,13 +11,15 @@ requires-python = ">=3.11"
 dependencies = [
     "aiofiles>=23.0.0",
     "asyncpg",
-    # Release-set policy: manifests track the moving major tag Quantum-L9/Gate_SDK@v1;
-    # requirements.lock records the concrete commit that tag resolved to, with the
-    # source archive's sha256, and the production image installs from the lock. A
-    # manifest naming a commit the lock does not (EIE-001: pyproject 69c6c67 vs lock
-    # 2b2f53a2 — they differ by the GateClientConfig fix that loads
-    # L9_VERIFYING_KEYS_JSON) is the split this policy exists to prevent.
-    # scripts/validate_sdk_pin.py checks the manifests and the lock together.
+    # Gate_SDK owns release identity; the consumer contract is its moving
+    # major channel `v1`, not a commit sha (contracts/RELEASE_IDENTITY_LEDGER
+    # .json, schema v2). Gate and CEG declare the same channel.
+    # Reproducibility lives in the generated requirements.lock, which records
+    # the concrete object the channel resolved to plus that archive's sha256;
+    # `python scripts/validate_sdk_pin.py --verify-tag` proves it is current.
+    # EIE-001 is what that split looks like when it goes unchecked: pyproject
+    # named 69c6c67 while the lock carried 2b2f53a2, and the two differ by the
+    # GateClientConfig fix that loads L9_VERIFYING_KEYS_JSON.
     "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@v1",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -44,9 +46,9 @@ dev = [
     "pytest-httpx>=0.34",
     "pytest-cov==7.1.0",
     "respx>=0.22",
-    "ruff==0.16.4",
+    "ruff==0.16.6",
     "mypy==2.3.1",
-    "coverage==7.15.4",
+    "coverage==7.16.0",
     "jsonschema>=4.23.0",
 ]
 

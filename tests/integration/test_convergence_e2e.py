@@ -20,6 +20,8 @@ import pytest
 from app.engines.convergence_controller import run_convergence_loop
 from app.models.schemas import EnrichRequest, EnrichResponse
 
+pytestmark = pytest.mark.integration
+
 
 def _make_enricher(pass_responses: list[dict[str, Any]]):
     """Build a callable enricher that returns different fields per pass."""

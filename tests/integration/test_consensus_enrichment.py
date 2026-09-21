@@ -15,6 +15,8 @@ from app.services.enrichment import (
 )
 from app.services.enrichment.waterfall_engine import ConsensusEnrichmentResult
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(autouse=True)
 def mock_perplexity_module():

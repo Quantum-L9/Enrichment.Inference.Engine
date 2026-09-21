@@ -329,14 +329,15 @@ async def test_reregistration_loop_survives_a_raising_attempt(monkeypatch):
 
 @pytest.fixture
 def fresh_runtime_config():
-    """Drop the SDK's cached runtime config so env changes are actually read.
+    """Make the environment -> config mapping observable.
 
-    ``get_runtime_config`` is ``@lru_cache``d, and ``app/main.py`` warms it at
-    import time (``app = create_node_app(config=_build_runtime_config())``).
-    Without this, every test below asserted against the config built at import
-    and the monkeypatched environment was never consulted — two of them failed
-    outright, and the third passed only because the cached value happened to
-    match what it expected.
+    The SDK's ``get_runtime_config`` is ``@lru_cache``d, and ``app/main.py``
+    warms it at import time (``create_node_app(config=_build_runtime_config())``),
+    so the first call in the process pins the config for every later one and the
+    ``monkeypatch.setenv`` calls below would be read against a config built
+    before they ran. Caching is the intended production behaviour -- the runtime
+    must not re-read the environment per packet -- so the cache is cleared here
+    rather than removed there.
     """
     from constellation_node_sdk.runtime.config import get_runtime_config
 
@@ -345,8 +346,7 @@ def fresh_runtime_config():
     get_runtime_config.cache_clear()
 
 
-@pytest.mark.usefixtures("fresh_runtime_config")
-def test_runtime_signs_responses_when_key_material_is_present(monkeypatch):
+def test_runtime_signs_responses_when_key_material_is_present(monkeypatch, fresh_runtime_config):
     from app.main import _build_runtime_config
 
     monkeypatch.setenv("L9_SIGNING_KEY", "worker-material")
@@ -362,8 +362,7 @@ def test_runtime_signs_responses_when_key_material_is_present(monkeypatch):
     assert config.verifying_keys == {"gate-k1": "gate-material"}
 
 
-@pytest.mark.usefixtures("fresh_runtime_config")
-def test_runtime_is_unsigned_without_key_material(monkeypatch):
+def test_runtime_is_unsigned_without_key_material(monkeypatch, fresh_runtime_config):
     from app.main import _build_runtime_config
 
     for name in (
@@ -381,8 +380,7 @@ def test_runtime_is_unsigned_without_key_material(monkeypatch):
     assert config.verifying_keys == {}
 
 
-@pytest.mark.usefixtures("fresh_runtime_config")
-def test_malformed_verifying_keys_fail_closed(monkeypatch):
+def test_malformed_verifying_keys_fail_closed(monkeypatch, fresh_runtime_config):
     from app.main import _build_runtime_config
 
     monkeypatch.setenv("L9_VERIFYING_KEYS_JSON", '["not", "a", "map"]')
