@@ -194,12 +194,11 @@ def test_retired_unprefixed_names_are_gone_from_config_surfaces() -> None:
     for rel in CONFIG_SURFACES:
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")
         for name in RETIRED_UNPREFIXED_NAMES:
-            # Match the bare name as a variable, not as the suffix of its L9_ form.
-            assert (
-                f"\n{name}=" not in text
-                and f"- {name}=" not in text
-                and f"name: {name}\n" not in text
-            ), f"{rel} still carries {name}"
+            # Match the bare name as a variable, not as the suffix of its L9_ form:
+            # a dotenv line, a kustomize literal, and an env-contract entry.
+            assert f"\n{name}=" not in text, f"{rel} still carries dotenv {name}="
+            assert f"- {name}=" not in text, f"{rel} still carries literal {name}="
+            assert f"name: {name}\n" not in text, f"{rel} still documents {name}"
 
 
 @pytest.mark.unit
