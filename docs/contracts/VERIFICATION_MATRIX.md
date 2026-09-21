@@ -39,3 +39,21 @@ When you fix a row, bump **Last reviewed** and narrow the **Follow-up** cell.
 ## Shared CI unblock (2026-08-01)
 
 Re-stamped `tools/l9_enrichment_manifest.yaml` hashes and root governance symlinks after shared Semgrep/format/loader fixes on protected contract files.
+
+## Contract pinning moved to versions (2026-09-19)
+
+`tools/l9_enrichment_manifest.yaml` (now `version: 3.0.0`) pins each active
+contract by `contract_version` instead of `sha256`, using the same
+`MAJOR.MINOR.PATCH` vocabulary `node.constitution.yaml` already declares.
+
+The 2026-08-01 entry above is why: a digest re-stamps on every incidental edit,
+so a formatter or loader fix failed the gate on contracts that had not changed.
+The most recent instance was `app/services/gate_client.py`, whose digest went
+stale in #203 and failed Architecture Compliance, CI Gate and PR Pipeline Gate
+on every commit afterwards. The pin now tracks the contract; the author bumps
+`contract_version` when the contract moves.
+
+**What this gate no longer does:** detect silent content drift. It still fails
+on a missing, unversioned, malformed-version, or absent contract file, and on a
+contract not referenced by each of its `required_refs`. Whether a given edit
+changed the contract is now a review judgement rather than a digest comparison.

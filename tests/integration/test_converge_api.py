@@ -24,6 +24,8 @@ os.environ["API_KEY_HASH"] = "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a7
 get_settings.cache_clear()
 AUTH = {"X-API-Key": _TEST_API_KEY}
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.mark.asyncio
 async def test_converge_health(api_client):

@@ -14,7 +14,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from constellation_node_sdk.transport import TransportPacket, create_transport_packet
+from constellation_node_sdk.transport import create_transport_packet
 
 from app.engines.packet_router import (
     NodeTarget,
