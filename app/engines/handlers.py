@@ -264,6 +264,9 @@ async def _run_canonical_converge(
     if max_passes is not None:
         loop_kwargs["convergence_config"] = ConvergenceConfig(max_passes=int(max_passes))
 
+    # EIE-POST-F001: identity lets each pass consume this entity's
+    # graph-inference-result targets from GraphReturnChannel.
+    entity_id = _canonical_entity_id(payload)
     response = await run_convergence_loop(
         request=request,
         settings=settings,
@@ -271,6 +274,8 @@ async def _run_canonical_converge(
         idem_store=_idem,
         inference_rules=inference_rules,
         domain_hints=domain_hints,
+        tenant_id=tenant,
+        entity_id=None if entity_id == "unknown" else entity_id,
         **loop_kwargs,
     )
     result = response.model_dump()
@@ -414,6 +419,8 @@ async def _run_odoo_compat_converge(
         inference_rules=inference_rules,
         domain_hints=domain_hints,
         convergence_config=convergence_config,
+        tenant_id=tenant,
+        entity_id=parsed["entity_id"],
     )
 
     result = build_odoo_converge_response(

@@ -103,8 +103,8 @@ class GraphReturnChannel:
         channel = GraphReturnChannel.get_instance()
         await channel.submit(packet)
 
-    Usage (convergence_controller):
-        targets = await channel.drain(tenant_id="acme", timeout=0.5)
+    Usage (convergence_controller, at the start of each pass):
+        targets = channel.take_for_entity(tenant_id="acme", entity_id="res.partner:55")
     """
 
     _instance: GraphReturnChannel | None = None
@@ -200,6 +200,45 @@ class GraphReturnChannel:
                 tenant_id,
             )
         return targets
+
+    def take_for_entity(
+        self,
+        tenant_id: str,
+        entity_id: str,
+        *,
+        max_targets: int = 500,
+    ) -> list[EnrichmentTarget]:
+        """Remove and return the queued targets for one entity of one tenant.
+
+        This is the convergence loop's consumer (EIE-POST-F001). It never
+        blocks, so it costs the request deadline nothing. Targets for other
+        entities of the same tenant go back on the queue in their original
+        order, for the loop converging those entities. It contains no await,
+        so no submit can interleave while the queue is being partitioned.
+        """
+        q = self._queues.get(tenant_id)
+        if q is None:
+            return []
+        taken: list[EnrichmentTarget] = []
+        kept: list[EnrichmentTarget] = []
+        for _ in range(q.qsize()):
+            target = q.get_nowait()
+            q.task_done()
+            if target.entity_id == entity_id and len(taken) < max_targets:
+                taken.append(target)
+            else:
+                kept.append(target)
+        for target in kept:
+            q.put_nowait(target)
+        self._drained += len(taken)
+        if taken:
+            logger.info(
+                "GraphReturnChannel: took %d targets for tenant=%s entity=%s",
+                len(taken),
+                tenant_id,
+                entity_id,
+            )
+        return taken
 
     def stats(self) -> dict[str, Any]:
         return {

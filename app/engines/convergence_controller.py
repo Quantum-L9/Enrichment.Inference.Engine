@@ -24,6 +24,7 @@ import structlog
 from ..core.config import Settings
 from ..models.loop_schemas import PassContext
 from ..models.schemas import EnrichRequest, EnrichResponse
+from ..services.graph_return_channel import EnrichmentTarget, GraphReturnChannel
 from ..services.idempotency import IdempotencyStore
 from ..services.request_deadline import current_deadline
 from .convergence.confidence_tracker import ConfidenceTracker  # NEW
@@ -81,6 +82,10 @@ def get_or_classify_domain(domain_spec: dict[str, Any]) -> DomainClassification:
     return classification
 
 
+# Confidence-tracker source label for values seeded by a Gate-routed
+# graph-inference-result packet (EIE-POST-F001).
+GRAPH_INFERENCE_SOURCE = "graph_inference"
+
 # Convergence stopped because the shared request deadline ran out. Not a
 # successful convergence — see _assemble_convergence_response.
 DEADLINE_EXHAUSTED_REASON = "deadline_exhausted"
@@ -99,6 +104,7 @@ class PassResult:
     sonar_config: SonarConfig | None = None
     inference_fired: int = 0
     per_field_confidence: dict[str, float] = field(default_factory=dict)  # NEW
+    graph_seeded_fields: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -126,6 +132,8 @@ async def run_convergence_loop(
     domain_hints: dict[str, Any] | None = None,
     domain_spec: dict[str, Any] | None = None,
     convergence_config: ConvergenceConfig | None = None,  # NEW
+    tenant_id: str | None = None,
+    entity_id: str | None = None,
 ) -> EnrichResponse:
     """
     Multi-pass convergence loop.
@@ -150,6 +158,12 @@ async def run_convergence_loop(
         Full domain YAML for field classification and search optimization.
     convergence_config : ConvergenceConfig | None
         Convergence behavior settings (thresholds, pass limits).
+    tenant_id, entity_id : str | None
+        Identity of the entity being converged. When both are set, each pass
+        first consumes this entity's GraphReturnChannel targets — the
+        graph-inference-result values CEG sent back through Gate — so graph
+        inference feeds the pass it precedes. Without both, no tenant's queue
+        is read: a target is never applied across a tenant or entity boundary.
     """
     start = time.monotonic()
     state = ConvergenceState()
@@ -209,6 +223,17 @@ async def run_convergence_loop(
             state.converged = True
             state.convergence_reason = "budget_exhausted"
             break
+
+        # --- GRAPH RETURN (EIE-POST-F001) ---
+        # Before planning, so the planner and this pass's request see it.
+        graph_seeded: dict[str, Any] = {}
+        if tenant_id and entity_id:
+            graph_seeded = _apply_graph_targets(
+                GraphReturnChannel.get_instance().take_for_entity(tenant_id, entity_id),
+                state,
+                confidence_tracker,
+                pass_num,
+            )
 
         # --- META-PROMPT PLANNING ---
         pass_context = PassContext(
@@ -306,6 +331,7 @@ async def run_convergence_loop(
             tokens_used=pass_response.tokens_used,
             search_plan=search_plan,
             sonar_config=sonar_config,
+            graph_seeded_fields=graph_seeded,
         )
 
         # NEW: Extract per-field confidence from consensus engine
@@ -398,6 +424,46 @@ async def run_convergence_loop(
     )
 
 
+def _apply_graph_targets(
+    targets: list[EnrichmentTarget],
+    state: ConvergenceState,
+    confidence_tracker: ConfidenceTracker,
+    pass_num: int,
+) -> dict[str, Any]:
+    """Seed graph-inference targets into convergence state.
+
+    A target replaces a known value only when it is more confident than that
+    value. The channel has already applied CONFIDENCE_FLOOR. Returns the fields
+    this pass actually seeded.
+    """
+    seeded: dict[str, Any] = {}
+    for target in targets:
+        name = target.field_name
+        if name in state.known_fields and (
+            state.confidence_map.get(name, 0.0) >= target.source_confidence
+        ):
+            continue
+        state.known_fields[name] = target.seed_value
+        state.inferred_fields[name] = target.seed_value
+        state.confidence_map[name] = target.source_confidence
+        confidence_tracker.update_field(
+            name=name,
+            value=target.seed_value,
+            confidence=target.source_confidence,
+            pass_num=pass_num,
+            source=GRAPH_INFERENCE_SOURCE,
+        )
+        seeded[name] = target.seed_value
+    if seeded:
+        logger.info(
+            "graph_targets_applied",
+            pass_number=pass_num,
+            fields=sorted(seeded),
+            received=len(targets),
+        )
+    return seeded
+
+
 def _rate_from_sonar_config(config: SonarConfig) -> float:
     """Extract cost rate from sonar config for the cost tracker."""
     from .search_optimizer import CONTEXT_COST_MULTIPLIER, MODEL_COST_PER_1K
@@ -420,6 +486,7 @@ def _assemble_convergence_response(
     for pr in state.pass_results:
         enriched_or_inferred.update(pr.enriched_fields.keys())
         enriched_or_inferred.update(pr.inferred_fields.keys())
+        enriched_or_inferred.update(pr.graph_seeded_fields.keys())
     final_fields = {k: v for k, v in state.known_fields.items() if k in enriched_or_inferred}
     avg_confidence = sum(state.confidence_map.get(k, 0) for k in final_fields) / max(
         len(final_fields), 1
@@ -433,6 +500,7 @@ def _assemble_convergence_response(
             "mode": pr.search_plan.mode if pr.search_plan else "unknown",
             "enriched": list(pr.enriched_fields.keys()),
             "inferred": list(pr.inferred_fields.keys()),
+            "graph_seeded": list(pr.graph_seeded_fields.keys()),
             "confidence": pr.confidence,
             "rules_fired": pr.inference_fired,
             "per_field_confidence": pr.per_field_confidence,  # NEW
