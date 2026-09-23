@@ -1,9 +1,11 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: Constellation.Gate Dependency
 # Source:   app/services/gate_client.py, app/engines/packet_router.py,
-#           app/engines/graph_sync_client.py, app/main.py
-# Version:  1.0.0
-# Updated:  2026-09-02 (seam audit; replaces neo4j.yaml)
+#           app/engines/graph_sync_client.py, app/main.py,
+#           app/services/graph_return_channel.py,
+#           app/engines/convergence_controller.py
+# Version:  1.1.0
+# Updated:  2026-09-23 (EIE-POST-F001: graph-inference-result is consumed)
 # ═══════════════════════════════════════════════════════════════
 
 service_name: Constellation.Gate
@@ -26,6 +28,10 @@ usages:
     source_file: app/main.py
     pattern: create_node_app(config=NodeRuntimeConfig) with enforce_gate_only_ingress
 
+  - purpose: Gate-only ingress consumption — graph-inference-result targets feed convergence
+    source_file: app/engines/convergence_controller.py
+    pattern: GraphReturnChannel.take_for_entity(tenant_id, entity_id) at the start of each run_convergence_loop pass
+
   - purpose: Node registration (control plane)
     source_file: app/main.py
     pattern: register_node(gate_url, NodeRegistration) -> POST /v1/admin/register
@@ -34,5 +40,9 @@ invariants:
   - EIE never addresses a peer node; every outbound packet targets Gate.
   - EIE has no graph-store (Neo4j) client; the graph is reached only through Gate -> CEG.
   - Gate unavailability fails closed; there is no direct node-to-node fallback.
+  - A graph-inference-result target is applied only to a converge for the packet's
+    Gate tenant and the output's entity_id; no target crosses a tenant or entity.
+  - A graph-inference-result target never overwrites a value the converge request's
+    entity supplied; it fills unknown fields or outranks lower-confidence loop output.
 
 health_check: "GET {GATE_URL}/v1/health"
