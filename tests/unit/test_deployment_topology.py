@@ -18,7 +18,9 @@ the topology tests below are still required.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -169,12 +171,92 @@ def test_helm_deployment_template_uses_recreate() -> None:
     )
 
 
-def test_deploy_workflow_does_not_default_to_scale_out() -> None:
-    """The manual Helm deploy passes --set replicaCount; its defaults must agree."""
+# EIE-POST-F002: checking only the fallback defaults left the override open —
+# PROD_REPLICAS=2 as a repository variable reached `--set replicaCount=2`. These
+# tests pin the *effective* count, including for configured non-1 variables.
+
+TOPOLOGY_STEP = "Enforce Single-Replica Topology"
+DEPLOY_STEP = "Deploy with Helm"
+
+
+def _deploy_steps() -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = _load(DEPLOY_WORKFLOW)["jobs"]["deploy"]["steps"]
+    return steps
+
+
+def _step(name: str) -> dict[str, Any]:
+    matches = [s for s in _deploy_steps() if s.get("name") == name]
+    assert len(matches) == 1, f"k8s-deploy.yml must have exactly one {name!r} step"
+    return matches[0]
+
+
+def _run_topology_guard(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Execute the guard step's run body verbatim, as Actions would (bash -e)."""
+    script = _step(TOPOLOGY_STEP)["run"]
+    assert "${{" not in script, "the guard must read env only so it runs unmodified here"
+    return subprocess.run(
+        ["bash", "-e", "-c", script],
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_deploy_workflow_pins_helm_replica_count_to_one() -> None:
+    """The Helm step sets replicaCount to a literal 1 — no expression can raise it."""
+    run = _step(DEPLOY_STEP)["run"]
+    settings = re.findall(r"--set\s+replicaCount=(\S+)", run)
+    assert settings == ["1"], f"k8s-deploy.yml sets replicaCount to {settings}"
+    assert not re.search(r"replicaCount\s*[=:]\s*\$\{\{", run)
+
+
+def test_deploy_workflow_has_no_replica_override_expression() -> None:
     text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-    defaults = re.findall(r"vars\.(?:PROD|STAGING)_REPLICAS \|\| '(\d+)'", text)
-    assert defaults, "k8s-deploy.yml no longer resolves replica defaults; update this test"
-    assert all(d == "1" for d in defaults), f"k8s-deploy.yml defaults replicas to {defaults}"
+    assert not re.search(r"vars\.\w*REPLICAS\w*\s*\|\|", text), (
+        "a vars.*REPLICAS fallback expression is an override path; replica count is pinned"
+    )
+    assert "outputs.replicas" not in text
+
+
+def test_topology_guard_runs_before_helm() -> None:
+    names = [s.get("name") for s in _deploy_steps()]
+    assert names.index(TOPOLOGY_STEP) < names.index(DEPLOY_STEP)
+    guard = _step(TOPOLOGY_STEP)
+    assert "if" not in guard, "the guard must run unconditionally"
+    assert "continue-on-error" not in guard
+    assert guard["env"] == {
+        "PROD_REPLICAS": "${{ vars.PROD_REPLICAS }}",
+        "STAGING_REPLICAS": "${{ vars.STAGING_REPLICAS }}",
+    }
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"PROD_REPLICAS": "2"},
+        {"PROD_REPLICAS": "3"},
+        {"STAGING_REPLICAS": "2"},
+        {"PROD_REPLICAS": "1", "STAGING_REPLICAS": "10"},
+        {"PROD_REPLICAS": "0"},
+        {"PROD_REPLICAS": " 2"},
+    ],
+    ids=["prod-2", "prod-3", "staging-2", "staging-10", "prod-0", "prod-padded"],
+)
+def test_topology_guard_fails_closed_on_configured_non_one(env: dict[str, str]) -> None:
+    result = _run_topology_guard(env)
+    assert result.returncode != 0, f"guard accepted {env}"
+    assert "::error::" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "env",
+    [{}, {"PROD_REPLICAS": "", "STAGING_REPLICAS": ""}, {"PROD_REPLICAS": "1"}],
+    ids=["unset", "empty", "prod-1"],
+)
+def test_topology_guard_allows_unset_or_one(env: dict[str, str]) -> None:
+    result = _run_topology_guard(env)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 # --------------------------------------------------------------------------
