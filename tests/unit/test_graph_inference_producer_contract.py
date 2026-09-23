@@ -284,8 +284,52 @@ async def test_graph_result_never_overwrites_the_records_own_value(
     payload["entity"]["city"] = "Charlotte"
 
     handler = get_handler("converge")
+    assert handler is eie_handlers.handle_converge
     result: dict[str, Any] = await handler(TENANT, payload)
 
     assert live_runtime.requests[0].entity["city"] == "Charlotte"
     assert "city" not in result["fields"]
     assert result["inferences"][0]["graph_seeded"] == []
+
+
+@pytest.mark.asyncio
+async def test_take_for_an_entity_with_nothing_pending_never_scans_the_queue() -> None:
+    """A large foreign backlog costs a converge pass nothing (O(1), no partition)."""
+    channel = GraphReturnChannel()
+    await channel.submit(
+        _packet([_ceg_output("tier", str(i), 0.9, "r", entity_id=f"e-{i}") for i in range(200)])
+    )
+    queue = channel._queues[TENANT]
+
+    def _no_scan() -> None:
+        raise AssertionError("take_for_entity partitioned the queue for an idle entity")
+
+    with patch.object(queue, "get_nowait", _no_scan):
+        assert channel.take_for_entity(TENANT, "e-none") == []
+        assert channel.take_for_entity("unknown-tenant", "e-1") == []
+
+    assert [t.seed_value for t in channel.take_for_entity(TENANT, "e-7")] == ["7"]
+    # Consumed once; the next pass for the same entity is back to O(1).
+    with patch.object(queue, "get_nowait", _no_scan):
+        assert channel.take_for_entity(TENANT, "e-7") == []
+    assert queue.qsize() == 199
+
+
+@pytest.mark.asyncio
+async def test_pending_counts_stay_consistent_across_drain_and_take() -> None:
+    channel = GraphReturnChannel()
+    await channel.submit(
+        _packet(
+            [
+                _ceg_output("a", 1, 0.9, "r", entity_id="e-1"),
+                _ceg_output("b", 2, 0.9, "r", entity_id="e-2"),
+                _ceg_output("c", 3, 0.9, "r", entity_id="e-1"),
+            ]
+        )
+    )
+    drained = await channel.drain(TENANT, timeout=0.05, max_targets=1)
+    assert [t.field_name for t in drained] == ["a"]
+    assert [t.field_name for t in channel.take_for_entity(TENANT, "e-1")] == ["c"]
+    assert [t.field_name for t in channel.take_for_entity(TENANT, "e-2")] == ["b"]
+    assert channel.take_for_entity(TENANT, "e-1") == []
+    assert channel._pending[TENANT] == {}
