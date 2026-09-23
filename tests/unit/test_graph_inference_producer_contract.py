@@ -272,3 +272,20 @@ async def test_graph_result_never_overrides_a_more_confident_value(
     result = await _converge()
 
     assert result["fields"]["tier"] == "enterprise"
+
+
+@pytest.mark.asyncio
+async def test_graph_result_never_overwrites_the_records_own_value(
+    live_runtime: _RecordingEnricher,
+) -> None:
+    """The entity's supplied fields are the record itself, not a guess to outrank."""
+    await _deliver([_ceg_output("city", "Raleigh", 0.95, "geo", entity_id=ENTITY)])
+    payload = _converge_payload()
+    payload["entity"]["city"] = "Charlotte"
+
+    handler = get_handler("converge")
+    result: dict[str, Any] = await handler(TENANT, payload)
+
+    assert live_runtime.requests[0].entity["city"] == "Charlotte"
+    assert "city" not in result["fields"]
+    assert result["inferences"][0]["graph_seeded"] == []

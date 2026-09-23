@@ -432,15 +432,19 @@ def _apply_graph_targets(
 ) -> dict[str, Any]:
     """Seed graph-inference targets into convergence state.
 
-    A target replaces a known value only when it is more confident than that
-    value. The channel has already applied CONFIDENCE_FLOOR. Returns the fields
-    this pass actually seeded.
+    A target fills an unknown field, or replaces a value that this loop
+    produced (it has a confidence_map entry) with lower confidence. It never
+    replaces a value the request's entity supplied: that is the record's own
+    data, which carries no confidence here, so no inference outranks it. The
+    channel has already applied CONFIDENCE_FLOOR. Returns the fields this pass
+    actually seeded.
     """
     seeded: dict[str, Any] = {}
     for target in targets:
         name = target.field_name
         if name in state.known_fields and (
-            state.confidence_map.get(name, 0.0) >= target.source_confidence
+            name not in state.confidence_map
+            or state.confidence_map[name] >= target.source_confidence
         ):
             continue
         state.known_fields[name] = target.seed_value
