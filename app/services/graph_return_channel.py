@@ -11,6 +11,7 @@ import asyncio
 import logging
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -103,14 +104,18 @@ class GraphReturnChannel:
         channel = GraphReturnChannel.get_instance()
         await channel.submit(packet)
 
-    Usage (convergence_controller):
-        targets = await channel.drain(tenant_id="acme", timeout=0.5)
+    Usage (convergence_controller, at the start of each pass):
+        targets = channel.take_for_entity(tenant_id="acme", entity_id="res.partner:55")
     """
 
     _instance: GraphReturnChannel | None = None
 
     def __init__(self, maxsize: int = 10_000) -> None:
         self._queues: dict[str, asyncio.Queue[EnrichmentTarget]] = {}
+        # Queued targets per entity, per tenant. take_for_entity reads this
+        # first so a converge pass for an entity with nothing queued is O(1),
+        # however large the tenant's backlog is.
+        self._pending: dict[str, Counter[str]] = {}
         self._maxsize = maxsize
         self._submitted: int = 0
         self._drained: int = 0
@@ -150,6 +155,7 @@ class GraphReturnChannel:
         for target in targets:
             try:
                 q.put_nowait(target)
+                self._pending.setdefault(tenant_id, Counter())[target.entity_id] += 1
                 count += 1
             except asyncio.QueueFull:
                 self._rejected += 1
@@ -193,6 +199,7 @@ class GraphReturnChannel:
             except TimeoutError:
                 break
         self._drained += len(targets)
+        self._forget(tenant_id, targets)
         if targets:
             logger.info(
                 "GraphReturnChannel: drained %d targets for tenant=%s",
@@ -200,6 +207,59 @@ class GraphReturnChannel:
                 tenant_id,
             )
         return targets
+
+    def take_for_entity(
+        self,
+        tenant_id: str,
+        entity_id: str,
+        *,
+        max_targets: int = 500,
+    ) -> list[EnrichmentTarget]:
+        """Remove and return the queued targets for one entity of one tenant.
+
+        This is the convergence loop's consumer (EIE-POST-F001). It never
+        blocks, so it costs the request deadline nothing. Targets for other
+        entities of the same tenant go back on the queue in their original
+        order, for the loop converging those entities. It contains no await,
+        so no submit can interleave while the queue is being partitioned.
+
+        The queue is scanned only when this entity has targets pending, so an
+        entity with nothing queued costs O(1) per pass; one that has targets
+        pays one scan, after which its later passes are O(1) again.
+        """
+        q = self._queues.get(tenant_id)
+        if q is None or not self._pending.get(tenant_id, Counter())[entity_id]:
+            return []
+        taken: list[EnrichmentTarget] = []
+        kept: list[EnrichmentTarget] = []
+        for _ in range(q.qsize()):
+            target = q.get_nowait()
+            q.task_done()
+            if target.entity_id == entity_id and len(taken) < max_targets:
+                taken.append(target)
+            else:
+                kept.append(target)
+        for target in kept:
+            q.put_nowait(target)
+        self._drained += len(taken)
+        self._forget(tenant_id, taken)
+        if taken:
+            logger.info(
+                "GraphReturnChannel: took %d targets for tenant=%s entity=%s",
+                len(taken),
+                tenant_id,
+                entity_id,
+            )
+        return taken
+
+    def _forget(self, tenant_id: str, targets: list[EnrichmentTarget]) -> None:
+        """Remove consumed targets from the per-entity pending counts."""
+        pending = self._pending.get(tenant_id)
+        if pending is None:
+            return
+        pending.subtract(t.entity_id for t in targets)
+        for entity_id in [e for e, n in pending.items() if n <= 0]:
+            del pending[entity_id]
 
     def stats(self) -> dict[str, Any]:
         return {
