@@ -28,7 +28,12 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "pyyaml>=6.0",
     "redis>=5.0.0",
-    "sqlalchemy",
+    # app/services/pg_store.py imports sqlalchemy.ext.asyncio, which needs
+    # greenlet; SQLAlchemy 2.1 only pulls greenlet through the `asyncio` extra.
+    "sqlalchemy[asyncio]",
+    # `alembic upgrade head` (migrations/, alembic.ini) is the schema step run
+    # by scripts/docker-entrypoint.sh; without it no table exists.
+    "alembic>=1.13",
     "structlog>=24.0.0",
     "perplexityai>=0.2.0",
     "opentelemetry-api>=1.27.0",
