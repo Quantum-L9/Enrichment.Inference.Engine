@@ -38,6 +38,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 # second pod (EIE-212-F001): one replica per deployment until the channel is
 # shared. Asserted by tests/unit/test_worker_singleton_invariant.py and
 # tests/unit/test_deployment_topology.py.
-# Apply the schema (alembic upgrade head) before serving; see the script.
-ENTRYPOINT ["sh", "/app/scripts/docker-entrypoint.sh"]
+# No migrate-on-start in production (AGENTS.md forbids `alembic upgrade head`
+# in production context): the schema is applied as an explicit, operator-run
+# release step before rollout, e.g. `docker run --rm <image> alembic upgrade head`.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
