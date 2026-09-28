@@ -16,6 +16,7 @@ Integration fix applied (PR#22 merge pass):
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Annotated
 
@@ -266,12 +267,34 @@ def _fallback_loop_store():
     return _InMemory()
 
 
+def _bridge_settings_to_participation_env(settings: Settings) -> None:
+    """Give Gate_SDK the Gate controls Settings already loaded.
+
+    Pydantic reads `.env` and `.env.local` into Settings and does not export
+    them. `NodeParticipation.from_env` reads `GATE_ADMIN_TOKEN` and
+    `GATE_REGISTRATION_ENABLED` from the process environment, defaulting the
+    enable flag to true when the variable is absent. A process started with
+    those controls only in the documented env files would register without
+    the admin token, or would attempt registration that Settings had switched
+    off. A variable already present in the process environment stays
+    authoritative (Kubernetes and the shell).
+    """
+    if "GATE_REGISTRATION_ENABLED" not in os.environ:
+        os.environ["GATE_REGISTRATION_ENABLED"] = (
+            "true" if settings.gate_registration_enabled else "false"
+        )
+    if settings.gate_admin_token and "GATE_ADMIN_TOKEN" not in os.environ:
+        os.environ["GATE_ADMIN_TOKEN"] = settings.gate_admin_token
+
+
+_participation_settings = get_settings()
+_bridge_settings_to_participation_env(_participation_settings)
 app = create_node_app(
     service_name="enrichment-engine",
     version="2.3.0",
     lifecycle_hook=EnrichmentLifecycle(),
     config=_build_runtime_config(),
-    registration=build_node_registration(get_settings()),
+    registration=build_node_registration(_participation_settings),
 )
 
 app.add_middleware(RateLimitMiddleware, requests_per_minute=120)
@@ -286,6 +309,21 @@ app.include_router(score_router)
 
 
 GATE_REGISTRATION_DEGRADED: frozenset[str] = frozenset({"failed", "not_attempted"})
+
+
+def _legacy_gate_registered(sdk_state: str) -> bool | None:
+    """Public `gate_registered` contract on top of the SDK state.
+
+    null is disabled or not yet attempted (including `registering`). true is
+    Gate accepted this node. false is reserved for a rejected or errored
+    attempt. Clients that still read this field must not treat startup or an
+    intentional disable as a failure.
+    """
+    if sdk_state == "active":
+        return True
+    if sdk_state == "degraded":
+        return False
+    return None
 
 
 def _gate_registration_state() -> str:
@@ -316,7 +354,7 @@ async def health_check(settings: Annotated[Settings, Depends(get_settings)]):
         kb_grades=kb.index.total_grades,
         kb_rules=kb.index.total_rules,
         circuit_breaker_state=breaker.state,
-        gate_registered=app.state.participation.status.state.value == "active",
+        gate_registered=_legacy_gate_registered(app.state.participation.status.state.value),
     )
 
 

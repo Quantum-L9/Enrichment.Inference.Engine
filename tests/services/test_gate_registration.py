@@ -175,11 +175,11 @@ def _with_state(monkeypatch, state: str) -> None:
 @pytest.mark.parametrize(
     ("sdk_state", "expected_state", "expected_status", "expected_registered"),
     [
-        ("not_attempted", "not_attempted", "degraded", False),
-        ("registering", "not_attempted", "degraded", False),
+        ("not_attempted", "not_attempted", "degraded", None),
+        ("registering", "not_attempted", "degraded", None),
         ("active", "registered", "ok", True),
         ("degraded", "failed", "degraded", False),
-        ("disabled", "disabled", "ok", False),
+        ("disabled", "disabled", "ok", None),
     ],
 )
 def test_health_surfaces_the_sdk_participation_state(
@@ -236,3 +236,25 @@ def test_registration_default_matches_the_documented_contract():
     env_example = Path(__file__).resolve().parents[2] / ".env.example"
     assert "GATE_REGISTRATION_ENABLED=true" in env_example.read_text(encoding="utf-8")
     assert Settings.model_fields["gate_registration_enabled"].default is True
+
+
+def test_settings_bridge_exports_file_only_gate_controls(monkeypatch):
+    """`.env` values reach the SDK only if this process exports them."""
+    monkeypatch.delenv("GATE_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("GATE_REGISTRATION_ENABLED", raising=False)
+    main_module._bridge_settings_to_participation_env(
+        _settings(gate_admin_token="from-dotenv", gate_registration_enabled=False)
+    )
+    assert os.environ["GATE_ADMIN_TOKEN"] == "from-dotenv"
+    assert os.environ["GATE_REGISTRATION_ENABLED"] == "false"
+
+
+def test_settings_bridge_does_not_override_process_env(monkeypatch):
+    """Kubernetes and the shell stay authoritative over the env file."""
+    monkeypatch.setenv("GATE_ADMIN_TOKEN", "from-process")
+    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "true")
+    main_module._bridge_settings_to_participation_env(
+        _settings(gate_admin_token="from-dotenv", gate_registration_enabled=False)
+    )
+    assert os.environ["GATE_ADMIN_TOKEN"] == "from-process"
+    assert os.environ["GATE_REGISTRATION_ENABLED"] == "true"

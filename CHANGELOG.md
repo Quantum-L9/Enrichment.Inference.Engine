@@ -19,7 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Gate restart and tracks `active`/`degraded`/`disabled`.
   - `/api/v1/health` and `/api/v1/ready` keep their contract (names, 200 vs
     503), now rendered from the SDK's participation state. The SDK's own
-    `/v1/ready` answers the same way.
+    `/v1/ready` answers the same way. `gate_registered` stays null for
+    disabled, registering, and not-attempted participation, and is false
+    only for a rejected or errored attempt.
+  - Gate controls that exist only in `.env` / `.env.local` are copied to
+    `GATE_ADMIN_TOKEN` and `GATE_REGISTRATION_ENABLED` before the SDK reads
+    the process environment. A variable already set in the process wins.
   - The re-registration interval is the SDK variable
     `GATE_REREGISTRATION_INTERVAL_SECONDS` (default 300; kustomize base 60);
     EIE's `L9_GATE_REREGISTRATION_INTERVAL_SECONDS` setting is retired.
