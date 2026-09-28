@@ -34,4 +34,4 @@ configMapGenerator:
       - GATE_URL=http://constellation-gate.gate.svc.cluster.local:9000
       - GATE_REGISTRATION_ENABLED=true
       - GATE_INTERNAL_URL=http://enrichment-api.enrichment.svc.cluster.local:8000
-      - L9_GATE_REREGISTRATION_INTERVAL_SECONDS=60
+      - GATE_REREGISTRATION_INTERVAL_SECONDS=60

@@ -1,20 +1,21 @@
-"""Gate registration boundary: EIE owns the values, Gate_SDK owns the transport.
+"""Gate registration boundary: EIE owns the values, Gate_SDK owns participation.
 
-EIE's bespoke registration client is gone. What remains testable here is the
-half EIE still owns — node identity, advertised actions, health endpoint, owner,
-and the node cap it advertises — plus proof that the wire body the SDK renders
-from it is semantically what the Gate previously accepted.
+EIE's bespoke registration client, its re-registration loop and its
+registration state are gone (L9-PARTICIPATION-01): Gate_SDK's create_node_app()
+registers, re-registers after a Gate restart and tracks the state. What remains
+testable here is the half EIE still owns — node identity, advertised actions,
+health endpoint, owner and node cap — that EIE hands exactly that identity to
+the SDK, and that /api/v1/health and /api/v1/ready keep their contract on top
+of the SDK's state.
 
-Hermetic: all HTTP is mocked via respx. No real network is contacted.
+Hermetic: no network is contacted.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 os.environ.update(
     {
@@ -26,25 +27,20 @@ os.environ.update(
     }
 )
 
-import httpx
 import pytest
-import respx
+from constellation_node_sdk import NodeParticipation, ParticipationState
 from fastapi.testclient import TestClient
 
 from app import main as main_module
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 from app.main import (
     ADVERTISED_ACTIONS,
     NODE_TIMEOUT_MS,
-    _register_with_gate,
     build_node_registration,
-    start_reregistration_loop,
-    stop_reregistration_loop,
 )
 from app.services.request_deadline import CANONICAL_CONVERGE_BUDGET_SECONDS
 
 GATE_URL = "http://gate.test"
-REGISTER_URL = f"{GATE_URL}/v1/admin/register"
 
 
 def _settings(**overrides) -> Settings:
@@ -152,78 +148,49 @@ def test_sdk_payload_is_semantically_equivalent_to_the_deleted_client():
     assert "owner" not in node  # owner is metadata.owner, never top-level
 
 
-@respx.mock
-async def test_register_posts_canonical_payload():
-    route = respx.post(REGISTER_URL).mock(return_value=httpx.Response(200))
-    assert await _register_with_gate(_settings()) is True
-
-    request = route.calls.last.request
-    assert request.url.params.get("overwrite") == "true"
-    node = json.loads(request.content)["enrichment-engine"]
-    assert node["metadata"]["owner"] == "eie"
-    assert node["health_endpoint"] == "/api/v1/health"
-    assert "converge" in node["supported_actions"]
-    assert node["timeout_ms"] == 25_000
+# --------------------------------------------------------------------------
+# Participation is the SDK's: EIE hands it the identity and nothing else
+# --------------------------------------------------------------------------
 
 
-@respx.mock
-async def test_admin_token_header_sent_when_configured():
-    route = respx.post(REGISTER_URL).mock(return_value=httpx.Response(200))
-    await _register_with_gate(_settings(gate_admin_token="secret-token"))
-    assert route.calls.last.request.headers.get("X-Admin-Token") == "secret-token"
+def test_eie_participates_through_the_sdk_with_its_own_identity():
+    """No bespoke registration code: the app's participation is the SDK's."""
+    participation = main_module.app.state.participation
+    assert isinstance(participation, NodeParticipation)
+    for gone in (
+        "_register_with_gate",
+        "_reregistration_loop",
+        "start_reregistration_loop",
+        "stop_reregistration_loop",
+        "_gate_registered",
+    ):
+        assert not hasattr(main_module, gone), f"app.main still defines {gone}"
 
 
-async def test_disabled_returns_none_and_no_http():
-    # No respx router active; a real POST would raise, proving no call is made.
-    assert await _register_with_gate(_settings(gate_registration_enabled=False)) is None
-
-
-async def test_no_gate_url_returns_none_and_no_http():
-    assert await _register_with_gate(_settings(gate_url="")) is None
-
-
-@respx.mock
-async def test_rejection_returns_false():
-    respx.post(REGISTER_URL).mock(return_value=httpx.Response(422))
-    assert await _register_with_gate(_settings()) is False
-
-
-@respx.mock
-async def test_transport_error_is_non_fatal():
-    """Gate unreachable degrades readiness; it never raises into startup."""
-    respx.post(REGISTER_URL).mock(side_effect=httpx.ConnectError("boom"))
-    assert await _register_with_gate(_settings()) is False
+def _with_state(monkeypatch, state: str) -> None:
+    fake = SimpleNamespace(status=SimpleNamespace(state=ParticipationState(state)))
+    monkeypatch.setattr(main_module.app.state, "participation", fake)
 
 
 @pytest.mark.parametrize(
-    ("registered", "expected_state", "expected_status"),
+    ("sdk_state", "expected_state", "expected_status", "expected_registered"),
     [
-        (None, "not_attempted", "degraded"),
-        (True, "registered", "ok"),
-        (False, "failed", "degraded"),
+        ("not_attempted", "not_attempted", "degraded", False),
+        ("registering", "not_attempted", "degraded", False),
+        ("active", "registered", "ok", True),
+        ("degraded", "failed", "degraded", False),
+        ("disabled", "disabled", "ok", False),
     ],
 )
-def test_health_surfaces_gate_registered(monkeypatch, registered, expected_state, expected_status):
-    """Liveness is not routability: an unregistered node reports degraded.
-
-    EIE-002: `None` used to report "ok" here, so a deployment that never
-    attempted registration — the common case, because the code default was
-    False while .env.example set true — looked healthy while Gate held no
-    route to it. With registration enabled, an un-attempted registration is
-    now `not_attempted` and degrades.
-    """
-    monkeypatch.setattr(main_module, "_gate_registered", registered)
-    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "true")
-    monkeypatch.setenv("GATE_URL", GATE_URL)
-    get_settings.cache_clear()
-    try:
-        client = TestClient(main_module.app)
-        body = client.get("/api/v1/health").json()
-    finally:
-        get_settings.cache_clear()
-    assert body["gate_registered"] is registered
+def test_health_surfaces_the_sdk_participation_state(
+    monkeypatch, sdk_state, expected_state, expected_status, expected_registered
+):
+    """Liveness is not routability: an unregistered node reports degraded (EIE-002)."""
+    _with_state(monkeypatch, sdk_state)
+    body = TestClient(main_module.app).get("/api/v1/health").json()
     assert body["gate_registration"] == expected_state
     assert body["status"] == expected_status
+    assert body["gate_registered"] is expected_registered
 
 
 # --------------------------------------------------------------------------
@@ -232,62 +199,29 @@ def test_health_surfaces_gate_registered(monkeypatch, registered, expected_state
 
 
 @pytest.mark.parametrize(
-    ("registered", "expected_state", "expected_http", "expected_ready"),
+    ("sdk_state", "expected_state", "expected_http", "expected_ready"),
     [
-        (None, "not_attempted", 503, False),
-        (False, "failed", 503, False),
-        (True, "registered", 200, True),
+        ("not_attempted", "not_attempted", 503, False),
+        ("degraded", "failed", 503, False),
+        ("active", "registered", 200, True),
+        ("disabled", "disabled", 200, True),
     ],
 )
 def test_readiness_fails_at_http_level_while_liveness_stays_up(
-    monkeypatch, registered, expected_state, expected_http, expected_ready
+    monkeypatch, sdk_state, expected_state, expected_http, expected_ready
 ):
-    """The audit's counterexample: a readinessProbe reads the status code, not the body.
-
-    With registration enabled, `failed` and `not_attempted` must be non-2xx on
-    the readiness endpoint so Kubernetes stops routing to a pod Gate cannot
-    reach — while /api/v1/health keeps answering 200, because the process is
-    alive and a Gate outage must not become a restart loop.
-    """
-    monkeypatch.setattr(main_module, "_gate_registered", registered)
-    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "true")
-    monkeypatch.setenv("GATE_URL", GATE_URL)
-    get_settings.cache_clear()
-    try:
-        client = TestClient(main_module.app)
-        ready = client.get(main_module.READINESS_ENDPOINT)
-        live = client.get(main_module.HEALTH_ENDPOINT)
-    finally:
-        get_settings.cache_clear()
+    """A readinessProbe reads the status code; a Gate outage must not become a restart loop."""
+    _with_state(monkeypatch, sdk_state)
+    client = TestClient(main_module.app)
+    ready = client.get(main_module.READINESS_ENDPOINT)
+    live = client.get(main_module.HEALTH_ENDPOINT)
 
     assert ready.status_code == expected_http
     body = ready.json()
     assert body["ready"] is expected_ready
     assert body["status"] == ("ready" if expected_ready else "not_ready")
     assert body["gate_registration"] == expected_state
-
     assert live.status_code == 200
-    assert live.json()["gate_registration"] == expected_state
-
-
-@pytest.mark.parametrize("registered", [None, True, False])
-def test_readiness_is_ready_when_registration_is_disabled(monkeypatch, registered):
-    """Switched off is not failed: a node that never registers is ready to serve."""
-    monkeypatch.setattr(main_module, "_gate_registered", registered)
-    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "false")
-    get_settings.cache_clear()
-    try:
-        client = TestClient(main_module.app)
-        ready = client.get(main_module.READINESS_ENDPOINT)
-    finally:
-        get_settings.cache_clear()
-    assert ready.status_code == 200
-    assert ready.json() == {
-        "ready": True,
-        "status": "ready",
-        "gate_registration": "disabled",
-        "version": main_module.NODE_VERSION,
-    }
 
 
 def test_readiness_endpoint_is_distinct_from_the_registered_health_endpoint():
@@ -297,159 +231,8 @@ def test_readiness_endpoint_is_distinct_from_the_registered_health_endpoint():
     assert build_node_registration(_settings()).health_endpoint == main_module.HEALTH_ENDPOINT
 
 
-@pytest.mark.parametrize("registered", [None, True, False])
-def test_health_reports_disabled_registration_as_ok(monkeypatch, registered):
-    """A node with registration switched off is not a node that failed to register."""
-    monkeypatch.setattr(main_module, "_gate_registered", registered)
-    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "false")
-    get_settings.cache_clear()
-    try:
-        client = TestClient(main_module.app)
-        body = client.get("/api/v1/health").json()
-    finally:
-        get_settings.cache_clear()
-    assert body["gate_registration"] == "disabled"
-    assert body["status"] == "ok"
-
-
 def test_registration_default_matches_the_documented_contract():
-    """EIE-002: the code default and .env.example must not disagree.
-
-    They did — config said False, .env.example line 103 said true — so a
-    deployment that omitted the variable silently never registered.
-    """
+    """EIE-002: the code default and .env.example must not disagree."""
     env_example = Path(__file__).resolve().parents[2] / ".env.example"
     assert "GATE_REGISTRATION_ENABLED=true" in env_example.read_text(encoding="utf-8")
     assert Settings.model_fields["gate_registration_enabled"].default is True
-
-
-# --------------------------------------------------------------------------
-# Periodic re-registration: routing recovery without a process restart
-# --------------------------------------------------------------------------
-
-
-def test_reregistration_loop_is_off_when_registration_is_off():
-    assert start_reregistration_loop(_settings(gate_registration_enabled=False)) is None
-    assert start_reregistration_loop(_settings(gate_url="")) is None
-
-
-@pytest.mark.asyncio
-async def test_reregistration_loop_is_off_at_zero_interval():
-    assert start_reregistration_loop(_settings(l9_gate_reregistration_interval_seconds=0)) is None
-
-
-@pytest.mark.asyncio
-async def test_reregistration_loop_reregisters_and_updates_readiness(monkeypatch):
-    """Each cycle re-runs the SDK registration and the verdict feeds readiness."""
-    verdicts = iter([False, True, True, True, True])
-    fake = AsyncMock(side_effect=lambda settings: next(verdicts))
-    monkeypatch.setattr(main_module, "_register_with_gate", fake)
-    monkeypatch.setattr(main_module, "_gate_registered", None)
-
-    task = start_reregistration_loop(_settings(l9_gate_reregistration_interval_seconds=0.01))
-    assert task is not None
-    monkeypatch.setattr(main_module, "_reregistration_task", task)
-    try:
-        for _ in range(200):
-            if fake.await_count >= 2:
-                break
-            await asyncio.sleep(0.01)
-    finally:
-        await stop_reregistration_loop()
-
-    assert fake.await_count >= 2
-    assert task.done()
-    assert main_module._gate_registered is True
-
-
-@pytest.mark.asyncio
-async def test_reregistration_loop_survives_a_raising_attempt(monkeypatch):
-    calls = {"n": 0}
-
-    async def flaky(settings):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("gate exploded")
-        return True
-
-    monkeypatch.setattr(main_module, "_register_with_gate", flaky)
-    monkeypatch.setattr(main_module, "_gate_registered", None)
-    task = start_reregistration_loop(_settings(l9_gate_reregistration_interval_seconds=0.01))
-    assert task is not None
-    monkeypatch.setattr(main_module, "_reregistration_task", task)
-    try:
-        for _ in range(200):
-            if calls["n"] >= 2:
-                break
-            await asyncio.sleep(0.01)
-    finally:
-        await stop_reregistration_loop()
-
-    assert calls["n"] >= 2
-    assert main_module._gate_registered is True
-
-
-# --------------------------------------------------------------------------
-# Node-runtime signing posture comes from the environment (SDK L9_* names)
-# --------------------------------------------------------------------------
-
-
-@pytest.fixture
-def fresh_runtime_config():
-    """Make the environment -> config mapping observable.
-
-    The SDK's ``get_runtime_config`` is ``@lru_cache``d, and ``app/main.py``
-    warms it at import time (``create_node_app(config=_build_runtime_config())``),
-    so the first call in the process pins the config for every later one and the
-    ``monkeypatch.setenv`` calls below would be read against a config built
-    before they ran. Caching is the intended production behaviour -- the runtime
-    must not re-read the environment per packet -- so the cache is cleared here
-    rather than removed there.
-    """
-    from constellation_node_sdk.runtime.config import get_runtime_config
-
-    get_runtime_config.cache_clear()
-    yield
-    get_runtime_config.cache_clear()
-
-
-def test_runtime_signs_responses_when_key_material_is_present(monkeypatch, fresh_runtime_config):
-    from app.main import _build_runtime_config
-
-    monkeypatch.setenv("L9_SIGNING_KEY", "worker-material")
-    monkeypatch.setenv("L9_SIGNING_KEY_ID", "eie-k1")
-    monkeypatch.setenv("L9_VERIFYING_KEYS_JSON", '{"gate-k1": "gate-material"}')
-    monkeypatch.setenv("L9_REQUIRE_SIGNATURE", "true")
-    monkeypatch.delenv("L9_SIGNING_ALGORITHM", raising=False)
-    config = _build_runtime_config()
-    assert config.signing_key == "worker-material"
-    assert config.signing_key_id == "eie-k1"
-    assert config.signing_algorithm == "hmac-sha256"
-    assert config.require_signature is True
-    assert config.verifying_keys == {"gate-k1": "gate-material"}
-
-
-def test_runtime_is_unsigned_without_key_material(monkeypatch, fresh_runtime_config):
-    from app.main import _build_runtime_config
-
-    for name in (
-        "L9_SIGNING_KEY",
-        "L9_SIGNING_SECRET",
-        "L9_SIGNING_KEY_ID",
-        "L9_VERIFYING_KEYS_JSON",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("L9_REQUIRE_SIGNATURE", "false")
-    config = _build_runtime_config()
-    assert config.signing_key is None
-    assert config.signing_key_id is None
-    assert config.require_signature is False
-    assert config.verifying_keys == {}
-
-
-def test_malformed_verifying_keys_fail_closed(monkeypatch, fresh_runtime_config):
-    from app.main import _build_runtime_config
-
-    monkeypatch.setenv("L9_VERIFYING_KEYS_JSON", '["not", "a", "map"]')
-    with pytest.raises(ValueError, match="L9_VERIFYING_KEYS_JSON"):
-        _build_runtime_config()

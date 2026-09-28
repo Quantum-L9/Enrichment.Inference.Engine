@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Gate participation is Gate_SDK's (L9-PARTICIPATION-01).** Requires
+  Gate_SDK 1.2.0 on the `@v1` channel.
+  - `create_node_app(registration=build_node_registration(...))` replaces
+    EIE's own startup registration, re-registration loop and registration
+    state (`_register_with_gate`, `start/stop_reregistration_loop`,
+    `_gate_registered` — deleted). The SDK registers, re-registers after a
+    Gate restart and tracks `active`/`degraded`/`disabled`.
+  - `/api/v1/health` and `/api/v1/ready` keep their contract (names, 200 vs
+    503), now rendered from the SDK's participation state. The SDK's own
+    `/v1/ready` answers the same way.
+  - The re-registration interval is the SDK variable
+    `GATE_REREGISTRATION_INTERVAL_SECONDS` (default 300; kustomize base 60);
+    EIE's `L9_GATE_REREGISTRATION_INTERVAL_SECONDS` setting is retired.
 - **PR #212 audit closure (EIE-212-F001..F004).**
   - `GET /api/v1/ready` answers HTTP 503 while Gate registration is enabled
     but `failed` or `not_attempted`, 200 when `registered` or `disabled`.
