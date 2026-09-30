@@ -32,8 +32,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -65,6 +68,38 @@ class SonarResponse:
 # ── Singleton client ───────────────────────────────────────
 
 _clients: dict[str, Perplexity] = {}
+
+
+def _capture_provider_exchange(payload: dict[str, Any], response: SonarResponse) -> None:
+    """Write the provider request and reply when a test capture directory is set.
+
+    The API key is not part of the chat payload and is never written. Unset
+    ``L9_PROVIDER_CAPTURE_DIR`` leaves the call with no extra file.
+    """
+    directory = os.environ.get("L9_PROVIDER_CAPTURE_DIR", "").strip()
+    if not directory:
+        return
+    path = Path(directory)
+    path.mkdir(parents=True, exist_ok=True)
+    safe_payload = {
+        key: value
+        for key, value in payload.items()
+        if key.lower() not in {"api_key", "authorization"}
+    }
+    record = {
+        "captured_at": datetime.now(tz=UTC).isoformat(),
+        "request": safe_payload,
+        "response": {
+            "model": response.model,
+            "tokens_used": response.tokens_used,
+            "latency_ms": response.latency_ms,
+            "data": response.data,
+            "citations": response.citations,
+        },
+    }
+    stamp = f"{time.time_ns()}"
+    target = path / f"{stamp}.json"
+    target.write_text(json.dumps(record, indent=2, default=str) + "\n", encoding="utf-8")
 
 
 def _get_client(api_key: str) -> Perplexity:
@@ -163,7 +198,9 @@ def _sync_call(payload: dict[str, Any], api_key: str, timeout: float) -> SonarRe
                 timeout=attempt_timeout,
                 max_retries=0,
             ).chat.completions.create(**payload)
-            return _parse_completion(completion, payload, start)
+            parsed = _parse_completion(completion, payload, start)
+            _capture_provider_exchange(payload, parsed)
+            return parsed
 
         except PerplexityError as e:
             last_err = e

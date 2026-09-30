@@ -92,6 +92,7 @@ def _live_producer_payload(**overrides: Any) -> dict[str, Any]:
         "object_type": "plasticos",
         "objective": "Full entity enrichment and inference",
         "max_variations": 5,
+        "consensus_threshold": 0.80,
         "odoo": {
             "model": "plasticos.enrichment.run",
             "record_id": 7,
@@ -159,6 +160,7 @@ async def test_live_payload_validates_as_a_canonical_enrich_request() -> None:
     assert request.object_type == "plasticos"
     assert request.objective == "Full entity enrichment and inference"
     assert request.max_variations == 5
+    assert request.consensus_threshold == 0.80
 
 
 @requires_app_runtime
@@ -187,6 +189,7 @@ async def test_request_reaches_the_convergence_loop_untranslated(converge_runtim
     assert request.object_type == "plasticos"
     assert request.objective == "Full entity enrichment and inference"
     assert request.max_variations == 5
+    assert request.consensus_threshold == 0.80
 
 
 @requires_app_runtime

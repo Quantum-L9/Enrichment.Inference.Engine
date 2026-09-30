@@ -25,7 +25,7 @@ import structlog
 from ..core.config import Settings
 from ..models.schemas import EnrichRequest, EnrichResponse
 from ..services.circuit_breaker import CircuitBreaker
-from ..services.consensus_engine import synthesize
+from ..services.consensus_engine import apply_field_confidence_thresholds, synthesize
 from ..services.deterministic_provider import PROVIDER_NAME as DETERMINISTIC_PROVIDER
 from ..services.deterministic_provider import query_deterministic
 from ..services.idempotency import IdempotencyStore
@@ -203,8 +203,14 @@ async def enrich_entity(
                         timeout=effective_timeout,
                     )
 
-        tasks = [_call() for _ in range(variation_count)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await _collect_variations(
+            call=_call,
+            variation_count=variation_count,
+            target_schema=target_schema,
+            threshold=request.consensus_threshold,
+            field_thresholds=request.field_thresholds,
+        )
+        calls_made = len(results)
 
         valid, raw_payloads, errors, total_tokens = _process_variation_results(
             results, target_schema
@@ -216,7 +222,7 @@ async def enrich_entity(
             return EnrichResponse(
                 state="failed",
                 failure_reason=f"no_valid_responses ({len(errors)} errors: {'; '.join(errors[:3])})",
-                variation_count=variation_count,
+                variation_count=calls_made,
                 consensus_threshold=request.consensus_threshold,
                 uncertainty_score=0.0,  # Single-pass mode has no uncertainty tracking
                 pass_count=1,
@@ -227,10 +233,15 @@ async def enrich_entity(
                 processing_time_ms=elapsed,
             )
 
+        # Timeouts are not dissenting votes. Agreement is measured across
+        # replies that actually came back, so one good `street` is not
+        # discarded because the sibling call never answered.
+        if request.field_thresholds:
+            valid = apply_field_confidence_thresholds(valid, request.field_thresholds)
         synthesis = synthesize(
             valid,
             request.consensus_threshold,
-            total_attempted=variation_count,
+            total_attempted=len(valid),
         )
 
         if not synthesis["fields"]:
@@ -238,7 +249,7 @@ async def enrich_entity(
                 state="failed",
                 failure_reason="no_fields_above_consensus_threshold",
                 confidence=synthesis["confidence"],
-                variation_count=variation_count,
+                variation_count=calls_made,
                 consensus_threshold=request.consensus_threshold,
                 uncertainty_score=0.0,  # Single-pass mode has no uncertainty tracking
                 pass_count=1,
@@ -261,7 +272,7 @@ async def enrich_entity(
             kb_content_hash=kb_data["content_hash"],
             kb_fragment_ids=kb_data["fragment_ids"],
             kb_files_consulted=kb_data["kb_files"],
-            variation_count=variation_count,
+            variation_count=calls_made,
             consensus_threshold=request.consensus_threshold,
             uncertainty_score=0.0,  # Single-pass mode has no uncertainty tracking
             pass_count=1,
@@ -298,6 +309,73 @@ async def enrich_entity(
             failure_reason=str(exc),
             processing_time_ms=elapsed,
         )
+
+
+def _reply_is_sufficient(
+    result: Any,
+    target_schema: dict[str, str] | None,
+    threshold: float,
+    field_thresholds: dict[str, float] | None = None,
+) -> bool:
+    """True when this reply already fills the requested schema at high confidence.
+
+    A later variation must not be sent once this is true. When the consumer
+    sent per-field thresholds, each field is judged by its own number. A
+    requested field with no number does not borrow ``threshold``.
+    """
+    if not isinstance(result, SonarResponse):
+        return False
+    try:
+        validated = validate_response(result.data, target_schema)
+    except ValidationError:
+        return False
+    try:
+        confidence = float(validated.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if not target_schema:
+        if field_thresholds:
+            return False
+        return confidence >= threshold
+    for name in target_schema:
+        if name == "confidence":
+            continue
+        if validated.get(name) in (None, "", [], {}):
+            return False
+        if field_thresholds is not None:
+            required = field_thresholds.get(name)
+            if required is None or confidence < required:
+                return False
+        elif confidence < threshold:
+            return False
+    return True
+
+
+async def _collect_variations(
+    *,
+    call: Any,
+    variation_count: int,
+    target_schema: dict[str, str] | None,
+    threshold: float,
+    field_thresholds: dict[str, float] | None = None,
+) -> list[Any]:
+    """Run variations one at a time. Stop after a sufficient reply."""
+    results: list[Any] = []
+    for _index in range(variation_count):
+        try:
+            reply = await call()
+        except Exception as exc:
+            results.append(exc)
+            continue
+        results.append(reply)
+        if _reply_is_sufficient(reply, target_schema, threshold, field_thresholds):
+            logger.info(
+                "variation_short_circuit",
+                calls_made=len(results),
+                budget=variation_count,
+            )
+            break
+    return results
 
 
 def _process_variation_results(

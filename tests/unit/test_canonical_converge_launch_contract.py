@@ -135,6 +135,7 @@ def _odoo_request() -> dict[str, Any]:
         "object_type": "plasticos",
         "objective": "Full entity enrichment and inference",
         "max_variations": 5,
+        "consensus_threshold": 0.80,
         "odoo": {
             "model": "plasticos.enrichment.run",
             "record_id": 7,
@@ -399,6 +400,7 @@ async def test_canonical_request_preserves_the_odoo_contract_verbatim(
     assert request.object_type == "plasticos"
     assert request.objective == "Full entity enrichment and inference"
     assert request.max_variations == 5
+    assert request.consensus_threshold == 0.80
     # The compat dialect's required keys are not required here.
     payload = _odoo_request()
     assert "entity_snapshot" not in payload

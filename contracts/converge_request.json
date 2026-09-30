@@ -9,6 +9,7 @@
   "object_type": "plasticos",
   "objective": "Full entity enrichment and inference",
   "max_variations": 5,
+  "consensus_threshold": 0.80,
   "odoo": {
     "model": "plasticos.enrichment.run",
     "record_id": 7,

@@ -23,6 +23,35 @@ import structlog
 logger = structlog.get_logger("consensus")
 
 
+def apply_field_confidence_thresholds(
+    variations: list[dict[str, Any]],
+    field_thresholds: dict[str, float],
+) -> list[dict[str, Any]]:
+    """Keep a field only when this reply's confidence clears that field's bar.
+
+    A field the consumer did not name in ``field_thresholds`` is dropped.
+    There is no fallback to the packet-wide agreement threshold.
+    """
+    filtered: list[dict[str, Any]] = []
+    for variation in variations:
+        try:
+            confidence = float(variation.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        kept: dict[str, Any] = {"confidence": variation.get("confidence")}
+        for key, value in variation.items():
+            if key == "confidence":
+                continue
+            required = field_thresholds.get(key)
+            if required is None or confidence < required:
+                continue
+            if value in (None, "", [], {}):
+                continue
+            kept[key] = value
+        filtered.append(kept)
+    return filtered
+
+
 def synthesize(
     variations: list[dict[str, Any]],
     threshold: float = 0.6,
