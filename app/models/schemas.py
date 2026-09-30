@@ -15,9 +15,10 @@ updating both the Apex package and the Odoo bridge.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ── Request ──────────────────────────────────────────────────
 
@@ -62,8 +63,11 @@ class EnrichRequest(BaseModel):
         description="KB profile identifier for selective injection.",
     )
 
-    # Tuning knobs
+    # Tuning knobs. consensus_threshold is the agreement bar. field_thresholds
+    # is the consumer's minimum model confidence for each requested field.
+    # A schema field with no entry is not filled; nothing substitutes 0.65.
     consensus_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+    field_thresholds: dict[str, float] | None = Field(default=None)
     max_variations: int = Field(default=5, ge=1, le=10)
 
     # Idempotency — caller can supply a UUID to prevent duplicate processing
@@ -83,6 +87,38 @@ class EnrichRequest(BaseModel):
             except json.JSONDecodeError:
                 return None
         return v
+
+    @field_validator("field_thresholds")
+    @classmethod
+    def thresholds_are_unit_interval(cls, value: Any) -> dict[str, float] | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            msg = "field_thresholds must be an object of field name to confidence"
+            raise ValueError(msg)
+        cleaned: dict[str, float] = {}
+        for key, raw in value.items():
+            try:
+                number = float(raw)
+            except (TypeError, ValueError) as exc:
+                msg = f"field_thresholds[{key!r}] is not a number"
+                raise ValueError(msg) from exc
+            if not math.isfinite(number) or number < 0.0 or number > 1.0:
+                msg = f"field_thresholds[{key!r}] must be a finite number between 0 and 1"
+                raise ValueError(msg)
+            cleaned[str(key)] = number
+        return cleaned
+
+    @model_validator(mode="after")
+    def requested_fields_name_their_threshold(self) -> EnrichRequest:
+        """A requested field with no consumer threshold is not given one here."""
+        if self.field_thresholds is None or not self.schema_:
+            return self
+        missing = [name for name in self.schema_ if name not in self.field_thresholds]
+        if missing:
+            msg = f"field_thresholds missing for requested fields: {', '.join(sorted(missing))}"
+            raise ValueError(msg)
+        return self
 
 
 class BatchEnrichRequest(BaseModel):

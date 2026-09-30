@@ -64,6 +64,7 @@ def _live_odoo_payload(**overrides: Any) -> dict[str, Any]:
         "object_type": "plasticos",
         "objective": "Full entity enrichment and inference",
         "max_variations": 5,
+        "consensus_threshold": 0.80,
         "odoo": {"model": "plasticos.enrichment.run", "record_id": 7},
     }
     base.update(overrides)
@@ -98,6 +99,7 @@ class TestLiveOdooBuilderShapeIsCanonical:
         assert request.object_type == "plasticos"
         assert request.objective == "Full entity enrichment and inference"
         assert request.max_variations == 5
+        assert request.consensus_threshold == 0.80
 
     def test_canonical_payload_wins_over_a_stray_top_level_entity_id(self) -> None:
         """Canonical precedence — found by review on this PR.

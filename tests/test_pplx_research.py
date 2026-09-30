@@ -6,6 +6,7 @@ Covers: Sonar API integration, citation extraction, rate limiting,
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -128,3 +129,20 @@ class TestPerplexityClient:
         assert client.with_options.call_count == 2
         for call in client.with_options.call_args_list:
             assert call.kwargs["max_retries"] == 0
+
+    def test_capture_directory_failure_does_not_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        blocked = tmp_path / "capture"
+        blocked.write_text("not a directory")
+        monkeypatch.setenv("L9_PROVIDER_CAPTURE_DIR", str(blocked))
+        success = _completion('{"polymer_type": "HDPE"}')
+        client = MagicMock()
+        client.with_options.return_value = client
+        client.chat.completions.create.return_value = success
+
+        with patch("app.services.perplexity_client._get_client", return_value=client):
+            response = _sync_call({"model": "sonar"}, "test-key", 60)
+
+        assert response.data["polymer_type"] == "HDPE"
+        assert client.chat.completions.create.call_count == 1

@@ -133,6 +133,99 @@ class TestConvergenceController:
         assert response.pass_count <= MAX_PASSES
 
     @pytest.mark.asyncio
+    async def test_first_pass_stops_when_requested_fields_clear_their_bars(
+        self, mock_settings, mock_kb_resolver
+    ):
+        calls = 0
+
+        async def enricher(request, settings, kb_resolver, idem_store, sonar_config=None):
+            nonlocal calls
+            calls += 1
+            return EnrichResponse(
+                fields={"state": "North Carolina", "website": "https://example.com"},
+                confidence=1.0,
+                variation_count=1,
+                uncertainty_score=0.0,
+                pass_count=1,
+                inference_version="test",
+                processing_time_ms=10,
+                tokens_used=100,
+                state="completed",
+                feature_vector={
+                    "per_field_confidence": {"state": 0.99, "website": 0.99},
+                },
+            )
+
+        request = EnrichRequest(
+            entity={"name": "Scrap Management Inc"},
+            object_type="plasticos",
+            objective="state and website",
+            schema={"state": "string", "website": "string"},
+            field_thresholds={"state": 0.95, "website": 0.99},
+            max_variations=1,
+        )
+        response = await run_convergence_loop(
+            request=request,
+            settings=mock_settings,
+            kb_resolver=mock_kb_resolver,
+            enricher=enricher,
+            inference_rules=[],
+        )
+        assert calls == 1
+        assert response.pass_count == 1
+        assert response.fields["state"] == "North Carolina"
+        assert response.fields["website"] == "https://example.com"
+
+    @pytest.mark.asyncio
+    async def test_first_pass_continues_when_a_requested_field_is_missing(
+        self, mock_settings, mock_kb_resolver
+    ):
+        calls = 0
+
+        async def enricher(request, settings, kb_resolver, idem_store, sonar_config=None):
+            nonlocal calls
+            calls += 1
+            fields = (
+                {"state": "North Carolina"}
+                if calls == 1
+                else {
+                    "state": "North Carolina",
+                    "website": "https://example.com",
+                }
+            )
+            return EnrichResponse(
+                fields=fields,
+                confidence=1.0,
+                variation_count=1,
+                uncertainty_score=0.0,
+                pass_count=1,
+                inference_version="test",
+                processing_time_ms=10,
+                tokens_used=100,
+                state="completed",
+                feature_vector={"per_field_confidence": dict.fromkeys(fields, 0.99)},
+            )
+
+        request = EnrichRequest(
+            entity={"name": "Scrap Management Inc"},
+            object_type="plasticos",
+            objective="state and website",
+            schema={"state": "string", "website": "string"},
+            field_thresholds={"state": 0.95, "website": 0.99},
+            max_variations=1,
+        )
+        response = await run_convergence_loop(
+            request=request,
+            settings=mock_settings,
+            kb_resolver=mock_kb_resolver,
+            enricher=enricher,
+            inference_rules=[],
+        )
+        assert calls == 2
+        assert response.pass_count == 2
+        assert "website" in response.fields
+
+    @pytest.mark.asyncio
     async def test_max_passes_respected(self, enrich_request, mock_settings, mock_kb_resolver):
         call_count = 0
 
@@ -540,3 +633,183 @@ class TestVariationCountIsAVariationCount:
         response = _assemble_convergence_response(state, request, elapsed=10)
         assert response.variation_count == 8
         assert response.pass_count == 3
+
+
+def test_caller_schema_is_the_pass_target() -> None:
+    """Odoo's writeback schema must survive pass 1 discovery.
+
+    Discovery otherwise replaces the schema with entity keys that merely
+    have low confidence, so a request for `street` never reaches the provider
+    and the Odoo backfill comes back empty.
+    """
+    from app.engines.convergence_controller import _build_pass_request
+    from app.engines.meta_prompt_planner import PromptPlan
+
+    plan = PromptPlan(
+        mode="discovery",
+        priority_fields=["name", "website", "city", "zip", "email", "phone", "id"],
+        kb_fragment_ids=[],
+        variation_count=2,
+        pass_number=1,
+    )
+    request = EnrichRequest(
+        entity={"name": "Scrap Management Inc", "city": "Charlotte"},
+        object_type="plasticos",
+        schema={"street": "string"},
+        objective="Return only the street address line.",
+        max_variations=1,
+    )
+    built = _build_pass_request(request, plan, ConvergenceState(), pass_num=1)
+    assert built.schema_ == {"street": "string"}
+    assert built.max_variations == 1
+
+
+@pytest.mark.asyncio
+async def test_high_confidence_reply_skips_later_variations() -> None:
+    from app.engines.enrichment_orchestrator import _collect_variations
+    from app.services.perplexity_client import SonarResponse
+
+    calls = 0
+
+    async def call() -> SonarResponse:
+        nonlocal calls
+        calls += 1
+        return SonarResponse(
+            data={"confidence": 0.98, "fields": {"street": "10612-D Providence Rd., #750"}},
+            tokens_used=10,
+        )
+
+    results = await _collect_variations(
+        call=call,
+        variation_count=2,
+        target_schema={"street": "string"},
+        threshold=0.65,
+    )
+    assert calls == 1
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_reply_runs_the_remaining_budget() -> None:
+    from app.engines.enrichment_orchestrator import _collect_variations
+    from app.services.perplexity_client import SonarResponse
+
+    calls = 0
+
+    async def call() -> SonarResponse:
+        nonlocal calls
+        calls += 1
+        return SonarResponse(
+            data={"confidence": 0.2, "fields": {"street": "somewhere"}},
+            tokens_used=10,
+        )
+
+    results = await _collect_variations(
+        call=call,
+        variation_count=2,
+        target_schema={"street": "string"},
+        threshold=0.65,
+    )
+    assert calls == 2
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_schema_less_empty_fields_do_not_short_circuit() -> None:
+    from app.engines.enrichment_orchestrator import _collect_variations
+    from app.services.perplexity_client import SonarResponse
+
+    calls = 0
+
+    async def call() -> SonarResponse:
+        nonlocal calls
+        calls += 1
+        return SonarResponse(data={"confidence": 0.9, "fields": {}}, tokens_used=1)
+
+    results = await _collect_variations(
+        call=call,
+        variation_count=2,
+        target_schema=None,
+        threshold=0.65,
+    )
+    assert calls == 2
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_schema_less_reply_with_a_field_stops() -> None:
+    from app.engines.enrichment_orchestrator import _collect_variations
+    from app.services.perplexity_client import SonarResponse
+
+    calls = 0
+
+    async def call() -> SonarResponse:
+        nonlocal calls
+        calls += 1
+        return SonarResponse(
+            data={"confidence": 0.9, "fields": {"street": "1 Main"}},
+            tokens_used=1,
+        )
+
+    results = await _collect_variations(
+        call=call,
+        variation_count=2,
+        target_schema=None,
+        threshold=0.65,
+    )
+    assert calls == 1
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_remaining_variations_overlap() -> None:
+    import asyncio
+
+    from app.engines.enrichment_orchestrator import _collect_variations
+    from app.services.perplexity_client import SonarResponse
+
+    calls = 0
+    in_flight = 0
+    peak = 0
+
+    async def call() -> SonarResponse:
+        nonlocal calls, in_flight, peak
+        calls += 1
+        if calls == 1:
+            return SonarResponse(
+                data={"confidence": 0.1, "fields": {"street": "x"}},
+                tokens_used=1,
+            )
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        return SonarResponse(
+            data={"confidence": 0.1, "fields": {"street": "y"}},
+            tokens_used=1,
+        )
+
+    results = await _collect_variations(
+        call=call,
+        variation_count=3,
+        target_schema={"street": "string"},
+        threshold=0.65,
+    )
+    assert calls == 3
+    assert peak == 2
+    assert len(results) == 3
+
+
+def test_field_thresholds_reject_non_finite() -> None:
+    from pydantic import ValidationError
+
+    from app.models.schemas import EnrichRequest
+
+    with pytest.raises(ValidationError, match="finite"):
+        EnrichRequest(
+            entity={"name": "Acme"},
+            object_type="Account",
+            objective="fill street",
+            schema={"street": "string"},
+            field_thresholds={"street": "NaN"},
+        )

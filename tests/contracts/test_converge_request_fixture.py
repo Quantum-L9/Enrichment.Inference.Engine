@@ -29,7 +29,15 @@ def payload() -> dict:
 
 @pytest.mark.unit
 def test_fixture_carries_the_odoo_envelope(payload: dict) -> None:
-    assert set(payload) == {"entity", "object_type", "objective", "max_variations", "odoo"}
+    assert set(payload) == {
+        "entity",
+        "object_type",
+        "objective",
+        "max_variations",
+        "consensus_threshold",
+        "odoo",
+    }
+    assert payload["consensus_threshold"] == 0.80
     assert payload["entity"]["_odoo_entity_id"] == payload["entity"]["id"]
     assert payload["odoo"]["model"] == "plasticos.enrichment.run"
     assert "kb_context" not in payload
@@ -45,6 +53,9 @@ def test_fixture_is_not_diverted_to_the_compatibility_path(payload: dict) -> Non
 def test_fixture_validates_as_the_canonical_enrich_request(payload: dict) -> None:
     """The live payload takes the canonical path: EnrichRequest, not the compat parser."""
     request = EnrichRequest.model_validate(payload)
+    assert request.consensus_threshold == 0.80
+    omitted = {key: value for key, value in payload.items() if key != "consensus_threshold"}
+    assert EnrichRequest.model_validate(omitted).consensus_threshold == 0.65
     assert request.entity["name"] == "Acme Recycling"
     assert request.object_type == "plasticos"
     assert request.max_variations == 5

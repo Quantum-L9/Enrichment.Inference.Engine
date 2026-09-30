@@ -55,6 +55,8 @@ def compute_uncertainty(
     # ── Combined uncertainty (0 = easy, 1 = hard) ────
     score = (1 - completeness) * 0.4 + conf_factor * 0.3 + (1 - richness) * 0.3
 
-    # Map to variation count: floor=2, ceiling=max_variations
+    # Floor at 2, but never above the caller's max_variations. A request
+    # for one variation must not grow a second call whose timeout is then
+    # counted as disagreement and drops the field the first call returned.
     variations = max(2, min(max_variations, round(score * max_variations) + 2))
-    return variations
+    return min(variations, max(1, max_variations))

@@ -2,9 +2,9 @@
 Convergence Controller — Multi-pass enrichment→inference loop.
 
 Orchestrates the Schema Discovery Loop:
-  Pass 1: Broad discovery (no target schema constraint)
-  Pass 2+: Surgical targeting (meta_prompt_planner directs what to research)
-  Each pass: enrich → infer → delta check → continue or converge
+  Each pass: enrich → infer → convergence check → continue or stop.
+  Pass 1 stops the loop when the requested fields already clear their bars.
+  The improvement-delta check starts on pass 2, once a prior pass exists.
 
 Config: max_passes=3, convergence_threshold=2.0, min_delta=0.05
 
@@ -322,6 +322,8 @@ async def run_convergence_loop(
             idem_store,
             sonar_config=sonar_config,
         )
+        if search_plan is not None:
+            search_plan.variation_count = pass_response.variation_count
 
         # --- COLLECT ENRICHED FIELDS ---
         pass_result = PassResult(
@@ -387,31 +389,32 @@ async def run_convergence_loop(
         state.pass_results.append(pass_result)
 
         # --- CONVERGENCE CHECK ---
-        if pass_num >= 2:
-            # Use confidence tracker convergence logic
-            if confidence_tracker.has_converged():
-                state.converged = True
-                state.convergence_reason = (
-                    f"all_fields_above_threshold_{config.confidence_threshold}"
-                )
-                logger.info(
-                    "converged_confidence_threshold",
-                    threshold=config.confidence_threshold,
-                    summary=confidence_tracker.get_pass_summary(),
-                )
-                break
+        # A sufficient first pass stops the loop. The improvement-delta check
+        # still needs a previous pass to compare, so it stays on pass 2+.
+        if _pass_meets_convergence(request, confidence_tracker):
+            state.converged = True
+            state.convergence_reason = _convergence_reason(request, config)
+            logger.info(
+                "converged_confidence_threshold",
+                pass_number=pass_num,
+                threshold=config.confidence_threshold,
+                summary=confidence_tracker.get_pass_summary(),
+            )
+            break
 
-            # Check improvement delta
-            if not confidence_tracker.had_meaningful_improvement(config.min_improvement_delta):
-                state.converged = True
-                state.convergence_reason = (
-                    f"insufficient_improvement_delta_{config.min_improvement_delta}"
-                )
-                logger.info(
-                    "converged_insufficient_improvement",
-                    min_delta=config.min_improvement_delta,
-                )
-                break
+        if pass_num >= 2 and not confidence_tracker.had_meaningful_improvement(
+            config.min_improvement_delta
+        ):
+            state.converged = True
+            state.convergence_reason = (
+                f"insufficient_improvement_delta_{config.min_improvement_delta}"
+            )
+            logger.info(
+                "converged_insufficient_improvement",
+                pass_number=pass_num,
+                min_delta=config.min_improvement_delta,
+            )
+            break
 
         if search_plan.mode == "verification":
             state.converged = True
@@ -422,6 +425,37 @@ async def run_convergence_loop(
     return _assemble_convergence_response(
         state, request, elapsed, domain_classification, cost_tracker, confidence_tracker
     )
+
+
+def _convergence_reason(request: EnrichRequest, config: ConvergenceConfig) -> str:
+    if request.field_thresholds:
+        return "requested_fields_meet_field_thresholds"
+    return f"all_fields_above_threshold_{config.confidence_threshold}"
+
+
+def _pass_meets_convergence(
+    request: EnrichRequest,
+    confidence_tracker: ConfidenceTracker,
+) -> bool:
+    """True when this pass already satisfies the fields the caller asked for.
+
+    With a schema, every requested field must be present. A consumer field
+    threshold wins over the loop's own confidence bar. With no schema, every
+    field this loop has tracked must clear the loop bar. An empty tracker has
+    not converged.
+    """
+    names = [name for name in (request.schema_ or {}) if name != "confidence"]
+    if not names:
+        return confidence_tracker.has_converged()
+    thresholds = request.field_thresholds or {}
+    for name in names:
+        field_state = confidence_tracker.fields.get(name)
+        if field_state is None:
+            return False
+        required = thresholds.get(name, confidence_tracker.threshold)
+        if field_state.confidence < required:
+            return False
+    return True
 
 
 def _apply_graph_targets(
@@ -572,11 +606,15 @@ def _build_pass_request(
     enriched_entity = {**original.entity, **state.known_fields, **state.inferred_fields}
 
     pass_objective = original.objective
-    pass_schema = None
-    if plan.priority_fields:
-        pass_schema = dict.fromkeys(plan.priority_fields, "string")
-    elif original.schema_:
+    # A caller-supplied schema is the writeback contract (Odoo asks for
+    # `street` and must get `street` back). Discovery priority fields are
+    # only the fallback for a request that did not name its targets.
+    if original.schema_:
         pass_schema = original.schema_
+    elif plan.priority_fields:
+        pass_schema = dict.fromkeys(plan.priority_fields, "string")
+    else:
+        pass_schema = None
 
     return EnrichRequest(
         entity=enriched_entity,
@@ -585,6 +623,10 @@ def _build_pass_request(
         objective=pass_objective,
         kb_context=original.kb_context,
         consensus_threshold=original.consensus_threshold,
-        max_variations=plan.variation_count or original.max_variations,
+        field_thresholds=original.field_thresholds,
+        max_variations=min(
+            plan.variation_count or original.max_variations,
+            original.max_variations,
+        ),
         idempotency_key=None,
     )
