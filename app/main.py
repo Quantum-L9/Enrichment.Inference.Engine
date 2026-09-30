@@ -16,7 +16,7 @@ Integration fix applied (PR#22 merge pass):
 
 from __future__ import annotations
 
-import asyncio
+import os
 import time
 from typing import Annotated
 
@@ -27,7 +27,6 @@ from constellation_node_sdk import (
     NodeRuntimeConfig,
     create_node_app,
     get_runtime_config,
-    register_node,
 )
 from constellation_node_sdk.runtime.handlers import clear_handlers
 from fastapi import Depends, Response
@@ -61,9 +60,6 @@ logger = structlog.get_logger("main")
 
 _kb: KBResolver | None = None
 _idem: IdempotencyStore | None = None
-# Gate registration outcome (TASK-003): None = not attempted/disabled,
-# True = accepted, False = rejected or errored (non-fatal).
-_gate_registered: bool | None = None
 
 
 class EnrichmentLifecycle(LifecycleHook):
@@ -71,7 +67,7 @@ class EnrichmentLifecycle(LifecycleHook):
 
     async def startup(self) -> None:
         """Load KB, connect Redis, init persistence, and register SDK handlers."""
-        global _kb, _idem, _gate_registered
+        global _kb, _idem
 
         settings = get_settings()
         setup_logging(settings.log_level)
@@ -126,32 +122,15 @@ class EnrichmentLifecycle(LifecycleHook):
             state_backend="redis" if _idem else "memory",
         )
 
-        # Explicit, non-fatal Gate registration. auto_register_with_gate is
-        # False, so we register here exactly once per process lifecycle and keep
-        # the result authoritative for readiness. The HTTP, the retry loop and
-        # the Gate status taxonomy belong to the SDK's register_node(); EIE
-        # supplies only the node-specific values.
-        if _gate_registered is None:
-            _gate_registered = await _register_with_gate(settings)
-            logger.info("gate_registration_attempted", result=_gate_registered)
-
-        # Reconcile periodically thereafter. Without this, a Gate that was down
-        # at startup (or that restarted and lost its registry) leaves this node
-        # serving traffic no route reaches until the process is restarted.
-        global _reregistration_task
-        _reregistration_task = start_reregistration_loop(settings)
-        logger.info(
-            "gate_reregistration_loop",
-            started=_reregistration_task is not None,
-            interval_seconds=settings.l9_gate_reregistration_interval_seconds,
-        )
+        # Gate participation (registration, re-registration after a Gate
+        # restart, readiness) is owned by the SDK: create_node_app(registration=...)
+        # below. L9-PARTICIPATION-01.
 
         logger.info("api_started", version="2.3.0")
 
     async def shutdown(self) -> None:
-        global _kb, _idem, _gate_registered
+        global _kb, _idem
 
-        await stop_reregistration_loop()
         if _idem:
             await _idem.close()
         from .services import pg_store as _pg
@@ -159,9 +138,6 @@ class EnrichmentLifecycle(LifecycleHook):
         await _pg.close_engine()
         _kb = None
         _idem = None
-        # The Gate SDK exposes no deregister primitive; a stale Gate entry is
-        # refreshed via overwrite=true on the next startup registration.
-        _gate_registered = None
 
 
 # EIE's registration semantics. EIE owns these values; the Gate_SDK owns
@@ -217,85 +193,6 @@ def build_node_registration(settings: Settings) -> NodeRegistration:
         owner=NODE_OWNER,
         timeout_ms=NODE_TIMEOUT_MS,
     )
-
-
-async def _register_with_gate(settings: Settings) -> bool | None:
-    """Register this node with Gate via the SDK.
-
-    Returns None when registration is disabled or no gate_url is configured,
-    otherwise the SDK's verdict. Registration stays non-fatal to *process*
-    startup; readiness, not liveness, is what a False degrades.
-    """
-    if not settings.gate_registration_enabled or not settings.gate_url:
-        return None
-
-    return await register_node(
-        gate_url=settings.gate_url,
-        registration=build_node_registration(settings),
-        admin_token=settings.gate_admin_token,
-        overwrite=True,
-    )
-
-
-_reregistration_task: asyncio.Task[None] | None = None
-
-
-async def _reregistration_loop(settings: Settings, interval_seconds: float) -> None:
-    """Re-run registration forever, feeding each verdict into readiness.
-
-    One startup attempt is not enough to keep a node routable: a Gate that was
-    unreachable at this node's startup, or that restarted and lost its registry,
-    leaves the node serving and unroutable until an operator notices. Each cycle
-    is `overwrite=True`, so a successful re-register is idempotent.
-
-    An attempt that raises is swallowed deliberately — the loop is the recovery
-    mechanism, so it must outlive the failures it exists to recover from.
-    """
-    global _gate_registered
-
-    while True:
-        await asyncio.sleep(interval_seconds)
-        try:
-            _gate_registered = await _register_with_gate(settings)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — a failed cycle must not end the loop
-            logger.warning("gate_reregistration_failed", error=str(exc))
-
-
-def start_reregistration_loop(settings: Settings) -> asyncio.Task[None] | None:
-    """Start the re-registration loop, or return None when it does not apply.
-
-    Returns None when registration is disabled, no gate_url is configured, or
-    the interval is zero — the same three conditions under which a single
-    startup registration is also skipped.
-    """
-    # No float() coercion: Settings declares this field as `float`, so Pydantic
-    # has already validated and converted it. The redundant call also tripped
-    # semgrep.float-requires-try-except, which cannot tell a validated field
-    # from raw user input.
-    interval = settings.l9_gate_reregistration_interval_seconds
-    if not settings.gate_registration_enabled or not settings.gate_url or interval <= 0:
-        return None
-    return asyncio.create_task(_reregistration_loop(settings, interval))
-
-
-async def stop_reregistration_loop() -> None:
-    """Cancel the loop and wait for it, so shutdown leaves no pending task."""
-    global _reregistration_task
-
-    task = _reregistration_task
-    if task is None:
-        return
-    _reregistration_task = None
-    task.cancel()
-    # gather(..., return_exceptions=True) rather than catching CancelledError.
-    # The catch swallowed the task's cancellation, which is what we want — but
-    # it swallowed *our own* cancellation identically, so a shutdown path that
-    # was itself cancelled while awaiting here stopped propagating it. gather
-    # aggregates the child's CancelledError as a result and still re-raises
-    # when the awaiting task is the one being cancelled (SonarQube S7497).
-    await asyncio.gather(task, return_exceptions=True)
 
 
 RUNTIME_ALLOWED_ACTIONS: tuple[str, ...] = (
@@ -370,12 +267,34 @@ def _fallback_loop_store():
     return _InMemory()
 
 
+def _bridge_settings_to_participation_env(settings: Settings) -> None:
+    """Give Gate_SDK the Gate controls Settings already loaded.
+
+    Pydantic reads `.env` and `.env.local` into Settings and does not export
+    them. `NodeParticipation.from_env` reads `GATE_ADMIN_TOKEN` and
+    `GATE_REGISTRATION_ENABLED` from the process environment, defaulting the
+    enable flag to true when the variable is absent. A process started with
+    those controls only in the documented env files would register without
+    the admin token, or would attempt registration that Settings had switched
+    off. A variable already present in the process environment stays
+    authoritative (Kubernetes and the shell).
+    """
+    if "GATE_REGISTRATION_ENABLED" not in os.environ:
+        os.environ["GATE_REGISTRATION_ENABLED"] = (
+            "true" if settings.gate_registration_enabled else "false"
+        )
+    if settings.gate_admin_token and "GATE_ADMIN_TOKEN" not in os.environ:
+        os.environ["GATE_ADMIN_TOKEN"] = settings.gate_admin_token
+
+
+_participation_settings = get_settings()
+_bridge_settings_to_participation_env(_participation_settings)
 app = create_node_app(
     service_name="enrichment-engine",
     version="2.3.0",
     lifecycle_hook=EnrichmentLifecycle(),
     config=_build_runtime_config(),
-    auto_register_with_gate=False,
+    registration=build_node_registration(_participation_settings),
 )
 
 app.add_middleware(RateLimitMiddleware, requests_per_minute=120)
@@ -392,27 +311,39 @@ app.include_router(score_router)
 GATE_REGISTRATION_DEGRADED: frozenset[str] = frozenset({"failed", "not_attempted"})
 
 
-def _gate_registration_state(settings: Settings) -> str:
-    """Name the registration state instead of leaving it to be inferred from None.
+def _legacy_gate_registered(sdk_state: str) -> bool | None:
+    """Public `gate_registered` contract on top of the SDK state.
 
-    EIE-002: `_gate_registered is None` meant both "switched off" and "never
-    attempted", and health treated both as success. The second is a node Gate
-    holds no route to, which is exactly the condition an operator opens /health
-    to discover.
+    null is disabled or not yet attempted (including `registering`). true is
+    Gate accepted this node. false is reserved for a rejected or errored
+    attempt. Clients that still read this field must not treat startup or an
+    intentional disable as a failure.
     """
-    if not settings.gate_registration_enabled or not settings.gate_url:
-        return "disabled"
-    if _gate_registered is True:
-        return "registered"
-    if _gate_registered is False:
-        return "failed"
-    return "not_attempted"
+    if sdk_state == "active":
+        return True
+    if sdk_state == "degraded":
+        return False
+    return None
+
+
+def _gate_registration_state() -> str:
+    """Gate_SDK's participation state, named in EIE's registration vocabulary.
+
+    EIE-002 still holds: "never attempted" is not "switched off". The SDK now
+    owns registration, re-registration after a Gate restart and the state
+    (L9-PARTICIPATION-01); EIE only renders it for /api/v1/health and
+    /api/v1/ready, whose contract (names, 200 vs 503) is unchanged.
+    """
+    state = app.state.participation.status.state.value
+    return {"active": "registered", "degraded": "failed", "disabled": "disabled"}.get(
+        state, "not_attempted"
+    )
 
 
 @app.get("/api/v1/health", response_model=HealthCheckResponse)
 async def health_check(settings: Annotated[Settings, Depends(get_settings)]):
     kb = _kb or KBResolver("/dev/null")
-    registration = _gate_registration_state(settings)
+    registration = _gate_registration_state()
     status = "degraded" if registration in GATE_REGISTRATION_DEGRADED else "ok"
     return HealthCheckResponse(
         status=status,
@@ -423,7 +354,7 @@ async def health_check(settings: Annotated[Settings, Depends(get_settings)]):
         kb_grades=kb.index.total_grades,
         kb_rules=kb.index.total_rules,
         circuit_breaker_state=breaker.state,
-        gate_registered=_gate_registered,
+        gate_registered=_legacy_gate_registered(app.state.participation.status.state.value),
     )
 
 
@@ -447,7 +378,7 @@ async def readiness_check(
     for `registered` and `disabled`. The process stays alive either way; only
     the Service stops sending it traffic Gate could not route anyway.
     """
-    registration = _gate_registration_state(settings)
+    registration = _gate_registration_state()
     ready = registration not in GATE_REGISTRATION_DEGRADED
     response.status_code = 200 if ready else 503
     return ReadinessResponse(

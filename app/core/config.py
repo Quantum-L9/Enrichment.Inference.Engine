@@ -101,12 +101,9 @@ class Settings(BaseSettings):
     gate_registration_enabled: bool = True
     gate_internal_url: str = ""  # URL the Gate dispatches to; empty → derived default
     gate_admin_token: str = ""
-    # Seconds between re-registration attempts. Registration is reconciliation,
-    # not a one-shot: a Gate that restarts, loses its registry, or was unreachable
-    # at this node's startup leaves the node running and unroutable until someone
-    # restarts the process. The loop closes that without a restart. 0 disables it.
-    # C-09 (EIE-212-F004): env name L9_GATE_REREGISTRATION_INTERVAL_SECONDS.
-    l9_gate_reregistration_interval_seconds: float = 300.0
+    # Re-registration after a Gate restart is owned by Gate_SDK's
+    # create_node_app() (L9-PARTICIPATION-01); its interval is the SDK variable
+    # GATE_REREGISTRATION_INTERVAL_SECONDS, not an EIE setting.
     # CEG `sync` contract projection for post-enrichment graph sync: the CEG sync
     # endpoint suffix and its id property (Cognitive.Engine.Graphs domain spec
     # `sync.endpoints`). Defaults match the plasticos domain.

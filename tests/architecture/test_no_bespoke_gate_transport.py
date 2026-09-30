@@ -68,10 +68,16 @@ def test_no_registration_module_reintroduced():
     )
 
 
-def test_registration_uses_sdk_register_node():
-    """The one registration call site is the SDK's, and it is actually wired."""
+def test_registration_is_sdk_participation():
+    """The one registration call site is the SDK's, and it is actually wired.
+
+    L9-PARTICIPATION-01: EIE hands its NodeRegistration to Gate_SDK's
+    create_node_app(registration=...), which registers, re-registers after a
+    Gate restart and drives readiness. EIE itself must not call register_node()
+    (that would re-fork the lifecycle the SDK owns) and must not turn
+    auto-registration off.
+    """
     main_src = (APP / "main.py").read_text(encoding="utf-8")
-    assert "register_node" in main_src, "app/main.py must call Gate_SDK register_node()"
     tree = ast.parse(main_src)
     imported = {
         alias.name
@@ -79,9 +85,25 @@ def test_registration_uses_sdk_register_node():
         if isinstance(node, ast.ImportFrom) and node.module == "constellation_node_sdk"
         for alias in node.names
     }
-    assert {"NodeRegistration", "register_node"} <= imported, (
-        "NodeRegistration and register_node must come from constellation_node_sdk, "
+    assert {"NodeRegistration", "create_node_app"} <= imported, (
+        "NodeRegistration and create_node_app must come from constellation_node_sdk, "
         f"got {sorted(imported)}"
+    )
+    assert "register_node" not in imported, "EIE must not register by hand; the SDK owns it"
+
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "create_node_app"
+    ]
+    assert len(calls) == 1, f"expected one create_node_app() call, found {len(calls)}"
+    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    assert "registration" in keywords, "create_node_app() must receive EIE's registration"
+    auto = keywords.get("auto_register_with_gate")
+    assert not (isinstance(auto, ast.Constant) and auto.value is False), (
+        "auto_register_with_gate=False hands participation back to EIE"
     )
 
 

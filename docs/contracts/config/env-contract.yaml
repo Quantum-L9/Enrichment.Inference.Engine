@@ -418,25 +418,23 @@ variables:
     sensitive: false
     source: env
 
-  - name: L9_GATE_REREGISTRATION_INTERVAL_SECONDS
+  - name: GATE_REREGISTRATION_INTERVAL_SECONDS
     type: number
     required: false
-    default: "300.0"
+    default: "300"
     description: |
-      Seconds between periodic re-registration attempts (Settings
-      l9_gate_reregistration_interval_seconds; C-09 name, EIE-212-F004 — the
-      GATE_* siblings predate C-09 and keep their names). One startup attempt is not enough
-      to keep a node routable: a Gate unreachable when this node started, or
-      one that restarted and lost its registry, would otherwise leave EIE
-      serving and unroutable until an operator noticed. Each cycle registers
-      with overwrite=true, so a successful re-register is idempotent and a
-      failed one only logs. Set to 0 to disable the loop entirely — the same
-      three conditions that skip the single startup registration
-      (GATE_REGISTRATION_ENABLED false, empty GATE_URL, zero interval) also
-      skip the loop.
+      Read by Gate_SDK, not by EIE Settings (L9-PARTICIPATION-01): seconds
+      between the background re-registrations create_node_app() runs after the
+      startup registration, so a Gate that restarted and lost its in-memory
+      registry routes to EIE again without a process restart. 0 disables the
+      loop. It replaces EIE's own L9_GATE_REREGISTRATION_INTERVAL_SECONDS
+      (EIE-212-F004): the variable belongs to the SDK's GATE_* registration
+      set (GATE_URL, GATE_ADMIN_TOKEN, GATE_REGISTRATION_ENABLED), which
+      predates C-09 and keeps its names. While Gate has not accepted the node,
+      GET /api/v1/ready (and the SDK's /v1/ready) answers 503.
+    example: "60"
     sensitive: false
     source: env
-
   - name: GATE_INTERNAL_URL
     type: url
     required: false

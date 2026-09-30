@@ -48,7 +48,8 @@ REQUIRED_ENV_VARS = {
     "GATE_ADMIN_TOKEN": {"type": "secret", "required": False, "sensitive": True},
     # C-09 names for the controls PR #212 introduced (EIE-212-F004).
     "L9_ENRICHMENT_PROVIDER": {"type": "string", "required": False, "sensitive": False},
-    "L9_GATE_REREGISTRATION_INTERVAL_SECONDS": {
+    # Gate_SDK-owned (L9-PARTICIPATION-01): documented, not an EIE Settings field.
+    "GATE_REREGISTRATION_INTERVAL_SECONDS": {
         "type": "number",
         "required": False,
         "sensitive": False,
@@ -154,9 +155,11 @@ def test_retired_peer_variables_are_gone_from_settings_and_examples() -> None:
 # controls PR #212 added, so they must comply (EIE-212-F004).
 NEW_L9_CONTROLS = {
     "l9_enrichment_provider": "L9_ENRICHMENT_PROVIDER",
-    "l9_gate_reregistration_interval_seconds": "L9_GATE_REREGISTRATION_INTERVAL_SECONDS",
 }
-RETIRED_UNPREFIXED_NAMES = ("ENRICHMENT_PROVIDER", "GATE_REREGISTRATION_INTERVAL_SECONDS")
+RETIRED_UNPREFIXED_NAMES = ("ENRICHMENT_PROVIDER",)
+# EIE's own re-registration loop and its setting moved into Gate_SDK
+# (L9-PARTICIPATION-01); the SDK reads GATE_REREGISTRATION_INTERVAL_SECONDS.
+RETIRED_EIE_REGISTRATION_NAMES = ("L9_GATE_REREGISTRATION_INTERVAL_SECONDS",)
 CONFIG_SURFACES = (
     ".env.example",
     "docs/contracts/config/env-contract.yaml",
@@ -172,8 +175,12 @@ def test_new_controls_are_c09_compliant_settings_fields() -> None:
         assert field in Settings.model_fields, f"Settings.{field} missing"
         assert field.upper() == env_name
         assert env_name.startswith("L9_"), f"{env_name} violates C-09"
-    for field in ("enrichment_provider", "gate_reregistration_interval_seconds"):
-        assert field not in Settings.model_fields, f"unprefixed Settings.{field} still exists"
+    for field in (
+        "enrichment_provider",
+        "gate_reregistration_interval_seconds",
+        "l9_gate_reregistration_interval_seconds",
+    ):
+        assert field not in Settings.model_fields, f"Settings.{field} must not exist"
 
 
 @pytest.mark.unit
@@ -183,10 +190,8 @@ def test_new_controls_are_read_from_their_l9_env_names(monkeypatch) -> None:
 
     monkeypatch.setenv("L9_ENRICHMENT_PROVIDER", "deterministic")
     monkeypatch.setenv("L9_ENVIRONMENT", "test")
-    monkeypatch.setenv("L9_GATE_REREGISTRATION_INTERVAL_SECONDS", "7.5")
     settings = Settings(_env_file=None)
     assert settings.l9_enrichment_provider == "deterministic"
-    assert settings.l9_gate_reregistration_interval_seconds == 7.5
 
 
 @pytest.mark.unit
@@ -196,6 +201,11 @@ def test_retired_unprefixed_names_are_gone_from_config_surfaces() -> None:
         for name in RETIRED_UNPREFIXED_NAMES:
             # Match the bare name as a variable, not as the suffix of its L9_ form:
             # a dotenv line, a kustomize literal, and an env-contract entry.
+            assert f"\n{name}=" not in text, f"{rel} still carries dotenv {name}="
+            assert f"- {name}=" not in text, f"{rel} still carries literal {name}="
+            assert f"name: {name}\n" not in text, f"{rel} still documents {name}"
+        for name in RETIRED_EIE_REGISTRATION_NAMES:
+            # As a variable, not as a mention in the prose that retires it.
             assert f"\n{name}=" not in text, f"{rel} still carries dotenv {name}="
             assert f"- {name}=" not in text, f"{rel} still carries literal {name}="
             assert f"name: {name}\n" not in text, f"{rel} still documents {name}"
