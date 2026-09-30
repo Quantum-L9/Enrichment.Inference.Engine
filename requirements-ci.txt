@@ -19,7 +19,8 @@ pydantic-settings>=2.6.0
 pyyaml>=6.0
 jsonschema>=4.23.0
 redis>=5.0.0
-sqlalchemy
+sqlalchemy[asyncio]
+alembic>=1.13
 structlog>=24.0.0
 perplexityai>=0.2.0
 opentelemetry-api>=1.27.0

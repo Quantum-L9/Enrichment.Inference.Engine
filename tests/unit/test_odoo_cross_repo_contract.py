@@ -49,6 +49,8 @@ def _odoo_builder_payload() -> dict[str, Any]:
         "object_type": "plasticos",
         "objective": "Full entity enrichment and inference",
         "max_variations": 5,
+        # IB-Odoo_19 asks for exactly its partner writeback allowlist.
+        "schema": dict.fromkeys(sorted(_PARTNER_WRITEBACK_FIELD_ALLOWLIST), "string"),
         "odoo": {
             "model": "plasticos.enrichment.run",
             "record_id": 7,
@@ -141,6 +143,8 @@ async def test_live_odoo_payload_round_trips_through_the_active_eie_path(eie_run
     assert request.entity["id"] == ENTITY_REF
     assert request.object_type == "plasticos"
     assert request.objective == "Full entity enrichment and inference"
+    # Odoo's target schema reaches EIE; without it EIE has no fields to fill.
+    assert request.schema_ == dict.fromkeys(sorted(_PARTNER_WRITEBACK_FIELD_ALLOWLIST), "string")
     assert eie_runtime["persist"].call_args is not None, "canonical convergence must still persist"
 
     # 3/4. The response is the canonical {state, fields} the live mapper reads.

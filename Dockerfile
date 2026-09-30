@@ -26,4 +26,6 @@ EXPOSE 8000
 # requires moving the channel to shared state first; the invariants are asserted
 # by tests/unit/test_worker_singleton_invariant.py and
 # tests/unit/test_deployment_topology.py.
+# Dev image: apply the schema (alembic upgrade head) before serving; see the script.
+ENTRYPOINT ["sh", "/app/scripts/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
