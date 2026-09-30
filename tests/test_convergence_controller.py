@@ -712,3 +712,104 @@ async def test_low_confidence_reply_runs_the_remaining_budget() -> None:
     )
     assert calls == 2
     assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_schema_less_empty_fields_do_not_short_circuit() -> None:
+    from app.engines.enrichment_orchestrator import _collect_variations
+    from app.services.perplexity_client import SonarResponse
+
+    calls = 0
+
+    async def call() -> SonarResponse:
+        nonlocal calls
+        calls += 1
+        return SonarResponse(data={"confidence": 0.9, "fields": {}}, tokens_used=1)
+
+    results = await _collect_variations(
+        call=call,
+        variation_count=2,
+        target_schema=None,
+        threshold=0.65,
+    )
+    assert calls == 2
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_schema_less_reply_with_a_field_stops() -> None:
+    from app.engines.enrichment_orchestrator import _collect_variations
+    from app.services.perplexity_client import SonarResponse
+
+    calls = 0
+
+    async def call() -> SonarResponse:
+        nonlocal calls
+        calls += 1
+        return SonarResponse(
+            data={"confidence": 0.9, "fields": {"street": "1 Main"}},
+            tokens_used=1,
+        )
+
+    results = await _collect_variations(
+        call=call,
+        variation_count=2,
+        target_schema=None,
+        threshold=0.65,
+    )
+    assert calls == 1
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_remaining_variations_overlap() -> None:
+    import asyncio
+
+    from app.engines.enrichment_orchestrator import _collect_variations
+    from app.services.perplexity_client import SonarResponse
+
+    calls = 0
+    in_flight = 0
+    peak = 0
+
+    async def call() -> SonarResponse:
+        nonlocal calls, in_flight, peak
+        calls += 1
+        if calls == 1:
+            return SonarResponse(
+                data={"confidence": 0.1, "fields": {"street": "x"}},
+                tokens_used=1,
+            )
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        return SonarResponse(
+            data={"confidence": 0.1, "fields": {"street": "y"}},
+            tokens_used=1,
+        )
+
+    results = await _collect_variations(
+        call=call,
+        variation_count=3,
+        target_schema={"street": "string"},
+        threshold=0.65,
+    )
+    assert calls == 3
+    assert peak == 2
+    assert len(results) == 3
+
+
+def test_field_thresholds_reject_non_finite() -> None:
+    from pydantic import ValidationError
+
+    from app.models.schemas import EnrichRequest
+
+    with pytest.raises(ValidationError, match="finite"):
+        EnrichRequest(
+            entity={"name": "Acme"},
+            object_type="Account",
+            objective="fill street",
+            schema={"street": "string"},
+            field_thresholds={"street": "NaN"},
+        )

@@ -311,6 +311,20 @@ async def enrich_entity(
         )
 
 
+_RESPONSE_METADATA = frozenset({"confidence", "reasoning", "sources", "citations", "explanation"})
+
+
+def _has_non_metadata_field(validated: dict[str, Any]) -> bool:
+    """True when the normalized reply carries a usable enriched value."""
+    for name, value in validated.items():
+        if name in _RESPONSE_METADATA:
+            continue
+        if value in (None, "", [], {}):
+            continue
+        return True
+    return False
+
+
 def _reply_is_sufficient(
     result: Any,
     target_schema: dict[str, str] | None,
@@ -321,7 +335,8 @@ def _reply_is_sufficient(
 
     A later variation must not be sent once this is true. When the consumer
     sent per-field thresholds, each field is judged by its own number. A
-    requested field with no number does not borrow ``threshold``.
+    requested field with no number does not borrow ``threshold``. A schema-less
+    reply is sufficient only when it also contains a non-metadata field.
     """
     if not isinstance(result, SonarResponse):
         return False
@@ -336,7 +351,7 @@ def _reply_is_sufficient(
     if not target_schema:
         if field_thresholds:
             return False
-        return confidence >= threshold
+        return confidence >= threshold and _has_non_metadata_field(validated)
     for name in target_schema:
         if name == "confidence":
             continue
@@ -359,22 +374,36 @@ async def _collect_variations(
     threshold: float,
     field_thresholds: dict[str, float] | None = None,
 ) -> list[Any]:
-    """Run variations one at a time. Stop after a sufficient reply."""
-    results: list[Any] = []
-    for _index in range(variation_count):
+    """Stop after a sufficient reply. Later variations run together.
+
+    The first call stays sequential so a complete reply does not spend the
+    rest of the budget. When that reply is incomplete, every remaining
+    variation is gathered at once so the collection is bounded by the slowest
+    call rather than the sum of their latencies.
+    """
+    if variation_count <= 0:
+        return []
+
+    async def _one() -> Any:
         try:
-            reply = await call()
+            return await call()
         except Exception as exc:
-            results.append(exc)
-            continue
-        results.append(reply)
-        if _reply_is_sufficient(reply, target_schema, threshold, field_thresholds):
-            logger.info(
-                "variation_short_circuit",
-                calls_made=len(results),
-                budget=variation_count,
-            )
-            break
+            return exc
+
+    first = await _one()
+    results: list[Any] = [first]
+    if _reply_is_sufficient(first, target_schema, threshold, field_thresholds):
+        logger.info(
+            "variation_short_circuit",
+            calls_made=len(results),
+            budget=variation_count,
+        )
+        return results
+    remaining = variation_count - 1
+    if remaining <= 0:
+        return results
+    rest = await asyncio.gather(*[_one() for _ in range(remaining)])
+    results.extend(rest)
     return results
 
 

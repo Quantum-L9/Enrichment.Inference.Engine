@@ -104,6 +104,18 @@ components:
           maximum: 1.0
           default: 0.65
           description: Minimum consensus ratio to accept a field value.
+        field_thresholds:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: number
+            format: float
+            minimum: 0.0
+            maximum: 1.0
+          description: >
+            Consumer minimum model confidence for each requested field.
+            A schema field with no entry is not filled; consensus_threshold
+            does not substitute for a missing entry.
         max_variations:
           type: integer
           minimum: 1

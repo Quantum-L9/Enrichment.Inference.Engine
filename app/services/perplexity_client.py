@@ -79,27 +79,32 @@ def _capture_provider_exchange(payload: dict[str, Any], response: SonarResponse)
     directory = os.environ.get("L9_PROVIDER_CAPTURE_DIR", "").strip()
     if not directory:
         return
-    path = Path(directory)
-    path.mkdir(parents=True, exist_ok=True)
-    safe_payload = {
-        key: value
-        for key, value in payload.items()
-        if key.lower() not in {"api_key", "authorization"}
-    }
-    record = {
-        "captured_at": datetime.now(tz=UTC).isoformat(),
-        "request": safe_payload,
-        "response": {
-            "model": response.model,
-            "tokens_used": response.tokens_used,
-            "latency_ms": response.latency_ms,
-            "data": response.data,
-            "citations": response.citations,
-        },
-    }
-    stamp = f"{time.time_ns()}"
-    target = path / f"{stamp}.json"
-    target.write_text(json.dumps(record, indent=2, default=str) + "\n", encoding="utf-8")
+    try:
+        path = Path(directory)
+        path.mkdir(parents=True, exist_ok=True)
+        safe_payload = {
+            key: value
+            for key, value in payload.items()
+            if key.lower() not in {"api_key", "authorization"}
+        }
+        record = {
+            "captured_at": datetime.now(tz=UTC).isoformat(),
+            "request": safe_payload,
+            "response": {
+                "model": response.model,
+                "tokens_used": response.tokens_used,
+                "latency_ms": response.latency_ms,
+                "data": response.data,
+                "citations": response.citations,
+            },
+        }
+        stamp = f"{time.time_ns()}"
+        target = path / f"{stamp}.json"
+        target.write_text(json.dumps(record, indent=2, default=str) + "\n", encoding="utf-8")
+    except OSError as exc:
+        # Capture is optional. A full or unwritable directory must not look
+        # like a failed provider call, or the retry loop will pay for it again.
+        logger.warning("provider_capture_failed", error_type=type(exc).__name__)
 
 
 def _get_client(api_key: str) -> Perplexity:

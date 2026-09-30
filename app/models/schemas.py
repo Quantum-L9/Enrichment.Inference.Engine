@@ -15,6 +15,7 @@ updating both the Apex package and the Odoo bridge.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -102,8 +103,8 @@ class EnrichRequest(BaseModel):
             except (TypeError, ValueError) as exc:
                 msg = f"field_thresholds[{key!r}] is not a number"
                 raise ValueError(msg) from exc
-            if number < 0.0 or number > 1.0:
-                msg = f"field_thresholds[{key!r}] must be between 0 and 1"
+            if not math.isfinite(number) or number < 0.0 or number > 1.0:
+                msg = f"field_thresholds[{key!r}] must be a finite number between 0 and 1"
                 raise ValueError(msg)
             cleaned[str(key)] = number
         return cleaned
