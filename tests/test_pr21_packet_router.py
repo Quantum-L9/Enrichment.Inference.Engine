@@ -175,3 +175,202 @@ def test_get_router_returns_singleton():
     r1 = get_router(settings)
     r2 = get_router(settings)
     assert r1 is r2, "get_router must be a singleton (lru_cache)"
+
+
+# ── RV-DOMAIN-RD-07: a worker failure is not a routed success ──
+
+
+def _ceg_response(payload: dict) -> object:
+    return create_transport_packet(
+        action="sync",
+        payload=payload,
+        tenant="tenant-acme",
+        source_node="gate",
+        destination_node="enrichment-engine",
+        reply_to="gate",
+    )
+
+
+def _ceg_failure_packet(*, with_hop: bool = False) -> object:
+    """What Gate relays (HTTP 200) when CEG's handler raised.
+
+    Gate_SDK ``create_error_transport_packet``: ``packet_type="failure"``, payload
+    ``{"status": "failed", "error": ..., "message": ..., "packet_id": ...}`` and a
+    response hop with ``status="failed"``.
+    """
+    from constellation_node_sdk.transport.hop_trace import make_response_hop
+
+    request = _ceg_response({"entity_type": "facilities", "batch": [{"facility_id": "ent-001"}]})
+    failure = request.derive(
+        packet_type="failure",
+        source_node="graph-engine",
+        destination_node="enrichment-engine",
+        reply_to="graph-engine",
+        payload={
+            "status": "failed",
+            "error": "ExecutionError",
+            "message": "Sync query execution failed",
+            "packet_id": str(request.header.packet_id),
+        },
+    )
+    if with_hop:
+        failure = failure.with_hop(
+            make_response_hop(
+                packet=failure,
+                node="graph-engine",
+                action="sync",
+                status="failed",
+                error_code="ExecutionError",
+            )
+        )
+    return failure
+
+
+@pytest.mark.asyncio
+async def test_route_raises_on_worker_failure_packet_without_retrying():
+    """A `failure` packet is the worker saying no; `route` must not return it as data."""
+    from app.engines.packet_router import NodeOperationFailedError
+
+    router = PacketRouter(gate_url="https://gate-node:8080")
+    with patch.object(
+        router._client,
+        "execute",
+        new_callable=AsyncMock,
+        return_value=_ceg_failure_packet(with_hop=True),
+    ) as mock_exec:
+        with pytest.raises(NodeOperationFailedError) as excinfo:
+            await router.route(
+                NodeTarget.GRAPH,
+                "sync",
+                "tenant-acme",
+                {"entity_type": "facilities", "batch": [{"facility_id": "ent-001"}]},
+                idempotency_key="eie:sync:tenant-acme:ent-001:abc",
+            )
+        assert mock_exec.await_count == 1, "a worker failure is not a transport retry case"
+    assert isinstance(excinfo.value, NodeUnreachableError), "existing handlers keep catching it"
+    assert "ExecutionError" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_response_hop_failed_status_is_a_failure_even_with_response_packet_type():
+    """Gate's second terminal-failure signal: a response hop recorded as `failed`."""
+    from constellation_node_sdk.transport.hop_trace import make_response_hop
+
+    from app.engines.packet_router import NodeOperationFailedError
+
+    request = _ceg_response({"entity_type": "facilities", "batch": [{"facility_id": "ent-001"}]})
+    packet = request.derive(
+        packet_type="response",
+        source_node="graph-engine",
+        destination_node="enrichment-engine",
+        reply_to="graph-engine",
+        payload={"status": "success", "entity_type": "facilities", "synced_count": 1},
+    )
+    packet = packet.with_hop(
+        make_response_hop(
+            packet=packet,
+            node="graph-engine",
+            action="sync",
+            status="failed",
+            error_code="ExecutionError",
+        )
+    )
+    router = PacketRouter(gate_url="https://gate-node:8080")
+    with (
+        patch.object(router._client, "execute", new_callable=AsyncMock, return_value=packet),
+        pytest.raises(NodeOperationFailedError),
+    ):
+        await router.route(NodeTarget.GRAPH, "sync", "tenant-acme", {"batch": []})
+
+
+@pytest.mark.asyncio
+async def test_notify_graph_sync_returns_none_on_worker_failure_packet():
+    """Reproduction of RV-DOMAIN-RD-07 at the router seam.
+
+    Before the repair the failure payload ``{"status": "failed", ...}`` came back
+    as a truthy dict and the coordinator recorded the row as synced.
+    """
+    router = PacketRouter(gate_url="https://gate-node:8080")
+    with patch.object(
+        router._client, "execute", new_callable=AsyncMock, return_value=_ceg_failure_packet()
+    ) as mock_exec:
+        result = await router.notify_graph_sync(
+            tenant_id="tenant-acme", entity_id="ent-001", fields={"x": 1}, domain="plastics"
+        )
+        assert mock_exec.await_count == 1
+        kwargs = mock_exec.await_args.kwargs
+    assert result is None
+    # The request that went out is still CEG's `sync` contract through Gate.
+    assert kwargs["action"] == "sync"
+    assert kwargs["payload"]["batch"][0]["facility_id"] == "ent-001"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "status": "all_rejected",
+            "entity_type": "facilities",
+            "synced_count": 0,
+            "rejected_count": 1,
+        },
+        {"status": "success", "entity_type": "facilities", "synced_count": 0},
+        {"status": "success", "entity_type": "outcome", "synced_count": 1},
+        {"status": "success", "entity_type": "facilities"},
+        {"status": "failed", "code": "execution_failed"},
+        {},
+    ],
+    ids=["all-rejected", "zero-synced", "other-endpoint", "no-count", "failed-status", "empty"],
+)
+async def test_notify_graph_sync_returns_none_when_ceg_does_not_confirm_the_operation(payload):
+    router = PacketRouter(gate_url="https://gate-node:8080")
+    with patch.object(
+        router._client, "execute", new_callable=AsyncMock, return_value=_ceg_response(payload)
+    ):
+        result = await router.notify_graph_sync(
+            tenant_id="tenant-acme", entity_id="ent-001", fields={}, domain="plastics"
+        )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_notify_graph_sync_returns_the_confirmed_acknowledgment():
+    router = PacketRouter(gate_url="https://gate-node:8080")
+    ok = {"status": "success", "entity_type": "facilities", "synced_count": 1}
+    with patch.object(
+        router._client, "execute", new_callable=AsyncMock, return_value=_ceg_response(ok)
+    ):
+        result = await router.notify_graph_sync(
+            tenant_id="tenant-acme", entity_id="ent-001", fields={}, domain="plastics"
+        )
+    assert result is not None
+    assert result["status"] == "success"
+    assert result["synced_count"] == 1
+    assert "packet_id" in result
+
+
+def test_graph_sync_acknowledged_is_ceg_handle_sync_contract():
+    """The predicate accepts exactly CEG's success shape, for the intended endpoint."""
+    from app.engines.packet_router import graph_sync_acknowledged as ok
+
+    assert ok({"status": "success", "entity_type": "facilities", "synced_count": 1})
+    assert ok(
+        {"status": "success", "entity_type": "facilities", "synced_count": 3},
+        entity_type="facilities",
+    )
+    assert ok({"status": "success", "synced_count": 1, "rejected_count": 2, "packet_id": "p"})
+    assert not ok(
+        {"status": "success", "entity_type": "outcome", "synced_count": 1}, entity_type="facilities"
+    )
+    assert not ok({"status": "all_rejected", "entity_type": "facilities", "synced_count": 0})
+    assert not ok({"status": "failed", "code": "execution_failed"})
+    assert not ok({"status": "success", "entity_type": "facilities", "synced_count": 0})
+    assert not ok({"status": "success", "entity_type": "facilities", "synced_count": True})
+    assert not ok({"status": "success", "entity_type": "facilities", "synced_count": "1"})
+    assert not ok({"status": "success", "entity_type": "facilities"})
+    assert not ok({"status": "ok"})
+    assert not ok(None)
+    assert not ok({})
+    assert not ok("success")
+    assert not ok(["success"])

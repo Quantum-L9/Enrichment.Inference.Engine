@@ -76,6 +76,56 @@ class NodeUnreachableError(Exception):
     """Raised when the Gate-routed operation could not be completed."""
 
 
+class NodeOperationFailedError(NodeUnreachableError):
+    """Gate completed the round trip, but the owning node answered a ``failure`` packet.
+
+    The SDK runtime turns a handler exception into a ``failure`` packet (Gate_SDK
+    ``create_error_transport_packet``) and Gate relays it with HTTP 200, so the
+    client never sees a transport error. Gate itself refuses to cache such an
+    answer (``_is_terminal_success``, SEAM-013); EIE applies the same reading.
+    Subclasses ``NodeUnreachableError`` so every existing "could not be
+    completed" handler keeps working.
+    """
+
+
+def _is_failure_packet(packet: Any) -> bool:
+    """Gate's terminal-success predicate, read from transport-level signals only.
+
+    A ``failure`` packet type, or a response hop whose status is ``failed``,
+    means the operation did not complete — whatever the payload says.
+    """
+    if getattr(packet.header, "packet_type", None) == "failure":
+        return True
+    for hop in reversed(getattr(packet, "hop_trace", ()) or ()):
+        if getattr(hop, "direction", None) == "response":
+            return bool(getattr(hop, "status", None) == "failed")
+    return False
+
+
+def graph_sync_acknowledged(ack: Any, *, entity_type: str | None = None) -> bool:
+    """Whether ``ack`` is CEG's confirmation of the intended ``sync`` operation.
+
+    Authoritative contract (Cognitive.Engine.Graphs ``engine/handlers.py``
+    ``handle_sync``): success is ``{"status": "success", "entity_type": <endpoint>,
+    "synced_count": len(batch)}``; a batch rejected in full answers
+    ``{"status": "all_rejected", "synced_count": 0, ...}``; a handler exception
+    never reaches the payload as a status — it becomes a ``failure`` packet.
+
+    Anything else — ``None``, a non-mapping, a missing or non-success status, a
+    non-positive ``synced_count``, or an acknowledgment for a different endpoint —
+    is NOT a synchronization. The graph may or may not hold the row; the caller
+    must not record it as synced.
+    """
+    if not isinstance(ack, dict):
+        return False
+    if ack.get("status") != "success":
+        return False
+    synced = ack.get("synced_count")
+    if isinstance(synced, bool) or not isinstance(synced, int) or synced < 1:
+        return False
+    return not (entity_type is not None and ack.get("entity_type") != entity_type)
+
+
 def _retry_allowed(exc: BaseException, *, has_idempotency_key: bool) -> bool:
     """Whether a second attempt cannot duplicate a domain effect.
 
@@ -184,6 +234,25 @@ class PacketRouter:
                     correlation_id=correlation_id,
                     compliance_tags=("INTER_NODE",),
                 )
+                if _is_failure_packet(response):
+                    # The worker executed and failed. Not retried here: the same
+                    # packet would re-run the worker, and whether that is safe is
+                    # the logical operation's (the caller's) decision, not the
+                    # transport's. Gate did not cache this answer, so a caller's
+                    # retry is not answered from a stale failure (SEAM-013).
+                    logger.warning(
+                        "packet_route_worker_failure",
+                        target=target.value,
+                        action=action,
+                        packet_id=str(response.header.packet_id),
+                        packet_type=response.header.packet_type,
+                        detail=response.payload.get("message"),
+                        attempt=attempt,
+                    )
+                    raise NodeOperationFailedError(
+                        f"Gate-routed {action!r} for {target.value} answered a failure "
+                        f"packet: {response.payload.get('error') or response.payload.get('code')}"
+                    )
                 data = dict(response.payload)
                 data["packet_id"] = str(response.header.packet_id)
                 logger.info(
@@ -269,9 +338,12 @@ class PacketRouter:
         Sync enriched entity fields into the graph through Gate (action `sync`,
         owned by Cognitive.Engine.Graphs).
 
-        Returns CEG's sync response payload, or None when the operation could
-        not be completed. There is no fallback path: a Gate outage or an
-        unresolvable route is a logged, bounded failure.
+        Returns CEG's sync acknowledgment only when it confirms the intended
+        operation (``graph_sync_acknowledged`` against this router's endpoint),
+        else None: a Gate outage, an unresolvable route, a worker ``failure``
+        packet, a rejected batch, or a malformed answer are each a logged,
+        bounded failure. There is no fallback path. ``None`` means "not
+        synced" — never "synced, response lost" (RV-DOMAIN-RD-07).
         """
         row = _graph_sync_row(
             entity_id=entity_id,
@@ -280,7 +352,7 @@ class PacketRouter:
             id_property=self._graph_sync_id_property,
         )
         try:
-            return await self.route(
+            ack = await self.route(
                 NodeTarget.GRAPH,
                 "sync",
                 tenant_id,
@@ -291,6 +363,17 @@ class PacketRouter:
         except NodeUnreachableError as exc:
             logger.warning("graph_sync_failed", entity_id=entity_id, error=str(exc))
             return None
+        if not graph_sync_acknowledged(ack, entity_type=self._graph_sync_entity_type):
+            logger.warning(
+                "graph_sync_unacknowledged",
+                entity_id=entity_id,
+                status=ack.get("status"),
+                synced_count=ack.get("synced_count"),
+                entity_type=ack.get("entity_type"),
+                expected_entity_type=self._graph_sync_entity_type,
+            )
+            return None
+        return ack
 
     async def notify_score_invalidate(
         self,
