@@ -179,7 +179,10 @@ async def run_convergence_loop(
 
     # ── Convergence config ─────────────────────────────────
     config = convergence_config or ConvergenceConfig()
-    confidence_tracker = ConfidenceTracker(confidence_threshold=config.confidence_threshold)  # NEW
+    confidence_tracker = ConfidenceTracker(
+        confidence_threshold=config.confidence_threshold,
+        exclude_sources=frozenset({INFERENCE_SOURCE}),
+    )
 
     # ── Domain classification (cached per domain) ──────────
     domain_classification: DomainClassification | None = None
@@ -460,7 +463,7 @@ def _pass_meets_convergence(
     """
     names = [name for name in (request.schema_ or {}) if name != "confidence"]
     if not names:
-        return confidence_tracker.has_converged(exclude_sources=frozenset({INFERENCE_SOURCE}))
+        return confidence_tracker.has_converged()
     thresholds = request.field_thresholds or {}
     for name in names:
         field_state = confidence_tracker.fields.get(name)

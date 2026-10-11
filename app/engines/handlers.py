@@ -511,11 +511,22 @@ async def _load_domain_convergence_context(
         if rules_path.exists():
             async with aiofiles.open(rules_path) as f:
                 content = await f.read()
-                inference_rules = yaml.safe_load(content) or []
+                inference_rules = _rules_section(yaml.safe_load(content))
     else:
         inference_rules = config.raw_spec.get("inference_rules") or []
 
     return domain_hints, inference_rules
+
+
+def _rules_section(document: Any) -> Any:
+    """A referenced rules file is a YAML document with an `inference_rules` section.
+
+    That is `rule_loader.load_rules`'s contract. A bare list is also accepted.
+    Anything else is passed through so InferenceBridge reports it refused.
+    """
+    if isinstance(document, dict) and "inference_rules" in document:
+        return document["inference_rules"]
+    return document or []
 
 
 async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:

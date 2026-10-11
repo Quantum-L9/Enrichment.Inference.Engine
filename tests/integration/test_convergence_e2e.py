@@ -461,6 +461,26 @@ class TestLiveDomainInference:
         # be raised by researching again, so it must not trigger pass 2.
         assert provider.await_count == 1
         assert response["pass_count"] == 1
+        # The serialized flag agrees with the decision that stopped the loop.
+        assert response["feature_vector"]["confidence_tracking"]["converged"] is True
+
+    async def test_rules_from_inference_rules_path_document(
+        self, sdk_converge, tmp_path: Path
+    ) -> None:
+        """A referenced rules file has load_rules' shape: an `inference_rules` section."""
+        state, run, _router = sdk_converge
+        spec = yaml.safe_load((_REPO_DOMAINS / "plasticos" / "spec.yaml").read_text())
+        rules_file = tmp_path / "rules.yaml"
+        rules_file.write_text(yaml.safe_dump({"inference_rules": spec.pop("inference_rules")}))
+        spec["inference_rules_path"] = str(rules_file)
+        (tmp_path / "plasticos").mkdir()
+        (tmp_path / "plasticos" / "spec.yaml").write_text(yaml.safe_dump(spec))
+        state["domains"] = tmp_path
+
+        response, _provider_mock = await run(_canonical_payload())
+
+        assert response["feature_vector"]["inference"]["status"] == "active"
+        assert _inferred(response)["facility_tier"]["rule_id"] == "tier-1-high-capacity"
 
     async def test_replay_is_deterministic(self, sdk_converge) -> None:
         _state, run, _router = sdk_converge

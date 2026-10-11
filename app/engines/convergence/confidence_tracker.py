@@ -38,9 +38,15 @@ class ConfidenceTracker:
     Determines when convergence criteria are met.
     """
 
-    def __init__(self, confidence_threshold: float = 0.85):
+    def __init__(
+        self,
+        confidence_threshold: float = 0.85,
+        exclude_sources: frozenset[str] = frozenset(),
+    ):
         self.fields: dict[str, FieldConfidenceState] = {}
         self.threshold = confidence_threshold
+        # Sources whose fields never decide convergence (see has_converged).
+        self.exclude_sources = exclude_sources
         self.current_pass = 0
 
     def update_field(
@@ -76,13 +82,15 @@ class ConfidenceTracker:
         """Return fields below confidence threshold."""
         return [name for name, state in self.fields.items() if state.confidence < self.threshold]
 
-    def has_converged(self, exclude_sources: frozenset[str] = frozenset()) -> bool:
+    def has_converged(self) -> bool:
         """Check if all fields meet threshold.
 
         Fields whose latest value came from a source in `exclude_sources` are
         not considered; if no field remains, the tracker has not converged.
+        The same rule backs the serialized `converged` flag and the loop's stop
+        decision, so the two cannot disagree.
         """
-        states = [s for s in self.fields.values() if s.source_variation not in exclude_sources]
+        states = [s for s in self.fields.values() if s.source_variation not in self.exclude_sources]
         if not states:
             return False
         return all(state.confidence >= self.threshold for state in states)
