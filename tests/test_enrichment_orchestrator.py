@@ -150,8 +150,19 @@ class TestEnrichmentOrchestrator:
             new_callable=AsyncMock,
             return_value=sonar_ok,
         ) as mock_pplx:
-            response = await enrich_entity(request, mock_settings, mock_kb_resolver, idem_store)
+            response = await enrich_entity(
+                request,
+                mock_settings,
+                mock_kb_resolver,
+                idem_store,
+                idempotency_scope="tenant:acme",
+            )
             mock_pplx.assert_not_called()
             idem_store.set.assert_not_called()
             assert response.fields == {"x": "val"}
             assert response.confidence == 0.85
+            # EIE-FIX-001: the lookup is owned by the caller's scope and bound
+            # to this exact request, never by the caller-chosen key alone.
+            scope, key, fingerprint = idem_store.get.await_args.args
+            assert (scope, key) == ("tenant:acme", "test-key-123")
+            assert len(fingerprint) == 64

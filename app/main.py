@@ -53,7 +53,7 @@ from .models.schemas import (
     ReadinessResponse,
 )
 from .score.score_api import router as score_router
-from .services.idempotency import IdempotencyStore
+from .services.idempotency import IdempotencyStore, api_key_scope
 from .services.kb_resolver import KBResolver
 from .services.request_deadline import CANONICAL_CONVERGE_BUDGET_SECONDS
 
@@ -461,26 +461,32 @@ async def readiness_check(
 @app.post(
     "/api/v1/enrich",
     response_model=EnrichResponse,
-    dependencies=[Depends(verify_api_key)],
 )
 async def enrich_single(
     request: EnrichRequest,
     settings: Annotated[Settings, Depends(get_settings)],
+    api_key: Annotated[str, Depends(verify_api_key)],
 ):
-    return await enrich_entity(request, settings, _kb, _idem)
+    # This surface carries no tenant; its one identity is the key verify_api_key
+    # authenticated, so that is what owns an idempotency key here (EIE-FIX-001).
+    return await enrich_entity(
+        request, settings, _kb, _idem, idempotency_scope=api_key_scope(api_key)
+    )
 
 
 @app.post(
     "/api/v1/enrich/batch",
     response_model=BatchEnrichResponse,
-    dependencies=[Depends(verify_api_key)],
 )
 async def enrich_batch_endpoint(
     request: BatchEnrichRequest,
     settings: Annotated[Settings, Depends(get_settings)],
+    api_key: Annotated[str, Depends(verify_api_key)],
 ):
     start = time.monotonic()
-    results = await enrich_batch(request.entities, settings, _kb, _idem)
+    results = await enrich_batch(
+        request.entities, settings, _kb, _idem, idempotency_scope=api_key_scope(api_key)
+    )
     elapsed = int((time.monotonic() - start) * 1000)
     succeeded = sum(1 for r in results if r.state == "completed")
     failed = sum(1 for r in results if r.state == "failed")
