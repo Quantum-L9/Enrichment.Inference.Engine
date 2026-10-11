@@ -86,6 +86,9 @@ def get_or_classify_domain(domain_spec: dict[str, Any]) -> DomainClassification:
 # graph-inference-result packet (EIE-POST-F001).
 GRAPH_INFERENCE_SOURCE = "graph_inference"
 
+# Confidence-tracker source label for values this loop's InferenceBridge derived.
+INFERENCE_SOURCE = "inference"
+
 # Convergence stopped because the shared request deadline ran out. Not a
 # successful convergence — see _assemble_convergence_response.
 DEADLINE_EXHAUSTED_REASON = "deadline_exhausted"
@@ -105,6 +108,7 @@ class PassResult:
     inference_fired: int = 0
     per_field_confidence: dict[str, float] = field(default_factory=dict)  # NEW
     graph_seeded_fields: dict[str, Any] = field(default_factory=dict)
+    inference_provenance: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -367,6 +371,7 @@ async def run_convergence_loop(
         )
         pass_result.inferred_fields = inference_result.derived_fields
         pass_result.inference_fired = inference_result.rules_fired
+        pass_result.inference_provenance = inference_result.provenance
 
         for field_name, value in inference_result.derived_fields.items():
             state.inferred_fields[field_name] = value
@@ -380,7 +385,7 @@ async def run_convergence_loop(
                 value=value,
                 confidence=inferred_conf,
                 pass_num=pass_num,
-                source="inference",
+                source=INFERENCE_SOURCE,
             )
 
         if hasattr(inference_result, "unlock_map"):
@@ -423,7 +428,13 @@ async def run_convergence_loop(
 
     elapsed = int((time.monotonic() - start) * 1000)
     return _assemble_convergence_response(
-        state, request, elapsed, domain_classification, cost_tracker, confidence_tracker
+        state,
+        request,
+        elapsed,
+        domain_classification,
+        cost_tracker,
+        confidence_tracker,
+        inference_context=bridge.describe(),
     )
 
 
@@ -441,12 +452,15 @@ def _pass_meets_convergence(
 
     With a schema, every requested field must be present. A consumer field
     threshold wins over the loop's own confidence bar. With no schema, every
-    field this loop has tracked must clear the loop bar. An empty tracker has
-    not converged.
+    field this loop has tracked must clear the loop bar — except values this
+    loop's inference derived. A derived confidence is bounded by its inputs and
+    its rule; another provider pass cannot raise it except by raising those
+    inputs, which are tracked themselves. Counting it would buy paid passes
+    that cannot change the outcome. An empty tracker has not converged.
     """
     names = [name for name in (request.schema_ or {}) if name != "confidence"]
     if not names:
-        return confidence_tracker.has_converged()
+        return confidence_tracker.has_converged(exclude_sources=frozenset({INFERENCE_SOURCE}))
     thresholds = request.field_thresholds or {}
     for name in names:
         field_state = confidence_tracker.fields.get(name)
@@ -518,6 +532,7 @@ def _assemble_convergence_response(
     domain_classification: DomainClassification | None = None,
     cost_tracker: CostTracker | None = None,
     confidence_tracker: ConfidenceTracker | None = None,  # NEW
+    inference_context: dict[str, Any] | None = None,
 ) -> EnrichResponse:
     """Build the final EnrichResponse from accumulated convergence state."""
     enriched_or_inferred: set[str] = set()
@@ -541,6 +556,7 @@ def _assemble_convergence_response(
             "graph_seeded": list(pr.graph_seeded_fields.keys()),
             "confidence": pr.confidence,
             "rules_fired": pr.inference_fired,
+            "inference_provenance": pr.inference_provenance,
             "per_field_confidence": pr.per_field_confidence,  # NEW
         }
         if pr.sonar_config:
@@ -559,6 +575,10 @@ def _assemble_convergence_response(
         ).model_dump()
     if confidence_tracker:  # NEW
         feature_vector["confidence_tracking"] = confidence_tracker.to_dict()
+    if inference_context is not None:
+        # Which inference context this run executed — or why it executed none.
+        # A refused rule set must not read like a run where no rule happened to fire.
+        feature_vector["inference"] = inference_context
 
     # A loop that stopped because the shared request deadline ran out has not
     # converged, however many fields it managed to accumulate first. Reporting

@@ -76,11 +76,16 @@ class ConfidenceTracker:
         """Return fields below confidence threshold."""
         return [name for name, state in self.fields.items() if state.confidence < self.threshold]
 
-    def has_converged(self) -> bool:
-        """Check if all fields meet threshold."""
-        if not self.fields:
+    def has_converged(self, exclude_sources: frozenset[str] = frozenset()) -> bool:
+        """Check if all fields meet threshold.
+
+        Fields whose latest value came from a source in `exclude_sources` are
+        not considered; if no field remains, the tracker has not converged.
+        """
+        states = [s for s in self.fields.values() if s.source_variation not in exclude_sources]
+        if not states:
             return False
-        return all(state.confidence >= self.threshold for state in self.fields.values())
+        return all(state.confidence >= self.threshold for state in states)
 
     def had_meaningful_improvement(self, min_delta: float) -> bool:
         """Check if last pass improved confidence meaningfully."""

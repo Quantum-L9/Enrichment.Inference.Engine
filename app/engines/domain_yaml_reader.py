@@ -13,6 +13,7 @@ This reader uses them to auto-configure enrichment behavior per node type.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,11 @@ import structlog
 import yaml
 
 logger = structlog.get_logger("domain_yaml_reader")
+
+# A domain id names a directory or file directly under the domains root. It
+# arrives from request payloads (`domain_id` / `object_type`), so anything that
+# could step outside that root ("..", "/", a dotted model name) is refused.
+_DOMAIN_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 
 
 @dataclass
@@ -70,6 +76,8 @@ class DomainYamlReader:
     def load(self, domain_id: str) -> DomainEnrichmentConfig:
         if domain_id in self._cache:
             return self._cache[domain_id]
+        if not isinstance(domain_id, str) or not _DOMAIN_ID_PATTERN.fullmatch(domain_id):
+            raise ValueError(f"Invalid domain id: {domain_id!r}")
 
         spec_path = self._root / domain_id / "spec.yaml"
         if not spec_path.exists():

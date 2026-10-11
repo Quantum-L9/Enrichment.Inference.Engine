@@ -157,6 +157,11 @@ def _fire_cascade_candidate(
 
     for field_name, field_value in result["outputs"].items():
         existing = best_output.get(field_name)
+        if existing is not None and field_name in working:
+            # Settled on an earlier cascade and already consumed by the rules
+            # that fired since; replacing it now would report a value that no
+            # downstream derivation actually used.
+            continue
         if existing is not None:
             _, ex_pri, ex_conf, _ = existing
             if (rule.priority, rule.confidence) <= (ex_pri, ex_conf):
@@ -175,8 +180,14 @@ def _run_cascade_pass(
     registry: RuleRegistry,
     best_output: dict[str, tuple[Any, int, float, str]],
     derivation_chains: dict[str, list[str]],
-) -> tuple[list[RuleFired], int, int]:
-    """Run one cascade pass; return (fired_records, evaluated, skipped)."""
+    fired_ids: set[str],
+) -> tuple[list[RuleFired], int, int, int]:
+    """Run one cascade pass; return (fired_records, evaluated, skipped, new_field_count).
+
+    A rule that fired on an earlier cascade is not evaluated again: `working`
+    only ever gains fields, so its conditions would see the same values and
+    produce the same outputs, inflating `rules_fired` with duplicates.
+    """
     available = set(working.keys())
     candidates = registry.candidates_for(available)
     new_fields: dict[str, Any] = {}
@@ -185,6 +196,8 @@ def _run_cascade_pass(
     skipped = 0
 
     for rule in candidates:
+        if rule.rule_id in fired_ids:
+            continue
         if not rule.trigger_fields.issubset(available):
             skipped += 1
             continue
@@ -194,9 +207,10 @@ def _run_cascade_pass(
         )
         if record is not None:
             fired.append(record)
+            fired_ids.add(rule.rule_id)
 
     working.update(new_fields)
-    return fired, evaluated, skipped
+    return fired, evaluated, skipped, len(new_fields)
 
 
 def infer(entity_fields: dict[str, Any], registry: RuleRegistry) -> InferenceResult:
@@ -206,16 +220,18 @@ def infer(entity_fields: dict[str, Any], registry: RuleRegistry) -> InferenceRes
     best_output: dict[str, tuple[Any, int, float, str]] = {}
     total_evaluated = 0
     total_skipped = 0
+    fired_ids: set[str] = set()
 
     for cascade in range(MAX_CASCADE_DEPTH + 1):
-        fired, evaluated, skipped = _run_cascade_pass(
-            cascade, working, registry, best_output, derivation_chains
+        fired, evaluated, skipped, new_field_count = _run_cascade_pass(
+            cascade, working, registry, best_output, derivation_chains, fired_ids
         )
         all_fired.extend(fired)
         total_evaluated += evaluated
         total_skipped += skipped
 
-        if not fired or cascade == MAX_CASCADE_DEPTH:
+        # No new field means no rule can newly satisfy its conditions next time.
+        if not new_field_count or cascade == MAX_CASCADE_DEPTH:
             break
 
     derived: dict[str, Any] = {k: v[0] for k, v in best_output.items()}
@@ -229,5 +245,5 @@ def infer(entity_fields: dict[str, Any], registry: RuleRegistry) -> InferenceRes
         rules_skipped=total_skipped,
         derivation_chains=derivation_chains,
         inference_confidence=round(min_conf, 4),
-        cascade_depth=min(cascade + 1, MAX_CASCADE_DEPTH) if all_fired else 0,
+        cascade_depth=max(f.cascade_level for f in all_fired) + 1 if all_fired else 0,
     )

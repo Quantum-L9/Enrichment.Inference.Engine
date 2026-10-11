@@ -41,6 +41,7 @@ from .core.auth import verify_api_key
 from .core.config import Settings, get_settings
 from .core.logging_config import setup_logging
 from .core.telemetry import setup_telemetry
+from .engines.domain_yaml_reader import DomainYamlReader
 from .engines.enrichment_orchestrator import breaker, enrich_batch, enrich_entity
 from .engines.orchestration_layer import register as register_orchestration
 from .middleware.rate_limiter import RateLimitMiddleware
@@ -86,7 +87,13 @@ class EnrichmentLifecycle(LifecycleHook):
             _idem = None
 
         clear_handlers()
-        register_orchestration(kb=_kb, idem_store=_idem)
+        # The domain reader is what gives converge its domain inference context
+        # (rules, version). Without it every converge ran with no domain at all.
+        register_orchestration(
+            kb=_kb,
+            idem_store=_idem,
+            domain_reader=DomainYamlReader(settings.domains_dir),
+        )
         from .services.chassis_handlers import register_all_handlers
 
         register_all_handlers()

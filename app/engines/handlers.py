@@ -470,10 +470,15 @@ async def _load_domain_convergence_context(
     *,
     domain_id: str | None,
     node_label: str | None,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Load optional domain hints + inference rules for converge."""
+) -> tuple[dict[str, Any], Any]:
+    """Load optional domain hints + inference rules for converge.
+
+    An unknown domain converges without inference. A loaded domain's rules come
+    from `inference_rules_path`, else the spec's own `inference_rules`; they are
+    returned unvalidated — InferenceBridge accepts the set whole or reports it refused.
+    """
     domain_hints: dict[str, Any] = {}
-    inference_rules: list[dict[str, Any]] = []
+    inference_rules: Any = []
     if not domain_id or not _domain_reader:
         return domain_hints, inference_rules
 
@@ -507,6 +512,8 @@ async def _load_domain_convergence_context(
             async with aiofiles.open(rules_path) as f:
                 content = await f.read()
                 inference_rules = yaml.safe_load(content) or []
+    else:
+        inference_rules = config.raw_spec.get("inference_rules") or []
 
     return domain_hints, inference_rules
 

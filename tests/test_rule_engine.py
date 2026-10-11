@@ -123,3 +123,78 @@ class TestRuleEngine:
         entity = {"polymer_type": "HDPE"}  # no contamination_pct
         result = infer(entity, hdpe_registry)
         assert "material_grade" not in result.derived_fields
+
+
+class TestCascade:
+    """A chained rule fires once, on the cascade after its input appears."""
+
+    @pytest.fixture
+    def chain_registry(self) -> RuleRegistry:
+        registry = RuleRegistry()
+        registry.add_rule(_grade_rule("premium_hdpe_grade", [(Operator.LT, 2.0)], "A", 0.95, 1))
+        registry.add_rule(
+            RuleDefinition(
+                rule_id="tier_from_grade",
+                conditions=[
+                    RuleCondition(field="material_grade", operator=Operator.IN, value=["A"])
+                ],
+                outputs=[
+                    RuleOutput(
+                        field="facility_tier",
+                        value_expr="tier_1",
+                        derivation_type="classification",
+                    )
+                ],
+                confidence=0.9,
+            )
+        )
+        return registry
+
+    def test_each_rule_fires_once_with_its_cascade_level(self, chain_registry):
+        result = infer({"polymer_type": "HDPE", "contamination_pct": 1.0}, chain_registry)
+        levels = {f.rule_id: f.cascade_level for f in result.rules_fired}
+        assert len(result.rules_fired) == 2
+        assert levels == {"premium_hdpe_grade": 0, "tier_from_grade": 1}
+        assert result.cascade_depth == 2
+        assert result.derived_fields == {"material_grade": "A", "facility_tier": "tier_1"}
+
+    def test_no_fire_reports_zero_depth(self, chain_registry):
+        result = infer({"polymer_type": "PP", "contamination_pct": 1.0}, chain_registry)
+        assert result.rules_fired == []
+        assert result.cascade_depth == 0
+
+    def test_later_cascade_does_not_replace_a_consumed_value(self):
+        def _rule(rule_id, conditions, out_field, value, priority):
+            return RuleDefinition(
+                rule_id=rule_id,
+                conditions=[RuleCondition(field=f, operator=Operator.EXISTS) for f in conditions],
+                outputs=[
+                    RuleOutput(field=out_field, value_expr=value, derivation_type="classification")
+                ],
+                confidence=0.9,
+                priority=priority,
+            )
+
+        registry = RuleRegistry()
+        registry.add_rule(_rule("grade_low", ["polymer_type"], "material_grade", "B", 1))
+        registry.add_rule(_rule("certified", ["polymer_type"], "certified", True, 1))
+        # Higher priority, but only satisfiable on cascade 1 — after tier consumed "B".
+        registry.add_rule(_rule("grade_high", ["certified"], "material_grade", "A", 9))
+        registry.add_rule(
+            RuleDefinition(
+                rule_id="tier",
+                conditions=[
+                    RuleCondition(field="material_grade", operator=Operator.EQUALS, value="B")
+                ],
+                outputs=[
+                    RuleOutput(
+                        field="facility_tier", value_expr="t2", derivation_type="classification"
+                    )
+                ],
+                confidence=0.9,
+            )
+        )
+        result = infer({"polymer_type": "HDPE"}, registry)
+        assert result.derived_fields["material_grade"] == "B"
+        assert result.derived_fields["facility_tier"] == "t2"
+        assert result.derivation_chains["material_grade"] == ["grade_low"]
