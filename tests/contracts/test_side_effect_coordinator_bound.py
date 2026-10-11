@@ -50,6 +50,10 @@ def test_graph_sync_acknowledgment_is_ceg_handle_sync_success_shape() -> None:
     assert graph_sync_acknowledged(CEG_SYNC_OK)
     assert graph_sync_acknowledged(CEG_SYNC_OK, entity_type="facilities")
     assert not graph_sync_acknowledged(CEG_SYNC_OK, entity_type="outcome")
+    assert graph_sync_acknowledged(CEG_SYNC_OK, expected_count=1)
+    assert not graph_sync_acknowledged(
+        {"status": "success", "entity_type": "facilities", "synced_count": 2}, expected_count=1
+    ), "an acknowledgment for a different batch size is not this request's"
     assert not graph_sync_acknowledged(None)
     assert not graph_sync_acknowledged({"status": "failed", "code": "execution_failed"})
     assert not graph_sync_acknowledged(

@@ -316,12 +316,21 @@ async def test_notify_graph_sync_returns_none_on_worker_failure_packet():
             "rejected_count": 1,
         },
         {"status": "success", "entity_type": "facilities", "synced_count": 0},
+        {"status": "success", "entity_type": "facilities", "synced_count": 2},
         {"status": "success", "entity_type": "outcome", "synced_count": 1},
         {"status": "success", "entity_type": "facilities"},
         {"status": "failed", "code": "execution_failed"},
         {},
     ],
-    ids=["all-rejected", "zero-synced", "other-endpoint", "no-count", "failed-status", "empty"],
+    ids=[
+        "all-rejected",
+        "zero-synced",
+        "count-not-this-batch",
+        "other-endpoint",
+        "no-count",
+        "failed-status",
+        "empty",
+    ],
 )
 async def test_notify_graph_sync_returns_none_when_ceg_does_not_confirm_the_operation(payload):
     router = PacketRouter(gate_url="https://gate-node:8080")
@@ -360,6 +369,12 @@ def test_graph_sync_acknowledged_is_ceg_handle_sync_contract():
         entity_type="facilities",
     )
     assert ok({"status": "success", "synced_count": 1, "rejected_count": 2, "packet_id": "p"})
+    assert ok(
+        {"status": "success", "entity_type": "facilities", "synced_count": 1}, expected_count=1
+    )
+    assert not ok(
+        {"status": "success", "entity_type": "facilities", "synced_count": 3}, expected_count=1
+    ), "synced_count must equal the batch the caller sent"
     assert not ok(
         {"status": "success", "entity_type": "outcome", "synced_count": 1}, entity_type="facilities"
     )

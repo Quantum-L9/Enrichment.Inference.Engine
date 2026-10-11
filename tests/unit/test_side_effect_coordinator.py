@@ -244,6 +244,60 @@ async def test_permitted_retry_completes_only_the_failed_graph_leg() -> None:
 
 
 @pytest.mark.asyncio
+async def test_graph_retry_syncs_the_fields_that_were_persisted_not_the_retrying_calls() -> None:
+    """The graph must agree with the store and the event, not with a later answer.
+
+    Under the tenant/entity fallback key (no packet id, no idempotency key) a
+    later enrichment of the same entity keys identically; its fields must not be
+    what the pending graph leg syncs, because PostgreSQL and the completion
+    event hold the first result.
+    """
+    coord = SideEffectCoordinator()
+    router, emitter = _collaborators(graph_ack=None)
+    persist = AsyncMock()
+
+    first_fields = {"polymer_type": "HDPE", "capacity_tpa": 1200}
+    with (
+        patch("app.models.schemas.EnrichResponse.model_validate", return_value=MagicMock()),
+        patch("app.services.result_store.ResultStore") as result_store_cls,
+        patch("app.engines.packet_router.get_router", return_value=router),
+        patch("app.services.event_emitter.get_emitter", return_value=emitter),
+    ):
+        result_store_cls.return_value.persist_enrich_response = persist
+        first = await coord.commit_after_enrich(
+            tenant="t1",
+            entity_id="e1",
+            object_type="Contact",
+            domain="plasticos",
+            response_dict={"state": "completed", "fields": first_fields, "confidence": 0.9},
+            settings=SimpleNamespace(gate_url="https://gate.example"),
+        )
+        assert first.graph_synced is False
+
+        router.notify_graph_sync = AsyncMock(return_value=dict(CEG_SYNC_OK))
+        second = await coord.commit_after_enrich(
+            tenant="t1",
+            entity_id="e1",
+            object_type="Contact",
+            domain="other-domain",
+            response_dict={
+                "state": "completed",
+                "fields": {"polymer_type": "PET"},
+                "confidence": 0.5,
+            },
+            settings=SimpleNamespace(gate_url="https://gate.example"),
+        )
+
+    assert second.graph_retry is True
+    assert second.graph_synced is True
+    sent = router.notify_graph_sync.await_args.kwargs
+    assert sent["fields"] == first_fields, "the retry must sync what was persisted"
+    assert sent["domain"] == "plasticos"
+    assert persist.await_count == 1
+    assert emitter.emit_enrichment_completed.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_retry_that_fails_again_stays_pending_without_duplicating_effects() -> None:
     coord = SideEffectCoordinator()
     router, emitter = _collaborators(graph_ack=None)

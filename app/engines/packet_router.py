@@ -102,7 +102,12 @@ def _is_failure_packet(packet: Any) -> bool:
     return False
 
 
-def graph_sync_acknowledged(ack: Any, *, entity_type: str | None = None) -> bool:
+def graph_sync_acknowledged(
+    ack: Any,
+    *,
+    entity_type: str | None = None,
+    expected_count: int | None = None,
+) -> bool:
     """Whether ``ack`` is CEG's confirmation of the intended ``sync`` operation.
 
     Authoritative contract (Cognitive.Engine.Graphs ``engine/handlers.py``
@@ -112,9 +117,10 @@ def graph_sync_acknowledged(ack: Any, *, entity_type: str | None = None) -> bool
     never reaches the payload as a status — it becomes a ``failure`` packet.
 
     Anything else — ``None``, a non-mapping, a missing or non-success status, a
-    non-positive ``synced_count``, or an acknowledgment for a different endpoint —
-    is NOT a synchronization. The graph may or may not hold the row; the caller
-    must not record it as synced.
+    non-positive ``synced_count``, a ``synced_count`` other than
+    ``expected_count`` when the caller knows its batch size, or an
+    acknowledgment for a different endpoint — is NOT a synchronization. The
+    graph may or may not hold the row; the caller must not record it as synced.
     """
     if not isinstance(ack, dict):
         return False
@@ -122,6 +128,8 @@ def graph_sync_acknowledged(ack: Any, *, entity_type: str | None = None) -> bool
         return False
     synced = ack.get("synced_count")
     if isinstance(synced, bool) or not isinstance(synced, int) or synced < 1:
+        return False
+    if expected_count is not None and synced != expected_count:
         return False
     return not (entity_type is not None and ack.get("entity_type") != entity_type)
 
@@ -351,19 +359,24 @@ class PacketRouter:
             domain=domain,
             id_property=self._graph_sync_id_property,
         )
+        batch = [row]
         try:
             ack = await self.route(
                 NodeTarget.GRAPH,
                 "sync",
                 tenant_id,
-                {"entity_type": self._graph_sync_entity_type, "batch": [row]},
+                {"entity_type": self._graph_sync_entity_type, "batch": batch},
                 correlation_id,
                 idempotency_key=_sync_idempotency_key(tenant_id, entity_id, row),
             )
         except NodeUnreachableError as exc:
             logger.warning("graph_sync_failed", entity_id=entity_id, error=str(exc))
             return None
-        if not graph_sync_acknowledged(ack, entity_type=self._graph_sync_entity_type):
+        # CEG answers synced_count == len(batch); an acknowledgment for any other
+        # count cannot be this request's and does not confirm this row.
+        if not graph_sync_acknowledged(
+            ack, entity_type=self._graph_sync_entity_type, expected_count=len(batch)
+        ):
             logger.warning(
                 "graph_sync_unacknowledged",
                 entity_id=entity_id,

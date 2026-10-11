@@ -81,14 +81,19 @@ class SideEffectCoordinator:
     * ``_graph_pending`` — persistence, score invalidation and the completion
       event ran, but CEG did not acknowledge the graph sync. A later call for
       the key re-attempts the graph leg ONLY, so a legitimate retry can finish
-      the sync without duplicating effects that already happened.
+      the sync without duplicating effects that already happened. The entry
+      holds the ``fields`` and ``domain`` that WERE persisted and emitted, and
+      the retry sends exactly those: the graph must end up agreeing with the
+      store and the event, not with whatever the retrying call happens to carry
+      (a later enrichment of the same entity can key identically under the
+      tenant/entity fallback, or re-run with a different LLM answer).
 
     A key is never in both. Both are process-local, like the guard always was.
     """
 
     def __init__(self) -> None:
         self._completed: set[str] = set()
-        self._graph_pending: set[str] = set()
+        self._graph_pending: dict[str, dict[str, Any]] = {}
 
     def reset_for_tests(self) -> None:
         self._completed.clear()
@@ -154,9 +159,16 @@ class SideEffectCoordinator:
         # A key left pending by an unacknowledged graph sync re-runs the graph
         # leg only: persistence, score invalidation and the completion event
         # already happened for it and must not happen twice.
-        graph_retry = key in self._graph_pending
+        pending = self._graph_pending.get(key)
+        graph_retry = pending is not None
         report.graph_retry = graph_retry
-        if graph_retry:
+        # What the graph leg syncs: on a retry, the fields/domain that were
+        # persisted and emitted on the first attempt, never this call's.
+        graph_fields: dict[str, Any] = response_dict.get("fields", {})
+        graph_domain = domain
+        if pending is not None:
+            graph_fields = pending["fields"]
+            graph_domain = pending["domain"]
             logger.info("side_effects_graph_retry", key=key, entity_id=entity_id)
 
         # 1) Persist once
@@ -208,8 +220,8 @@ class SideEffectCoordinator:
                 ack = await router.notify_graph_sync(
                     tenant_id=tenant,
                     entity_id=entity_id,
-                    fields=response_dict.get("fields", {}),
-                    domain=domain,
+                    fields=graph_fields,
+                    domain=graph_domain,
                 )
                 if graph_sync_acknowledged(ack):
                     report.graph_synced = True
@@ -269,8 +281,9 @@ class SideEffectCoordinator:
             # as completed would suppress the retry that can finish it, so the
             # key stays pending for the graph leg only (never re-persist, never
             # re-emit). A persist failure on this attempt is already reported
-            # above and keeps its own semantics.
-            self._graph_pending.add(key)
+            # above and keeps its own semantics. The pending entry pins the
+            # fields the retry must sync — those of the first attempt.
+            self._graph_pending[key] = {"fields": graph_fields, "domain": graph_domain}
             logger.warning(
                 "side_effects_graph_pending",
                 key=key,
@@ -282,7 +295,7 @@ class SideEffectCoordinator:
             )
             return report
 
-        self._graph_pending.discard(key)
+        self._graph_pending.pop(key, None)
         self._completed.add(key)
         logger.info(
             "side_effects_committed",
