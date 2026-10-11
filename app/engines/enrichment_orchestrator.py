@@ -44,6 +44,14 @@ logger = structlog.get_logger("orchestrator")
 breaker = CircuitBreaker(failure_threshold=5, cooldown=60)
 
 
+def _conflict_response(exc: IdempotencyConflictError, start: float) -> EnrichResponse:
+    return EnrichResponse(
+        state="failed",
+        failure_reason=f"idempotency_key_conflict: {exc}",
+        processing_time_ms=int((time.monotonic() - start) * 1000),
+    )
+
+
 def _replay_binding(
     request: EnrichRequest,
     idem_store: IdempotencyStore | None,
@@ -93,11 +101,7 @@ async def enrich_entity(
         try:
             cached = await store.get(scope, key, fingerprint)
         except IdempotencyConflictError as exc:
-            return EnrichResponse(
-                state="failed",
-                failure_reason=f"idempotency_key_conflict: {exc}",
-                processing_time_ms=int((time.monotonic() - start) * 1000),
-            )
+            return _conflict_response(exc, start)
         if cached:
             return EnrichResponse(**cached)
 
@@ -328,7 +332,15 @@ async def enrich_entity(
 
         if replay is not None:
             store, scope, key, fingerprint = replay
-            await store.set(scope, key, fingerprint, resp.model_dump())
+            # A duplicate that was in flight alongside this one may have bound
+            # the key first. Answer with what the key holds, never with a result
+            # a later retry would contradict.
+            try:
+                bound = await store.set(scope, key, fingerprint, resp.model_dump())
+            except IdempotencyConflictError as exc:
+                return _conflict_response(exc, start)
+            if bound is not None:
+                resp = EnrichResponse(**bound)
 
         logger.info(
             "pipeline_completed",

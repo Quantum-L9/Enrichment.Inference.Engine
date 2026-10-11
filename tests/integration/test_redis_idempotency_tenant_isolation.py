@@ -23,6 +23,8 @@ store's own logic.
 
 from __future__ import annotations
 
+import asyncio
+import itertools
 import json
 import os
 import uuid
@@ -256,3 +258,68 @@ async def test_sdk_tenants_never_share_a_binding_with_the_http_surface(wired, st
     assert response.status_code == 200
     assert _owner(sdk) == "acme-only"
     assert _owner(response.json()) == "http-only", "the HTTP caller received a tenant's result"
+
+
+class SlowProvider:
+    """Every request gets a distinct answer, and each call yields to the loop,
+    so two requests started together are genuinely in flight at once."""
+
+    def __init__(self) -> None:
+        self._seq = itertools.count()
+
+    async def __call__(self, **_: Any) -> SonarResponse:
+        marker = f"run-{next(self._seq)}"
+        await asyncio.sleep(0.05)
+        return SonarResponse(
+            data={"confidence": 0.9, "polymer_type": "HDPE", "material_grade": marker},
+            tokens_used=10,
+            citations=[],
+            model="sonar",
+        )
+
+
+def _single_variation(name: str, key: str) -> dict[str, Any]:
+    payload = _fixture(name, key)
+    payload["max_variations"] = 1  # one provider call per request: one marker per run
+    return payload
+
+
+@pytest.fixture
+def concurrent(wired):
+    with patch("app.engines.enrichment_orchestrator.query_perplexity", SlowProvider()):
+        yield
+
+
+async def test_a_retry_in_flight_with_the_original_gets_the_bound_result(concurrent):
+    """Salesforce/Odoo retry on timeout while the original is still running."""
+    acme, _ = _tenants()
+    payload = _single_variation("enrich_request_same_key_variant_a.json", _key())
+
+    original, retry = await asyncio.gather(
+        handlers.handle_enrich(acme, payload), handlers.handle_enrich(acme, dict(payload))
+    )
+    later = await handlers.handle_enrich(acme, dict(payload))
+
+    assert original["state"] == retry["state"] == "completed"
+    assert _owner(original) == _owner(retry) == _owner(later), (
+        "callers of one logical request were given different results"
+    )
+
+
+async def test_a_different_request_in_flight_under_the_same_key_is_refused(concurrent):
+    acme, _ = _tenants()
+    key = _key()
+
+    a, b = await asyncio.gather(
+        handlers.handle_enrich(
+            acme, _single_variation("enrich_request_same_key_variant_a.json", key)
+        ),
+        handlers.handle_enrich(
+            acme, _single_variation("enrich_request_same_key_variant_b.json", key)
+        ),
+    )
+
+    states = sorted([a["state"], b["state"]])
+    assert states == ["completed", "failed"], f"both requests answered as bound: {states}"
+    refused = a if a["state"] == "failed" else b
+    assert (refused["failure_reason"] or "").startswith("idempotency_key_conflict")

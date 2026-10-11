@@ -93,14 +93,28 @@ class IdempotencyStore:
         logger.info("idempotency_hit", key_digest=_digest(key)[:12])
         return response if isinstance(response, dict) else None
 
-    async def set(self, scope: str, key: str, fingerprint: str, response: dict[str, Any]) -> None:
-        """Bind (scope, key) to this request's response unless already bound."""
-        await self.client.set(
+    async def set(
+        self, scope: str, key: str, fingerprint: str, response: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Bind (scope, key) to this request's response unless already bound.
+
+        Returns the response that is bound once this call ends, so a caller
+        never answers with a result the key does not hold: `response` when this
+        call won the binding, or the earlier binding when a concurrent duplicate
+        (a retry sent while the original was still running) completed first.
+        Raises IdempotencyConflictError when a different request won it. None
+        means the binding vanished between the two calls (expiry); the caller
+        keeps its own response.
+        """
+        won = await self.client.set(
             self._redis_key(scope, key),
             json.dumps({"fingerprint": fingerprint, "response": response}, default=str),
             ex=self.ttl,
             nx=True,
         )
+        if won:
+            return response
+        return await self.get(scope, key, fingerprint)
 
     async def close(self) -> None:
         await self.client.aclose()

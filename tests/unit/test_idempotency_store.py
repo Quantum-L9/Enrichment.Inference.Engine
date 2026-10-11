@@ -85,8 +85,18 @@ class TestStore:
 
     async def test_the_first_binding_is_never_replaced(self, store):
         await store.set(ACME, "k", "fp-a", RESPONSE)
-        await store.set(ACME, "k", "fp-b", {"fields": {"other": 1}})
+        with pytest.raises(IdempotencyConflictError):
+            await store.set(ACME, "k", "fp-b", {"fields": {"other": 1}})
         assert await store.get(ACME, "k", "fp-a") == RESPONSE
+
+    async def test_winning_the_binding_returns_this_response(self, store):
+        assert await store.set(ACME, "k", "fp", RESPONSE) == RESPONSE
+
+    async def test_losing_to_the_same_request_returns_the_winners_response(self, store):
+        """A retry in flight alongside the original: whoever completes second
+        answers with what the key holds, not with its own unbound result."""
+        await store.set(ACME, "k", "fp", RESPONSE)
+        assert await store.set(ACME, "k", "fp", {"fields": {"late": 1}}) == RESPONSE
 
     async def test_every_binding_carries_the_configured_ttl(self, store, fake):
         await store.set(ACME, "k", "fp", RESPONSE)
@@ -249,6 +259,46 @@ class TestOrchestrator:
         provider.assert_awaited()
         assert response.state == "completed"
         assert fake.data == {}
+
+    async def test_a_lost_race_to_the_same_request_answers_with_the_binding(
+        self, settings, kb, store
+    ):
+        """The duplicate completed first while this call was enriching."""
+        winner = {"fields": {"polymer_type": "WINNER"}, "confidence": 0.9, "state": "completed"}
+        fingerprint = request_fingerprint(
+            _request().model_dump(mode="json", exclude={"idempotency_key"})
+        )
+
+        async def concurrent_duplicate_completes(**_: Any) -> SonarResponse:
+            await store.set(ACME, "op-1", fingerprint, winner)
+            return SonarResponse(
+                data={"confidence": 0.9, "polymer_type": "LOSER"},
+                tokens_used=5,
+                citations=[],
+                model="sonar",
+            )
+
+        with patch(
+            "app.engines.enrichment_orchestrator.query_perplexity", concurrent_duplicate_completes
+        ):
+            response = await enrich_entity(_request(), settings, kb, store, idempotency_scope=ACME)
+        assert response.fields == {"polymer_type": "WINNER"}
+
+    async def test_a_lost_race_to_a_different_request_is_a_conflict(self, settings, kb, store):
+        async def other_request_completes(**_: Any) -> SonarResponse:
+            await store.set(ACME, "op-1", "another-request", RESPONSE)
+            return SonarResponse(
+                data={"confidence": 0.9, "polymer_type": "LOSER"},
+                tokens_used=5,
+                citations=[],
+                model="sonar",
+            )
+
+        with patch("app.engines.enrichment_orchestrator.query_perplexity", other_request_completes):
+            response = await enrich_entity(_request(), settings, kb, store, idempotency_scope=ACME)
+        assert response.state == "failed"
+        assert (response.failure_reason or "").startswith("idempotency_key_conflict")
+        assert not response.fields
 
     async def test_batch_carries_the_scope_to_every_entity(self, settings, kb, store):
         await _enrich(_request(), settings, kb, store, "HDPE", idempotency_scope=ACME)
