@@ -31,4 +31,3 @@ usages:
       # TODO: Verify exact rate limiter backend from middleware/rate_limiter.py
 
 health_check: "redis-cli ping"  # from docker-compose.yml healthcheck
-
