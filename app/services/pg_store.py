@@ -406,6 +406,30 @@ async def get_pending_schema_proposals(tenant_id: str, domain: str) -> list[Sche
         return list(result.scalars().all())
 
 
+async def get_approved_schema_proposals(tenant_id: str, domain: str) -> list[SchemaProposalRecord]:
+    """Return every approved proposal for a domain, oldest batch first.
+
+    EIE-IDENT-03 read side: the approved rows of ``schema_proposals`` are the
+    durable record of a domain spec's revisions. Ordered by creation so a
+    replay onto the file-backed spec lands the batches in the order they were
+    approved. Under the identity contract ``tenant_id == domain``; both are
+    still bound so the index on (tenant, domain) is used and a cross-tenant
+    read is impossible.
+    """
+    async with get_session() as session:
+        stmt = (
+            select(SchemaProposalRecord)
+            .where(
+                SchemaProposalRecord.tenant_id == tenant_id,
+                SchemaProposalRecord.domain == domain,
+                SchemaProposalRecord.approval_status == "approved",
+            )
+            .order_by(SchemaProposalRecord.created_at.asc(), SchemaProposalRecord.field_name.asc())
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+
 async def approve_schema_proposal(proposal_id: uuid.UUID, reviewed_by: str, approved: bool) -> None:
     """Record a human approval or rejection decision on a schema proposal."""
     async with get_session() as session:

@@ -38,6 +38,7 @@ from enum import StrEnum
 from typing import Any
 
 import structlog
+import yaml
 from constellation_node_sdk.gate import (
     GateClientError,
     GateConnectionError,
@@ -63,6 +64,10 @@ _PRIMITIVE = (str, int, float, bool, type(None))
 # a fallback never passes for a spec-declared endpoint.
 GRAPH_SYNC_SOURCE_DOMAIN_SPEC = "domain_spec"
 GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK = "settings_fallback"
+_NO_CONTRACT_FIX = (
+    "declare sync.endpoints[] in the domain spec, or set GRAPH_SYNC_ENTITY_TYPE "
+    "and GRAPH_SYNC_ID_PROPERTY as the labeled fallback"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,11 +121,32 @@ def resolve_graph_sync_contract(
     ``None``. The caller decides between fallback and fail-closed; this
     function never guesses.
     """
+    usable = _usable_sync_endpoints(domain_spec)
+    if not usable:
+        return None
+    if node_label:
+        chosen = [c for c in usable if c[2] == node_label]
+    elif len(usable) == 1:
+        chosen = usable
+    else:
+        labels = _ontology_labels(domain_spec)
+        chosen = [c for c in usable if c[2] in labels]
+    if len(chosen) != 1:
+        return None
+    entity_type, id_property, _target = chosen[0]
+    return GraphSyncContract(
+        entity_type=entity_type,
+        id_property=id_property,
+        source=GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
+    )
+
+
+def _usable_sync_endpoints(domain_spec: dict[str, Any]) -> list[tuple[str, str, str | None]]:
+    """``(entity_type, id_property, targetnode)`` for each endpoint that has both keys."""
     sync = domain_spec.get("sync")
     endpoints = sync.get("endpoints") if isinstance(sync, dict) else None
     if not isinstance(endpoints, list):
-        return None
-
+        return []
     usable: list[tuple[str, str, str | None]] = []
     for endpoint in endpoints:
         if not isinstance(endpoint, dict):
@@ -134,27 +160,7 @@ def resolve_graph_sync_contract(
             continue
         target = endpoint.get("targetnode")
         usable.append((entity_type, id_property, target if isinstance(target, str) else None))
-
-    if not usable:
-        return None
-
-    def _contract(choice: tuple[str, str, str | None]) -> GraphSyncContract:
-        return GraphSyncContract(
-            entity_type=choice[0],
-            id_property=choice[1],
-            source=GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
-        )
-
-    if node_label:
-        by_label = [c for c in usable if c[2] == node_label]
-        return _contract(by_label[0]) if len(by_label) == 1 else None
-    if len(usable) == 1:
-        return _contract(usable[0])
-    labels = _ontology_labels(domain_spec)
-    by_ontology = [c for c in usable if c[2] in labels]
-    if len(by_ontology) == 1:
-        return _contract(by_ontology[0])
-    return None
+    return usable
 
 
 class NodeTarget(StrEnum):
@@ -287,7 +293,7 @@ class PacketRouter:
         if domain and self._domain_reader is not None:
             try:
                 spec = self._domain_reader.load(domain).raw_spec
-            except (FileNotFoundError, ValueError, OSError) as exc:
+            except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:
                 logger.warning("graph_sync_domain_spec_unavailable", domain=domain, error=str(exc))
             else:
                 contract = resolve_graph_sync_contract(spec, node_label=node_label)
@@ -436,8 +442,7 @@ class PacketRouter:
                 tenant_id=tenant_id,
                 entity_id=entity_id,
                 domain=domain,
-                fix="declare sync.endpoints[] in the domain spec, or set GRAPH_SYNC_ENTITY_TYPE "
-                "and GRAPH_SYNC_ID_PROPERTY as the labeled fallback",
+                fix=_NO_CONTRACT_FIX,
             )
             return None
         row = _graph_sync_row(

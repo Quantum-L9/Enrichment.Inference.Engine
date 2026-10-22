@@ -105,16 +105,11 @@ async def discover_schema(request: DiscoverRequest) -> dict[str, Any]:
 )
 async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
     # scan_crm_fields is synchronous with the (crm_fields, domain_spec) contract.
-    # Resolve domain_spec from the shared converge registry; unknown domain -> 404.
+    # The domain spec comes from the one registry resolution path shared with
+    # POST /v1/scan (converge.get_domain_spec): unknown domain -> 404 on both.
     from . import converge as _converge
 
-    domain_spec = _converge._domain_specs.get(request.domain)
-    if not domain_spec:
-        available = sorted(_converge._domain_specs.keys())
-        raise HTTPException(
-            status_code=404,
-            detail=f"Domain '{request.domain}' not found. Available: {available}",
-        )
+    domain_spec = _converge.get_domain_spec(request.domain)
     try:
         crm_fields = [
             CRMField(

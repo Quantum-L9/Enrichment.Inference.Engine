@@ -22,6 +22,7 @@ from typing import Any
 
 import aiofiles
 import structlog
+import yaml
 
 from ..core.config import get_settings
 from ..engines.convergence.convergence_config import ConvergenceConfig
@@ -283,9 +284,10 @@ async def _run_canonical_converge(
     if response.state == ODOO_COMPLETED_STATE:
         persist_payload = {**payload, "domain": domain_id or settings.default_domain}
         # E14: zero Graph calls on the canonical path. Graph sync awaits up to
-        # three Gate attempts at 30 s each with backoff between them — 93 s in
-        # the worst case, against a caller that waits 30 s. Persistence stays
-        # synchronous because the response depends on it; Graph does not.
+        # two Gate attempts at 10 s each with a 1 s backoff between them
+        # (packet_router._MAX_ATTEMPTS / _ROUTE_TIMEOUT) — 21 s in the worst
+        # case, most of a caller's 30 s budget. Persistence stays synchronous
+        # because the response depends on it; Graph does not.
         #
         # require_persistence=True is what makes `completed` mean durable. The
         # producer treats a completed EnrichResponse as the authoritative record
@@ -483,9 +485,11 @@ async def _load_domain_convergence_context(
         return domain_hints, inference_rules
 
     label = node_label or "Partner"
+    # yaml.YAMLError is not a ValueError: a malformed spec file used to escape
+    # these guards and fail the converge instead of converging without a domain.
     try:
         domain_hints = _domain_reader.get_enrichment_hints(domain_id, label)
-    except (FileNotFoundError, ValueError, OSError, KeyError) as exc:
+    except (FileNotFoundError, ValueError, OSError, KeyError, yaml.YAMLError) as exc:
         logger.warning(
             "handlers.converge_domain_hints_failed",
             domain_id=domain_id,
@@ -494,7 +498,7 @@ async def _load_domain_convergence_context(
 
     try:
         config = _domain_reader.load(domain_id)
-    except (FileNotFoundError, ValueError, OSError) as exc:
+    except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:
         logger.warning(
             "handlers.converge_domain_load_failed",
             domain_id=domain_id,
@@ -504,8 +508,6 @@ async def _load_domain_convergence_context(
 
     if config.inference_rules_path:
         from pathlib import Path
-
-        import yaml
 
         rules_path = Path(config.inference_rules_path)
         if rules_path.exists():
