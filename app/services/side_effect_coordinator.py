@@ -94,8 +94,10 @@ class SideEffectCoordinator:
 
         `graph_sync=False` excludes the Gate->GRAPH round trip, and ONLY that.
         A caller that is itself answering a latency-bounded request uses it:
-        `notify_graph_sync` awaits up to three Gate attempts at 30 s each with
-        backoff between, which no synchronous caller budget can absorb.
+        `notify_graph_sync` awaits up to two Gate attempts at 10 s each with a
+        1 s backoff between (packet_router._MAX_ATTEMPTS / _ROUTE_TIMEOUT) --
+        21 s worst case, which a 30 s synchronous caller budget cannot absorb
+        on top of the enrichment itself.
 
         EIE-004 read the score-invalidation call below as escaping this guard.
         It does not need the guard, and the distinction is the reason the flag

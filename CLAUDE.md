@@ -39,7 +39,10 @@ Do NOT use vague language. Be specific.
   - `app/services/chassis_handlers.py`
   - `app/engines/orchestration_layer.py` — action registration
   - `app/engines/handlers.py`
-  - `app/engines/packet_router.py` — **the** EIE → Gate → CEG egress
+  - `app/engines/packet_router.py` — **the** EIE → Gate → CEG egress; the CEG
+    `sync` endpoint and id property are resolved per domain from that domain's
+    spec (`sync.endpoints[]`), with `Settings.graph_sync_*` as the labeled
+    fallback (GRAPH-IDENT-02)
   - `app/services/gate_client.py` — the single Gate client factory
 
 Two modules that this list used to name are governed by C-13 but carry no live
@@ -54,6 +57,15 @@ that send nothing (EIE-006, EIE-007):
 Both remain listed in AGENTS.md C-13 (transport-contract lockstep) and
 `docs/INVARIANTS.md`: they are part of the contract surface, not of the running
 path. Wire or retire them under C-13, not ad hoc.
+
+The complete list of modules that exist but are deliberately not wired is
+`STAGED_ARTIFACTS` in `tests/compliance/test_module_reachability.py`, and that
+test fails when the list and the import graph disagree. As of this revision it
+names three modules: `app.engines.graph_sync_client` (above),
+`app.engines.inference.nary_inference_engine` (needs a KB n-ary fact schema and
+a YAML→NAryFact loader) and `app.services.audit_persistence` (expects a raw
+`asyncpg.Pool` this app does not create). Edit that list, not this paragraph,
+when one is wired or retired.
 
 Do not describe deprecated local chassis dispatch as if it were the live production path.
 
@@ -103,7 +115,7 @@ Honor the frozen ignore list instead.
 ## Key Commands
 
 ```bash
-make agent-check  # Full 7-gate validation
+make agent-check  # Full 8-gate validation (lint, format, types, unit, ci, audit, contracts, payload compiler)
 make agent-fix    # Auto-fix lint/format
 make test         # Run tests
 make verify       # Contract verification
