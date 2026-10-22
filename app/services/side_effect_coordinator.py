@@ -113,6 +113,7 @@ class SideEffectCoordinator:
         emit_event: bool = True,
         graph_sync: bool = True,
         require_persistence: bool = False,
+        node_label: str | None = None,
     ) -> SideEffectReport:
         """Commit post-enrich side effects once per semantic key.
 
@@ -142,6 +143,13 @@ class SideEffectCoordinator:
         retried. Without it a caller that reports `completed` on the strength of
         a computed result would acknowledge work no store holds, and the
         once-per-key guard would then suppress every retry of it.
+
+        `node_label` names the entity's ontology node (GRAPH-IDENT-02). The
+        router selects the domain's CEG sync endpoint by it when the spec
+        declares several; a domain with several endpoints and no label is
+        skipped as ambiguous rather than sent to another entity type's
+        endpoint. A graph-leg retry re-sends the label of the first attempt,
+        like the fields and domain it pins.
         """
         key = semantic_side_effect_key(
             tenant=tenant,
@@ -166,9 +174,11 @@ class SideEffectCoordinator:
         # persisted and emitted on the first attempt, never this call's.
         graph_fields: dict[str, Any] = response_dict.get("fields", {})
         graph_domain = domain
+        graph_node_label = node_label
         if pending is not None:
             graph_fields = pending["fields"]
             graph_domain = pending["domain"]
+            graph_node_label = pending.get("node_label")
             logger.info("side_effects_graph_retry", key=key, entity_id=entity_id)
 
         # 1) Persist once
@@ -222,6 +232,7 @@ class SideEffectCoordinator:
                     entity_id=entity_id,
                     fields=graph_fields,
                     domain=graph_domain,
+                    node_label=graph_node_label,
                 )
                 if graph_sync_acknowledged(ack):
                     report.graph_synced = True
@@ -283,7 +294,11 @@ class SideEffectCoordinator:
             # re-emit). A persist failure on this attempt is already reported
             # above and keeps its own semantics. The pending entry pins the
             # fields the retry must sync — those of the first attempt.
-            self._graph_pending[key] = {"fields": graph_fields, "domain": graph_domain}
+            self._graph_pending[key] = {
+                "fields": graph_fields,
+                "domain": graph_domain,
+                "node_label": graph_node_label,
+            }
             logger.warning(
                 "side_effects_graph_pending",
                 key=key,

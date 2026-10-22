@@ -177,7 +177,10 @@ def test_sync_contract_honours_an_explicit_node_label():
     contract = resolve_graph_sync_contract(_PLASTICS_SPEC, node_label="PolymerFamily")
     assert contract is not None
     assert (contract.entity_type, contract.id_property) == ("polymerfamilies", "code")
-    assert resolve_graph_sync_contract(_PLASTICS_SPEC, node_label="Nope") is None
+    # A label no endpoint targets (an `object_type` such as "Account") falls
+    # through to the ontology rule: the domain's own node is Facility.
+    unmatched = resolve_graph_sync_contract(_PLASTICS_SPEC, node_label="Nope")
+    assert unmatched is not None and unmatched.entity_type == "facilities"
 
 
 def test_sync_contract_single_endpoint_needs_no_label():
@@ -304,6 +307,87 @@ def test_get_router_reads_specs_from_settings_domains_dir(tmp_path):
         assert router.graph_sync_contract("metals") is None
     finally:
         packet_router_module._router_singleton = original
+
+
+def test_unmatched_label_still_selects_a_single_declared_endpoint():
+    """`object_type="Account"` is a CRM object, not a node label; one endpoint is still it."""
+    spec = {
+        "sync": {
+            "endpoints": [
+                {"path": "/v1/sync/metals", "targetnode": "Metal", "idproperty": "metal_id"}
+            ]
+        }
+    }
+    contract = resolve_graph_sync_contract(spec, node_label="Account")
+    assert contract is not None
+    assert (contract.entity_type, contract.id_property) == ("metals", "metal_id")
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_declared_endpoints_are_skipped_not_defaulted(tmp_path):
+    """Several endpoints, no label: nothing is sent and the fallback is NOT used.
+
+    The production caller (SideEffectCoordinator) used to call without a node
+    label; the resolver returned None and the `facilities` fallback silently
+    took over for an entity of another type.
+    """
+    ambiguous = {
+        "name": "mixed",
+        "ontology": {"nodes": [{"label": "A"}, {"label": "B"}]},
+        "sync": {
+            "endpoints": [
+                {"path": "/v1/sync/a", "targetnode": "A", "idproperty": "a_id"},
+                {"path": "/v1/sync/b", "targetnode": "B", "idproperty": "b_id"},
+            ]
+        },
+    }
+    reader = DomainYamlReader(_domains_dir(tmp_path, {"mixed": ambiguous}))
+    router = PacketRouter(
+        gate_url="https://gate-node:8080",
+        domain_reader=reader,
+        fallback_entity_type="facilities",
+        fallback_id_property="facility_id",
+    )
+    assert router.graph_sync_contract("mixed") is None
+    with patch.object(router._client, "execute", new_callable=AsyncMock) as mock_exec:
+        result = await router.notify_graph_sync(
+            tenant_id="tenant-acme", entity_id="x-1", fields={}, domain="mixed"
+        )
+    assert result is None
+    mock_exec.assert_not_awaited()
+    # The label resolves it; the fallback was never the answer.
+    chosen = router.graph_sync_contract("mixed", node_label="B")
+    assert chosen is not None
+    assert (chosen.entity_type, chosen.id_property, chosen.source) == (
+        "b",
+        "b_id",
+        GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
+    )
+
+
+@pytest.mark.parametrize(
+    ("filename_body", "case"),
+    [("", "empty-file"), ("- just\n- a list\n", "list-root"), ("ontology: [:::", "malformed")],
+)
+def test_unparseable_spec_counts_as_declaring_no_endpoint(tmp_path, filename_body, case):
+    """An empty, list-rooted or malformed spec is "declares none": fallback, else fail closed."""
+    root = tmp_path / "domains"
+    (root / "odd").mkdir(parents=True)
+    (root / "odd" / "spec.yaml").write_text(filename_body, encoding="utf-8")
+    reader = DomainYamlReader(root)
+
+    closed = PacketRouter(gate_url="https://gate-node:8080", domain_reader=reader)
+    assert closed.graph_sync_contract("odd") is None, case
+
+    with_fallback = PacketRouter(
+        gate_url="https://gate-node:8080",
+        domain_reader=reader,
+        fallback_entity_type="facilities",
+        fallback_id_property="facility_id",
+    )
+    contract = with_fallback.graph_sync_contract("odd")
+    assert contract is not None, case
+    assert contract.source == GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK
 
 
 def test_retry_discipline_never_multiplies_a_domain_effect():

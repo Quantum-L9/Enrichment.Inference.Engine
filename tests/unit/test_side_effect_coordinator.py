@@ -343,3 +343,38 @@ async def test_reset_clears_pending_graph_legs() -> None:
     coord.reset_for_tests()
     assert not coord._graph_pending
     assert not coord._completed
+
+
+# ── GRAPH-IDENT-02: the entity's node label reaches the router ──────────────
+
+
+@pytest.mark.asyncio
+async def test_node_label_is_passed_to_the_router() -> None:
+    """The router selects the domain's CEG endpoint by it; the coordinator forwards it."""
+    coord = SideEffectCoordinator()
+    router, emitter = _collaborators()
+    report = await _commit(coord, router, emitter, idempotency_key="k-label", node_label="Facility")
+    assert report.graph_synced is True
+    assert router.notify_graph_sync.await_args.kwargs["node_label"] == "Facility"
+
+
+@pytest.mark.asyncio
+async def test_graph_retry_resends_the_first_attempts_node_label() -> None:
+    """Like the fields and domain it pins, the pending graph leg keeps its label."""
+    coord = SideEffectCoordinator()
+    router, emitter = _collaborators(graph_ack=None)
+    persist = AsyncMock()
+
+    first = await _commit(
+        coord, router, emitter, persist, idempotency_key="k-label-retry", node_label="Facility"
+    )
+    assert first.graph_synced is False
+    assert coord._graph_pending[first.key]["node_label"] == "Facility"
+
+    router.notify_graph_sync = AsyncMock(return_value=dict(CEG_SYNC_OK))
+    second = await _commit(
+        coord, router, emitter, persist, idempotency_key="k-label-retry", node_label="Other"
+    )
+    assert second.graph_retry is True
+    assert second.graph_synced is True
+    assert router.notify_graph_sync.await_args.kwargs["node_label"] == "Facility"

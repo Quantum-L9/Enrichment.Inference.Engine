@@ -121,6 +121,7 @@ async def _persist_and_sync(
         emit_event=True,
         graph_sync=graph_sync,
         require_persistence=require_persistence,
+        node_label=payload.get("node_label") or object_type,
     )
 
 

@@ -133,26 +133,30 @@ def resolve_graph_sync_contract(
     (``path``, ``targetnode``, ``idproperty``); CEG resolves ``entity_type`` as
     the last path segment, so that is what is returned. Selection, in order:
 
-    1. ``node_label`` given -> the endpoint whose ``targetnode`` is that label;
-    2. exactly one usable endpoint -> that endpoint;
+    1. ``node_label`` given and exactly one endpoint's ``targetnode`` is that
+       label -> that endpoint;
+    2. exactly one usable endpoint -> that endpoint (a single declared
+       endpoint is the domain's sync target whatever the caller's label is:
+       an `object_type` such as ``Account`` is a CRM object, not a node label);
     3. exactly one endpoint whose ``targetnode`` is a label of this domain's
        own ontology -> that endpoint.
 
     Anything else -- no ``sync`` section, no endpoint with both a path and an
-    id property, or several candidates with no label to choose by -- is
-    ``None``. The caller decides between fallback and fail-closed; this
+    id property, or several candidates none of which the label or the ontology
+    singles out -- is ``None``. The caller distinguishes "declares none" from
+    "declares several, ambiguous" with :func:`_usable_sync_endpoints`; this
     function never guesses.
     """
     usable = _usable_sync_endpoints(domain_spec)
     if not usable:
         return None
-    if node_label:
-        chosen = [c for c in usable if c[2] == node_label]
-    elif len(usable) == 1:
-        chosen = usable
-    else:
-        labels = _ontology_labels(domain_spec)
-        chosen = [c for c in usable if c[2] in labels]
+    chosen = [c for c in usable if node_label and c[2] == node_label]
+    if len(chosen) != 1:
+        if len(usable) == 1:
+            chosen = usable
+        else:
+            labels = _ontology_labels(domain_spec)
+            chosen = [c for c in usable if c[2] in labels]
     if len(chosen) != 1:
         return None
     entity_type, id_property, _target = chosen[0]
@@ -341,21 +345,62 @@ class PacketRouter:
     ) -> GraphSyncContract | None:
         """Resolve the CEG sync endpoint for ``domain``: spec first, then fallback.
 
-        Returns None when neither the domain's spec nor the configured fallback
-        yields a contract -- the fail-closed case ``notify_graph_sync`` honours
-        by sending nothing. Spec problems (unknown domain, illegal id, unreadable
-        or malformed file) are logged and treated as "declares none", never
-        raised: a sync is a side effect, and the enrichment it follows already
-        completed.
+        Three outcomes, in order:
+
+        * the spec declares endpoints and one is selected -> that contract;
+        * the spec declares endpoints but none can be selected (several
+          endpoints, no label or ontology singles one out) -> ``None`` and
+          ``graph_sync_skipped_ambiguous_contract`` names the domain and the
+          candidates. The fallback is NOT consulted: a row of an entity whose
+          type the spec could not name must not land on the fallback's
+          endpoint, which belongs to another entity type;
+        * the spec declares no endpoint at all -- no ``sync`` section, an
+          unknown domain, an illegal id, an unreadable, malformed or
+          wrong-shaped file -> the labeled settings fallback when configured,
+          else ``None`` (fail closed). Spec problems are logged and never
+          raised: a sync is a side effect, and the enrichment it follows
+          already completed.
         """
         contract: GraphSyncContract | None = None
         if domain and self._domain_reader is not None:
+            # AttributeError / TypeError / KeyError: an empty file (YAML `None`)
+            # or a list root makes DomainYamlReader._parse raise before any
+            # spec exists; that is "declares none", not a resolution failure.
             try:
                 spec = self._domain_reader.load(domain).raw_spec
-            except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:
-                logger.warning("graph_sync_domain_spec_unavailable", domain=domain, error=str(exc))
+            except (
+                FileNotFoundError,
+                ValueError,
+                OSError,
+                yaml.YAMLError,
+                AttributeError,
+                TypeError,
+                KeyError,
+            ) as exc:
+                logger.warning(
+                    "graph_sync_domain_spec_unavailable",
+                    domain=domain,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
             else:
+                if not isinstance(spec, dict):
+                    spec = {}
                 contract = resolve_graph_sync_contract(spec, node_label=node_label)
+                if contract is None:
+                    declared = _usable_sync_endpoints(spec)
+                    if declared:
+                        logger.warning(
+                            "graph_sync_skipped_ambiguous_contract",
+                            domain=domain,
+                            node_label=node_label,
+                            candidates=[
+                                {"entity_type": e, "id_property": i, "targetnode": t}
+                                for e, i, t in declared
+                            ],
+                            fix="pass the entity's node label, or declare one endpoint per "
+                            "ontology node so the label selects it",
+                        )
+                        return None
         if contract is None:
             contract = self._fallback_contract
         if contract is None:
