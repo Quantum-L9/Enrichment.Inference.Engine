@@ -15,12 +15,38 @@ Integration fix applied (PR#21 merge pass):
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENRICHMENT_PROVIDERS: frozenset[str] = frozenset({"perplexity", "deterministic"})
+
+# Identity contract (operator decision 2026-10-22): tenant id == domain spec id
+# == Neo4j database name. One customer is one directory `domains/<tenant>/spec.yaml`,
+# one versioned spec and one database, so a tenant id has to be a legal Neo4j
+# database name: lowercase, starting with a letter, then letters, digits, dots
+# or dashes, 3-63 characters, and never starting with the reserved `system`
+# prefix. Vertical templates are provenance only (`metadata.template.*`); there
+# is no tenant-to-domain mapping layer anywhere.
+TENANT_ID_PATTERN: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9.-]{2,62}$")
+TENANT_ID_RESERVED_PREFIX = "system"
+
+
+def is_legal_tenant_id(value: object) -> bool:
+    """Whether ``value`` can name a tenant, its domain spec and its Neo4j database.
+
+    The lowercase check runs before the pattern so a mixed-case id is refused
+    outright rather than silently lowercased into a different identity.
+    """
+    if not isinstance(value, str) or value != value.lower():
+        return False
+    if value.startswith(TENANT_ID_RESERVED_PREFIX):
+        return False
+    return TENANT_ID_PATTERN.fullmatch(value) is not None
+
+
 # EIE-212-F002: the deterministic source invents numeric and boolean values that
 # carry no marker, so the only place it can run is one that serves no real
 # tenant. The set matches the SDK's unsigned `dev_mode` environments in
@@ -107,9 +133,17 @@ class Settings(BaseSettings):
     # restarts the process. The loop closes that without a restart. 0 disables it.
     # C-09 (EIE-212-F004): env name L9_GATE_REREGISTRATION_INTERVAL_SECONDS.
     l9_gate_reregistration_interval_seconds: float = 300.0
-    # CEG `sync` contract projection for post-enrichment graph sync: the CEG sync
-    # endpoint suffix and its id property (Cognitive.Engine.Graphs domain spec
-    # `sync.endpoints`). Defaults match the plasticos domain.
+    # GRAPH-IDENT-02: the CEG `sync` contract for post-enrichment graph sync is
+    # read per domain from that domain's own spec (`sync.endpoints[]`, the
+    # owner-native `path` / `targetnode` / `idproperty` keys of
+    # Cognitive.Engine.Graphs' SyncEndpointSpec) by app/engines/packet_router.py.
+    # These two values are the clearly labeled FALLBACK, used only when the
+    # domain spec declares no resolvable sync endpoint; every use is logged as
+    # `graph_sync_contract_resolved` with `source="settings_fallback"` and the
+    # domain it stood in for. Set both to "" to fail closed instead (no sync is
+    # sent for a domain without a spec-declared endpoint). Defaults match the
+    # plasticos domain so the live path keeps syncing until that spec declares
+    # its endpoint.
     graph_sync_entity_type: str = "facilities"
     graph_sync_id_property: str = "facility_id"
 

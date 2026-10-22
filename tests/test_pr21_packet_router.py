@@ -11,19 +11,59 @@ Proves GAP-1 and GAP-6:
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import yaml
 from constellation_node_sdk.transport import create_transport_packet
 
+import app.engines.packet_router as packet_router_module
+from app.engines.domain_yaml_reader import DomainYamlReader
 from app.engines.packet_router import (
+    GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
+    GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK,
     NodeTarget,
     NodeUnreachableError,
     PacketRouter,
     _graph_sync_row,
     _retry_allowed,
     get_router,
+    resolve_graph_sync_contract,
 )
+
+# One tenant, one directory, one spec (identity contract 2026-10-22). The sync
+# section is CEG's owner-native SyncEndpointSpec shape: path / targetnode /
+# idproperty, with entity_type being the path's last segment.
+_PLASTICS_SPEC = {
+    "name": "plastics",
+    "version": "0.3.0",
+    "ontology": {"nodes": [{"label": "Facility", "properties": [{"name": "id"}]}]},
+    "sync": {
+        "endpoints": [
+            {
+                "path": "/v1/sync/facilities",
+                "targetnode": "Facility",
+                "idproperty": "facility_id",
+                "batchstrategy": "UNWINDMERGE",
+            },
+            {
+                "path": "/v1/sync/polymerfamilies",
+                "targetnode": "PolymerFamily",
+                "idproperty": "code",
+                "batchstrategy": "UNWINDMERGE",
+            },
+        ]
+    },
+}
+
+
+def _domains_dir(tmp_path: Path, specs: dict[str, dict]) -> Path:
+    root = tmp_path / "domains"
+    for domain, spec in specs.items():
+        (root / domain).mkdir(parents=True)
+        (root / domain / "spec.yaml").write_text(yaml.safe_dump(spec), encoding="utf-8")
+    return root
 
 
 def test_dispatch_to_score_symbol_absent():
@@ -72,9 +112,14 @@ def test_graph_sync_row_is_a_ceg_sync_row_of_neo4j_primitives():
 
 
 @pytest.mark.asyncio
-async def test_notify_graph_sync_sends_ceg_sync_contract_to_gate():
-    """GAP-6 successor: graph sync is CEG's `sync` action, sent through Gate."""
-    router = PacketRouter(gate_url="https://gate-node:8080")
+async def test_notify_graph_sync_sends_ceg_sync_contract_to_gate(tmp_path):
+    """GAP-6 successor: graph sync is CEG's `sync` action, sent through Gate.
+
+    GRAPH-IDENT-02: the endpoint (`facilities`) and its id property
+    (`facility_id`) come from the `plastics` domain's own spec, not a constant.
+    """
+    reader = DomainYamlReader(_domains_dir(tmp_path, {"plastics": _PLASTICS_SPEC}))
+    router = PacketRouter(gate_url="https://gate-node:8080", domain_reader=reader)
 
     response_packet = create_transport_packet(
         action="sync",
@@ -104,6 +149,134 @@ async def test_notify_graph_sync_sends_ceg_sync_contract_to_gate():
     assert kwargs["payload"]["batch"][0]["domain"] == "plastics"
     assert kwargs["idempotency_key"].startswith("eie:sync:tenant-acme:ent-001:")
     assert kwargs["timeout_ms"] == 10_000
+
+
+# ── GRAPH-IDENT-02: per-domain sync contract from the domain spec ───────────
+
+
+def test_sync_contract_is_read_from_the_domain_spec_by_ontology_label():
+    """Two endpoints, one of which targets the domain's own ontology node: that one."""
+    contract = resolve_graph_sync_contract(_PLASTICS_SPEC)
+    assert contract is not None
+    assert (contract.entity_type, contract.id_property) == ("facilities", "facility_id")
+    assert contract.source == GRAPH_SYNC_SOURCE_DOMAIN_SPEC
+
+
+def test_sync_contract_honours_an_explicit_node_label():
+    contract = resolve_graph_sync_contract(_PLASTICS_SPEC, node_label="PolymerFamily")
+    assert contract is not None
+    assert (contract.entity_type, contract.id_property) == ("polymerfamilies", "code")
+    assert resolve_graph_sync_contract(_PLASTICS_SPEC, node_label="Nope") is None
+
+
+def test_sync_contract_single_endpoint_needs_no_label():
+    spec = {"sync": {"endpoints": [{"path": "/v1/sync/metals/", "idproperty": "metal_id"}]}}
+    contract = resolve_graph_sync_contract(spec)
+    assert contract is not None
+    assert (contract.entity_type, contract.id_property) == ("metals", "metal_id")
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {},
+        {"sync": {}},
+        {"sync": {"endpoints": []}},
+        {"sync": {"endpoints": [{"path": "/v1/sync/facilities"}]}},  # no id property
+        {  # two endpoints, neither selectable by label
+            "sync": {
+                "endpoints": [
+                    {"path": "/v1/sync/a", "targetnode": "A", "idproperty": "a_id"},
+                    {"path": "/v1/sync/b", "targetnode": "B", "idproperty": "b_id"},
+                ]
+            }
+        },
+    ],
+)
+def test_sync_contract_never_guesses(spec):
+    """No section, no id property, or an ambiguous pair resolves to None, not a default."""
+    assert resolve_graph_sync_contract(spec) is None
+
+
+@pytest.mark.asyncio
+async def test_graph_sync_fails_closed_for_a_domain_without_a_contract(tmp_path):
+    """No spec endpoint and no fallback: nothing is sent, the skip is reported."""
+    reader = DomainYamlReader(_domains_dir(tmp_path, {"plastics": _PLASTICS_SPEC}))
+    router = PacketRouter(gate_url="https://gate-node:8080", domain_reader=reader)
+
+    with patch.object(router._client, "execute", new_callable=AsyncMock) as mock_exec:
+        result = await router.notify_graph_sync(
+            tenant_id="tenant-acme",
+            entity_id="ent-001",
+            fields={"material_type": "HDPE"},
+            domain="metals",  # no such spec
+        )
+    assert result is None
+    mock_exec.assert_not_awaited()
+    assert router.graph_sync_contract("metals") is None
+
+
+@pytest.mark.asyncio
+async def test_graph_sync_fallback_is_labeled_and_only_used_without_a_spec_contract(tmp_path):
+    """Settings fallback stands in for a spec that declares none, and says so."""
+    reader = DomainYamlReader(_domains_dir(tmp_path, {"plastics": _PLASTICS_SPEC}))
+    router = PacketRouter(
+        gate_url="https://gate-node:8080",
+        domain_reader=reader,
+        fallback_entity_type="facilities",
+        fallback_id_property="facility_id",
+    )
+
+    fallback = router.graph_sync_contract("metals")
+    assert fallback is not None
+    assert fallback.source == GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK
+    assert (fallback.entity_type, fallback.id_property) == ("facilities", "facility_id")
+
+    from_spec = router.graph_sync_contract("plastics", node_label="PolymerFamily")
+    assert from_spec is not None
+    assert from_spec.source == GRAPH_SYNC_SOURCE_DOMAIN_SPEC
+    assert (from_spec.entity_type, from_spec.id_property) == ("polymerfamilies", "code")
+
+    response_packet = create_transport_packet(
+        action="sync",
+        payload={"status": "success", "entity_type": "facilities", "synced_count": 1},
+        tenant="tenant-acme",
+        source_node="gate",
+        destination_node="enrichment-engine",
+        reply_to="gate",
+    )
+    with patch.object(
+        router._client, "execute", new_callable=AsyncMock, return_value=response_packet
+    ) as mock_exec:
+        await router.notify_graph_sync(
+            tenant_id="tenant-acme", entity_id="ent-9", fields={}, domain="metals"
+        )
+    payload = mock_exec.await_args.kwargs["payload"]
+    assert payload["entity_type"] == "facilities"
+    assert payload["batch"][0]["facility_id"] == "ent-9"
+
+
+def test_get_router_reads_specs_from_settings_domains_dir(tmp_path):
+    """The singleton resolves contracts from the same domains/ the converge path reads."""
+
+    class SettingsStub:
+        gate_url = "https://gate:8080"
+        domains_dir = str(_domains_dir(tmp_path, {"plastics": _PLASTICS_SPEC}))
+        graph_sync_entity_type = ""
+        graph_sync_id_property = ""
+
+    original = packet_router_module._router_singleton
+    packet_router_module._router_singleton = None
+    try:
+        router = get_router(SettingsStub())
+        contract = router.graph_sync_contract("plastics")
+        assert contract is not None
+        assert contract.entity_type == "facilities"
+        assert contract.source == GRAPH_SYNC_SOURCE_DOMAIN_SPEC
+        # Empty fallback pair: a domain without a spec endpoint fails closed.
+        assert router.graph_sync_contract("metals") is None
+    finally:
+        packet_router_module._router_singleton = original
 
 
 def test_retry_discipline_never_multiplies_a_domain_effect():
