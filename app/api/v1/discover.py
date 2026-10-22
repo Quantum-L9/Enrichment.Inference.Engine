@@ -15,12 +15,12 @@ import uuid
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.utils.safe_convert import safe_float
 
-from ...core.auth import verify_api_key
+from ...core.auth import require_direct_tenant_read, tenant_scope, verify_api_key
 from ...engines.handlers import handle_discover
 from ...services import pg_store
 from ...services.crm_field_scanner import CRMField, scan_crm_fields, scan_result_to_dict
@@ -67,7 +67,9 @@ class ApprovalRequest(BaseModel):
 
 @router.post(
     "/api/v1/discover",
-    dependencies=[Depends(verify_api_key)],
+    # EIE-SEC-03: the tenant travels in the body, so the key -> environment
+    # trust gate is a route dependency (it composes verify_api_key).
+    dependencies=[Depends(require_direct_tenant_read)],
     summary="Trigger schema discovery for a domain entity",
 )
 async def discover_schema(request: DiscoverRequest) -> dict[str, Any]:
@@ -99,7 +101,7 @@ async def discover_schema(request: DiscoverRequest) -> dict[str, Any]:
 
 @router.post(
     "/api/v1/scan",
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(require_direct_tenant_read)],
     summary="CRM field scan — Seed tier entry point",
     responses={404: {"description": "Domain not found"}},
 )
@@ -138,12 +140,14 @@ async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
 
 @router.get(
     "/api/v1/proposals/{domain}",
-    dependencies=[Depends(verify_api_key)],
     summary="Get pending schema proposals for a domain",
 )
 async def get_proposals(
     domain: str,
-    tenant_id: Annotated[str, Query(..., description="Tenant identifier")],
+    # EIE-SEC-03: still a required `tenant_id` query parameter on the wire;
+    # tenant_scope composes verify_api_key, the environment trust gate and
+    # the identity grammar.
+    tenant_id: Annotated[str, Depends(tenant_scope)],
 ) -> list[dict[str, Any]]:
     proposals = await pg_store.get_pending_schema_proposals(tenant_id=tenant_id, domain=domain)
     return [

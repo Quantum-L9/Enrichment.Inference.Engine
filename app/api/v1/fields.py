@@ -13,12 +13,12 @@ from datetime import datetime
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.utils.safe_convert import safe_float
 
-from ...core.auth import verify_api_key
+from ...core.auth import tenant_scope, verify_api_key
 from ...core.config import Settings, get_settings
 from ...services.result_store import ResultStore
 
@@ -49,7 +49,9 @@ class FieldsResponse(BaseModel):
 )
 async def get_field_confidence_map(
     entity_id: str,
-    tenant_id: Annotated[str, Query(..., description="Tenant identifier")],
+    # EIE-SEC-03: `tenant_id` stays a required query parameter on the wire;
+    # tenant_scope binds it (key -> environment trust -> identity grammar).
+    tenant_id: Annotated[str, Depends(tenant_scope)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> FieldsResponse:
     store = ResultStore(tenant_id=tenant_id)
@@ -106,7 +108,7 @@ async def get_field_confidence_map(
 async def get_field_confidence_history(
     entity_id: str,
     field_name: str,
-    tenant_id: Annotated[str, Query(..., description="Tenant identifier")],
+    tenant_id: Annotated[str, Depends(tenant_scope)],
 ) -> list[dict]:
     store = ResultStore(tenant_id=tenant_id)
     history = await store.get_field_confidence_history(entity_id, field_name)
