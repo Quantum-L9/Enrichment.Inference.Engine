@@ -166,14 +166,87 @@ class TestScanCrmFields:
 class TestSeedYaml:
     def test_seed_version(self):
         result = scan_crm_fields(RECYCLER_CRM_FIELDS, PLASTICS_DOMAIN_SPEC)
-        seed = generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC)
+        seed = generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC, "acme")
         assert seed["domain"]["version"] == "0.1.0-seed"
 
     def test_seed_contains_only_matched(self):
         result = scan_crm_fields(RECYCLER_CRM_FIELDS, PLASTICS_DOMAIN_SPEC)
-        seed = generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC)
+        seed = generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC, "acme")
         props = seed["ontology"]["nodes"][0]["properties"]
         assert len(props) == 3  # name, city, phone
+
+    # EIE-IDENT-01: tenant id == domain spec id == Neo4j database name. The
+    # seed's domain.id is the tenant, never a value cut from the template.
+
+    def test_two_tenants_on_one_template_get_their_own_domain_id(self):
+        result = scan_crm_fields(RECYCLER_CRM_FIELDS, PLASTICS_DOMAIN_SPEC)
+        alpha = generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC, "alpha")
+        beta = generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC, "beta")
+        assert alpha["domain"]["id"] == "alpha"
+        assert beta["domain"]["id"] == "beta"
+        assert alpha["metadata"]["tenant_id"] == "alpha"
+        assert beta["metadata"]["tenant_id"] == "beta"
+        # Same template, same provenance; only the identity differs.
+        assert alpha["metadata"]["template"] == beta["metadata"]["template"]
+        assert alpha["ontology"] == beta["ontology"]
+
+    def test_template_is_provenance_only(self):
+        result = scan_crm_fields(RECYCLER_CRM_FIELDS, PLASTICS_DOMAIN_SPEC)
+        seed = generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC, "alpha")
+        assert seed["metadata"]["template"] == {"id": "plastics-recycling", "version": "8.0.0"}
+        assert "plastics-recycling" not in seed["domain"]["id"]
+        assert "customer-" not in seed["domain"]["id"]
+        assert seed["domain"]["name"] == "Plastics Recycling"
+        assert seed["metadata"]["scan_hash"] == result.scan_hash
+
+    def test_source_system_recorded_from_scan_or_argument(self):
+        odoo_fields = [
+            CRMField(name="name", field_type="char", source_system="odoo"),
+            CRMField(name="city", field_type="char", source_system="odoo"),
+        ]
+        result = scan_crm_fields(odoo_fields, PLASTICS_DOMAIN_SPEC)
+        inferred = generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC, "alpha")
+        assert inferred["metadata"]["source_system"] == "odoo"
+        explicit = generate_seed_yaml(
+            result, PLASTICS_DOMAIN_SPEC, "alpha", source_system="salesforce"
+        )
+        assert explicit["metadata"]["source_system"] == "salesforce"
+        legacy = generate_seed_yaml(
+            scan_crm_fields(RECYCLER_CRM_FIELDS, PLASTICS_DOMAIN_SPEC), PLASTICS_DOMAIN_SPEC, "a1b"
+        )
+        assert legacy["metadata"]["source_system"] is None
+
+    @pytest.mark.parametrize(
+        "tenant_id",
+        [
+            "Alpha",  # uppercase: never lowercased silently
+            " alpha",  # whitespace: never stripped
+            "1alpha",  # must start with a letter
+            "al",  # shorter than 3
+            "a" * 64,  # longer than 63
+            "alpha_beta",  # underscore is not legal in a Neo4j database name
+            "system",  # reserved prefix
+            "systemx",  # reserved prefix
+            "customer-plastics-recycling!",  # illegal character
+            "",
+        ],
+    )
+    def test_illegal_tenant_id_is_rejected_not_normalised(self, tenant_id):
+        result = scan_crm_fields(RECYCLER_CRM_FIELDS, PLASTICS_DOMAIN_SPEC)
+        with pytest.raises(ValueError):
+            generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC, tenant_id)
+
+    @pytest.mark.parametrize("tenant_id", ["alpha", "acme-corp", "tenant.a1", "a" * 63, "sys"])
+    def test_legal_tenant_ids_accepted_verbatim(self, tenant_id):
+        result = scan_crm_fields(RECYCLER_CRM_FIELDS, PLASTICS_DOMAIN_SPEC)
+        assert generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC, tenant_id)["domain"]["id"] == (
+            tenant_id
+        )
+
+    def test_tenant_id_is_a_required_argument(self):
+        result = scan_crm_fields(RECYCLER_CRM_FIELDS, PLASTICS_DOMAIN_SPEC)
+        with pytest.raises(TypeError):
+            generate_seed_yaml(result, PLASTICS_DOMAIN_SPEC)  # type: ignore[call-arg]
 
 
 # ── Discovery Report Tests ───────────────────────────────────

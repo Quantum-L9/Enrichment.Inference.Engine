@@ -30,6 +30,8 @@ from typing import Any
 
 import structlog
 
+from app.models.schemas import validate_tenant_id
+
 logger = structlog.get_logger(__name__)
 
 
@@ -453,8 +455,20 @@ def scan_crm_fields(
 def generate_seed_yaml(
     scan_result: ScanResult,
     domain_template: dict[str, Any],
+    tenant_id: str,
+    *,
+    source_system: str | None = None,
 ) -> dict[str, Any]:
-    """Produce v0.1.0-seed domain YAML with only customer's matched CRM fields."""
+    """Produce v0.1.0-seed domain YAML with only customer's matched CRM fields.
+
+    EIE-IDENT-01: the seed's ``domain.id`` IS the tenant id (identity contract:
+    tenant id == domain spec id == Neo4j database name), validated against the
+    Neo4j name grammar and never derived from the template. The vertical
+    template the seed was cut from is provenance only, recorded under
+    ``metadata.template`` (id, version); ``metadata.source_system`` names the
+    CRM the scan came from. An illegal tenant id raises ValueError.
+    """
+    tenant = validate_tenant_id(tenant_id)
     template_props = _extract_domain_properties(domain_template)
     template_lookup = {_normalize(tp.name): tp for tp in template_props}
 
@@ -473,19 +487,35 @@ def generate_seed_yaml(
         seed_properties.append(prop_entry)
 
     domain_meta = domain_template.get("domain", domain_template.get("metadata", {}))
-    base_id = (
-        domain_meta.get("id", scan_result.domain_id)
-        if isinstance(domain_meta, dict)
-        else scan_result.domain_id
-    )
+    if not isinstance(domain_meta, dict):
+        domain_meta = {}
+    template_id = str(domain_meta.get("id") or scan_result.domain_id)
+    template_version = str(domain_meta.get("version") or scan_result.domain_version)
+    template_name = str(domain_meta.get("name") or template_id)
+
+    source = source_system
+    if source is None:
+        systems = {m.source_system for m in scan_result.matched if m.source_system}
+        source = next(iter(systems)) if len(systems) == 1 else None
 
     seed_yaml: dict[str, Any] = {
-        "domain": {"id": f"customer-{base_id}", "name": base_id, "version": "0.1.0-seed"},
+        "domain": {"id": tenant, "name": template_name, "version": "0.1.0-seed"},
+        "metadata": {
+            "tenant_id": tenant,
+            "template": {"id": template_id, "version": template_version},
+            "source_system": source,
+            "scan_hash": scan_result.scan_hash,
+        },
         "ontology": {"nodes": [{"label": "Partner", "properties": seed_properties}]},
     }
     logger.info(
         "seed_yaml_generated",
-        extra={"domain": seed_yaml["domain"]["id"], "properties": len(seed_properties)},
+        extra={
+            "domain": tenant,
+            "template": template_id,
+            "template_version": template_version,
+            "properties": len(seed_properties),
+        },
     )
     return seed_yaml
 
