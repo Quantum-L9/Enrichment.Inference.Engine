@@ -31,15 +31,10 @@ from app.models.schemas import (
     resolve_entity_identity,
 )
 
-# `app.engines.handlers` reaches the Perplexity SDK transitively (handlers ->
-# enrichment_orchestrator -> deterministic_provider -> perplexity_client ->
-# `import perplexity`). The constitution gate runs `tests/contracts/` in an
-# environment without the app's provider runtime, so a module-scope import
-# would break collection of this whole file, schema contracts included (the
-# same pattern as test_canonical_converge_runtime_contract.py). The body-shape
-# and resolution-order contracts below run everywhere; the consumer-dispatch
-# tests import the handlers lazily and declare the runtime they need. Removal
-# trigger: the gate installing the project's runtime dependencies.
+# The constitution gate runs `tests/contracts/` without the provider runtime
+# that `app.engines.handlers` imports transitively; the schema contracts below
+# run everywhere and the consumer-dispatch tests import the handlers lazily.
+# Rationale and removal trigger: test_canonical_converge_runtime_contract.py.
 _HAS_PROVIDER_RUNTIME = importlib.util.find_spec("perplexity") is not None
 requires_app_runtime = pytest.mark.skipif(
     not _HAS_PROVIDER_RUNTIME,
