@@ -5,12 +5,26 @@ tenant id == domain spec id == Neo4j database name. The registry is built from
 persisted in one transaction and replayed at startup, and an unknown domain is
 404 on both scan routes.
 
-`app.main` reaches the Perplexity SDK transitively (main -> orchestration_layer
--> handlers -> enrichment_orchestrator -> perplexity_client). The constitution
-gate runs `tests/contracts/` without the provider runtime, so the readiness pin
-imports it lazily behind `requires_app_runtime`; everything else here needs no
-runtime at all. See tests/contracts/test_canonical_converge_runtime_contract.py
-for the same arrangement.
+Two runtimes this file does NOT assume, because the constitution gate
+(`.github/workflows/l9-constitution-gate.yml`, `pytest tests/contracts/ -m "unit
+and not enforcement"`) installs fastapi / httpx / pydantic / pyyaml / structlog /
+redis and constellation-node-sdk only:
+
+* the DB runtime — `app.api.v1.converge` and `app.api.v1.discover` import
+  `app.services.pg_store`, which imports SQLAlchemy (`pg_models`). The tests that
+  need those modules import them lazily through `_converge()`, `_discover()`,
+  `_pg_store()` and `_schema_proposer()` and carry `requires_db_runtime`, so they
+  are reported as skipped in the gate instead of breaking collection of the
+  whole module. Removal trigger: the gate installing the project's DB runtime
+  (`sqlalchemy`), after which the condition is always true;
+* the provider runtime — `app.main` reaches the Perplexity SDK (main ->
+  orchestration_layer -> handlers -> enrichment_orchestrator ->
+  perplexity_client). The readiness pin imports it lazily behind
+  `requires_app_runtime`, the arrangement
+  tests/contracts/test_canonical_converge_runtime_contract.py uses.
+
+The grammar and reader pins (`is_legal_tenant_id`, `DomainYamlReader`) import
+only `app.engines.domain_yaml_reader` (yaml + structlog) and run in the gate.
 
 L9_META:
   tier: 2
@@ -21,6 +35,7 @@ L9_META:
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,26 +44,40 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-import app.api.v1.converge as converge
-import app.api.v1.discover as discover
-from app.core.auth import verify_api_key
 from app.engines import domain_yaml_reader
-from app.engines.convergence.schema_proposer import (
-    ApprovalDecision,
-    FieldProposal,
-    SchemaProposalSet,
-)
 from app.engines.domain_yaml_reader import DomainYamlReader, is_legal_tenant_id
-from app.services import pg_store
+
+_HAS_DB_RUNTIME = importlib.util.find_spec("sqlalchemy") is not None
+requires_db_runtime = pytest.mark.skipif(
+    not _HAS_DB_RUNTIME,
+    reason="app.api.v1.converge / app.services.pg_store need SQLAlchemy; "
+    "not installed in the contract gate env",
+)
 
 _HAS_PROVIDER_RUNTIME = importlib.util.find_spec("perplexity") is not None
 requires_app_runtime = pytest.mark.skipif(
     not _HAS_PROVIDER_RUNTIME,
     reason="app.main needs the Perplexity SDK; not installed in the contract gate env",
 )
+
+
+def _converge():
+    """Lazy: reaches SQLAlchemy through app.services.pg_store. See the note above."""
+    return importlib.import_module("app.api.v1.converge")
+
+
+def _discover():
+    return importlib.import_module("app.api.v1.discover")
+
+
+def _pg_store():
+    return importlib.import_module("app.services.pg_store")
+
+
+def _schema_proposer():
+    """Lazy: the `app.engines.convergence` package init imports the loop-state store."""
+    return importlib.import_module("app.engines.convergence.schema_proposer")
 
 
 def _spec(name: str) -> dict[str, Any]:
@@ -65,7 +94,7 @@ def _write(root: Path, tenant: str, body: dict[str, Any] | str) -> None:
     (root / tenant / "spec.yaml").write_text(text, encoding="utf-8")
 
 
-# ── 1. Identity grammar ──────────────────────────────────────────────────────
+# ── 1. Identity grammar (no runtime) ─────────────────────────────────────────
 
 
 @pytest.mark.unit
@@ -95,19 +124,48 @@ def test_illegal_tenant_ids(tenant: object) -> None:
 
 
 @pytest.mark.unit
-def test_reader_and_registry_share_one_grammar(tmp_path: Path) -> None:
-    """One function, imported by the registry; no second regex to drift."""
-    assert converge.is_legal_tenant_id is domain_yaml_reader.is_legal_tenant_id
+def test_grammar_is_the_neo4j_database_name_grammar() -> None:
     assert domain_yaml_reader.TENANT_ID_PATTERN.pattern == r"^[a-z][a-z0-9.-]{2,62}$"
+    assert domain_yaml_reader.TENANT_ID_RESERVED_PREFIX == "system"
+
+
+@pytest.mark.unit
+def test_reader_enforces_the_grammar_on_every_id_that_reaches_the_filesystem(
+    tmp_path: Path,
+) -> None:
     reader = DomainYamlReader(tmp_path)
-    for refused in ("Plasticos", "../plasticos", "res_partner", "systemdb"):
+    for refused in (
+        "Plasticos",
+        "../plasticos",
+        "plasticos/../plasticos",
+        "res_partner",
+        "systemdb",
+    ):
         with pytest.raises(ValueError, match="Invalid domain id"):
             reader.load(refused)
 
 
-# ── 2. Registry ──────────────────────────────────────────────────────────────
+@pytest.mark.unit
+def test_reader_loads_a_dotted_tenant(tmp_path: Path) -> None:
+    """A dotted id is a legal Neo4j database name and resolves to its own directory."""
+    root = tmp_path / "domains"
+    _write(root, "acme.eu", _spec("acme.eu"))
+    config = DomainYamlReader(root).load("acme.eu")
+    assert config.domain_id == "acme.eu"
+    assert "Facility" in config.node_schemas
 
 
+# ── 2. Registry (DB runtime: converge imports pg_store) ──────────────────────
+
+
+@requires_db_runtime
+@pytest.mark.unit
+def test_reader_and_registry_share_one_grammar() -> None:
+    """One function, imported by the registry; no second regex to drift."""
+    assert _converge().is_legal_tenant_id is domain_yaml_reader.is_legal_tenant_id
+
+
+@requires_db_runtime
 @pytest.mark.unit
 def test_registry_is_built_from_domains_root_keyed_by_tenant_id(tmp_path: Path) -> None:
     root = tmp_path / "domains"
@@ -120,23 +178,30 @@ def test_registry_is_built_from_domains_root_keyed_by_tenant_id(tmp_path: Path) 
     _write(root, "listroot", "- just\n- a list\n")  # wrong shape
     _write(root, "mapnodes", {"name": "mapnodes", "ontology": {"nodes": {"Facility": {}}}})
 
-    registry = converge.build_domain_spec_registry(DomainYamlReader(root))
+    registry = _converge().build_domain_spec_registry(DomainYamlReader(root))
 
     assert sorted(registry) == ["acme.eu", "plasticos"]
-    assert DomainYamlReader(root).load("acme.eu").domain_id == "acme.eu"
 
 
+@requires_db_runtime
 @pytest.mark.unit
 def test_checked_in_domains_root_registers_plasticos() -> None:
     root = Path(__file__).resolve().parents[2] / "domains"
-    assert "plasticos" in converge.build_domain_spec_registry(DomainYamlReader(root))
+    assert "plasticos" in _converge().build_domain_spec_registry(DomainYamlReader(root))
 
 
 # ── 3. Unknown domain: 404 on both scan routes ───────────────────────────────
 
 
+@requires_db_runtime
 @pytest.mark.unit
 def test_unknown_domain_is_404_on_both_scan_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.core.auth import verify_api_key
+
+    converge, discover = _converge(), _discover()
     api = FastAPI()
     api.include_router(converge.router)
     api.include_router(discover.router)
@@ -211,9 +276,11 @@ def _decisions() -> list[dict[str, Any]]:
     ]
 
 
+@requires_db_runtime
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_approval_batch_is_one_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    pg_store = _pg_store()
     opened: list[_FakeSession] = []
     monkeypatch.setattr(pg_store, "_session_factory", lambda: _FakeSession(opened, False))
 
@@ -232,9 +299,11 @@ async def test_approval_batch_is_one_transaction(monkeypatch: pytest.MonkeyPatch
     assert all(r.batch_run_id == "run-1" and r.reviewed_by == "reviewer" for r in records)
 
 
+@requires_db_runtime
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_failing_row_leaves_zero_durable_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    pg_store = _pg_store()
     opened: list[_FakeSession] = []
     monkeypatch.setattr(pg_store, "_session_factory", lambda: _FakeSession(opened, True))
 
@@ -252,20 +321,22 @@ async def test_failing_row_leaves_zero_durable_rows(monkeypatch: pytest.MonkeyPa
     assert opened[0].rolled_back is True
 
 
+@requires_db_runtime
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_api_seam_persists_every_decided_field_through_the_batch_operation() -> None:
-    proposal_set = SchemaProposalSet(
+    converge, proposer = _converge(), _schema_proposer()
+    proposal_set = proposer.SchemaProposalSet(
         proposed_fields=[
-            FieldProposal(field_name="annual_capacity_mt", field_type="float"),
-            FieldProposal(field_name="facility_tier", field_type="string"),
-            FieldProposal(field_name="undecided", field_type="string"),
+            proposer.FieldProposal(field_name="annual_capacity_mt", field_type="float"),
+            proposer.FieldProposal(field_name="facility_tier", field_type="string"),
+            proposer.FieldProposal(field_name="undecided", field_type="string"),
         ],
         version_bump="0.4.0-discovered",
     )
     decisions = [
-        ApprovalDecision(field_name="annual_capacity_mt", approved=True),
-        ApprovalDecision(field_name="facility_tier", approved=False),
+        proposer.ApprovalDecision(field_name="annual_capacity_mt", approved=True),
+        proposer.ApprovalDecision(field_name="facility_tier", approved=False),
     ]
     batch = AsyncMock(side_effect=lambda **kw: [SimpleNamespace(**d) for d in kw["decisions"]])
     with patch.object(converge.pg_store, "persist_schema_proposal_batch", new=batch):
@@ -287,6 +358,7 @@ async def test_api_seam_persists_every_decided_field_through_the_batch_operation
     ]
 
 
+@requires_db_runtime
 @pytest.mark.unit
 def test_startup_replays_approved_rows_batch_by_batch() -> None:
     row = SimpleNamespace(
@@ -304,13 +376,13 @@ def test_startup_replays_approved_rows_batch_by_batch() -> None:
         proposed_scoring_dimension=None,
         approval_status="approved",
     )
-    revised = converge.apply_approved_records(_spec("plasticos"), [row])
+    revised = _converge().apply_approved_records(_spec("plasticos"), [row])
     names = {p["name"] for p in revised["ontology"]["nodes"][0]["properties"]}
     assert names == {"id", "annual_capacity_mt"}
     assert revised["version"] == "0.4.0-discovered"
 
 
-# ── 5. Readiness reflects the registry ──────────────────────────────────────
+# ── 5. Readiness reflects the registry (provider runtime) ────────────────────
 
 
 @requires_app_runtime
@@ -321,6 +393,8 @@ def test_startup_replays_approved_rows_batch_by_batch() -> None:
 def test_readiness_is_503_while_registry_is_empty_or_failed(
     monkeypatch: pytest.MonkeyPatch, state: str, expected: int
 ) -> None:
+    from fastapi.testclient import TestClient
+
     from app import main as main_module
     from app.core.config import get_settings
 
