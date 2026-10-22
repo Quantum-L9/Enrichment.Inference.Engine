@@ -18,12 +18,12 @@ Markers: unit
 from __future__ import annotations
 
 import copy
+import importlib.util
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.engines import handlers
 from app.models.schemas import (
     ENTITY_IDENTITY_ORDER,
     EnrichRequest,
@@ -31,7 +31,29 @@ from app.models.schemas import (
     resolve_entity_identity,
 )
 
+# `app.engines.handlers` reaches the Perplexity SDK transitively (handlers ->
+# enrichment_orchestrator -> deterministic_provider -> perplexity_client ->
+# `import perplexity`). The constitution gate runs `tests/contracts/` in an
+# environment without the app's provider runtime, so a module-scope import
+# would break collection of this whole file, schema contracts included (the
+# same pattern as test_canonical_converge_runtime_contract.py). The body-shape
+# and resolution-order contracts below run everywhere; the consumer-dispatch
+# tests import the handlers lazily and declare the runtime they need. Removal
+# trigger: the gate installing the project's runtime dependencies.
+_HAS_PROVIDER_RUNTIME = importlib.util.find_spec("perplexity") is not None
+requires_app_runtime = pytest.mark.skipif(
+    not _HAS_PROVIDER_RUNTIME,
+    reason="app.engines.handlers needs the Perplexity SDK; not installed in the contract gate env",
+)
 pytestmark = pytest.mark.unit
+
+
+def _handlers():
+    """Import the SDK handler module lazily. See the note above."""
+    from app.engines import handlers
+
+    return handlers
+
 
 TENANT = "plasticos"
 ENTITY = "res.partner:55"
@@ -132,8 +154,10 @@ def _completed() -> EnrichResponse:
     return EnrichResponse(fields={"website": "acme.example"}, confidence=0.9, state="completed")
 
 
+@requires_app_runtime
 @pytest.mark.asyncio
 async def test_handle_enrich_rejects_body_without_identity_before_enrichment() -> None:
+    handlers = _handlers()
     enricher = AsyncMock(return_value=_completed())
     persist = AsyncMock()
     body = {"entity": {"name": "Acme"}, "object_type": "res.partner", "objective": "x"}
@@ -147,6 +171,7 @@ async def test_handle_enrich_rejects_body_without_identity_before_enrichment() -
     persist.assert_not_awaited()
 
 
+@requires_app_runtime
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("body", "expected"),
@@ -165,6 +190,7 @@ async def test_handle_enrich_rejects_body_without_identity_before_enrichment() -
 async def test_handle_enrich_persists_under_the_resolved_identity(
     body: dict[str, Any], expected: str
 ) -> None:
+    handlers = _handlers()
     coordinator = AsyncMock()
     with (
         patch.object(handlers, "enrich_entity", AsyncMock(return_value=_completed())),
@@ -184,9 +210,11 @@ async def test_handle_enrich_persists_under_the_resolved_identity(
     assert kwargs["idempotency_key"] == body.get("idempotency_key")
 
 
+@requires_app_runtime
 @pytest.mark.asyncio
 async def test_persist_and_sync_never_keys_on_unknown() -> None:
     """The shared side-effect path refuses an unidentified payload outright."""
+    handlers = _handlers()
     coordinator = AsyncMock()
     with (
         patch(
@@ -201,10 +229,12 @@ async def test_persist_and_sync_never_keys_on_unknown() -> None:
     coordinator.commit_after_enrich.assert_not_awaited()
 
 
+@requires_app_runtime
 def test_handlers_module_has_no_unknown_identity_fallback_for_enrich() -> None:
     """`'unknown'` survives only in the converge compat resolver, never for enrich."""
     import inspect
 
+    handlers = _handlers()
     for fn in (handlers._persist_and_sync, handlers.handle_enrich):
         source = inspect.getsource(fn)
         assert '"unknown"' not in source, fn.__name__
