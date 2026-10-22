@@ -146,11 +146,11 @@ async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     call — identity is what persistence, graph sync and score invalidation key
     on, and `'unknown'` is not an identity.
     """
-    settings = get_settings()
-    request = EnrichRequest.model_validate(payload)
     if resolve_entity_identity(payload) is None:
         msg = f"enrich: entity identity required: one of {', '.join(ENTITY_IDENTITY_ORDER)}"
         raise ValueError(msg)
+    settings = get_settings()
+    request = EnrichRequest.model_validate(payload)
     response = await enrich_entity(request, settings, _kb, _idem)
     result = response.model_dump()
 
