@@ -9,7 +9,11 @@ empty such a domain fails closed.
 
 Nothing here needs the provider runtime: `app.engines.packet_router` imports the
 Gate SDK and the domain reader only, and the coordinator pin patches its
-collaborators like tests/unit/test_side_effect_coordinator.py does.
+collaborators like tests/unit/test_side_effect_coordinator.py does. The one
+exception is the coordinator pin itself: `commit_after_enrich` imports
+`app.services.result_store`, which reaches SQLAlchemy through `pg_models`, so
+that test runs only where the DB runtime is installed (the L9 Constitution Gate
+installs neither SQLAlchemy nor the provider SDK).
 
 L9_META:
   tier: 2
@@ -20,6 +24,7 @@ L9_META:
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -39,6 +44,13 @@ from app.engines.packet_router import (
 from app.services.side_effect_coordinator import SideEffectCoordinator
 
 GATE = "https://gate-node:8080"
+
+_HAS_DB_RUNTIME = importlib.util.find_spec("sqlalchemy") is not None
+requires_db_runtime = pytest.mark.skipif(
+    not _HAS_DB_RUNTIME,
+    reason="commit_after_enrich imports app.services.result_store (SQLAlchemy via pg_models); "
+    "the L9 Constitution Gate installs no DB runtime",
+)
 
 # CEG's owner-native SyncEndpointSpec shape (Cognitive.Engine.Graphs
 # engine/config/schema.py): path / targetnode / idproperty; CEG keys the sync
@@ -251,6 +263,7 @@ def test_unparseable_spec_is_declares_none(tmp_path: Path, body: str) -> None:
 # ── The node label reaches the router through the coordinator ────────────────
 
 
+@requires_db_runtime
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_coordinator_forwards_the_node_label_to_the_router() -> None:
