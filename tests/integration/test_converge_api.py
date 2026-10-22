@@ -228,10 +228,10 @@ def test_domain_spec_registry_keys_specs_by_legal_tenant_id(tmp_path):
 
     root = tmp_path / "domains"
     _write_spec(root, "plasticos", _list_shaped_spec("plasticos"))
-    # A dotted id (`acme.recycling-eu`) is a legal tenant id under the identity
-    # contract but DomainYamlReader._DOMAIN_ID_PATTERN still refuses dots; that
-    # reader is owned by PR #235's lane, so the legal second tenant here is dashed.
-    _write_spec(root, "acme-recycling-eu", _list_shaped_spec("acme-recycling-eu"))
+    # Dotted ids are legal Neo4j database names; the reader and the registry
+    # share one grammar (domain_yaml_reader.is_legal_tenant_id), so `acme.eu`
+    # loads and registers.
+    _write_spec(root, "acme.eu", _list_shaped_spec("acme.eu"))
     _write_spec(root, "Metals", _list_shaped_spec("Metals"))  # uppercase
     _write_spec(root, "systemwide", _list_shaped_spec("systemwide"))  # reserved prefix
     _write_spec(root, "ab", _list_shaped_spec("ab"))  # too short
@@ -239,11 +239,35 @@ def test_domain_spec_registry_keys_specs_by_legal_tenant_id(tmp_path):
     _write_spec(root, "renamed", _list_shaped_spec("something-else"))  # id mismatch
     (root / "broken").mkdir()
     (root / "broken" / "spec.yaml").write_text("ontology: [:::", encoding="utf-8")
+    # Valid YAML, wrong shape: a list root and `ontology.nodes` as a mapping
+    # raise AttributeError inside DomainYamlReader._parse. Each refuses its own
+    # tenant only.
+    (root / "listroot").mkdir()
+    (root / "listroot" / "spec.yaml").write_text("- just\n- a list\n", encoding="utf-8")
+    _write_spec(root, "mapnodes", {"name": "mapnodes", "ontology": {"nodes": {"Facility": {}}}})
 
     registry = converge_module.build_domain_spec_registry(DomainYamlReader(root))
 
-    assert sorted(registry) == ["acme-recycling-eu", "plasticos"]
+    assert sorted(registry) == ["acme.eu", "plasticos"]
     assert registry["plasticos"]["ontology"]["nodes"][0]["label"] == "Facility"
+    assert DomainYamlReader(root).load("acme.eu").domain_id == "acme.eu"
+
+
+def test_one_structurally_broken_tenant_does_not_fail_the_registry(tmp_path, monkeypatch):
+    """main._load_domain_registry: the valid tenant registers and the state is `loaded`."""
+    from app import main as main_module
+    from app.engines.domain_yaml_reader import DomainYamlReader
+
+    root = tmp_path / "domains"
+    _write_spec(root, "plasticos", _list_shaped_spec("plasticos"))
+    (root / "listroot").mkdir()
+    (root / "listroot" / "spec.yaml").write_text("- just\n- a list\n", encoding="utf-8")
+
+    monkeypatch.setattr(main_module, "_domain_registry_state", "not_attempted")
+    registry = main_module._load_domain_registry(DomainYamlReader(root))
+
+    assert sorted(registry) == ["plasticos"]
+    assert main_module._domain_registry_state == "loaded"
 
 
 def test_repo_domains_root_registers_plasticos():
@@ -360,22 +384,16 @@ async def test_approve_persists_the_revision_before_the_registry_takes_it(api_cl
 
     state = _held_state()
     original = _configure_for_approval(converge_module, state, _list_shaped_spec())
-    saved: list[dict] = []
-    reviewed: list[dict] = []
+    batches: list[dict] = []
 
-    async def fake_save(**kwargs):
-        saved.append(kwargs)
-        return SimpleNamespace(id=uuid.uuid4(), **kwargs)
-
-    async def fake_review(**kwargs):
-        reviewed.append(kwargs)
+    async def fake_batch(**kwargs):
+        # One call, one transaction: every decided row of the approval arrives together.
+        batches.append(kwargs)
+        return [SimpleNamespace(id=uuid.uuid4(), **row) for row in kwargs["decisions"]]
 
     try:
-        with (
-            patch.object(converge_module.pg_store, "save_schema_proposal", side_effect=fake_save),
-            patch.object(
-                converge_module.pg_store, "approve_schema_proposal", side_effect=fake_review
-            ),
+        with patch.object(
+            converge_module.pg_store, "persist_schema_proposal_batch", side_effect=fake_batch
         ):
             resp = await api_client.post(
                 f"/v1/converge/{state.run_id}/approve",
@@ -401,13 +419,82 @@ async def test_approve_persists_the_revision_before_the_registry_takes_it(api_cl
         for name, value in original.items():
             setattr(converge_module, name, value)
 
-    assert {s["field_name"] for s in saved} == {"annual_capacity_mt", "facility_tier"}
-    assert all(s["tenant_id"] == s["domain"] == "plasticos" for s in saved)
-    assert all(s["batch_run_id"] == state.run_id for s in saved)
-    assert {(r["reviewed_by"], r["approved"]) for r in reviewed} == {
-        ("ib@example.test", True),
-        ("ib@example.test", False),
+    assert len(batches) == 1, "the whole approval is one store transaction"
+    sent = batches[0]
+    assert sent["tenant_id"] == sent["domain"] == "plasticos"
+    assert sent["batch_run_id"] == state.run_id
+    assert sent["reviewed_by"] == "ib@example.test"
+    assert {(d["field_name"], d["approved"]) for d in sent["decisions"]} == {
+        ("annual_capacity_mt", True),
+        ("facility_tier", False),
     }
+
+
+@pytest.mark.asyncio
+async def test_concurrent_approvals_for_one_domain_keep_both_field_sets(api_client):
+    """The per-domain lock serialises approvals: the second lands on the first's revision."""
+    import asyncio
+    import uuid
+    from types import SimpleNamespace
+
+    import app.api.v1.converge as converge_module
+    from app.engines.convergence.loop_state import LoopState, LoopStatus
+    from app.models.field_confidence import FieldConfidence, FieldConfidenceMap, FieldSource
+    from app.services.enrichment_profile import ProfileRegistry
+
+    def _held(field: str, value) -> LoopState:
+        fcm = FieldConfidenceMap()
+        fcm.set(
+            FieldConfidence(
+                field_name=field, value=value, confidence=0.9, source=FieldSource.ENRICHMENT
+            )
+        )
+        return LoopState(
+            entity_id=f"ent-{field}",
+            domain="plasticos",
+            status=LoopStatus.HUMAN_HOLD,
+            accumulated_fields={field: value},
+            accumulated_confidences=fcm,
+        )
+
+    first, second = _held("annual_capacity_mt", 5000.0), _held("certifications", "ISO")
+    names = ("_state_store", "_profile_registry", "_domain_specs", "_kb_resolver", "_idem_store")
+    original = {name: getattr(converge_module, name) for name in names}
+    converge_module.configure(
+        state_store=_RegistryStateStore(first, second),
+        profile_registry=ProfileRegistry(),
+        domain_specs={"plasticos": _list_shaped_spec()},
+    )
+
+    async def slow_batch(**kwargs):
+        # Long enough for both requests to be in flight: without the lock, both
+        # compute their revision from the same snapshot and the last writer wins.
+        await asyncio.sleep(0.05)
+        return [SimpleNamespace(id=uuid.uuid4(), **row) for row in kwargs["decisions"]]
+
+    try:
+        with patch.object(
+            converge_module.pg_store, "persist_schema_proposal_batch", side_effect=slow_batch
+        ):
+            responses = await asyncio.gather(
+                api_client.post(
+                    f"/v1/converge/{first.run_id}/approve",
+                    json={"decisions": [{"field_name": "annual_capacity_mt", "approved": True}]},
+                    headers=AUTH,
+                ),
+                api_client.post(
+                    f"/v1/converge/{second.run_id}/approve",
+                    json={"decisions": [{"field_name": "certifications", "approved": True}]},
+                    headers=AUTH,
+                ),
+            )
+        assert [r.status_code for r in responses] == [200, 200], [r.text for r in responses]
+        revised = converge_module._domain_specs["plasticos"]
+        assert _property_names(revised) == {"id", "annual_capacity_mt", "certifications"}
+        assert revised["version"] == "0.5.0-discovered", "two approvals, two version bumps"
+    finally:
+        for name, value in original.items():
+            setattr(converge_module, name, value)
 
 
 @pytest.mark.asyncio

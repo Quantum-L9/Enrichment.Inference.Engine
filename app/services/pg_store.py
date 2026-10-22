@@ -390,6 +390,74 @@ async def save_schema_proposal(
         return record
 
 
+async def persist_schema_proposal_batch(
+    *,
+    tenant_id: str,
+    domain: str,
+    batch_run_id: str,
+    reviewed_by: str,
+    decisions: list[dict[str, Any]],
+) -> list[SchemaProposalRecord]:
+    """Write and review every proposal of one approval in ONE transaction.
+
+    EIE-IDENT-03. `save_schema_proposal` and `approve_schema_proposal` each
+    open and commit their own session, so a failure midway through an approval
+    left the earlier rows approved while the API answered 503 and kept the
+    registry unchanged -- and the next startup replayed that partial batch as a
+    revision the API had said was not applied. Here one session and one
+    `begin()` cover the whole batch: a failure on any row rolls every row of
+    the batch back, so the store and the registry agree either way.
+
+    Each decision carries the `save_schema_proposal` columns plus `approved`.
+    Upsert key is (tenant, domain, batch, field), as for `save_schema_proposal`;
+    `approval_status`, `reviewed_by` and `reviewed_at` are stamped in the same
+    transaction.
+    """
+    reviewed_at = datetime.now(UTC)
+    records: list[SchemaProposalRecord] = []
+    async with get_session() as session:
+        for decision in decisions:
+            stmt = select(SchemaProposalRecord).where(
+                SchemaProposalRecord.tenant_id == tenant_id,
+                SchemaProposalRecord.domain == domain,
+                SchemaProposalRecord.batch_run_id == batch_run_id,
+                SchemaProposalRecord.field_name == decision["field_name"],
+            )
+            result = await session.execute(stmt)
+            record = result.scalar_one_or_none()
+            if record is None:
+                record = SchemaProposalRecord(
+                    tenant_id=tenant_id,
+                    domain=domain,
+                    batch_run_id=batch_run_id,
+                    field_name=decision["field_name"],
+                )
+                session.add(record)
+            record.field_type = decision["field_type"]
+            record.source = decision["source"]
+            record.fill_rate = decision["fill_rate"]
+            record.avg_confidence = decision["avg_confidence"]
+            record.sample_values = list(decision.get("sample_values") or [])
+            record.value_distribution = dict(decision.get("value_distribution") or {})
+            record.proposed_gate = decision.get("proposed_gate")
+            record.proposed_scoring_dimension = decision.get("proposed_scoring_dimension")
+            record.yaml_diff = decision.get("yaml_diff")
+            record.approval_status = "approved" if decision["approved"] else "rejected"
+            record.reviewed_by = reviewed_by
+            record.reviewed_at = reviewed_at
+            records.append(record)
+        await session.flush()
+    logger.info(
+        "schema_proposal_batch_persisted",
+        tenant_id=tenant_id,
+        domain=domain,
+        batch_run_id=batch_run_id,
+        rows=len(records),
+        approved=sum(1 for r in records if r.approval_status == "approved"),
+    )
+    return records
+
+
 async def get_pending_schema_proposals(tenant_id: str, domain: str) -> list[SchemaProposalRecord]:
     """Return all pending proposals for a domain, ranked by confidence."""
     async with get_session() as session:

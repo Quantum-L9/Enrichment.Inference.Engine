@@ -23,10 +23,34 @@ import yaml
 
 logger = structlog.get_logger("domain_yaml_reader")
 
-# A domain id names a directory or file directly under the domains root. It
-# arrives from request payloads (`domain_id` / `object_type`), so anything that
-# could step outside that root ("..", "/", a dotted model name) is refused.
-_DOMAIN_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
+# Identity contract (operator decision 2026-10-22): tenant id == domain spec id
+# == Neo4j database name. One customer is one directory `domains/<tenant>/spec.yaml`,
+# one versioned spec and one database, so a tenant id has to be a legal Neo4j
+# database name: lowercase, starting with a letter, then letters, digits, dots
+# or dashes, 3-63 characters, and never starting with the reserved `system`
+# prefix. Vertical templates are provenance only (`metadata.template.*`); there
+# is no tenant-to-domain mapping layer anywhere.
+#
+# This is the ONE grammar. The reader applies it to every id that reaches the
+# filesystem (ids arrive from request payloads: `domain_id` / `object_type`,
+# so "..", "/" and any other escape from the domains root are refused by the
+# same check), and the API-side registry (app/api/v1/converge.py) imports it
+# rather than keeping a second regex that could drift.
+TENANT_ID_PATTERN: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9.-]{2,62}$")
+TENANT_ID_RESERVED_PREFIX = "system"
+
+
+def is_legal_tenant_id(value: object) -> bool:
+    """Whether ``value`` can name a tenant, its domain spec and its Neo4j database.
+
+    The lowercase check runs before the pattern so a mixed-case id is refused
+    outright rather than silently lowercased into a different identity.
+    """
+    if not isinstance(value, str) or value != value.lower():
+        return False
+    if value.startswith(TENANT_ID_RESERVED_PREFIX):
+        return False
+    return TENANT_ID_PATTERN.fullmatch(value) is not None
 
 
 @dataclass
@@ -76,7 +100,7 @@ class DomainYamlReader:
     def load(self, domain_id: str) -> DomainEnrichmentConfig:
         if domain_id in self._cache:
             return self._cache[domain_id]
-        if not isinstance(domain_id, str) or not _DOMAIN_ID_PATTERN.fullmatch(domain_id):
+        if not is_legal_tenant_id(domain_id):
             raise ValueError(f"Invalid domain id: {domain_id!r}")
 
         spec_path = self._root / domain_id / "spec.yaml"

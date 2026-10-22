@@ -19,7 +19,7 @@ Domain registry (EIE-IDENT-02 / EIE-IDENT-03):
 
 from __future__ import annotations
 
-import re
+import asyncio
 from collections import OrderedDict
 from typing import Any
 
@@ -43,7 +43,7 @@ from ...engines.convergence.schema_proposer import (
 )
 from ...engines.convergence.schema_proposer import apply as apply_proposals
 from ...engines.convergence.schema_proposer import propose as propose_schema
-from ...engines.domain_yaml_reader import DomainYamlReader
+from ...engines.domain_yaml_reader import DomainYamlReader, is_legal_tenant_id
 from ...models.schemas import EnrichRequest
 from ...services import pg_store
 from ...services.crm_field_scanner import (
@@ -63,29 +63,24 @@ _profile_registry: ProfileRegistry | None = None
 _domain_specs: dict[str, dict[str, Any]] = {}
 _kb_resolver: Any = None
 _idem_store: Any = None
+# One asyncio.Lock per domain, held across propose -> apply -> persist ->
+# publish of an approval. Two concurrent approvals for the same domain used to
+# compute `updated_yaml` from the same snapshot, so the last writer silently
+# dropped the other's approved fields until the next restart replayed them.
+# Process-local, like the registry it protects (one in-process registry).
+_domain_locks: dict[str, asyncio.Lock] = {}
 
-# Identity contract (operator decision 2026-10-22): tenant id == domain spec id
-# == Neo4j database name. One customer is one directory `domains/<tenant>/spec.yaml`,
-# one versioned spec and one database, so a tenant id has to be a legal Neo4j
-# database name: lowercase, starting with a letter, then letters, digits, dots
-# or dashes, 3-63 characters, and never starting with the reserved `system`
-# prefix. Vertical templates are provenance only (`metadata.template.*`); there
-# is no tenant-to-domain mapping layer anywhere.
-TENANT_ID_PATTERN: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9.-]{2,62}$")
-TENANT_ID_RESERVED_PREFIX = "system"
+# The identity grammar lives with the reader (app/engines/domain_yaml_reader.py)
+# so the filesystem check and the registry check are one function; the name is
+# re-exported here for the API-side callers and tests that pin it.
+__all__ = ["is_legal_tenant_id"]
 
 
-def is_legal_tenant_id(value: object) -> bool:
-    """Whether ``value`` can name a tenant, its domain spec and its Neo4j database.
-
-    The lowercase check runs before the pattern so a mixed-case id is refused
-    outright rather than silently lowercased into a different identity.
-    """
-    if not isinstance(value, str) or value != value.lower():
-        return False
-    if value.startswith(TENANT_ID_RESERVED_PREFIX):
-        return False
-    return TENANT_ID_PATTERN.fullmatch(value) is not None
+def _domain_lock(domain: str) -> asyncio.Lock:
+    lock = _domain_locks.get(domain)
+    if lock is None:
+        lock = _domain_locks[domain] = asyncio.Lock()
+    return lock
 
 
 def configure(
@@ -144,10 +139,26 @@ def build_domain_spec_registry(reader: DomainYamlReader) -> dict[str, dict[str, 
                 rule="lowercase, ^[a-z][a-z0-9.-]{2,62}$, not prefixed 'system'",
             )
             continue
+        # AttributeError / TypeError / KeyError: valid YAML with the wrong shape
+        # (a list root, `ontology.nodes` as a mapping) raises inside
+        # DomainYamlReader._parse. One tenant's broken spec refuses that tenant;
+        # it does not fail the whole registry.
         try:
             spec = reader.load(domain_id).raw_spec
-        except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:
-            logger.warning("domain_registry_spec_unreadable", domain_id=domain_id, error=str(exc))
+        except (
+            FileNotFoundError,
+            ValueError,
+            OSError,
+            yaml.YAMLError,
+            AttributeError,
+            TypeError,
+            KeyError,
+        ) as exc:
+            logger.warning(
+                "domain_registry_spec_unreadable",
+                domain_id=domain_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
             continue
         if not isinstance(spec, dict):
             logger.warning("domain_registry_spec_not_a_mapping", domain_id=domain_id)
@@ -264,44 +275,47 @@ async def persist_approved_revision(
 ) -> int:
     """Write every decided proposal of one approval to ``schema_proposals``.
 
-    EIE-IDENT-03 write side. Each decided field is upserted with
-    :func:`pg_store.save_schema_proposal` (keyed on tenant, domain, batch,
-    field) and then stamped approved or rejected. Rejections are persisted
-    too: they are the audit trail of what a reviewer declined. Returns the
-    number of rows written; raises whatever the store raised so the caller
-    can refuse to apply an unpersisted revision.
+    EIE-IDENT-03 write side. The whole batch goes through
+    :func:`pg_store.persist_schema_proposal_batch` in ONE transaction: each
+    decided field is upserted (keyed on tenant, domain, batch, field) and
+    stamped approved or rejected, and a failure on any row leaves zero rows of
+    this batch durable. Rejections are persisted too: they are the audit trail
+    of what a reviewer declined. Returns the number of rows written; raises
+    whatever the store raised so the caller can refuse to apply an
+    unpersisted revision.
     """
     decided = {d.field_name: d.approved for d in decisions}
     gate_by_field = {g.field_name: g.gate_type for g in proposal_set.proposed_gates}
     dim_by_field = {
         d.field_name: d.dimension_type for d in proposal_set.proposed_scoring_dimensions
     }
-    written = 0
-    for fp in proposal_set.proposed_fields:
-        if fp.field_name not in decided:
-            continue
-        record = await pg_store.save_schema_proposal(
-            tenant_id=tenant_id,
-            domain=domain,
-            batch_run_id=batch_run_id,
-            field_name=fp.field_name,
-            field_type=fp.field_type,
-            source=fp.source,
-            fill_rate=fp.fill_rate,
-            avg_confidence=fp.avg_confidence,
-            sample_values=fp.sample_values,
-            value_distribution=fp.value_distribution,
-            proposed_gate=gate_by_field.get(fp.field_name),
-            proposed_scoring_dimension=dim_by_field.get(fp.field_name),
-            yaml_diff=proposal_set.yaml_diff,
-        )
-        await pg_store.approve_schema_proposal(
-            proposal_id=record.id,
-            reviewed_by=reviewed_by,
-            approved=decided[fp.field_name],
-        )
-        written += 1
-    return written
+    rows = [
+        {
+            "field_name": fp.field_name,
+            "field_type": fp.field_type,
+            "source": fp.source,
+            "fill_rate": fp.fill_rate,
+            "avg_confidence": fp.avg_confidence,
+            "sample_values": fp.sample_values,
+            "value_distribution": fp.value_distribution,
+            "proposed_gate": gate_by_field.get(fp.field_name),
+            "proposed_scoring_dimension": dim_by_field.get(fp.field_name),
+            "yaml_diff": proposal_set.yaml_diff,
+            "approved": decided[fp.field_name],
+        }
+        for fp in proposal_set.proposed_fields
+        if fp.field_name in decided
+    ]
+    if not rows:
+        return 0
+    records = await pg_store.persist_schema_proposal_batch(
+        tenant_id=tenant_id,
+        domain=domain,
+        batch_run_id=batch_run_id,
+        reviewed_by=reviewed_by,
+        decisions=rows,
+    )
+    return len(records)
 
 
 def _get_state_store() -> LoopStateStore:
@@ -610,19 +624,27 @@ async def approve_proposals(run_id: str, body: ApproveRequestBody) -> dict[str, 
         raise HTTPException(
             status_code=409, detail=f"Run is {state.status.value}, not awaiting approval"
         )
-    domain_spec = _domain_specs.get(state.domain, {})
-    if not domain_spec:
+    if state.domain not in _domain_specs:
         raise HTTPException(status_code=404, detail=f"Domain spec for '{state.domain}' not found")
-    proposal_set = _propose_for_run(state, domain_spec, state.domain)
-    updated_yaml = apply_proposals(domain_spec, body.decisions, proposal_set)
-    # EIE-IDENT-03: the revision is durable before the registry takes it. An
-    # in-memory-only revision vanished on the next restart while every caller
-    # had been told it was approved. Identity contract: tenant_id == domain.
-    persisted = await _persist_or_503(run_id, state.domain, proposal_set, body)
-    _domain_specs[state.domain] = updated_yaml
-    approved_count = sum(1 for d in body.decisions if d.approved)
-    state.status = LoopStatus.CONVERGED
-    await store.save(state)
+    # The per-domain lock serialises propose -> apply -> persist -> publish, so
+    # a second approval for the same domain proposes against the revision the
+    # first one published, not against the snapshot both started from.
+    async with _domain_lock(state.domain):
+        domain_spec = _domain_specs.get(state.domain, {})
+        if not domain_spec:
+            raise HTTPException(
+                status_code=404, detail=f"Domain spec for '{state.domain}' not found"
+            )
+        proposal_set = _propose_for_run(state, domain_spec, state.domain)
+        updated_yaml = apply_proposals(domain_spec, body.decisions, proposal_set)
+        # EIE-IDENT-03: the revision is durable before the registry takes it. An
+        # in-memory-only revision vanished on the next restart while every caller
+        # had been told it was approved. Identity contract: tenant_id == domain.
+        persisted = await _persist_or_503(run_id, state.domain, proposal_set, body)
+        _domain_specs[state.domain] = updated_yaml
+        approved_count = sum(1 for d in body.decisions if d.approved)
+        state.status = LoopStatus.CONVERGED
+        await store.save(state)
     return {
         "run_id": run_id,
         "approved": approved_count,

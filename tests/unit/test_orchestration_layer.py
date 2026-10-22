@@ -143,9 +143,19 @@ async def test_startup_wires_domain_reader_into_converge():
     assert reader.load("plasticos").raw_spec["inference_rules"]
 
 
-@pytest.mark.parametrize("domain_id", ["../plasticos", "plasticos/../plasticos", "res.partner"])
+@pytest.mark.parametrize(
+    "domain_id",
+    ["../plasticos", "plasticos/../plasticos", "Res.Partner", "res_partner", "systemdb"],
+)
 def test_domain_reader_refuses_ids_outside_its_root(domain_id):
-    """Payload-supplied ids reach the filesystem once the reader is wired."""
+    """Payload-supplied ids reach the filesystem once the reader is wired.
+
+    The reader applies the identity grammar (tenant id == spec id == Neo4j
+    database name): lowercase, `^[a-z][a-z0-9.-]{2,62}$`, no `system` prefix.
+    A dotted id such as `res.partner` is legal under it and resolves to
+    `domains/res.partner/spec.yaml` (absent -> FileNotFoundError), so the
+    refused cases here are path escapes and grammar violations only.
+    """
     from pathlib import Path
 
     from app.engines.domain_yaml_reader import DomainYamlReader
