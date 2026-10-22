@@ -19,6 +19,7 @@ Domain registry (EIE-IDENT-02 / EIE-IDENT-03):
 
 from __future__ import annotations
 
+import re
 from collections import OrderedDict
 from typing import Any
 
@@ -30,7 +31,7 @@ from pydantic import BaseModel, Field
 from app.utils.safe_convert import safe_float
 
 from ...core.auth import verify_api_key
-from ...core.config import Settings, get_settings, is_legal_tenant_id
+from ...core.config import Settings, get_settings
 from ...engines.convergence.loop_state import LoopState, LoopStateStore, LoopStatus
 from ...engines.convergence.schema_proposer import (
     ApprovalDecision,
@@ -62,6 +63,29 @@ _profile_registry: ProfileRegistry | None = None
 _domain_specs: dict[str, dict[str, Any]] = {}
 _kb_resolver: Any = None
 _idem_store: Any = None
+
+# Identity contract (operator decision 2026-10-22): tenant id == domain spec id
+# == Neo4j database name. One customer is one directory `domains/<tenant>/spec.yaml`,
+# one versioned spec and one database, so a tenant id has to be a legal Neo4j
+# database name: lowercase, starting with a letter, then letters, digits, dots
+# or dashes, 3-63 characters, and never starting with the reserved `system`
+# prefix. Vertical templates are provenance only (`metadata.template.*`); there
+# is no tenant-to-domain mapping layer anywhere.
+TENANT_ID_PATTERN: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9.-]{2,62}$")
+TENANT_ID_RESERVED_PREFIX = "system"
+
+
+def is_legal_tenant_id(value: object) -> bool:
+    """Whether ``value`` can name a tenant, its domain spec and its Neo4j database.
+
+    The lowercase check runs before the pattern so a mixed-case id is refused
+    outright rather than silently lowercased into a different identity.
+    """
+    if not isinstance(value, str) or value != value.lower():
+        return False
+    if value.startswith(TENANT_ID_RESERVED_PREFIX):
+        return False
+    return TENANT_ID_PATTERN.fullmatch(value) is not None
 
 
 def configure(

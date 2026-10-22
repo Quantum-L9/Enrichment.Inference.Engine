@@ -13,12 +13,6 @@ Seam contract (seam audit 2026-09-02):
   contract -- ``{"entity_type": <sync endpoint>, "batch": [row, ...]}`` where
   each row carries the endpoint's id property -- instead of the retired
   ``graph-sync`` dialect that no node owned and no Gate route resolved.
-* GRAPH-IDENT-02: the endpoint and its id property are read per domain from
-  that domain's spec (``sync.endpoints[]``, CEG's owner-native ``path`` /
-  ``targetnode`` / ``idproperty`` keys), never from a process-global constant.
-  A domain whose spec declares no resolvable endpoint falls back to the
-  clearly labeled ``Settings.graph_sync_*`` pair when it is set, and is
-  otherwise skipped (fail closed: nothing is sent, a warning names the domain).
 * Retry ownership for EIE-originated side effects lives HERE, once. Gate
   attempts every seam action exactly once (Gate replay_safety), so a retry
   below is the only retry. A retry is only taken when it cannot multiply a
@@ -33,12 +27,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 import structlog
-import yaml
 from constellation_node_sdk.gate import (
     GateClientError,
     GateConnectionError,
@@ -46,7 +38,6 @@ from constellation_node_sdk.gate import (
     GateTimeoutError,
 )
 
-from app.engines.domain_yaml_reader import DomainYamlReader
 from app.services.gate_client import EIE_NODE_NAME, build_gate_client
 
 logger = structlog.get_logger("packet_router")
@@ -58,109 +49,12 @@ _ROUTE_TIMEOUT = 10.0
 _MAX_ATTEMPTS = 2
 _BACKOFF_BASE_SECONDS = 1.0
 
+# CEG sync contract defaults for the plasticos domain
+# (Cognitive.Engine.Graphs/domains/plasticos/spec.yaml `sync.endpoints`).
+DEFAULT_GRAPH_SYNC_ENTITY_TYPE = "facilities"
+DEFAULT_GRAPH_SYNC_ID_PROPERTY = "facility_id"
+
 _PRIMITIVE = (str, int, float, bool, type(None))
-
-# Where a resolved graph-sync contract came from. Logged on every resolution so
-# a fallback never passes for a spec-declared endpoint.
-GRAPH_SYNC_SOURCE_DOMAIN_SPEC = "domain_spec"
-GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK = "settings_fallback"
-_NO_CONTRACT_FIX = (
-    "declare sync.endpoints[] in the domain spec, or set GRAPH_SYNC_ENTITY_TYPE "
-    "and GRAPH_SYNC_ID_PROPERTY as the labeled fallback"
-)
-
-
-@dataclass(frozen=True, slots=True)
-class GraphSyncContract:
-    """The CEG ``sync`` endpoint one domain's enriched rows are addressed to.
-
-    ``entity_type`` is the endpoint's path suffix (what CEG's sync handler keys
-    on) and ``id_property`` the row key that endpoint merges on.
-    """
-
-    entity_type: str
-    id_property: str
-    source: str
-
-
-def _ontology_labels(domain_spec: dict[str, Any]) -> set[str]:
-    """Node labels the domain's own ontology declares, in either spec shape."""
-    ontology = domain_spec.get("ontology")
-    if not isinstance(ontology, dict):
-        return set()
-    nodes = ontology.get("nodes", ontology.get("entities", []))
-    if isinstance(nodes, dict):
-        return {str(k) for k in nodes}
-    if isinstance(nodes, list):
-        return {
-            str(n["label"])
-            for n in nodes
-            if isinstance(n, dict) and isinstance(n.get("label"), str)
-        }
-    return set()
-
-
-def resolve_graph_sync_contract(
-    domain_spec: dict[str, Any],
-    *,
-    node_label: str | None = None,
-) -> GraphSyncContract | None:
-    """Pick the CEG sync endpoint a domain's enriched entity rows belong to.
-
-    Reads ``sync.endpoints[]`` exactly as CEG's ``SyncEndpointSpec`` declares it
-    (``path``, ``targetnode``, ``idproperty``); CEG resolves ``entity_type`` as
-    the last path segment, so that is what is returned. Selection, in order:
-
-    1. ``node_label`` given -> the endpoint whose ``targetnode`` is that label;
-    2. exactly one usable endpoint -> that endpoint;
-    3. exactly one endpoint whose ``targetnode`` is a label of this domain's
-       own ontology -> that endpoint.
-
-    Anything else -- no ``sync`` section, no endpoint with both a path and an
-    id property, or several candidates with no label to choose by -- is
-    ``None``. The caller decides between fallback and fail-closed; this
-    function never guesses.
-    """
-    usable = _usable_sync_endpoints(domain_spec)
-    if not usable:
-        return None
-    if node_label:
-        chosen = [c for c in usable if c[2] == node_label]
-    elif len(usable) == 1:
-        chosen = usable
-    else:
-        labels = _ontology_labels(domain_spec)
-        chosen = [c for c in usable if c[2] in labels]
-    if len(chosen) != 1:
-        return None
-    entity_type, id_property, _target = chosen[0]
-    return GraphSyncContract(
-        entity_type=entity_type,
-        id_property=id_property,
-        source=GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
-    )
-
-
-def _usable_sync_endpoints(domain_spec: dict[str, Any]) -> list[tuple[str, str, str | None]]:
-    """``(entity_type, id_property, targetnode)`` for each endpoint that has both keys."""
-    sync = domain_spec.get("sync")
-    endpoints = sync.get("endpoints") if isinstance(sync, dict) else None
-    if not isinstance(endpoints, list):
-        return []
-    usable: list[tuple[str, str, str | None]] = []
-    for endpoint in endpoints:
-        if not isinstance(endpoint, dict):
-            continue
-        path = endpoint.get("path")
-        id_property = endpoint.get("idproperty")
-        if not isinstance(path, str) or not isinstance(id_property, str):
-            continue
-        entity_type = path.rstrip("/").rsplit("/", 1)[-1]
-        if not entity_type or not id_property:
-            continue
-        target = endpoint.get("targetnode")
-        usable.append((entity_type, id_property, target if isinstance(target, str) else None))
-    return usable
 
 
 class NodeTarget(StrEnum):
@@ -251,64 +145,15 @@ class PacketRouter:
         gate_url: str,
         timeout: float = _ROUTE_TIMEOUT,
         *,
-        domain_reader: DomainYamlReader | None = None,
-        fallback_entity_type: str = "",
-        fallback_id_property: str = "",
+        graph_sync_entity_type: str = DEFAULT_GRAPH_SYNC_ENTITY_TYPE,
+        graph_sync_id_property: str = DEFAULT_GRAPH_SYNC_ID_PROPERTY,
     ) -> None:
-        """
-        ``domain_reader`` resolves a domain's sync contract from its own spec
-        (GRAPH-IDENT-02). The ``fallback_*`` pair is the clearly labeled
-        stand-in for a domain whose spec declares none; both empty means fail
-        closed for such a domain. A router built with neither can route
-        anything except a graph sync.
-        """
         self._client = build_gate_client(gate_url, timeout_seconds=timeout)
         self._gate_url = self._client.gate_url
         self._timeout_ms = int(timeout * 1000)
-        self._domain_reader = domain_reader
-        self._fallback_contract: GraphSyncContract | None = None
-        if fallback_entity_type and fallback_id_property:
-            self._fallback_contract = GraphSyncContract(
-                entity_type=fallback_entity_type,
-                id_property=fallback_id_property,
-                source=GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK,
-            )
+        self._graph_sync_entity_type = graph_sync_entity_type
+        self._graph_sync_id_property = graph_sync_id_property
         self._background_tasks: set[asyncio.Task[Any]] = set()
-
-    def graph_sync_contract(
-        self,
-        domain: str | None,
-        *,
-        node_label: str | None = None,
-    ) -> GraphSyncContract | None:
-        """Resolve the CEG sync endpoint for ``domain``: spec first, then fallback.
-
-        Returns None when neither the domain's spec nor the configured fallback
-        yields a contract -- the fail-closed case ``notify_graph_sync`` honours
-        by sending nothing. Spec problems (unknown domain, illegal id, unreadable
-        file) are logged and treated as "declares none", never raised: a sync
-        is a side effect, and the enrichment it follows already completed.
-        """
-        contract: GraphSyncContract | None = None
-        if domain and self._domain_reader is not None:
-            try:
-                spec = self._domain_reader.load(domain).raw_spec
-            except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:
-                logger.warning("graph_sync_domain_spec_unavailable", domain=domain, error=str(exc))
-            else:
-                contract = resolve_graph_sync_contract(spec, node_label=node_label)
-        if contract is None:
-            contract = self._fallback_contract
-        if contract is None:
-            return None
-        logger.info(
-            "graph_sync_contract_resolved",
-            domain=domain,
-            entity_type=contract.entity_type,
-            id_property=contract.id_property,
-            source=contract.source,
-        )
-        return contract
 
     async def route(
         self,
@@ -419,44 +264,27 @@ class PacketRouter:
         fields: dict[str, Any],
         domain: str | None = None,
         correlation_id: str | None = None,
-        *,
-        node_label: str | None = None,
     ) -> dict[str, Any] | None:
         """
         Sync enriched entity fields into the graph through Gate (action `sync`,
         owned by Cognitive.Engine.Graphs).
 
-        The endpoint and id property come from ``domain``'s own spec
-        (:meth:`graph_sync_contract`). A domain that resolves no contract is
-        skipped -- nothing is sent and ``graph_sync_skipped_no_contract`` names
-        it -- rather than addressed to an endpoint another tenant owns.
-
         Returns CEG's sync response payload, or None when the operation could
-        not be completed or was skipped. There is no fallback path for a Gate
-        outage or an unresolvable route: that is a logged, bounded failure.
+        not be completed. There is no fallback path: a Gate outage or an
+        unresolvable route is a logged, bounded failure.
         """
-        contract = self.graph_sync_contract(domain, node_label=node_label)
-        if contract is None:
-            logger.warning(
-                "graph_sync_skipped_no_contract",
-                tenant_id=tenant_id,
-                entity_id=entity_id,
-                domain=domain,
-                fix=_NO_CONTRACT_FIX,
-            )
-            return None
         row = _graph_sync_row(
             entity_id=entity_id,
             fields=fields,
             domain=domain,
-            id_property=contract.id_property,
+            id_property=self._graph_sync_id_property,
         )
         try:
             return await self.route(
                 NodeTarget.GRAPH,
                 "sync",
                 tenant_id,
-                {"entity_type": contract.entity_type, "batch": [row]},
+                {"entity_type": self._graph_sync_entity_type, "batch": [row]},
                 correlation_id,
                 idempotency_key=_sync_idempotency_key(tenant_id, entity_id, row),
             )
@@ -487,22 +315,17 @@ _router_singleton: PacketRouter | None = None
 
 
 def get_router(settings: Any) -> PacketRouter:
-    """Module-level singleton router. One instance per process.
-
-    The router reads each domain's sync contract from ``settings.domains_dir``
-    -- the same directory the converge path and the domain registry read, so
-    one spec per tenant governs all three. ``Settings.graph_sync_*`` is the
-    labeled fallback; a settings object without those attributes gets none and
-    fails closed for a domain whose spec declares no endpoint.
-    """
+    """Module-level singleton router. One instance per process."""
     global _router_singleton
     if _router_singleton is not None:
         return _router_singleton
-    domains_dir = getattr(settings, "domains_dir", None)
     _router_singleton = PacketRouter(
         gate_url=settings.gate_url,
-        domain_reader=DomainYamlReader(domains_dir) if domains_dir else None,
-        fallback_entity_type=getattr(settings, "graph_sync_entity_type", "") or "",
-        fallback_id_property=getattr(settings, "graph_sync_id_property", "") or "",
+        graph_sync_entity_type=getattr(
+            settings, "graph_sync_entity_type", DEFAULT_GRAPH_SYNC_ENTITY_TYPE
+        ),
+        graph_sync_id_property=getattr(
+            settings, "graph_sync_id_property", DEFAULT_GRAPH_SYNC_ID_PROPERTY
+        ),
     )
     return _router_singleton
