@@ -107,9 +107,17 @@ class Settings(BaseSettings):
     # restarts the process. The loop closes that without a restart. 0 disables it.
     # C-09 (EIE-212-F004): env name L9_GATE_REREGISTRATION_INTERVAL_SECONDS.
     l9_gate_reregistration_interval_seconds: float = 300.0
-    # CEG `sync` contract projection for post-enrichment graph sync: the CEG sync
-    # endpoint suffix and its id property (Cognitive.Engine.Graphs domain spec
-    # `sync.endpoints`). Defaults match the plasticos domain.
+    # GRAPH-IDENT-02: the CEG `sync` contract for post-enrichment graph sync is
+    # read per domain from that domain's own spec (`sync.endpoints[]`, the
+    # owner-native `path` / `targetnode` / `idproperty` keys of
+    # Cognitive.Engine.Graphs' SyncEndpointSpec) by app/engines/packet_router.py.
+    # These two values are the clearly labeled FALLBACK, used only when the
+    # domain spec declares no resolvable sync endpoint; every use is logged as
+    # `graph_sync_contract_resolved` with `source="settings_fallback"` and the
+    # domain it stood in for. Set both to "" to fail closed instead (no sync is
+    # sent for a domain without a spec-declared endpoint). Defaults match the
+    # plasticos domain so the live path keeps syncing until that spec declares
+    # its endpoint.
     graph_sync_entity_type: str = "facilities"
     graph_sync_id_property: str = "facility_id"
 
