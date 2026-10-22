@@ -253,6 +253,23 @@ class TestSimulateIsNotARuntimeAction:
 
         assert "simulate" not in get_handler_map()
 
+    def test_orchestration_registry_does_not_register_simulate(self):
+        """C-13 lockstep: the live SDK registry built at startup holds no `simulate`.
+
+        Removing the action from RUNTIME_ALLOWED_ACTIONS and get_handler_map()
+        is not enough on its own: orchestration_layer.register() is what the
+        lifespan runs, so it must stop registering the handler too.
+        """
+        from constellation_node_sdk.runtime.handlers import registered_actions
+
+        from app.engines.orchestration_layer import register as register_orchestration
+
+        register_orchestration(kb=None, idem_store=None)
+        assert "simulate" not in registered_actions()
+        assert {"enrich", "converge", "discover", "writeback", "enrich-and-sync"} <= set(
+            registered_actions()
+        )
+
     @pytest.mark.asyncio
     async def test_sdk_runtime_refuses_simulate_even_with_a_registered_handler(self):
         """Allowed-actions is checked before dispatch: a stale registration cannot route it."""
