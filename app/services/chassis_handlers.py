@@ -30,10 +30,15 @@ async def handle_community_export(
 
     These contain Louvain community labels to be injected as
     enrichment targets for re-enrichment passes.
+
+    EIE-SEC-01: the tenant is ``packet.tenant.org_id`` — the ``tenant``
+    argument the SDK runtime passes — and nothing else. A ``tenant_id`` in the
+    payload is caller-asserted data and is not read; it must never redirect
+    one tenant's communities into another tenant's enrichment queue.
     """
     from .graph_return_channel import GraphReturnChannel
 
-    tenant_id = payload.get("tenant_id") or tenant
+    tenant_id = tenant
     communities = payload.get("communities", [])
 
     if not communities:
@@ -79,8 +84,11 @@ async def handle_schema_proposal(
 
     These contain proposed field additions from schema discovery
     that should be reviewed and potentially added to the domain schema.
+
+    EIE-SEC-01: tenant comes only from ``packet.tenant.org_id`` (the ``tenant``
+    argument); a payload ``tenant_id`` is not an override.
     """
-    tenant_id = payload.get("tenant_id") or tenant
+    tenant_id = tenant
     proposed_fields = payload.get("proposed_fields", [])
 
     logger.info(

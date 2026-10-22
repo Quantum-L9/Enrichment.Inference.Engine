@@ -1,13 +1,23 @@
 """
 Tests for Simulation Bridge — validates gate/scoring/inference/community/leverage/brief.
+
+PREVIEW-01: the bridge is a demo/test fixture. The tests at the end pin that
+`simulate` is not a runtime action and that every brief is labelled synthetic.
 Run: pytest tests/test_simulation_bridge.py -v
 """
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
+from constellation_node_sdk.runtime.execution import execute_transport_packet
+from constellation_node_sdk.runtime.handlers import clear_handlers, register_handler
+from constellation_node_sdk.transport import create_transport_packet
+from constellation_node_sdk.transport.errors import TransportAuthorizationError
 
 from app.services.simulation_bridge import (
+    SYNTHETIC_OUTPUT_LABEL,
     GateVerdict,
     LeverageType,
     SimulationMode,
@@ -191,3 +201,106 @@ class TestExecutiveBrief:
         assert "headline" in d
         assert "leverage_points" in d
         assert "combined_narrative" in d
+
+
+# ── PREVIEW-01: demo fixture, not a runtime action ───────────────────────────
+
+
+class TestSyntheticLabel:
+    def test_brief_is_labelled_synthetic(self):
+        seed_stats, enriched_stats, _, _ = simulate(
+            CUSTOMER_CRM_FIELDS, DOMAIN_SPEC, entity_count=5, use_sonar=False
+        )
+        brief = generate_executive_brief(
+            "Test Co",
+            "plastics",
+            seed_stats,
+            enriched_stats,
+            analyze_leverage(seed_stats, enriched_stats),
+        )
+        d = brief_to_dict(brief)
+        assert d["synthetic"] is True
+        assert d["provenance"] == SYNTHETIC_OUTPUT_LABEL
+        assert d["provenance"]["runtime_action"] is False
+        assert d["provenance"]["source"] == "app.services.simulation_bridge"
+        assert "Synthetic simulation" in d["headline"]
+        assert d["combined_narrative"].startswith("SYNTHETIC SIMULATION.")
+
+    def test_label_is_a_copy_not_the_module_constant(self):
+        seed_stats, enriched_stats, _, _ = simulate(
+            CUSTOMER_CRM_FIELDS, DOMAIN_SPEC, entity_count=5, use_sonar=False
+        )
+        brief = generate_executive_brief("Test Co", "plastics", seed_stats, enriched_stats, [])
+        brief_to_dict(brief)["provenance"]["kind"] = "tampered"
+        assert SYNTHETIC_OUTPUT_LABEL["kind"] == "simulation"
+
+
+class TestSimulateIsNotARuntimeAction:
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self):
+        clear_handlers()
+        yield
+        clear_handlers()
+
+    def test_simulate_absent_from_runtime_allowed_actions(self):
+        from app.main import RUNTIME_ALLOWED_ACTIONS, _build_runtime_config
+
+        assert "simulate" not in RUNTIME_ALLOWED_ACTIONS
+        assert "simulate" not in _build_runtime_config().allowed_actions
+
+    def test_simulate_absent_from_handler_map(self):
+        from app.engines.handlers import get_handler_map
+
+        assert "simulate" not in get_handler_map()
+
+    @pytest.mark.asyncio
+    async def test_sdk_runtime_refuses_simulate_even_with_a_registered_handler(self):
+        """Allowed-actions is checked before dispatch: a stale registration cannot route it."""
+        from app.main import NODE_NAME, RUNTIME_ALLOWED_ACTIONS
+
+        handler = AsyncMock(return_value={"status": "completed"})
+        register_handler("simulate", handler)
+        packet = create_transport_packet(
+            action="simulate",
+            payload={"crm_field_names": ["name"], "customer_name": "Acme"},
+            tenant="acme",
+            source_node="gate",
+            destination_node=NODE_NAME,
+            reply_to="gate",
+        )
+        with pytest.raises(TransportAuthorizationError, match="action not allowed: simulate"):
+            await execute_transport_packet(
+                packet,
+                node_name=NODE_NAME,
+                dev_mode=True,
+                allowed_actions=RUNTIME_ALLOWED_ACTIONS,
+            )
+        handler.assert_not_awaited()
+
+
+class TestDemoDriver:
+    @pytest.mark.asyncio
+    async def test_customer_name_does_not_default_to_tenant(self):
+        """EIE-SEC-01: the tenant id never becomes a customer-facing label by default."""
+        from app.engines.handlers import handle_simulate
+
+        with pytest.raises(ValueError, match="customer_name is required"):
+            await handle_simulate("acme", {"crm_field_names": ["name"], "use_sonar": False})
+
+    @pytest.mark.asyncio
+    async def test_demo_driver_output_is_labelled_synthetic(self):
+        from app.engines.handlers import handle_simulate
+
+        result = await handle_simulate(
+            "acme",
+            {
+                "crm_field_names": CUSTOMER_CRM_FIELDS,
+                "customer_name": "Acme Recycling",
+                "domain_id": "does-not-exist",
+                "entity_count": 5,
+                "use_sonar": False,
+            },
+        )
+        assert result["synthetic"] is True
+        assert result["customer"] == "Acme Recycling"
+        assert result["customer"] != "acme"

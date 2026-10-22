@@ -29,7 +29,13 @@ from ..engines.convergence_controller import run_convergence_loop
 from ..engines.domain_yaml_reader import DomainYamlReader
 from ..engines.enrichment_orchestrator import enrich_batch, enrich_entity
 from ..engines.schema_discovery import SchemaDiscoveryEngine
-from ..models.schemas import BatchEnrichRequest, EnrichRequest, EnrichResponse
+from ..models.schemas import (
+    ENTITY_IDENTITY_ORDER,
+    BatchEnrichRequest,
+    EnrichRequest,
+    EnrichResponse,
+    resolve_entity_identity,
+)
 from ..services.crm.base import CRMType
 from ..services.crm.writeback import WriteBackOrchestrator
 from ..services.idempotency import IdempotencyStore
@@ -102,7 +108,14 @@ async def _persist_and_sync(
     app/services/side_effect_coordinator.py for the full reasoning).
     """
     settings = get_settings()
-    entity_id = payload.get("entity_id", payload.get("entity", {}).get("id", "unknown"))
+    # SEAM-02: identity resolves top-level entity_id, then entity.id, then
+    # entity.entity_id. There is no literal fallback — persisting under a
+    # placeholder would collapse every unidentified entity of a tenant into one
+    # row, so an unidentified payload is refused here instead.
+    entity_id = resolve_entity_identity(payload)
+    if entity_id is None:
+        msg = f"entity identity required: one of {', '.join(ENTITY_IDENTITY_ORDER)}"
+        raise ValueError(msg)
     domain = payload.get("domain", settings.default_domain)
     packet_id = None
     if payload.get("packet_id"):
@@ -125,8 +138,19 @@ async def _persist_and_sync(
 
 
 async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """SDK handler for action='enrich' (SEAM-02 consumer).
+
+    The producer's EnrichRequest body carries identity at the top level
+    (`entity_id`) and in `entity.id`; `entity.entity_id` is the last accepted
+    fallback. A body that names none of them is rejected before any provider
+    call — identity is what persistence, graph sync and score invalidation key
+    on, and `'unknown'` is not an identity.
+    """
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
+    if resolve_entity_identity(payload) is None:
+        msg = f"enrich: entity identity required: one of {', '.join(ENTITY_IDENTITY_ORDER)}"
+        raise ValueError(msg)
     response = await enrich_entity(request, settings, _kb, _idem)
     result = response.model_dump()
 
@@ -563,10 +587,22 @@ async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any
 
 
 async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Demo-only driver for the simulation fixture (PREVIEW-01).
+
+    `simulate` is not a runtime action: it is absent from
+    app.main.RUNTIME_ALLOWED_ACTIONS and from get_handler_map(), so the SDK
+    runtime refuses a `simulate` packet before any handler runs, and Gate holds
+    no route for it. This function remains importable for in-process demo and
+    test drivers only. Its output is synthetic and is labelled as such by
+    simulation_bridge.brief_to_dict.
+
+    EIE-SEC-01: `customer_name` is a display label the caller supplies
+    explicitly; it never defaults to the tenant id.
+    """
     settings = get_settings()
     crm_field_names: list[str] = payload.get("crm_field_names", [])
     domain_id: str = payload.get("domain_id", "plastics")
-    customer_name: str = payload.get("customer_name", tenant)
+    customer_name = payload.get("customer_name")
     query_profile: dict[str, Any] | None = payload.get("query_profile")
     entity_count: int = int(payload.get("entity_count", 20))
     seed: int = int(payload.get("seed", 42))
@@ -575,6 +611,8 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
 
     if not crm_field_names:
         raise ValueError("simulate: crm_field_names is required and must be non-empty")
+    if not isinstance(customer_name, str) or not customer_name.strip():
+        raise ValueError("simulate: customer_name is required; it does not default to the tenant")
 
     domain_spec: dict[str, Any] = {}
     if _domain_reader:
@@ -638,11 +676,12 @@ async def handle_writeback(tenant: str, payload: dict[str, Any]) -> dict[str, An
 
 
 def get_handler_map() -> dict[str, Any]:
+    # PREVIEW-01: `simulate` is deliberately absent — it is a demo fixture, not
+    # a runtime action (see handle_simulate and app.main.RUNTIME_ALLOWED_ACTIONS).
     return {
         "enrich": handle_enrich,
         "enrichbatch": handle_enrichbatch,
         "converge": handle_converge,
         "discover": handle_discover,
-        "simulate": handle_simulate,
         "writeback": handle_writeback,
     }
