@@ -82,8 +82,8 @@ class SideEffectCoordinator:
       event ran, but CEG did not acknowledge the graph sync. A later call for
       the key re-attempts the graph leg ONLY, so a legitimate retry can finish
       the sync without duplicating effects that already happened. The entry
-      holds the ``fields`` and ``domain`` that WERE persisted and emitted, and
-      the retry sends exactly those: the graph must end up agreeing with the
+      holds the ``entity_id``, ``fields`` and ``domain`` that WERE persisted and
+      emitted, and the retry sends exactly those: the graph must end up agreeing with the
       store and the event, not with whatever the retrying call happens to carry
       (a later enrichment of the same entity can key identically under the
       tenant/entity fallback, or re-run with a different LLM answer).
@@ -170,12 +170,14 @@ class SideEffectCoordinator:
         pending = self._graph_pending.get(key)
         graph_retry = pending is not None
         report.graph_retry = graph_retry
-        # What the graph leg syncs: on a retry, the fields/domain that were
-        # persisted and emitted on the first attempt, never this call's.
+        # What the graph leg syncs: on a retry, the entity, fields and domain
+        # that were persisted and emitted on the first attempt, never this call's.
+        graph_entity_id = entity_id
         graph_fields: dict[str, Any] = response_dict.get("fields", {})
         graph_domain = domain
         graph_node_label = node_label
         if pending is not None:
+            graph_entity_id = pending["entity_id"]
             graph_fields = pending["fields"]
             graph_domain = pending["domain"]
             graph_node_label = pending.get("node_label")
@@ -222,14 +224,35 @@ class SideEffectCoordinator:
         if not graph_sync:
             report.graph_skipped = True
             logger.info("side_effect_graph_sync_excluded", entity_id=entity_id, key=key)
+            if graph_retry:
+                # Excluding the leg is not acknowledging it. This call cannot
+                # resolve the pending leg, so it is recorded and the key stays
+                # pending below for a later call that does ask for the graph.
+                report.errors.append("graph_sync:excluded_while_pending")
+                logger.warning(
+                    "side_effect_graph_sync_excluded_while_pending", key=key, entity_id=entity_id
+                )
         else:
+            if graph_entity_id != entity_id:
+                # The semantic key does not carry entity_id (idem:{tenant}:{key}),
+                # so a caller reusing an idempotency key across entities keyed
+                # this call as a retry of another entity's operation. The leg
+                # completes for the entity that was persisted and emitted; a
+                # clean sync is not reported for this call's entity.
+                report.errors.append(f"graph_sync:entity_mismatch:pinned={graph_entity_id}")
+                logger.warning(
+                    "side_effect_graph_retry_entity_mismatch",
+                    key=key,
+                    entity_id=entity_id,
+                    pinned_entity_id=graph_entity_id,
+                )
             try:
                 from app.engines.packet_router import get_router, graph_sync_acknowledged
 
                 router = get_router(settings)
                 ack = await router.notify_graph_sync(
                     tenant_id=tenant,
-                    entity_id=entity_id,
+                    entity_id=graph_entity_id,
                     fields=graph_fields,
                     domain=graph_domain,
                     node_label=graph_node_label,
@@ -287,9 +310,10 @@ class SideEffectCoordinator:
                     report.errors.append(f"event:{exc}")
                     logger.warning("side_effect_event_failed", entity_id=entity_id, error=str(exc))
 
-        if graph_sync and not report.graph_synced:
-            # The graph leg was asked for and did not complete. Recording the key
-            # as completed would suppress the retry that can finish it, so the
+        if (graph_sync or graph_retry) and not report.graph_synced:
+            # The graph leg was asked for (on this call, or on the earlier one
+            # that left it pending) and did not complete. Recording the key as
+            # completed would suppress the retry that can finish it, so the
             # key stays pending for the graph leg only (never re-persist, never
             # re-emit). A persist failure on this attempt is already reported
             # above and keeps its own semantics. The pending entry pins the
@@ -308,6 +332,10 @@ class SideEffectCoordinator:
                 event_emitted=report.event_emitted,
                 graph_retry=graph_retry,
             )
+            # The entry also pins the entity those fields were persisted for: an
+            # idem:{tenant}:{idempotency_key} key omits entity_id, so a retry can
+            # carry another entity's id (recorded as entity_mismatch above).
+            self._graph_pending[key]["entity_id"] = graph_entity_id
             return report
 
         self._graph_pending.pop(key, None)
