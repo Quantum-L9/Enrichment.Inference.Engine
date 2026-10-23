@@ -596,7 +596,8 @@ class TestLiveDomainInference:
         assert response["state"] == "completed"  # enrichment itself is unaffected
         inference = response["feature_vector"]["inference"]
         assert inference["status"] == "invalid_rules"
-        assert inference["errors"] and all(isinstance(err, str) for err in inference["errors"])
+        assert inference["errors"]
+        assert all(isinstance(err, str) for err in inference["errors"])
         assert _inferred(response) == {}
         assert "material_grade" not in response["fields"]
 
