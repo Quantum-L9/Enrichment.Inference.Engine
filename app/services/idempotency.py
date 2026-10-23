@@ -47,9 +47,15 @@ def tenant_scope(tenant: str) -> str:
     return f"tenant:{tenant}"
 
 
-def api_key_scope(api_key: str) -> str:
-    """Scope for the HTTP surface, whose only identity is the authenticated key."""
-    return f"api-key:{_digest(api_key)}"
+def api_key_scope(api_key_hash: str) -> str:
+    """Scope for the HTTP surface, whose only identity is the authenticated key.
+
+    The caller passes the configured key hash (``Settings.api_key_hash``, the
+    value ``verify_api_key`` authenticated against), never the secret itself, so
+    the secret is not hashed here (CodeQL py/weak-sensitive-data-hashing). The
+    scope string is unchanged: ``api-key:<configured hash>``.
+    """
+    return f"api-key:{api_key_hash}"
 
 
 def request_fingerprint(request: Mapping[str, Any]) -> str:

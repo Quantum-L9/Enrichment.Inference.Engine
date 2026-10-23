@@ -8,6 +8,7 @@ tests/integration/test_redis_idempotency_tenant_isolation.py.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -135,10 +136,15 @@ class TestStore:
 
 class TestScopes:
     def test_a_tenant_cannot_name_itself_into_the_http_scope(self):
-        assert tenant_scope(api_key_scope("key")) != api_key_scope("key")
+        assert tenant_scope(api_key_scope("keyhash")) != api_key_scope("keyhash")
 
-    def test_the_http_scope_holds_no_raw_key(self):
-        assert "super-secret" not in api_key_scope("super-secret")
+    def test_the_http_scope_is_named_by_the_configured_hash_not_the_secret(self):
+        # The scope takes Settings.api_key_hash (what verify_api_key compared
+        # against), so the module never hashes the secret itself.
+        configured_hash = hashlib.sha256(b"super-secret").hexdigest()
+        scope = api_key_scope(configured_hash)
+        assert scope == f"api-key:{configured_hash}"
+        assert "super-secret" not in scope
 
     def test_fingerprint_ignores_key_order(self):
         assert request_fingerprint({"a": 1, "b": {"c": 2, "d": 3}}) == request_fingerprint(

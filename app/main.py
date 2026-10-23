@@ -469,8 +469,10 @@ async def enrich_single(
 ):
     # This surface carries no tenant; its one identity is the key verify_api_key
     # authenticated, so that is what owns an idempotency key here (EIE-FIX-001).
+    # The scope is named by the configured hash that key was verified against,
+    # so the secret itself is never hashed outside verify_api_key.
     return await enrich_entity(
-        request, settings, _kb, _idem, idempotency_scope=api_key_scope(api_key)
+        request, settings, _kb, _idem, idempotency_scope=api_key_scope(settings.api_key_hash)
     )
 
 
@@ -485,7 +487,11 @@ async def enrich_batch_endpoint(
 ):
     start = time.monotonic()
     results = await enrich_batch(
-        request.entities, settings, _kb, _idem, idempotency_scope=api_key_scope(api_key)
+        request.entities,
+        settings,
+        _kb,
+        _idem,
+        idempotency_scope=api_key_scope(settings.api_key_hash),
     )
     elapsed = int((time.monotonic() - start) * 1000)
     succeeded = sum(1 for r in results if r.state == "completed")
