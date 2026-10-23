@@ -275,7 +275,8 @@ def _converge_body(**overrides: Any) -> dict[str, Any]:
 
 
 def test_converge_identity_order_is_seam_02_plus_the_odoo_alias() -> None:
-    assert (*ENTITY_IDENTITY_ORDER, "entity._odoo_entity_id") == CONVERGE_IDENTITY_ORDER
+    expected = (*ENTITY_IDENTITY_ORDER, "entity._odoo_entity_id")
+    assert tuple(CONVERGE_IDENTITY_ORDER) == expected
 
 
 @pytest.mark.parametrize(
