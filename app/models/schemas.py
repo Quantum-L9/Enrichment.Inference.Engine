@@ -76,6 +76,30 @@ def resolve_entity_identity(payload: Mapping[str, Any]) -> str | None:
     return None
 
 
+# The converge consumer accepts one more carrier. The live Odoo builder
+# (IB-Odoo_19 build_converge_request) puts the record reference on
+# `entity._odoo_entity_id` beside `entity.id`, and older builders sent only the
+# alias. It is the documented last fallback after the SEAM-02 order — the
+# superset below is the whole converge grammar, resolved once per operation so
+# the convergence loop, GraphReturnChannel and persistence key on one id.
+CONVERGE_IDENTITY_ORDER: tuple[str, ...] = (*ENTITY_IDENTITY_ORDER, "entity._odoo_entity_id")
+
+
+def resolve_converge_identity(payload: Mapping[str, Any]) -> str | None:
+    """Resolve converge identity: the SEAM-02 order, then ``entity._odoo_entity_id``.
+
+    Returns None when none of them carries a non-blank string."""
+    resolved = resolve_entity_identity(payload)
+    if resolved is not None:
+        return resolved
+    entity = payload.get("entity")
+    if isinstance(entity, Mapping):
+        value = entity.get("_odoo_entity_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 # ── Request ──────────────────────────────────────────────────
 
 

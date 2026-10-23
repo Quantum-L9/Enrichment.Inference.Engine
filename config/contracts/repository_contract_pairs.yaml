@@ -19,8 +19,8 @@ schema_version: "2.0.0"
 
 dora_metadata:
   created_at: "2026-03-25T00:00:00Z"
-  updated_at: "2026-04-11T00:00:00Z"
-  updated_by: "l9-review-remediation"
+  updated_at: "2026-10-23T00:00:00Z"
+  updated_by: "l9-pr-remediation"
   purpose: "Repository-wide method/param contract enforcement for SDK transport runtime"
 
 scan:
@@ -46,7 +46,6 @@ pairs:
       - "enrichbatch"
       - "converge"
       - "discover"
-      - "simulate"
       - "writeback"
       - "enrich-and-sync"
       - "graph-inference-result"
@@ -68,7 +67,6 @@ pairs:
       - "enrichbatch"
       - "graph-inference-result"
       - "schema-proposal"
-      - "simulate"
       - "writeback"
     dynamic_policy: "prove_dynamic"
     severity: "error"

@@ -34,6 +34,7 @@ from ..models.schemas import (
     BatchEnrichRequest,
     EnrichRequest,
     EnrichResponse,
+    resolve_converge_identity,
     resolve_entity_identity,
 )
 from ..services.crm.base import CRMType
@@ -230,12 +231,17 @@ async def _handle_canonical_converge(
         logger.warning("handlers.converge_parse_failed", tenant=tenant, error=str(exc))
         return _canonical_failure(f"invalid converge request: {exc}")
 
-    entity_id = _canonical_entity_id(payload)
+    # Identity is resolved exactly once, here, and handed down: it is what the
+    # convergence loop gives GraphReturnChannel and what persistence keys on, so
+    # nothing downstream re-derives it from `entity`. There is no placeholder id
+    # — `'unknown'` would collapse every unidentified entity of a tenant into
+    # one row; a body that names no identity is refused by `_persist_and_sync`.
+    entity_id = resolve_converge_identity(payload)
 
     try:
         with deadline_scope(deadline):
             return await asyncio.wait_for(
-                _run_canonical_converge(tenant, payload, request, deadline),
+                _run_canonical_converge(tenant, payload, request, deadline, entity_id),
                 timeout=max(deadline.remaining(), 0.0),
             )
     except TimeoutError:
@@ -265,8 +271,15 @@ async def _run_canonical_converge(
     payload: dict[str, Any],
     request: EnrichRequest,
     deadline: Deadline,
+    entity_id: str | None,
 ) -> dict[str, Any]:
-    """The complete canonical operation, run under the outer deadline."""
+    """The complete canonical operation, run under the outer deadline.
+
+    `entity_id` is the identity the caller resolved once from the body
+    (`resolve_converge_identity`; None when the body names none); it is not
+    re-derived here. The loop, the GraphReturnChannel lookups it performs, and
+    persistence all key on it.
+    """
     settings = get_settings()
 
     # `object_type` is where the live Odoo builder carries the domain
@@ -290,7 +303,6 @@ async def _run_canonical_converge(
 
     # EIE-POST-F001: identity lets each pass consume this entity's
     # graph-inference-result targets from GraphReturnChannel.
-    entity_id = _canonical_entity_id(payload)
     response = await run_convergence_loop(
         request=request,
         settings=settings,
@@ -299,13 +311,21 @@ async def _run_canonical_converge(
         inference_rules=inference_rules,
         domain_hints=domain_hints,
         tenant_id=tenant,
-        entity_id=None if entity_id == "unknown" else entity_id,
+        entity_id=entity_id,
         **loop_kwargs,
     )
     result = response.model_dump()
 
     if response.state == ODOO_COMPLETED_STATE:
-        persist_payload = {**payload, "domain": domain_id or settings.default_domain}
+        # The top-level `entity_id` is the first key of the SEAM-02 order that
+        # `_persist_and_sync` applies, so writing the once-resolved id there is
+        # what makes persistence key on the same id the loop used, rather than
+        # re-deriving one from `entity` (which may carry only the Odoo alias).
+        persist_payload = {
+            **payload,
+            "entity_id": entity_id,
+            "domain": domain_id or settings.default_domain,
+        }
         # E14: zero Graph calls on the canonical path. Graph sync awaits up to
         # three Gate attempts at 30 s each with backoff between them — 93 s in
         # the worst case, against a caller that waits 30 s. Persistence stays
@@ -330,7 +350,7 @@ async def _run_canonical_converge(
             logger.error(
                 "handlers.converge_persistence_failed",
                 tenant=tenant,
-                entity_id=_canonical_entity_id(payload),
+                entity_id=entity_id,
                 error=str(exc),
             )
             # Reported in EnrichResponse semantics: the producer's mapper reads
@@ -341,24 +361,13 @@ async def _run_canonical_converge(
     logger.info(
         "handlers.converge_ok",
         tenant=tenant,
-        entity_id=_canonical_entity_id(payload),
+        entity_id=entity_id,
         fields=sorted(result.get("fields", {}).keys()),
         pass_count=result.get("pass_count"),
         state=result.get("state"),
         remaining_s=round(deadline.remaining(), 3),
     )
     return result
-
-
-def _canonical_entity_id(payload: dict[str, Any]) -> str:
-    """Canonical identity: `entity["id"]` — e.g. "res.partner:55" from Odoo."""
-    entity = payload.get("entity")
-    if isinstance(entity, dict):
-        for key in ("id", "_odoo_entity_id"):
-            value = entity.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return "unknown"
 
 
 def _canonical_failure(reason: str) -> dict[str, Any]:
