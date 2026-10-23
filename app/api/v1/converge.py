@@ -741,9 +741,7 @@ async def get_pending_proposals(domain: str) -> dict[str, Any]:
     return {"domain": domain, "pending_count": len(proposals), "proposals": proposals}
 
 
-@router.post(
-    "/scan", response_model=DiscoveryReport, responses={403: _DIRECT_DOMAIN_ACCESS_RESPONSE}
-)
+@router.post("/scan", responses={403: _DIRECT_DOMAIN_ACCESS_RESPONSE})
 async def scan_crm(body: ScanRequestBody) -> DiscoveryReport:
     scan_result, domain_spec = scan_registered_domain(body.domain, body.fields)
     return generate_discovery_report(scan_result, domain_spec)
