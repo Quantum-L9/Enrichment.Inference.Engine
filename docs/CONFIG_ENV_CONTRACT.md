@@ -32,10 +32,12 @@ PERPLEXITY_API_KEY=pplx-your-key-here
 API_KEY_HASH=<sha256-hex-of-your-client-api-key>
 REDIS_URL=redis://localhost:6379/0
 DATABASE_URL=postgresql+asyncpg://enrich:changeme@localhost:5432/enrich
-GATE_URL=http://localhost:8080
+GATE_URL=http://localhost:9000
 L9_NODE_NAME=enrichment-engine
 L9_ENVIRONMENT=local
 ```
+
+`GATE_URL` above is Gate's own default and shipped compose port (9000), matching `.env.example`. The `Settings.gate_url` code default and `docs/contracts/config/env-contract.yaml` still say `http://localhost:8080`; that difference is deliberate until the deployment surfaces move together, so a local `.env` must set `GATE_URL` explicitly.
 
 `API_SECRET_KEY` exists on `Settings` but is **not** used for client auth; `X-API-Key` is verified against `API_KEY_HASH` (see `app/core/auth.py`).
 

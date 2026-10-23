@@ -615,7 +615,12 @@ async def test_non_canonical_enrich_still_syncs_to_graph():
         patch("app.services.event_emitter.get_emitter") as emitter_factory,
     ):
         router = router_factory.return_value
-        router.notify_graph_sync = AsyncMock(return_value=None)
+        # CEG's `sync` acknowledgment. `graph_synced` reads the acknowledgment,
+        # not the dispatch: a `None` here would (correctly) leave it False
+        # (RV-DOMAIN-RD-07). What this test owns is that the hop is TAKEN.
+        router.notify_graph_sync = AsyncMock(
+            return_value={"status": "success", "entity_type": "facilities", "synced_count": 1}
+        )
         router.notify_score_invalidate = AsyncMock(return_value=None)
         emitter_factory.return_value.emit_enrichment_completed = AsyncMock(return_value=None)
 

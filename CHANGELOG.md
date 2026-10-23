@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Graph-sync acknowledgment (RV-DOMAIN-RD-07).** `SideEffectReport.graph_synced`
+  is set only when CEG acknowledges the `sync` operation (`status: success`,
+  `synced_count >= 1`, the intended endpoint). A Gate outage, a worker
+  `failure` packet (now raised by `PacketRouter.route` as
+  `NodeOperationFailedError` instead of returned as data), a rejected batch, a
+  malformed answer or an exception each leave it `False` and record an error.
+  A key whose graph leg was not acknowledged stays pending for that leg only,
+  so a later permitted call for the same key re-attempts the graph sync
+  without re-persisting, re-emitting or re-invalidating
+  (`SideEffectReport.graph_retry`). `graph_sync=False` on the canonical
+  converge path is unchanged.
+
 ### Changed
 - **PR #212 audit closure (EIE-212-F001..F004).**
   - `GET /api/v1/ready` answers HTTP 503 while Gate registration is enabled

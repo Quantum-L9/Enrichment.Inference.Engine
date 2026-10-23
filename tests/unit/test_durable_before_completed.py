@@ -57,7 +57,12 @@ async def _commit(coordinator, store, **kwargs):
         patch("app.engines.packet_router.get_router") as router,
         patch("app.services.event_emitter.get_emitter") as emitter,
     ):
-        router.return_value.notify_graph_sync = AsyncMock()
+        # CEG's acknowledgment, so these tests isolate the persistence contract
+        # from the graph one (RV-DOMAIN-RD-07): an unacknowledged graph leg
+        # keeps a key open on purpose, which is not what is under test here.
+        router.return_value.notify_graph_sync = AsyncMock(
+            return_value={"status": "success", "entity_type": "facilities", "synced_count": 1}
+        )
         router.return_value.notify_score_invalidate = AsyncMock()
         emitter.return_value.emit_enrichment_completed = AsyncMock()
         return await coordinator.commit_after_enrich(

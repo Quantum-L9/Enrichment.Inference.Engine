@@ -4,8 +4,8 @@
 #           app/engines/graph_sync_client.py, app/main.py,
 #           app/services/graph_return_channel.py,
 #           app/engines/convergence_controller.py
-# Version:  1.1.0
-# Updated:  2026-09-23 (EIE-POST-F001: graph-inference-result is consumed)
+# Version:  1.2.0
+# Updated:  2026-10-11 (RV-DOMAIN-RD-07: graph sync is CEG's acknowledgment, not EIE's dispatch)
 # ═══════════════════════════════════════════════════════════════
 
 service_name: Constellation.Gate
@@ -44,5 +44,19 @@ invariants:
     Gate tenant and the output's entity_id; no target crosses a tenant or entity.
   - A graph-inference-result target never overwrites a value the converge request's
     entity supplied; it fills unknown fields or outranks lower-confidence loop output.
+  - A worker `failure` packet relayed by Gate (packet_type `failure`, or a response hop
+    with status `failed`) is not a routed success — PacketRouter.route raises
+    NodeOperationFailedError and never returns the failure payload as data. It is not
+    retried at the transport; Gate did not cache it (SEAM-013), so the caller's retry
+    is not answered from a stale failure.
+  - The post-enrichment graph sync is recorded as synchronized only on CEG's `sync`
+    acknowledgment for the intended operation — `graph_sync_acknowledged` requires
+    status `success`, an integer `synced_count` equal to the batch EIE sent (one row)
+    and the configured sync endpoint. None, a failure or rejected answer, a malformed
+    answer, or an exception each leave `graph_synced` false; the key then stays
+    pending for the graph leg only, so a permitted retry re-attempts the sync — with
+    the fields that were persisted and emitted on the first attempt, never the
+    retrying call's — without re-persisting, re-emitting or re-invalidating
+    (RV-DOMAIN-RD-07).
 
 health_check: "GET {GATE_URL}/v1/health"
