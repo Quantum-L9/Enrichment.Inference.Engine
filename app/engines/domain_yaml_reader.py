@@ -13,6 +13,7 @@ This reader uses them to auto-configure enrichment behavior per node type.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,74 @@ import structlog
 import yaml
 
 logger = structlog.get_logger("domain_yaml_reader")
+
+# Identity contract (operator decision 2026-10-22): tenant id == domain spec id
+# == Neo4j database name. One customer is one directory `domains/<tenant>/spec.yaml`,
+# one versioned spec and one database, so a tenant id has to be a legal Neo4j
+# database name: lowercase, starting with a letter, then letters, digits, dots
+# or dashes, 3-63 characters, and never starting with the reserved `system`
+# prefix. Vertical templates are provenance only (`metadata.template.*`); there
+# is no tenant-to-domain mapping layer anywhere.
+#
+# This is the ONE grammar. The reader applies it to every id that reaches the
+# filesystem (ids arrive from request payloads: `domain_id` / `object_type`,
+# so "..", "/" and any other escape from the domains root are refused by the
+# same check), and the API-side registry (app/api/v1/converge.py) imports it
+# rather than keeping a second regex that could drift.
+TENANT_ID_PATTERN: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9.-]{2,62}$")
+TENANT_ID_RESERVED_PREFIX = "system"
+
+
+def is_legal_tenant_id(value: object) -> bool:
+    """Whether ``value`` can name a tenant, its domain spec and its Neo4j database.
+
+    The lowercase check runs before the pattern so a mixed-case id is refused
+    outright rather than silently lowercased into a different identity.
+    """
+    if not isinstance(value, str) or value != value.lower():
+        return False
+    if value.startswith(TENANT_ID_RESERVED_PREFIX):
+        return False
+    return TENANT_ID_PATTERN.fullmatch(value) is not None
+
+
+def _declared_id(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _declared_version(value: Any) -> str | None:
+    # YAML reads an unquoted `version: 1.0` as a float; a bool is never a version.
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    return str(value) if isinstance(value, (str, int, float)) else None
+
+
+def declared_spec_identity(spec: Any) -> tuple[str | None, str | None]:
+    """The ``(id, version)`` a domain spec declares for itself; ``None`` where it declares none.
+
+    The ONE spec-identity reader. The registry (app/api/v1/converge.py) checks
+    the declared id against the spec's directory, the reader reports the
+    version, and a registry scan stamps the version onto its result, so the
+    three cannot disagree about which spec they hold.
+
+    The live specs carry top-level ``name`` / ``version``; older fixtures carry
+    ``domain`` as a string, or a ``domain_identity`` / ``domain`` block with
+    ``id`` (or ``name``) and ``version``. Top-level keys win: an approved
+    revision bumps the top-level ``version`` (schema_proposer.apply), never a
+    block's. Template provenance (``metadata.template.*``) is not identity.
+    """
+    if not isinstance(spec, dict):
+        return None, None
+    spec_id = _declared_id(spec.get("name"))
+    version = _declared_version(spec.get("version"))
+    for key in ("domain_identity", "domain"):
+        block = spec.get(key)
+        if isinstance(block, dict):
+            spec_id = spec_id or _declared_id(block.get("id")) or _declared_id(block.get("name"))
+            version = version or _declared_version(block.get("version"))
+        else:
+            spec_id = spec_id or _declared_id(block)
+    return spec_id, version
 
 
 @dataclass
@@ -70,6 +139,8 @@ class DomainYamlReader:
     def load(self, domain_id: str) -> DomainEnrichmentConfig:
         if domain_id in self._cache:
             return self._cache[domain_id]
+        if not is_legal_tenant_id(domain_id):
+            raise ValueError(f"Invalid domain id: {domain_id!r}")
 
         spec_path = self._root / domain_id / "spec.yaml"
         if not spec_path.exists():

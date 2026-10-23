@@ -1,11 +1,14 @@
 """Graph-sync contract (docs/contracts/dependencies/constellation-gate.yaml).
 
 GRAPH-IDENT-02 on top of RV-DOMAIN-RD-07: the CEG `sync` endpoint a tenant's
-rows are addressed to is resolved per domain from that domain's own spec, the
-acknowledgment is checked against the endpoint that was resolved, an ambiguous
-declaration is refused rather than defaulted, the labeled settings fallback
-applies only to a spec that declares no endpoint, and with both fallback values
-empty such a domain fails closed.
+rows are addressed to is resolved from the tenant's own spec (tenant id ==
+domain spec id, the spec CEG loads to validate the sync), never from the
+payload's `domain`; the acknowledgment is checked against the endpoint that was
+resolved, an ambiguous declaration (including an explicit node label no
+endpoint targets) is refused rather than defaulted, an id the reader's tenant
+grammar refuses never reaches the filesystem, the labeled settings fallback
+applies only to a spec that declares no endpoint and is empty by default, and
+with both fallback values empty such a tenant fails closed.
 
 Nothing here needs the provider runtime: `app.engines.packet_router` imports the
 Gate SDK and the domain reader only, and the coordinator pin patches its
@@ -34,6 +37,7 @@ import pytest
 import yaml
 from constellation_node_sdk.transport import create_transport_packet
 
+from app.core.config import Settings
 from app.engines.domain_yaml_reader import DomainYamlReader
 from app.engines.packet_router import (
     GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
@@ -90,12 +94,51 @@ AMBIGUOUS_SPEC: dict[str, Any] = {
 
 NO_SYNC_SPEC: dict[str, Any] = {"name": "plain", "ontology": {"nodes": [{"label": "Thing"}]}}
 
+# A spec planted OUTSIDE the domains root: `domains/../outside.yaml`. A
+# payload-controlled id of "../outside" would reach it through the flat-file
+# branch of DomainYamlReader.load if the id were not validated first.
+OUTSIDE_SPEC: dict[str, Any] = {
+    "name": "outside",
+    "ontology": {"nodes": [{"label": "Loot"}]},
+    "sync": {
+        "endpoints": [{"path": "/v1/sync/attacker", "targetnode": "Loot", "idproperty": "pwn"}]
+    },
+}
+
+ALPHA_SPEC: dict[str, Any] = {
+    "name": "alpha",
+    "ontology": {"nodes": [{"label": "Site"}]},
+    "sync": {
+        "endpoints": [{"path": "/v1/sync/sites", "targetnode": "Site", "idproperty": "site_id"}]
+    },
+}
+
+BETA_SPEC: dict[str, Any] = {
+    "name": "beta",
+    "ontology": {"nodes": [{"label": "Facility"}]},
+    "sync": {
+        "endpoints": [
+            {"path": "/v1/sync/facilities", "targetnode": "Facility", "idproperty": "facility_id"}
+        ]
+    },
+}
+
+# EIE's shipped specs, the directory Settings.domains_dir names by default.
+REPO_DOMAINS = Path(__file__).resolve().parents[2] / "domains"
+
 
 def _reader(tmp_path: Path, specs: dict[str, dict[str, Any]]) -> DomainYamlReader:
     root = tmp_path / "domains"
     for tenant, spec in specs.items():
         (root / tenant).mkdir(parents=True)
         (root / tenant / "spec.yaml").write_text(yaml.safe_dump(spec), encoding="utf-8")
+    return DomainYamlReader(root)
+
+
+def _outside_reader(tmp_path: Path) -> DomainYamlReader:
+    root = tmp_path / "domains"
+    root.mkdir()
+    (tmp_path / "outside.yaml").write_text(yaml.safe_dump(OUTSIDE_SPEC), encoding="utf-8")
     return DomainYamlReader(root)
 
 
@@ -152,7 +195,7 @@ async def test_ack_is_checked_against_the_domains_resolved_endpoint(specs_reader
         router._client, "execute", new_callable=AsyncMock, return_value=_ack(other)
     ) as execute:
         result = await router.notify_graph_sync(
-            tenant_id="tenant-acme",
+            tenant_id="plastics",
             entity_id="pf-1",
             fields={},
             domain="plastics",
@@ -168,7 +211,7 @@ async def test_ack_is_checked_against_the_domains_resolved_endpoint(specs_reader
         router._client, "execute", new_callable=AsyncMock, return_value=_ack(matching)
     ):
         confirmed = await router.notify_graph_sync(
-            tenant_id="tenant-acme",
+            tenant_id="plastics",
             entity_id="pf-1",
             fields={},
             domain="plastics",
@@ -194,7 +237,7 @@ async def test_ambiguous_declaration_is_skipped_and_the_fallback_is_not_consulte
     assert router.graph_sync_contract("mixed") is None
     with patch.object(router._client, "execute", new_callable=AsyncMock) as execute:
         result = await router.notify_graph_sync(
-            tenant_id="tenant-acme", entity_id="x-1", fields={}, domain="mixed"
+            tenant_id="mixed", entity_id="x-1", fields={}, domain="mixed"
         )
     assert result is None
     execute.assert_not_awaited()
@@ -223,7 +266,7 @@ async def test_no_declared_endpoint_uses_the_labeled_fallback(specs_reader) -> N
         router._client, "execute", new_callable=AsyncMock, return_value=_ack(ok)
     ) as execute:
         result = await router.notify_graph_sync(
-            tenant_id="tenant-acme", entity_id="t-1", fields={}, domain="plain"
+            tenant_id="plain", entity_id="t-1", fields={}, domain="plain"
         )
     assert execute.await_args.kwargs["payload"]["entity_type"] == "facilities"
     assert result is not None and result["status"] == "success"
@@ -237,7 +280,7 @@ async def test_both_fallback_values_empty_fails_closed(specs_reader) -> None:
         assert router.graph_sync_contract(domain) is None, domain
     with patch.object(router._client, "execute", new_callable=AsyncMock) as execute:
         result = await router.notify_graph_sync(
-            tenant_id="tenant-acme", entity_id="t-1", fields={}, domain="plain"
+            tenant_id="plain", entity_id="t-1", fields={}, domain="plain"
         )
     assert result is None
     execute.assert_not_awaited()
@@ -258,6 +301,151 @@ def test_unparseable_spec_is_declares_none(tmp_path: Path, body: str) -> None:
         fallback_id_property="facility_id",
     ).graph_sync_contract("odd")
     assert fallback is not None and fallback.source == GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK
+
+
+# ── F-248-1: an illegal id never reaches the filesystem ──────────────────────
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("domain_id", ["../outside", "..", "/abs/outside", "abc/../../outside"])
+def test_reader_refuses_an_id_outside_the_tenant_grammar(tmp_path: Path, domain_id: str) -> None:
+    reader = _outside_reader(tmp_path)
+    with pytest.raises(ValueError, match="Invalid domain id"):
+        reader.load(domain_id)
+
+
+@pytest.mark.unit
+def test_traversal_id_takes_the_labeled_fallback_never_the_outside_spec(tmp_path: Path) -> None:
+    router = PacketRouter(
+        gate_url=GATE,
+        domain_reader=_outside_reader(tmp_path),
+        fallback_entity_type="facilities",
+        fallback_id_property="facility_id",
+    )
+    contract = router.graph_sync_contract("../outside")
+    assert contract is not None
+    assert contract.source == GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK
+    assert (contract.entity_type, contract.id_property) == ("facilities", "facility_id")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_traversal_tenant_sends_nothing_without_a_fallback(tmp_path: Path) -> None:
+    router = PacketRouter(gate_url=GATE, domain_reader=_outside_reader(tmp_path))
+    assert router.graph_sync_contract("../outside") is None
+    with patch.object(router._client, "execute", new_callable=AsyncMock) as execute:
+        result = await router.notify_graph_sync(
+            tenant_id="../outside", entity_id="x-1", fields={}, domain="../outside"
+        )
+    assert result is None
+    execute.assert_not_awaited()
+
+
+# ── F-248-2: the tenant's spec governs, not the payload domain ───────────────
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_sync_contract_is_the_tenants_not_the_payload_domains(tmp_path: Path) -> None:
+    router = PacketRouter(
+        gate_url=GATE, domain_reader=_reader(tmp_path, {"alpha": ALPHA_SPEC, "beta": BETA_SPEC})
+    )
+    ok = {"status": "success", "entity_type": "facilities", "synced_count": 1}
+    with patch.object(
+        router._client, "execute", new_callable=AsyncMock, return_value=_ack(ok)
+    ) as execute:
+        result = await router.notify_graph_sync(
+            tenant_id="beta", entity_id="f-1", fields={}, domain="alpha"
+        )
+    sent = execute.await_args.kwargs["payload"]
+    assert sent["entity_type"] == "facilities"
+    assert sent["batch"][0]["facility_id"] == "f-1"
+    assert result is not None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_tenant_without_a_spec_is_not_synced_by_another_domains_spec(
+    tmp_path: Path,
+) -> None:
+    router = PacketRouter(gate_url=GATE, domain_reader=_reader(tmp_path, {"alpha": ALPHA_SPEC}))
+    with patch.object(router._client, "execute", new_callable=AsyncMock) as execute:
+        result = await router.notify_graph_sync(
+            tenant_id="gamma", entity_id="s-1", fields={}, domain="alpha"
+        )
+    assert result is None
+    execute.assert_not_awaited()
+
+
+# ── F-248-3: the shipped spec declares CEG's endpoints; no global default ────
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("node_label", "expected"),
+    [
+        (None, ("facilities", "facility_id")),
+        ("Facility", ("facilities", "facility_id")),
+        ("PolymerFamily", ("polymerfamilies", "code")),
+        ("MaterialForm", ("materialforms", "form_id")),
+        ("SupplyOpportunity", ("supply-opportunities", "opportunity_id")),
+        ("BuyerDemand", ("buyer-demands", "demand_id")),
+    ],
+)
+def test_shipped_plasticos_spec_declares_cegs_sync_endpoints(
+    node_label: str | None, expected: tuple[str, str]
+) -> None:
+    router = PacketRouter(gate_url=GATE, domain_reader=DomainYamlReader(REPO_DOMAINS))
+    contract = router.graph_sync_contract("plasticos", node_label=node_label)
+    assert contract is not None
+    assert contract.source == GRAPH_SYNC_SOURCE_DOMAIN_SPEC
+    assert (contract.entity_type, contract.id_property) == expected
+
+
+@pytest.mark.unit
+def test_settings_fallback_pair_defaults_to_empty() -> None:
+    fields = Settings.model_fields
+    assert fields["graph_sync_entity_type"].default == ""
+    assert fields["graph_sync_id_property"].default == ""
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_default_settings_send_nothing_for_a_tenant_without_a_spec_endpoint(
+    specs_reader,
+) -> None:
+    fields = Settings.model_fields
+    router = PacketRouter(
+        gate_url=GATE,
+        domain_reader=specs_reader,
+        fallback_entity_type=fields["graph_sync_entity_type"].default,
+        fallback_id_property=fields["graph_sync_id_property"].default,
+    )
+    with patch.object(router._client, "execute", new_callable=AsyncMock) as execute:
+        result = await router.notify_graph_sync(
+            tenant_id="plain", entity_id="t-1", fields={}, domain="plain"
+        )
+    assert result is None
+    execute.assert_not_awaited()
+
+
+# ── F-248-4: an explicit label no endpoint targets is ambiguous ──────────────
+
+
+@pytest.mark.unit
+def test_unmatched_explicit_label_among_several_endpoints_is_ambiguous() -> None:
+    assert resolve_graph_sync_contract(PLASTICS_SPEC, node_label="Account") is None
+
+
+@pytest.mark.unit
+def test_unmatched_explicit_label_does_not_reach_the_fallback(specs_reader) -> None:
+    router = PacketRouter(
+        gate_url=GATE,
+        domain_reader=specs_reader,
+        fallback_entity_type="facilities",
+        fallback_id_property="facility_id",
+    )
+    assert router.graph_sync_contract("plastics", node_label="Account") is None
 
 
 # ── The node label reaches the router through the coordinator ────────────────

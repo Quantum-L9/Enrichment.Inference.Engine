@@ -13,12 +13,14 @@ Seam contract (seam audit 2026-09-02):
   contract -- ``{"entity_type": <sync endpoint>, "batch": [row, ...]}`` where
   each row carries the endpoint's id property -- instead of the retired
   ``graph-sync`` dialect that no node owned and no Gate route resolved.
-* GRAPH-IDENT-02: the endpoint and its id property are read per domain from
-  that domain's spec (``sync.endpoints[]``, CEG's owner-native ``path`` /
-  ``targetnode`` / ``idproperty`` keys), never from a process-global constant.
-  A domain whose spec declares no resolvable endpoint falls back to the
-  clearly labeled ``Settings.graph_sync_*`` pair when it is set, and is
-  otherwise skipped (fail closed: nothing is sent, a warning names the domain).
+* GRAPH-IDENT-02: the endpoint and its id property are read per tenant from
+  the tenant's own spec (tenant id == domain spec id: ``domains/<tenant>/spec.yaml``
+  ``sync.endpoints[]``, CEG's owner-native ``path`` / ``targetnode`` /
+  ``idproperty`` keys) -- the spec CEG loads to validate the same sync --
+  never from a process-global constant or the payload's ``domain``. A tenant
+  whose spec declares no resolvable endpoint falls back to the clearly labeled
+  ``Settings.graph_sync_*`` pair when it is set (empty by default), and is
+  otherwise skipped (fail closed: nothing is sent, a warning names it).
 * Retry ownership for EIE-originated side effects lives HERE, once. Gate
   attempts every seam action exactly once (Gate replay_safety), so a retry
   below is the only retry. A retry is only taken when it cannot multiply a
@@ -138,14 +140,17 @@ def resolve_graph_sync_contract(
     2. exactly one usable endpoint -> that endpoint (a single declared
        endpoint is the domain's sync target whatever the caller's label is:
        an `object_type` such as ``Account`` is a CRM object, not a node label);
-    3. exactly one endpoint whose ``targetnode`` is a label of this domain's
-       own ontology -> that endpoint.
+    3. NO ``node_label`` given and exactly one endpoint whose ``targetnode``
+       is a label of this domain's own ontology -> that endpoint.
 
     Anything else -- no ``sync`` section, no endpoint with both a path and an
-    id property, or several candidates none of which the label or the ontology
-    singles out -- is ``None``. The caller distinguishes "declares none" from
-    "declares several, ambiguous" with :func:`_usable_sync_endpoints`; this
-    function never guesses.
+    id property, several candidates none of which the label or the ontology
+    singles out, or an explicit ``node_label`` that no endpoint among several
+    targets -- is ``None``. Rule 3 does not override a label the caller
+    supplied: that label names an entity type the spec does not declare, and
+    the ontology's endpoint belongs to another one. The caller distinguishes
+    "declares none" from "declares several, ambiguous" with
+    :func:`_usable_sync_endpoints`; this function never guesses.
     """
     usable = _usable_sync_endpoints(domain_spec)
     if not usable:
@@ -154,7 +159,7 @@ def resolve_graph_sync_contract(
     if len(chosen) != 1:
         if len(usable) == 1:
             chosen = usable
-        else:
+        elif not node_label:
             labels = _ontology_labels(domain_spec)
             chosen = [c for c in usable if c[2] in labels]
     if len(chosen) != 1:
@@ -345,6 +350,9 @@ class PacketRouter:
     ) -> GraphSyncContract | None:
         """Resolve the CEG sync endpoint for ``domain``: spec first, then fallback.
 
+        ``domain`` is the spec id. :meth:`notify_graph_sync` passes the tenant
+        id (tenant id == domain spec id), the key CEG resolves the sync by.
+
         Three outcomes, in order:
 
         * the spec declares endpoints and one is selected -> that contract;
@@ -360,6 +368,11 @@ class PacketRouter:
           else ``None`` (fail closed). Spec problems are logged and never
           raised: a sync is a side effect, and the enrichment it follows
           already completed.
+
+        An illegal id never reaches the filesystem: ``DomainYamlReader.load``
+        refuses any id outside the one tenant grammar (``is_legal_tenant_id``)
+        with ``ValueError`` before it builds a path, so ``../x`` cannot select a
+        spec outside the domains root.
         """
         contract: GraphSyncContract | None = None
         if domain and self._domain_reader is not None:
@@ -549,8 +562,12 @@ class PacketRouter:
         Sync enriched entity fields into the graph through Gate (action `sync`,
         owned by Cognitive.Engine.Graphs).
 
-        The endpoint and id property come from ``domain``'s own spec
-        (:meth:`graph_sync_contract`, GRAPH-IDENT-02). A domain that resolves
+        The endpoint and id property come from the TENANT's own spec
+        (:meth:`graph_sync_contract` keyed by ``tenant_id``, GRAPH-IDENT-02):
+        tenant id == domain spec id, and CEG validates the sync against the
+        spec it loads for the same tenant. ``domain`` does not select the spec;
+        it is carried on the row, and a ``domain`` other than the tenant is
+        logged as ``graph_sync_domain_is_not_tenant``. A tenant that resolves
         no contract is skipped -- nothing is sent and
         ``graph_sync_skipped_no_contract`` names it -- rather than addressed
         to an endpoint another tenant owns.
@@ -562,7 +579,15 @@ class PacketRouter:
         each a logged, bounded failure. There is no fallback path. ``None``
         means "not synced" — never "synced, response lost" (RV-DOMAIN-RD-07).
         """
-        contract = self.graph_sync_contract(domain, node_label=node_label)
+        if domain and domain != tenant_id:
+            logger.warning(
+                "graph_sync_domain_is_not_tenant",
+                tenant_id=tenant_id,
+                domain=domain,
+                fix="the tenant's spec governs the sync (tenant id == domain spec id); "
+                "the payload domain does not select it",
+            )
+        contract = self.graph_sync_contract(tenant_id, node_label=node_label)
         if contract is None:
             logger.warning(
                 "graph_sync_skipped_no_contract",

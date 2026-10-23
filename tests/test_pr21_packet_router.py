@@ -135,7 +135,7 @@ async def test_notify_graph_sync_sends_ceg_sync_contract_to_gate(plastics_router
     response_packet = create_transport_packet(
         action="sync",
         payload={"status": "success", "entity_type": "facilities", "synced_count": 1},
-        tenant="tenant-acme",
+        tenant="plastics",
         source_node="gate",
         destination_node="enrichment-engine",
         reply_to="gate",
@@ -145,7 +145,7 @@ async def test_notify_graph_sync_sends_ceg_sync_contract_to_gate(plastics_router
         router._client, "execute", new_callable=AsyncMock, return_value=response_packet
     ) as mock_exec:
         result = await router.notify_graph_sync(
-            tenant_id="tenant-acme",
+            tenant_id="plastics",
             entity_id="ent-001",
             fields={"material_type": "HDPE", "mfi_range": "2-4"},
             domain="plastics",
@@ -154,11 +154,11 @@ async def test_notify_graph_sync_sends_ceg_sync_contract_to_gate(plastics_router
         assert "packet_id" in result
         kwargs = mock_exec.await_args.kwargs
     assert kwargs["action"] == "sync"
-    assert kwargs["tenant"] == "tenant-acme"
+    assert kwargs["tenant"] == "plastics"
     assert kwargs["payload"]["entity_type"] == "facilities"
     assert kwargs["payload"]["batch"][0]["facility_id"] == "ent-001"
     assert kwargs["payload"]["batch"][0]["domain"] == "plastics"
-    assert kwargs["idempotency_key"].startswith("eie:sync:tenant-acme:ent-001:")
+    assert kwargs["idempotency_key"].startswith("eie:sync:plastics:ent-001:")
     assert kwargs["timeout_ms"] == 10_000
 
 
@@ -177,10 +177,9 @@ def test_sync_contract_honours_an_explicit_node_label():
     contract = resolve_graph_sync_contract(_PLASTICS_SPEC, node_label="PolymerFamily")
     assert contract is not None
     assert (contract.entity_type, contract.id_property) == ("polymerfamilies", "code")
-    # A label no endpoint targets (an `object_type` such as "Account") falls
-    # through to the ontology rule: the domain's own node is Facility.
-    unmatched = resolve_graph_sync_contract(_PLASTICS_SPEC, node_label="Nope")
-    assert unmatched is not None and unmatched.entity_type == "facilities"
+    # A label no endpoint targets among several is ambiguous: the ontology rule
+    # applies only when no label was supplied (F-248-4).
+    assert resolve_graph_sync_contract(_PLASTICS_SPEC, node_label="Nope") is None
 
 
 def test_sync_contract_single_endpoint_needs_no_label():
@@ -275,7 +274,7 @@ async def test_acknowledgment_is_checked_against_the_domains_own_endpoint(tmp_pa
         return_value=_ceg_response(acked_for_other_endpoint),
     ) as mock_exec:
         result = await router.notify_graph_sync(
-            tenant_id="tenant-acme",
+            tenant_id="plastics",
             entity_id="pf-1",
             fields={},
             domain="plastics",
@@ -351,7 +350,7 @@ async def test_ambiguous_declared_endpoints_are_skipped_not_defaulted(tmp_path):
     assert router.graph_sync_contract("mixed") is None
     with patch.object(router._client, "execute", new_callable=AsyncMock) as mock_exec:
         result = await router.notify_graph_sync(
-            tenant_id="tenant-acme", entity_id="x-1", fields={}, domain="mixed"
+            tenant_id="mixed", entity_id="x-1", fields={}, domain="mixed"
         )
     assert result is None
     mock_exec.assert_not_awaited()
@@ -579,7 +578,7 @@ async def test_notify_graph_sync_returns_none_on_worker_failure_packet(plastics_
         router._client, "execute", new_callable=AsyncMock, return_value=_ceg_failure_packet()
     ) as mock_exec:
         result = await router.notify_graph_sync(
-            tenant_id="tenant-acme", entity_id="ent-001", fields={"x": 1}, domain="plastics"
+            tenant_id="plastics", entity_id="ent-001", fields={"x": 1}, domain="plastics"
         )
         assert mock_exec.await_count == 1
         kwargs = mock_exec.await_args.kwargs
@@ -624,7 +623,7 @@ async def test_notify_graph_sync_returns_none_when_ceg_does_not_confirm_the_oper
         router._client, "execute", new_callable=AsyncMock, return_value=_ceg_response(payload)
     ):
         result = await router.notify_graph_sync(
-            tenant_id="tenant-acme", entity_id="ent-001", fields={}, domain="plastics"
+            tenant_id="plastics", entity_id="ent-001", fields={}, domain="plastics"
         )
     assert result is None
 
@@ -637,7 +636,7 @@ async def test_notify_graph_sync_returns_the_confirmed_acknowledgment(plastics_r
         router._client, "execute", new_callable=AsyncMock, return_value=_ceg_response(ok)
     ):
         result = await router.notify_graph_sync(
-            tenant_id="tenant-acme", entity_id="ent-001", fields={}, domain="plastics"
+            tenant_id="plastics", entity_id="ent-001", fields={}, domain="plastics"
         )
     assert result is not None
     assert result["status"] == "success"
