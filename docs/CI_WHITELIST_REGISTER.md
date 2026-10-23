@@ -26,9 +26,10 @@ These jobs run but failures do not block merge unless a waiver is removed.
 |-----|-----------|--------|
 | `lint-mypy` | WAIVER-001 | Progressive type annotation rollout |
 | `security-pip-audit` | WAIVER-002 | Requires human triage |
-| `security-safety-check` | WAIVER-003 | Secondary to pip-audit |
 | `security-bandit` | WAIVER-004 | Human triage required |
 | `coverage-codecov-upload` | WAIVER-005 | Network/token issue, not code quality |
+
+WAIVER-003 (`security-safety-check`) is retired: the `safety` scanner was removed on 2026-10-23 (ADR-003). pip-audit is the only dependency-vulnerability scan.
 
 ---
 

@@ -51,7 +51,8 @@ coverage==7.16.1
 # ── Security scanning ────────────────────────────────────────────────────────
 bandit>=1.9.4
 pip-audit>=2.10.1
-safety>=3.8.1
+# `safety` was removed (ADR-003, 2026-10-23): it duplicated pip-audit and its
+# filelock<4.0 pin kept a vulnerable filelock in this environment.
 
 # ── License compliance ───────────────────────────────────────────────────────
 pip-licenses>=5.5.5
