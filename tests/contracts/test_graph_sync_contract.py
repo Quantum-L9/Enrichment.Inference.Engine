@@ -399,7 +399,8 @@ def test_shipped_plasticos_spec_declares_cegs_sync_endpoints(
     contract = router.graph_sync_contract("plasticos", node_label=node_label)
     assert contract is not None
     assert contract.source == GRAPH_SYNC_SOURCE_DOMAIN_SPEC
-    assert (contract.entity_type, contract.id_property) == expected
+    actual = (contract.entity_type, contract.id_property)
+    assert actual == expected
 
 
 @pytest.mark.unit
