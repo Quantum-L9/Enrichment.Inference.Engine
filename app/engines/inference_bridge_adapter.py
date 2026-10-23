@@ -35,12 +35,20 @@ outputs, and condition rules have no `derived_from` edges.
 Condition-rule results are composed here, at the one place that holds both the
 rule outcome and the convergence confidence map:
   - a field already present in the entity is never re-derived or overwritten
-    (the same no-overwrite the rule engine applies to its own working set);
+    (the same no-overwrite the rule engine applies to its own working set).
+    The entity is therefore facts only — record, provider and graph-seeded
+    values. The convergence loop keeps this bridge's own earlier derivations
+    out of it and re-runs the rules every pass, so a derivation always
+    reflects the inputs currently in the response (see convergence_controller);
   - confidence = min(rule confidence, confidence of every condition input).
     A value the request's entity supplied carries no confidence entry; it is
     the record's own data and bounds nothing (1.0);
   - every derived field carries provenance: rule id, rule-set version, the
-    inputs and their confidences, and the cascade level.
+    inputs and their confidences, and the cascade level;
+  - the entity is provider output and may hold any JSON shape. The rule engine
+    is total over such values; should execution still fail, the fault is
+    isolated here and reported in describe()["errors"] — the converge that
+    carried the values completes without the derivations, it does not fail.
 """
 
 from __future__ import annotations
@@ -121,6 +129,9 @@ class InferenceBridge:
         self._graph: DerivationGraph | None = None
         self._registry: RuleRegistry | None = None
         self._rule_errors: list[str] = []
+        # Faults raised while executing an accepted rule set. They do not change
+        # `status`: the rules were valid, a run over some entity was not.
+        self._run_errors: list[str] = []
         self._last_unlock_map: dict[str, float] = {}
 
         if domain_spec:
@@ -165,7 +176,7 @@ class InferenceBridge:
             "rule_count": self._registry.count() if self._registry is not None else 0,
             "derivation_edges": len(self._graph.edges) if self._graph is not None else 0,
             "rule_versions": versions,
-            "errors": list(self._rule_errors),
+            "errors": [*self._rule_errors, *self._run_errors],
         }
 
     def run(
@@ -256,7 +267,19 @@ class InferenceBridge:
         present.update(result.derived_fields)
         known_conf = {**confidence_map, **result.confidence_map}
 
-        outcome = infer(present, registry)
+        try:
+            outcome = infer(present, registry)
+        except Exception as exc:
+            # Provider values are untrusted shapes; a fault evaluating them is a
+            # degraded inference, not a failed converge. Report it where the
+            # response already explains why no rule fired.
+            message = f"condition rules did not execute: {type(exc).__name__}: {exc}"
+            if message not in self._run_errors:
+                self._run_errors.append(message)
+            logger.exception("inference_rules_execution_failed", error=str(exc))
+            result.rules_skipped += registry.count()
+            return
+
         first_firing: dict[str, RuleFired] = {}
         for fired in outcome.rules_fired:
             first_firing.setdefault(fired.rule_id, fired)

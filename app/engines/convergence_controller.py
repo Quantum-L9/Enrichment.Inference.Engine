@@ -354,6 +354,9 @@ async def run_convergence_loop(
             field_conf = per_field_conf.get(field_name, pass_response.confidence)
             state.known_fields[field_name] = value
             state.confidence_map[field_name] = field_conf
+            # Provider evidence for a field this loop had inferred makes it a
+            # fact: it is no longer a derivation to re-run or retract.
+            state.inferred_fields.pop(field_name, None)
 
             # NEW: Update confidence tracker
             confidence_tracker.update_field(
@@ -368,13 +371,25 @@ async def run_convergence_loop(
         cost_tracker.record_pass(pass_num, pass_result.tokens_used)
 
         # --- INFERENCE PASS ---
+        # Rules run over facts only — the record's values, provider evidence and
+        # graph-seeded targets — never over this loop's own earlier derivations.
+        # A derivation is a function of its inputs: when a later pass moves an
+        # input across a rule boundary, re-running the rules replaces it (and
+        # re-bounds its confidence by the inputs now in the response); a
+        # derivation whose rule no longer fires is retracted rather than carried
+        # forward beside the evidence that contradicts it.
+        derived_before = _own_derivations(confidence_tracker)
+        facts = {k: v for k, v in state.known_fields.items() if k not in derived_before}
         inference_result = bridge.run(
-            entity=state.known_fields,
-            confidence_map=state.confidence_map,
+            entity=facts,
+            confidence_map={k: v for k, v in state.confidence_map.items() if k in facts},
         )
         pass_result.inferred_fields = inference_result.derived_fields
         pass_result.inference_fired = inference_result.rules_fired
         pass_result.inference_provenance = inference_result.provenance
+
+        for field_name in sorted(derived_before - set(inference_result.derived_fields)):
+            _retract_derivation(field_name, state, confidence_tracker, pass_num)
 
         for field_name, value in inference_result.derived_fields.items():
             state.inferred_fields[field_name] = value
@@ -473,6 +488,34 @@ def _pass_meets_convergence(
         if field_state.confidence < required:
             return False
     return True
+
+
+def _own_derivations(confidence_tracker: ConfidenceTracker) -> set[str]:
+    """Fields whose current value this loop's InferenceBridge derived.
+
+    The tracker records the source of each field's latest value, so a field the
+    bridge derived on an earlier pass and the provider later evidenced reads as
+    a fact here, not as a derivation.
+    """
+    return {
+        name
+        for name, field_state in confidence_tracker.fields.items()
+        if field_state.source_variation == INFERENCE_SOURCE
+    }
+
+
+def _retract_derivation(
+    name: str,
+    state: ConvergenceState,
+    confidence_tracker: ConfidenceTracker,
+    pass_num: int,
+) -> None:
+    """Drop a derivation whose rule did not fire over this pass's facts."""
+    state.known_fields.pop(name, None)
+    state.inferred_fields.pop(name, None)
+    state.confidence_map.pop(name, None)
+    confidence_tracker.fields.pop(name, None)
+    logger.info("inference_derivation_retracted", pass_number=pass_num, field=name)
 
 
 def _apply_graph_targets(

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.engines.inference.rule_engine import infer
+from app.engines.inference.rule_engine import _evaluate_condition, infer
 from app.engines.inference.rule_loader import (
     Operator,
     RuleCondition,
@@ -198,3 +198,99 @@ class TestCascade:
         assert result.derived_fields["material_grade"] == "B"
         assert result.derived_fields["facility_tier"] == "t2"
         assert result.derivation_chains["material_grade"] == ["grade_low"]
+
+
+# Provider output can put any JSON shape under any field. No comparison with a
+# string or a collection target can interpret these; each must evaluate, not raise.
+_NON_NUMERIC_VALUES = [
+    pytest.param({"name": "HDPE"}, id="object"),
+    pytest.param([{"name": "HDPE"}], id="list-of-objects"),
+    pytest.param([["HDPE"]], id="nested-list"),
+    pytest.param("free text", id="text"),
+]
+_MALFORMED_VALUES = [pytest.param(5, id="number"), *_NON_NUMERIC_VALUES]
+
+
+class TestOperatorsAreTotal:
+    """A rule condition over an unexpected value shape is False, never a TypeError."""
+
+    @pytest.mark.parametrize("value", _MALFORMED_VALUES)
+    @pytest.mark.parametrize(
+        ("operator", "target"),
+        [(Operator.CONTAINS, "HDPE"), (Operator.IN, ["A", "A+"]), (Operator.EQUALS, "HDPE")],
+    )
+    def test_uninterpretable_value_evaluates_false(self, operator, target, value):
+        condition = RuleCondition(field="polymer_types", operator=operator, value=target)
+        assert _evaluate_condition(condition, value) is False
+
+    @pytest.mark.parametrize("value", _NON_NUMERIC_VALUES)
+    @pytest.mark.parametrize("operator", [Operator.GT, Operator.LT, Operator.GTE, Operator.LTE])
+    def test_non_numeric_value_fails_numeric_comparison(self, operator, value):
+        condition = RuleCondition(field="contamination_tolerance", operator=operator, value=0.03)
+        assert _evaluate_condition(condition, value) is False
+
+    @pytest.mark.parametrize("value", _MALFORMED_VALUES)
+    def test_not_in_of_uninterpretable_value_is_true(self, value):
+        """NOTIN is the complement of IN: a value no member equals is absent."""
+        condition = RuleCondition(field="material_grade", operator=Operator.NOT_IN, value=["A"])
+        assert _evaluate_condition(condition, value) is True
+
+    def test_collection_members_compare_by_equality_not_hash(self):
+        contains = RuleCondition(field="f", operator=Operator.CONTAINS, value="HDPE")
+        assert _evaluate_condition(contains, [{"name": "HDPE"}, "hdpe"]) is True
+        in_target = RuleCondition(field="f", operator=Operator.IN, value=[{"a": 1}, "B"])
+        assert _evaluate_condition(in_target, {"a": 1}) is True
+
+    def test_string_contains_needs_a_string_needle(self):
+        assert _evaluate_condition(
+            RuleCondition(field="f", operator=Operator.CONTAINS, value="hdpe"), "HDPE, PP"
+        )
+        assert not _evaluate_condition(
+            RuleCondition(field="f", operator=Operator.CONTAINS, value=5), "5 items"
+        )
+
+    @pytest.mark.parametrize(
+        "polymer_types",
+        [pytest.param(5, id="number"), pytest.param([{"name": "HDPE"}], id="list-of-objects")],
+    )
+    def test_infer_over_malformed_provider_value_derives_nothing(self, polymer_types):
+        """The production rule shapes against the shapes the audit reproduced."""
+        registry = RuleRegistry()
+        registry.add_rule(
+            RuleDefinition(
+                rule_id="grade-a",
+                conditions=[
+                    RuleCondition(field="polymer_types", operator=Operator.CONTAINS, value="HDPE"),
+                    RuleCondition(
+                        field="contamination_tolerance", operator=Operator.LT, value=0.03
+                    ),
+                ],
+                outputs=[
+                    RuleOutput(
+                        field="material_grade", value_expr="A", derivation_type="classification"
+                    )
+                ],
+                confidence=0.92,
+            )
+        )
+        registry.add_rule(
+            RuleDefinition(
+                rule_id="tier-1",
+                conditions=[
+                    RuleCondition(field="material_grade", operator=Operator.IN, value=["A", "A+"])
+                ],
+                outputs=[
+                    RuleOutput(
+                        field="facility_tier", value_expr="tier_1", derivation_type="classification"
+                    )
+                ],
+                confidence=0.9,
+            )
+        )
+        result = infer(
+            {"polymer_types": polymer_types, "contamination_tolerance": 0.02, "material_grade": 7},
+            registry,
+        )
+        assert result.derived_fields == {}
+        assert result.rules_fired == []
+        assert result.rules_evaluated == 2
