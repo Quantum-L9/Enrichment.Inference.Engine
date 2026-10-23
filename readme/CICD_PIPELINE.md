@@ -94,7 +94,7 @@ Phase Details:
   lint       — Ruff check + format + MyPy type check
   semgrep    — Semgrep policy rules (.semgrep/)
   test       — pytest with coverage (Postgres + Redis services)
-  security   — Gitleaks + pip-audit + Safety + Bandit + dependency-review
+  security   — Gitleaks + pip-audit + Bandit + dependency-review
   compliance — Terminology guard + chassis isolation + KB schema + L9 contracts
   l9         — Constitution verify + tier2 tests + attestation + select-gates
   docs       — Docs consistency + markdown link check
@@ -110,7 +110,7 @@ validate → lint → semgrep → test → security → sbom → scorecard → c
     │         │       │        │        │        │        │          └─ Fan-in: PASS/FAIL
     │         │       │        │        │        │        └─ OpenSSF Scorecard
     │         │       │        │        │        └─ SPDX SBOM generation
-    │         │       │        │        └─ Gitleaks + pip-audit + Safety + Bandit
+    │         │       │        │        └─ Gitleaks + pip-audit + Bandit
     │         │       │        └─ pytest with coverage (Postgres + Redis services)
     │         │       └─ Semgrep policy rules (.semgrep/)
     │         └─ Ruff lint + format + MyPy type check

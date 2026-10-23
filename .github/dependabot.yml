@@ -52,7 +52,6 @@ updates:
         patterns:
           - "bandit*"
           - "pip-audit*"
-          - "safety*"
       observability:
         patterns:
           - "structlog*"
