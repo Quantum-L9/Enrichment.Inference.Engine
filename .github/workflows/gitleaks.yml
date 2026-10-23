@@ -35,6 +35,11 @@ on:
 
 permissions:
   contents: read
+  # gitleaks-action@v2.3.6 (src/gitleaks.js ScanPullRequest) calls
+  # GET /repos/{owner}/{repo}/pulls/{n}/commits to bound the PR scan range.
+  # Without this scope that call returns 403 "Resource not accessible by
+  # integration" and the scan never executes (PR #231, job 114356059936).
+  pull-requests: read
   security-events: write
 
 jobs:
