@@ -317,6 +317,88 @@ async def test_retry_that_fails_again_stays_pending_without_duplicating_effects(
 
 
 @pytest.mark.asyncio
+async def test_graph_sync_false_on_a_pending_key_keeps_the_leg_pending() -> None:
+    """A call that excludes the graph leg cannot resolve a pending one (F-234-1).
+
+    The canonical converge path calls with graph_sync=False; under the
+    tenant/entity fallback it can key identically to an earlier handle_enrich
+    call whose graph leg CEG never acknowledged. Excluding the leg is not
+    acknowledging it: the key must stay pending with an explicit error, so the
+    next permitted call that does ask for the graph leg can still finish it.
+    """
+    coord = SideEffectCoordinator()
+    router, emitter = _collaborators(graph_ack=None)
+    persist = AsyncMock()
+
+    first = await _commit(coord, router, emitter, persist, idempotency_key="k-excl")
+    assert first.graph_synced is False
+    assert first.key in coord._graph_pending
+
+    excluded = await _commit(
+        coord, router, emitter, persist, idempotency_key="k-excl", graph_sync=False
+    )
+
+    assert excluded.graph_retry is True
+    assert excluded.graph_skipped is True
+    assert excluded.graph_synced is False
+    assert excluded.skipped is False
+    assert any(e.startswith("graph_sync:excluded_while_pending") for e in excluded.errors)
+    assert excluded.key in coord._graph_pending, "the unacknowledged graph leg was dropped"
+    assert excluded.key not in coord._completed
+    # Nothing ran twice, and the excluded leg was not attempted.
+    assert router.notify_graph_sync.await_count == 1
+    assert persist.await_count == 1
+    assert router.notify_score_invalidate.await_count == 1
+    assert emitter.emit_enrichment_completed.await_count == 1
+
+    # A later call that asks for the graph leg completes it.
+    router.notify_graph_sync = AsyncMock(return_value=dict(CEG_SYNC_OK))
+    finished = await _commit(coord, router, emitter, persist, idempotency_key="k-excl")
+    assert finished.graph_retry is True
+    assert finished.graph_synced is True
+    assert finished.key in coord._completed
+    assert finished.key not in coord._graph_pending
+
+
+@pytest.mark.asyncio
+async def test_graph_retry_syncs_to_the_entity_that_was_persisted_not_the_retrying_calls() -> None:
+    """The pending graph leg pins its entity, like its fields and domain (F-234-3).
+
+    An idem:{tenant}:{idempotency_key} key excludes entity_id, so a caller that
+    reuses an idempotency key across entities keys e2's call as a retry of e1's.
+    That retry must write e1's fields to e1 — never e1's fields onto e2 — and
+    record the mismatch rather than report a clean sync for e2.
+    """
+    coord = SideEffectCoordinator()
+    router, emitter = _collaborators(graph_ack=None)
+    persist = AsyncMock()
+
+    first = await _commit(
+        coord, router, emitter, persist, entity_id="e1", idempotency_key="k-shared"
+    )
+    assert first.graph_synced is False
+    assert coord._graph_pending[first.key]["entity_id"] == "e1"
+
+    router.notify_graph_sync = AsyncMock(return_value=dict(CEG_SYNC_OK))
+    second = await _commit(
+        coord, router, emitter, persist, entity_id="e2", idempotency_key="k-shared"
+    )
+
+    assert second.graph_retry is True
+    sent = router.notify_graph_sync.await_args.kwargs
+    assert sent["entity_id"] == "e1", "the retry must sync the entity that was persisted"
+    assert sent["fields"] == _response()["fields"]
+    assert router.notify_graph_sync.await_count == 1
+    assert any(e.startswith("graph_sync:entity_mismatch") for e in second.errors)
+    assert second.graph_synced is True
+    assert second.key in coord._completed
+    # e2 was never persisted or emitted under e1's key.
+    assert persist.await_count == 1
+    assert persist.await_args.kwargs["entity_id"] == "e1"
+    assert emitter.emit_enrichment_completed.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_pending_graph_leg_is_per_key_and_per_tenant() -> None:
     """A pending key never leaks into another tenant's or entity's key."""
     coord = SideEffectCoordinator()
