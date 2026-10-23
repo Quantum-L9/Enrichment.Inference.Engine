@@ -32,7 +32,7 @@ from ..engines.schema_discovery import SchemaDiscoveryEngine
 from ..models.schemas import BatchEnrichRequest, EnrichRequest, EnrichResponse
 from ..services.crm.base import CRMType
 from ..services.crm.writeback import WriteBackOrchestrator
-from ..services.idempotency import IdempotencyStore
+from ..services.idempotency import IdempotencyStore, tenant_scope
 from ..services.kb_resolver import KBResolver
 from ..services.odoo_gate_converge import (
     DEFAULT_CONVERGE_TIMEOUT_SECONDS,
@@ -127,7 +127,9 @@ async def _persist_and_sync(
 async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
-    response = await enrich_entity(request, settings, _kb, _idem)
+    response = await enrich_entity(
+        request, settings, _kb, _idem, idempotency_scope=tenant_scope(tenant)
+    )
     result = response.model_dump()
 
     if response.state == "completed":
@@ -139,7 +141,9 @@ async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
 async def handle_enrichbatch(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     batch_req = BatchEnrichRequest.model_validate(payload)
-    results = await enrich_batch(batch_req.entities, settings, _kb, _idem)
+    results = await enrich_batch(
+        batch_req.entities, settings, _kb, _idem, idempotency_scope=tenant_scope(tenant)
+    )
     succeeded = sum(1 for r in results if r.state == "completed")
     failed = sum(1 for r in results if r.state == "failed")
     return {
@@ -514,7 +518,9 @@ async def _load_domain_convergence_context(
 async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
-    response = await enrich_entity(request, settings, _kb, _idem)
+    response = await enrich_entity(
+        request, settings, _kb, _idem, idempotency_scope=tenant_scope(tenant)
+    )
 
     current_schema = payload.get("current_schema", {})
     version = payload.get("schema_version", "0.1.0-seed")
