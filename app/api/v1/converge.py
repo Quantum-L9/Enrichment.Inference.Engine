@@ -103,6 +103,10 @@ _DIRECT_DOMAIN_ACCESS_REFUSED = (
     "tenant-scoped domain spec access is not served directly in this environment; "
     "an X-API-Key request is not bound to a tenant"
 )
+# OpenAPI entry for every route guarded by require_direct_domain_access.
+_DIRECT_DOMAIN_ACCESS_RESPONSE: dict[str, Any] = {
+    "description": "Direct tenant-scoped access is refused outside local/dev/test"
+}
 
 
 class SchemaRevisionHydrateError(RuntimeError):
@@ -670,7 +674,7 @@ async def _persist_or_503(
         ) from exc
 
 
-@router.post("/converge/{run_id}/approve")
+@router.post("/converge/{run_id}/approve", responses={403: _DIRECT_DOMAIN_ACCESS_RESPONSE})
 async def approve_proposals(run_id: str, body: ApproveRequestBody) -> dict[str, Any]:
     require_direct_domain_access()
     store = _get_state_store()
@@ -721,7 +725,7 @@ async def approve_proposals(run_id: str, body: ApproveRequestBody) -> dict[str, 
     }
 
 
-@router.get("/converge/proposals/{domain}")
+@router.get("/converge/proposals/{domain}", responses={403: _DIRECT_DOMAIN_ACCESS_RESPONSE})
 async def get_pending_proposals(domain: str) -> dict[str, Any]:
     require_direct_domain_access()
     store = _get_state_store()
@@ -737,7 +741,9 @@ async def get_pending_proposals(domain: str) -> dict[str, Any]:
     return {"domain": domain, "pending_count": len(proposals), "proposals": proposals}
 
 
-@router.post("/scan", response_model=DiscoveryReport)
+@router.post(
+    "/scan", response_model=DiscoveryReport, responses={403: _DIRECT_DOMAIN_ACCESS_RESPONSE}
+)
 async def scan_crm(body: ScanRequestBody) -> DiscoveryReport:
     scan_result, domain_spec = scan_registered_domain(body.domain, body.fields)
     return generate_discovery_report(scan_result, domain_spec)

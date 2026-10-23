@@ -101,7 +101,10 @@ async def discover_schema(request: DiscoverRequest) -> dict[str, Any]:
     "/api/v1/scan",
     dependencies=[Depends(verify_api_key)],
     summary="CRM field scan — Seed tier entry point",
-    responses={404: {"description": "Domain not found"}},
+    responses={
+        403: {"description": "Direct tenant-scoped access is refused outside local/dev/test"},
+        404: {"description": "Domain not found"},
+    },
 )
 async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
     # One scan path shared with POST /v1/scan (converge.scan_registered_domain ->
