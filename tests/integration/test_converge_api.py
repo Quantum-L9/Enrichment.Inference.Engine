@@ -286,7 +286,13 @@ def test_repo_domains_root_registers_plasticos():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("registry_state", "expected_http"),
-    [("loaded", 200), ("not_attempted", 200), ("empty", 503), ("failed", 503)],
+    [
+        ("loaded", 200),
+        ("not_attempted", 200),
+        ("empty", 503),
+        ("failed", 503),
+        ("hydrate_failed", 503),
+    ],
 )
 async def test_readiness_reflects_domain_registry(
     api_client, monkeypatch, registry_state, expected_http
@@ -575,18 +581,22 @@ async def test_hydrate_replays_approved_rows_onto_the_registry():
             "gates"
         ]
 
-        # An unreachable store leaves the file-backed revision in place.
+        # An unreachable store leaves the file-backed revision in place and is
+        # raised, not swallowed: main records `hydrate_failed` (not Ready).
         converge_module.configure(
             state_store=_RegistryStateStore(),
             profile_registry=ProfileRegistry(),
             domain_specs={"plasticos": _list_shaped_spec()},
         )
-        with patch.object(
-            converge_module.pg_store,
-            "get_approved_schema_proposals",
-            new=AsyncMock(side_effect=RuntimeError("Call init_engine() first")),
+        with (
+            patch.object(
+                converge_module.pg_store,
+                "get_approved_schema_proposals",
+                new=AsyncMock(side_effect=RuntimeError("Call init_engine() first")),
+            ),
+            pytest.raises(converge_module.SchemaRevisionHydrateError, match="plasticos"),
         ):
-            assert await converge_module.hydrate_approved_revisions() == {}
+            await converge_module.hydrate_approved_revisions()
         assert converge_module._domain_specs["plasticos"]["version"] == "0.3.0"
     finally:
         for name, value in original.items():
@@ -619,3 +629,191 @@ def test_apply_serves_list_shaped_and_dict_shaped_ontologies():
         "type": "float",
         "source": "enrichment",
     }
+
+
+# ── F-247-2: a batch that applies nothing publishes no revision ──────────────
+
+
+def _held_for(field: str, value):
+    from app.engines.convergence.loop_state import LoopState, LoopStatus
+    from app.models.field_confidence import FieldConfidence, FieldConfidenceMap, FieldSource
+
+    fcm = FieldConfidenceMap()
+    fcm.set(
+        FieldConfidence(
+            field_name=field, value=value, confidence=0.9, source=FieldSource.ENRICHMENT
+        )
+    )
+    return LoopState(
+        entity_id=f"ent-{field}",
+        domain="plasticos",
+        status=LoopStatus.HUMAN_HOLD,
+        accumulated_fields={field: value},
+        accumulated_confidences=fcm,
+    )
+
+
+class _ProposalTable:
+    """One in-memory `schema_proposals` table behind both store operations."""
+
+    def __init__(self) -> None:
+        self.rows: list = []
+
+    async def persist(self, **kwargs):
+        from types import SimpleNamespace
+
+        written = []
+        for row in kwargs["decisions"]:
+            fields = {k: v for k, v in row.items() if k != "approved"}
+            record = SimpleNamespace(
+                tenant_id=kwargs["tenant_id"],
+                domain=kwargs["domain"],
+                batch_run_id=kwargs["batch_run_id"],
+                approval_status="approved" if row["approved"] else "rejected",
+                **fields,
+            )
+            self.rows.append(record)
+            written.append(record)
+        return written
+
+    async def approved(self, *, tenant_id: str, domain: str):
+        return [
+            r
+            for r in self.rows
+            if r.approval_status == "approved" and (r.tenant_id, r.domain) == (tenant_id, domain)
+        ]
+
+
+@pytest.mark.asyncio
+async def test_unapplied_approvals_publish_no_revision_so_replay_matches_live(api_client):
+    """All-rejected and unproposed-field approvals bump nothing; a restart lands on live."""
+    import copy
+
+    import app.api.v1.converge as converge_module
+    from app.services.enrichment_profile import ProfileRegistry
+
+    rejected = _held_for("annual_capacity_mt", 5000.0)
+    unproposed = _held_for("certifications", "ISO")
+    applied = _held_for("facility_tier", "tier_1")
+    table = _ProposalTable()
+    names = ("_state_store", "_profile_registry", "_domain_specs", "_kb_resolver", "_idem_store")
+    original = {name: getattr(converge_module, name) for name in names}
+    converge_module.configure(
+        state_store=_RegistryStateStore(rejected, unproposed, applied),
+        profile_registry=ProfileRegistry(),
+        domain_specs={"plasticos": _list_shaped_spec()},
+    )
+    sequence = [
+        (rejected, [{"field_name": "annual_capacity_mt", "approved": False}]),
+        (unproposed, [{"field_name": "not_a_proposed_field", "approved": True}]),
+        (applied, [{"field_name": "facility_tier", "approved": True}]),
+    ]
+    try:
+        with (
+            patch.object(
+                converge_module.pg_store, "persist_schema_proposal_batch", side_effect=table.persist
+            ),
+            patch.object(
+                converge_module.pg_store,
+                "get_approved_schema_proposals",
+                side_effect=table.approved,
+            ),
+        ):
+            responses = [
+                await api_client.post(
+                    f"/v1/converge/{state.run_id}/approve",
+                    json={"decisions": decisions},
+                    headers=AUTH,
+                )
+                for state, decisions in sequence
+            ]
+            live = copy.deepcopy(converge_module._domain_specs["plasticos"])
+            # Restart: the file-backed revision, then the approved rows replayed.
+            converge_module.configure(
+                state_store=_RegistryStateStore(),
+                profile_registry=ProfileRegistry(),
+                domain_specs={"plasticos": _list_shaped_spec()},
+            )
+            await converge_module.hydrate_approved_revisions()
+            replayed = converge_module._domain_specs["plasticos"]
+    finally:
+        for name, value in original.items():
+            setattr(converge_module, name, value)
+
+    assert [r.status_code for r in responses] == [200, 200, 200], [r.text for r in responses]
+    bodies = [r.json() for r in responses]
+    assert [b["approved"] for b in bodies] == [0, 0, 1], "applied counts, not decided counts"
+    assert [b["new_version"] for b in bodies] == ["0.3.0", "0.3.0", "0.4.0-discovered"]
+    assert bodies[1]["unapplied"] == ["not_a_proposed_field"]
+    assert replayed["version"] == live["version"]
+    assert replayed == live
+
+
+# ── F-247-3: a registry scan carries the tenant's identity ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_scans_of_two_tenants_carry_distinct_identities(api_client, monkeypatch):
+    """Same ontology, two tenants: domain_id, version and hashes come from the registry key."""
+    import app.api.v1.converge as converge_module
+
+    monkeypatch.setattr(
+        converge_module,
+        "_domain_specs",
+        {"plasticos": _list_shaped_spec("plasticos"), "acme": _list_shaped_spec("acme")},
+    )
+    scans = {}
+    reports = {}
+    for tenant in ("plasticos", "acme"):
+        scans[tenant] = await api_client.post(
+            "/api/v1/scan",
+            json={
+                "fields": [{"name": "id", "type": "string"}],
+                "domain": tenant,
+                "tenant_id": tenant,
+            },
+            headers=AUTH,
+        )
+        reports[tenant] = await api_client.post(
+            "/v1/scan",
+            json={"fields": [{"name": "id", "field_type": "string"}], "domain": tenant},
+            headers=AUTH,
+        )
+
+    plasticos, acme = scans["plasticos"].json(), scans["acme"].json()
+    assert plasticos["domain_id"] == "plasticos"
+    assert plasticos["domain_version"] == "0.3.0"
+    assert acme["domain_id"] == "acme"
+    assert plasticos["scan_hash"] != acme["scan_hash"]
+    assert reports["plasticos"].json()["domain_id"] == "plasticos"
+    assert reports["acme"].json()["domain_id"] == "acme"
+    assert reports["plasticos"].json()["report_hash"] != reports["acme"].json()["report_hash"]
+
+
+# ── F-247-10: a replay that cannot run is not Ready ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_startup_hydrate_failure_degrades_readiness(api_client, monkeypatch):
+    """get_approved_schema_proposals raising at startup -> `hydrate_failed` -> 503."""
+    import app.api.v1.converge as converge_module
+    from app import main as main_module
+
+    monkeypatch.setattr(converge_module, "_domain_specs", {"plasticos": _list_shaped_spec()})
+    monkeypatch.setattr(main_module, "_domain_registry_state", "loaded")
+    monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "false")
+    with patch.object(
+        converge_module.pg_store,
+        "get_approved_schema_proposals",
+        new=AsyncMock(side_effect=RuntimeError("store down")),
+    ):
+        applied = await main_module._hydrate_domain_registry()
+    get_settings.cache_clear()
+    try:
+        resp = await api_client.get(main_module.READINESS_ENDPOINT)
+    finally:
+        get_settings.cache_clear()
+
+    assert applied == {}
+    assert main_module._domain_registry_state == "hydrate_failed"
+    assert resp.status_code == 503

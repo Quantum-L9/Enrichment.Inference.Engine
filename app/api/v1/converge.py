@@ -15,6 +15,14 @@ Domain registry (EIE-IDENT-02 / EIE-IDENT-03):
     startup; `hydrate_approved_revisions` replays the approved rows of the
     `schema_proposals` table onto it; `approve_proposals` persists a new
     revision there before the registry takes it.
+
+Direct tenant access (F-247-4 / F-247-5):
+    The scan, approval and proposal routes read or revise one tenant's spec,
+    and the X-API-Key binds its holder to no tenant (one key hash serves the
+    deployment). `require_direct_domain_access` therefore serves them only in
+    the unsigned runtimes (local/dev/test) and answers 403 everywhere else.
+    Both scan routes resolve through `get_domain_spec`, which applies it, so
+    `POST /v1/scan` and `POST /api/v1/scan` answer the same status.
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ from pydantic import BaseModel, Field
 from app.utils.safe_convert import safe_float
 
 from ...core.auth import verify_api_key
-from ...core.config import Settings, get_settings
+from ...core.config import DETERMINISTIC_PROVIDER_ENVIRONMENTS, Settings, get_settings
 from ...engines.convergence.loop_state import LoopState, LoopStateStore, LoopStatus
 from ...engines.convergence.schema_proposer import (
     ApprovalDecision,
@@ -39,16 +47,24 @@ from ...engines.convergence.schema_proposer import (
     GateProposal,
     SchemaProposalSet,
     ScoringDimensionProposal,
+    applied_field_names,
     revision_from_approved,
 )
 from ...engines.convergence.schema_proposer import apply as apply_proposals
 from ...engines.convergence.schema_proposer import propose as propose_schema
-from ...engines.domain_yaml_reader import DomainYamlReader, is_legal_tenant_id
+from ...engines.domain_yaml_reader import (
+    TENANT_ID_PATTERN,
+    TENANT_ID_RESERVED_PREFIX,
+    DomainYamlReader,
+    declared_spec_identity,
+    is_legal_tenant_id,
+)
 from ...models.schemas import EnrichRequest
 from ...services import pg_store
 from ...services.crm_field_scanner import (
     CRMField,
     DiscoveryReport,
+    ScanResult,
     generate_discovery_report,
     scan_crm_fields,
 )
@@ -75,6 +91,35 @@ _domain_locks: dict[str, asyncio.Lock] = {}
 # re-exported here for the API-side callers and tests that pin it.
 __all__ = ["is_legal_tenant_id"]
 
+# F-247-4: the environments in which a direct, key-authenticated read or
+# revision of one tenant's spec is served. It is the one unsigned set the node
+# already keeps (app/core/config.py: the SDK runs `dev_mode` there and the
+# deterministic provider is permitted there because no real tenant is served).
+# Outside it the node is signed and tenant-facing, a single deployment key binds
+# its holder to no tenant, and the direct route is refused -- fail closed, no
+# fallback tenant.
+DIRECT_DOMAIN_ACCESS_ENVIRONMENTS: frozenset[str] = DETERMINISTIC_PROVIDER_ENVIRONMENTS
+_DIRECT_DOMAIN_ACCESS_REFUSED = (
+    "tenant-scoped domain spec access is not served directly in this environment; "
+    "an X-API-Key request is not bound to a tenant"
+)
+
+
+class SchemaRevisionHydrateError(RuntimeError):
+    """The approved revisions of a registered tenant could not be read at startup."""
+
+
+def require_direct_domain_access() -> None:
+    """Refuse a direct tenant-scoped spec read or revision outside the unsigned runtimes.
+
+    Called first by :func:`get_domain_spec` (so both scan routes share it), by
+    :func:`approve_proposals` and by :func:`get_pending_proposals`: before any
+    run, spec or registry listing is read, so a refused caller learns nothing
+    about which tenants exist.
+    """
+    if get_settings().l9_environment not in DIRECT_DOMAIN_ACCESS_ENVIRONMENTS:
+        raise HTTPException(status_code=403, detail=_DIRECT_DOMAIN_ACCESS_REFUSED)
+
 
 def _domain_lock(domain: str) -> asyncio.Lock:
     lock = _domain_locks.get(domain)
@@ -99,44 +144,35 @@ def configure(
     _idem_store = idem_store
 
 
-def _declared_spec_id(spec: dict[str, Any]) -> str | None:
-    """The id a spec claims for itself, if it claims one.
-
-    The live specs carry a top-level ``name``; older fixtures carry ``domain``
-    as a string or a ``domain`` / ``domain_identity`` block with ``id``.
-    """
-    name = spec.get("name")
-    if isinstance(name, str) and name:
-        return name
-    for key in ("domain_identity", "domain"):
-        block = spec.get(key)
-        if isinstance(block, str) and block:
-            return block
-        if isinstance(block, dict):
-            declared = block.get("id") or block.get("name")
-            if isinstance(declared, str) and declared:
-                return declared
-    return None
-
-
 def build_domain_spec_registry(reader: DomainYamlReader) -> dict[str, dict[str, Any]]:
     """One spec per tenant, keyed by tenant id, read from the domains root.
 
-    EIE-IDENT-02. The directory name under ``domains/`` IS the tenant id, the
-    domain spec id and the Neo4j database name, so it has to be a legal
-    database name (:func:`is_legal_tenant_id`). A directory that is not, a spec
-    that cannot be read, or a spec whose declared id disagrees with its
-    directory is refused with a warning naming it -- never registered under an
-    identity it does not hold, and never mapped to one. Template provenance
-    (``metadata.template.*``) is not consulted: it never selects a spec.
+    EIE-IDENT-02. Only ``domains/<tenant>/spec.yaml`` names a tenant: a flat
+    ``domains/<name>.yaml`` is refused with a warning naming the file, so a
+    stray ``acme.bak.yaml`` never registers tenant ``acme.bak`` and an
+    ``acme.yaml`` beside ``acme/`` is not silently shadowed. The directory name
+    IS the tenant id, the domain spec id and the Neo4j database name, so it has
+    to be a legal database name (:func:`is_legal_tenant_id`). A directory that
+    is not, a spec that cannot be read, or a spec whose declared id
+    (:func:`declared_spec_identity`) disagrees with its directory is refused
+    with a warning naming it -- never registered under an identity it does not
+    hold, and never mapped to one. Template provenance (``metadata.template.*``)
+    is not consulted: it never selects a spec.
     """
     registry: dict[str, dict[str, Any]] = {}
-    for domain_id in sorted(reader.list_domains()):
+    for flat_file in sorted(reader.list_flat_specs()):
+        logger.warning(
+            "domain_registry_refused_flat_spec",
+            file=flat_file,
+            rule="a tenant is a directory: domains/<tenant>/spec.yaml",
+        )
+    for domain_id in sorted(reader.list_directory_domains()):
         if not is_legal_tenant_id(domain_id):
             logger.warning(
                 "domain_registry_refused_illegal_tenant_id",
                 domain_id=domain_id,
-                rule="lowercase, ^[a-z][a-z0-9.-]{2,62}$, not prefixed 'system'",
+                pattern=TENANT_ID_PATTERN.pattern,
+                reserved_prefix=TENANT_ID_RESERVED_PREFIX,
             )
             continue
         # AttributeError / TypeError / KeyError: valid YAML with the wrong shape
@@ -163,7 +199,7 @@ def build_domain_spec_registry(reader: DomainYamlReader) -> dict[str, dict[str, 
         if not isinstance(spec, dict):
             logger.warning("domain_registry_spec_not_a_mapping", domain_id=domain_id)
             continue
-        declared = _declared_spec_id(spec)
+        declared = declared_spec_identity(spec)[0]
         if declared is not None and declared != domain_id:
             logger.warning(
                 "domain_registry_refused_identity_mismatch",
@@ -235,10 +271,11 @@ async def hydrate_approved_revisions() -> dict[str, int]:
 
     EIE-IDENT-03 read side, run once at startup after the file-backed registry
     is built. Returns ``{tenant_id: approved_rows_applied}``. A store that is
-    not reachable leaves the registry at its file-backed revision and is
-    reported, not raised: durability is enforced where an approval is written
-    (:func:`approve_proposals`), and one unreachable store stops the walk
-    instead of timing out once per domain.
+    not reachable stops the walk (instead of timing out once per domain),
+    leaves that tenant at its file-backed revision, and raises
+    :class:`SchemaRevisionHydrateError`: app/main.py records the registry as
+    ``hydrate_failed`` and readiness answers 503, so a node serving a rolled
+    back revision is never Ready (F-247-10).
     """
     applied: dict[str, int] = {}
     for domain in registered_domains():
@@ -250,7 +287,8 @@ async def hydrate_approved_revisions() -> dict[str, int]:
                 domain=domain,
                 error=f"{type(exc).__name__}: {exc}",
             )
-            break
+            msg = f"approved schema revisions of tenant {domain!r} could not be read"
+            raise SchemaRevisionHydrateError(msg) from exc
         if not records:
             continue
         _domain_specs[domain] = apply_approved_records(_domain_specs[domain], records)
@@ -334,11 +372,13 @@ def get_domain_spec(domain: str) -> dict[str, Any]:
     """Resolve a configured domain spec from the injected registry.
 
     The single resolution path for CRM scans: ``POST /v1/scan`` (this router)
-    and ``POST /api/v1/scan`` (app/api/v1/discover.py) both call it, so an
+    and ``POST /api/v1/scan`` (app/api/v1/discover.py) both call it, so they
+    share one tenant posture (:func:`require_direct_domain_access`, 403) and an
     unknown domain is HTTP 404 on both -- the status the OpenAPI contract
     documents for ``/api/v1/scan`` -- with the same detail. The registry is
     populated once at startup via :func:`configure` (main.py lifespan).
     """
+    require_direct_domain_access()
     domain_spec = _domain_specs.get(domain)
     if not domain_spec:
         available = sorted(_domain_specs)
@@ -346,6 +386,22 @@ def get_domain_spec(domain: str) -> dict[str, Any]:
             status_code=404, detail=f"Domain '{domain}' not found. Available: {available}"
         )
     return domain_spec
+
+
+def scan_registered_domain(
+    domain: str, crm_fields: list[CRMField]
+) -> tuple[ScanResult, dict[str, Any]]:
+    """Scan ``crm_fields`` against the registered spec of ``domain``, under its identity.
+
+    Both scan routes call it. The result carries the registry key as its
+    ``domain_id`` (tenant id == domain spec id) and the spec's declared version
+    (:func:`declared_spec_identity`), so two tenants sharing one ontology scan
+    to distinct ids and hashes (F-247-3). Returns the scan and the spec.
+    """
+    domain_spec = get_domain_spec(domain)
+    version = declared_spec_identity(domain_spec)[1]
+    result = scan_crm_fields(crm_fields, domain_spec, domain_id=domain, domain_version=version)
+    return result, domain_spec
 
 
 class ConvergeRequestBody(BaseModel):
@@ -616,6 +672,7 @@ async def _persist_or_503(
 
 @router.post("/converge/{run_id}/approve")
 async def approve_proposals(run_id: str, body: ApproveRequestBody) -> dict[str, Any]:
+    require_direct_domain_access()
     store = _get_state_store()
     state = await store.load(run_id)
     if state is None:
@@ -636,26 +693,37 @@ async def approve_proposals(run_id: str, body: ApproveRequestBody) -> dict[str, 
                 status_code=404, detail=f"Domain spec for '{state.domain}' not found"
             )
         proposal_set = _propose_for_run(state, domain_spec, state.domain)
+        applied = applied_field_names(body.decisions, proposal_set)
         updated_yaml = apply_proposals(domain_spec, body.decisions, proposal_set)
         # EIE-IDENT-03: the revision is durable before the registry takes it. An
         # in-memory-only revision vanished on the next restart while every caller
         # had been told it was approved. Identity contract: tenant_id == domain.
         persisted = await _persist_or_503(run_id, state.domain, proposal_set, body)
-        _domain_specs[state.domain] = updated_yaml
-        approved_count = sum(1 for d in body.decisions if d.approved)
+        # F-247-2: a batch that applies no field is no revision. Startup replays
+        # approved rows only, so publishing a bump for it would land the live
+        # registry on a version no restart reproduces. Rejections are still
+        # persisted above as the audit trail.
+        if applied:
+            _domain_specs[state.domain] = updated_yaml
+        published = _domain_specs[state.domain]
         state.status = LoopStatus.CONVERGED
         await store.save(state)
+    applied_set = set(applied)
     return {
         "run_id": run_id,
-        "approved": approved_count,
-        "rejected": len(body.decisions) - approved_count,
+        "approved": len(applied),
+        "rejected": sum(1 for d in body.decisions if not d.approved),
+        "unapplied": sorted(
+            d.field_name for d in body.decisions if d.approved and d.field_name not in applied_set
+        ),
         "persisted": persisted,
-        "new_version": updated_yaml.get("version", "unknown"),
+        "new_version": published.get("version", "unknown"),
     }
 
 
 @router.get("/converge/proposals/{domain}")
 async def get_pending_proposals(domain: str) -> dict[str, Any]:
+    require_direct_domain_access()
     store = _get_state_store()
     active_runs = await store.list_active(domain=domain)
     held_runs = [r for r in active_runs if r.status == LoopStatus.HUMAN_HOLD]
@@ -671,6 +739,5 @@ async def get_pending_proposals(domain: str) -> dict[str, Any]:
 
 @router.post("/scan", response_model=DiscoveryReport)
 async def scan_crm(body: ScanRequestBody) -> DiscoveryReport:
-    domain_spec = get_domain_spec(body.domain)
-    scan_result = scan_crm_fields(body.fields, domain_spec)
+    scan_result, domain_spec = scan_registered_domain(body.domain, body.fields)
     return generate_discovery_report(scan_result, domain_spec)

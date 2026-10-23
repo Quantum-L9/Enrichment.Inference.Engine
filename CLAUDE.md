@@ -39,10 +39,7 @@ Do NOT use vague language. Be specific.
   - `app/services/chassis_handlers.py`
   - `app/engines/orchestration_layer.py` — action registration
   - `app/engines/handlers.py`
-  - `app/engines/packet_router.py` — **the** EIE → Gate → CEG egress; the CEG
-    `sync` endpoint and id property are resolved per domain from that domain's
-    spec (`sync.endpoints[]`), with `Settings.graph_sync_*` as the labeled
-    fallback (GRAPH-IDENT-02)
+  - `app/engines/packet_router.py` — **the** EIE → Gate → CEG egress
   - `app/services/gate_client.py` — the single Gate client factory
 
 Two modules that this list used to name are governed by C-13 but carry no live

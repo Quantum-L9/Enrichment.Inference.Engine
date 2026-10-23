@@ -23,7 +23,7 @@ from app.utils.safe_convert import safe_float
 from ...core.auth import verify_api_key
 from ...engines.handlers import handle_discover
 from ...services import pg_store
-from ...services.crm_field_scanner import CRMField, scan_crm_fields, scan_result_to_dict
+from ...services.crm_field_scanner import CRMField, scan_result_to_dict
 
 logger = structlog.get_logger("api.discover")
 router = APIRouter(tags=["discover"])
@@ -104,12 +104,12 @@ async def discover_schema(request: DiscoverRequest) -> dict[str, Any]:
     responses={404: {"description": "Domain not found"}},
 )
 async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
-    # scan_crm_fields is synchronous with the (crm_fields, domain_spec) contract.
-    # The domain spec comes from the one registry resolution path shared with
-    # POST /v1/scan (converge.get_domain_spec): unknown domain -> 404 on both.
+    # One scan path shared with POST /v1/scan (converge.scan_registered_domain ->
+    # get_domain_spec): one tenant posture (403 outside local/dev/test), unknown
+    # domain -> 404 on both, and the registry key + spec version as the scan's
+    # identity. HTTPException from it is re-raised below, never turned into 500.
     from . import converge as _converge
 
-    domain_spec = _converge.get_domain_spec(request.domain)
     try:
         crm_fields = [
             CRMField(
@@ -122,7 +122,7 @@ async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
             )
             for f in request.fields
         ]
-        result = scan_crm_fields(crm_fields, domain_spec)
+        result, _domain_spec = _converge.scan_registered_domain(request.domain, crm_fields)
         return scan_result_to_dict(result)
     except HTTPException:
         raise

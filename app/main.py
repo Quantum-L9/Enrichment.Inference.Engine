@@ -17,7 +17,9 @@ Domain identity (EIE-IDENT-02 / EIE-IDENT-03, 2026-10-22):
     domain_specs is built from `domains/` by converge.build_domain_spec_registry
     — one spec per tenant, keyed by tenant id == domain spec id == Neo4j
     database name — then the approved rows of `schema_proposals` are replayed
-    onto it. The same DomainYamlReader feeds the converge handlers.
+    onto it. The same DomainYamlReader feeds the converge handlers, which read
+    the file-backed revision: approvals revise the API-side registry only (the
+    approved properties and version), never the handlers' rules or hints.
 """
 
 from __future__ import annotations
@@ -73,12 +75,13 @@ _idem: IdempotencyStore | None = None
 _gate_registered: bool | None = None
 # Domain spec registry outcome (EIE-IDENT-02): not_attempted = startup has not
 # run, loaded = at least one tenant spec registered, empty = the domains root
-# yielded no legal spec, failed = the load itself raised. `empty` and `failed`
-# degrade readiness: a node with no domain spec can serve no tenant's converge
-# or scan. `not_attempted` does not, because uvicorn serves no request before
-# the lifespan startup that sets it.
+# yielded no legal spec, failed = the load itself raised, hydrate_failed = the
+# approved revisions could not be read back (EIE-IDENT-03), so at least one
+# tenant would be served its rolled-back file revision. `empty`, `failed` and
+# `hydrate_failed` degrade readiness. `not_attempted` does not, because uvicorn
+# serves no request before the lifespan startup that sets it.
 _domain_registry_state: str = "not_attempted"
-DOMAIN_REGISTRY_DEGRADED: frozenset[str] = frozenset({"empty", "failed"})
+DOMAIN_REGISTRY_DEGRADED: frozenset[str] = frozenset({"empty", "failed", "hydrate_failed"})
 
 
 class EnrichmentLifecycle(LifecycleHook):
@@ -102,9 +105,10 @@ class EnrichmentLifecycle(LifecycleHook):
 
         clear_handlers()
         # One reader over `domains/` serves both the converge handlers (rules,
-        # hints, version) and the API-side spec registry below, so one spec per
-        # tenant governs both paths. Without it every converge ran with no
-        # domain at all.
+        # hints, version) and the API-side spec registry below, so both start
+        # from one spec file per tenant. Without it every converge ran with no
+        # domain at all. Approved revisions are replayed onto the registry
+        # only; the handlers keep reading the file-backed revision.
         domain_reader = DomainYamlReader(settings.domains_dir)
         register_orchestration(
             kb=_kb,
@@ -148,7 +152,7 @@ class EnrichmentLifecycle(LifecycleHook):
         )
         # EIE-IDENT-03: approved spec revisions live in `schema_proposals`;
         # replay them so a restart does not roll a tenant back to its file.
-        approved_revisions = await converge_module.hydrate_approved_revisions()
+        approved_revisions = await _hydrate_domain_registry()
         logger.info(
             "converge_module_configured",
             profiles=profile_registry.list_profiles(),
@@ -400,6 +404,24 @@ def _load_domain_registry(domain_reader: DomainYamlReader) -> dict[str, dict[str
     return domain_specs
 
 
+async def _hydrate_domain_registry() -> dict[str, int]:
+    """EIE-IDENT-03: replay approved revisions onto the registry and record a failure.
+
+    A store that cannot be read leaves at least one tenant at its file-backed
+    revision, a rollback of what was approved. The registry state becomes
+    `hydrate_failed` and readiness answers 503 rather than serving it as Ready.
+    """
+    global _domain_registry_state
+    from .api.v1 import converge as converge_module
+
+    try:
+        return await converge_module.hydrate_approved_revisions()
+    except converge_module.SchemaRevisionHydrateError as exc:
+        logger.error("domain_registry_hydrate_failed", error=str(exc))
+        _domain_registry_state = "hydrate_failed"
+        return {}
+
+
 def _fallback_loop_store():
     """In-memory LoopStateStore used when Redis is unavailable."""
     from .engines.convergence.loop_state import LoopState, LoopStateStore
@@ -501,8 +523,10 @@ async def readiness_check(
     the Service stops sending it traffic Gate could not route anyway.
 
     EIE-IDENT-02: it also answers 503 while the domain spec registry is
-    `empty` or `failed` (see `_domain_registry_state`). A routable node with
-    no domain spec can serve no tenant, so it must not be Ready either.
+    `empty`, `failed` or `hydrate_failed` (see `_domain_registry_state`). A
+    routable node with no domain spec can serve no tenant, and one whose
+    approved revisions could not be replayed would serve a rolled-back one, so
+    neither is Ready.
     `ReadinessResponse` carries no registry field (T5 schema); the state is in
     the status code and the startup log (`converge_module_configured`).
     """

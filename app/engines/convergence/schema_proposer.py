@@ -147,7 +147,23 @@ def apply(
     approval_decisions: list[ApprovalDecision],
     proposal_set: SchemaProposalSet,
 ) -> dict[str, Any]:
-    """Apply approved proposals to the domain YAML, returning the updated spec."""
+    """Apply approved proposals to the domain YAML, returning the updated spec.
+
+    A decision set that applies no proposal (every decision rejected, every
+    approval naming a field that was not proposed, or only non-canonical names
+    approved) returns an unchanged copy: no version bump, no revision. Only
+    approved rows are replayed at startup (``apply_approved_records``), so a
+    bump here for a batch that wrote nothing would land the live registry on a
+    version a restart can never reproduce (F-247-2).
+    """
+    applied = applied_field_names(approval_decisions, proposal_set)
+    if not applied:
+        logger.info(
+            "schema_proposer.apply: no approved proposal applies (proposed=%d); version stays %s",
+            len(proposal_set.proposed_fields),
+            current_yaml.get("version"),
+        )
+        return copy.deepcopy(current_yaml)
     approved_fields = {d.field_name for d in approval_decisions if d.approved}
     updated = copy.deepcopy(current_yaml)
 
@@ -167,11 +183,29 @@ def apply(
 
     logger.info(
         "schema_proposer.apply: approved=%d/%d version=%s",
-        len(approved_fields),
+        len(applied),
         len(proposal_set.proposed_fields),
         proposal_set.version_bump,
     )
     return updated
+
+
+def applied_field_names(
+    approval_decisions: list[ApprovalDecision],
+    proposal_set: SchemaProposalSet,
+) -> list[str]:
+    """The proposed fields :func:`apply` writes, in proposal order.
+
+    A field applies when a decision approves it, ``proposal_set`` proposes it,
+    and its name is canonical (L9 §3.1 / §5.1 / §5.2). An approval answers this
+    count, not the count of approving decisions.
+    """
+    approved = {d.field_name for d in approval_decisions if d.approved}
+    return [
+        fp.field_name
+        for fp in proposal_set.proposed_fields
+        if fp.field_name in approved and _is_canonical_field_name(fp.field_name)
+    ]
 
 
 def _is_canonical_field_name(name: str) -> bool:

@@ -134,6 +134,9 @@ async def test_startup_wires_domain_reader_into_converge():
         patch.object(main, "_register_with_gate", AsyncMock(return_value=None)),
         patch.object(main, "start_reregistration_loop", return_value=None),
         patch.object(main, "_gate_registered", None),
+        # Startup records the registry (and hydrate) outcome module-wide; restore
+        # it so readiness tests that run later do not inherit this process state.
+        patch.object(main, "_domain_registry_state", "not_attempted"),
         patch.object(handlers, "_domain_reader", None),
     ):
         await main.EnrichmentLifecycle().startup()

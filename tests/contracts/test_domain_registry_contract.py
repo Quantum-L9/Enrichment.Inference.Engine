@@ -155,6 +155,38 @@ def test_reader_loads_a_dotted_tenant(tmp_path: Path) -> None:
     assert "Facility" in config.node_schemas
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        ({"name": "plasticos", "version": "0.3.0"}, ("plasticos", "0.3.0")),
+        ({"domain": "acme"}, ("acme", None)),
+        ({"domain": {"id": "acme", "name": "Acme", "version": "8.0.0"}}, ("acme", "8.0.0")),
+        ({"domain_identity": {"name": "acme", "version": "1.0.0"}}, ("acme", "1.0.0")),
+        # An approval bumps the top-level version; it wins over a stale block version.
+        (
+            {"domain": {"id": "acme", "version": "8.0.0"}, "version": "8.1.0-discovered"},
+            ("acme", "8.1.0-discovered"),
+        ),
+        ({"metadata": {"template": {"id": "plastics", "version": "2.0.0"}}}, (None, None)),
+        ([], (None, None)),
+    ],
+)
+def test_one_spec_identity_reader(spec: Any, expected: tuple[str | None, str | None]) -> None:
+    """Registry, reader and scan share `declared_spec_identity`; template provenance is not identity."""
+    assert domain_yaml_reader.declared_spec_identity(spec) == expected
+
+
+@pytest.mark.unit
+def test_reader_reports_the_spec_identity_version(tmp_path: Path) -> None:
+    root = tmp_path / "domains"
+    _write(root, "plasticos", _spec("plasticos"))
+    _write(root, "acme", {"domain": "acme", "version": "2.0.0", "ontology": {"nodes": []}})
+    reader = DomainYamlReader(root)
+    assert reader.load("plasticos").version == "0.3.0"
+    assert reader.load("acme").version == "2.0.0"
+
+
 # ── 2. Registry (DB runtime: converge imports pg_store) ──────────────────────
 
 
@@ -190,6 +222,36 @@ def test_checked_in_domains_root_registers_plasticos() -> None:
     assert "plasticos" in _converge().build_domain_spec_registry(DomainYamlReader(root))
 
 
+@requires_db_runtime
+@pytest.mark.unit
+def test_registry_admits_only_directory_specs(tmp_path: Path) -> None:
+    """`domains/<tenant>/spec.yaml` registers; a flat file is refused and named, never a tenant."""
+    converge = _converge()
+    root = tmp_path / "domains"
+    _write(root, "acme", _spec("acme"))
+    (root / "acme.yaml").write_text(yaml.safe_dump(_spec("acme")), encoding="utf-8")
+    (root / "acme.bak.yaml").write_text(yaml.safe_dump({"version": "0.0.1"}), encoding="utf-8")
+
+    with patch.object(converge, "logger") as log:
+        registry = converge.build_domain_spec_registry(DomainYamlReader(root))
+
+    assert sorted(registry) == ["acme"]
+    refused = [
+        call.kwargs.get("file")
+        for call in log.warning.call_args_list
+        if call.args == ("domain_registry_refused_flat_spec",)
+    ]
+    assert sorted(refused) == ["acme.bak.yaml", "acme.yaml"]
+
+
+@requires_db_runtime
+@pytest.mark.unit
+def test_registry_refusal_names_the_one_grammar() -> None:
+    """The refusal log cites TENANT_ID_PATTERN; the API module restates no grammar."""
+    source = Path(_converge().__file__).read_text(encoding="utf-8")
+    assert domain_yaml_reader.TENANT_ID_PATTERN.pattern not in source
+
+
 # ── 3. Unknown domain: 404 on both scan routes ───────────────────────────────
 
 
@@ -216,6 +278,76 @@ def test_unknown_domain_is_404_on_both_scan_routes(monkeypatch: pytest.MonkeyPat
     assert (v1.status_code, api_v1.status_code) == (404, 404)
     assert v1.json()["detail"] == api_v1.json()["detail"]
     assert "nope" in v1.json()["detail"]
+
+
+def _direct_client(monkeypatch: pytest.MonkeyPatch, environment: str):
+    """Both routers, auth satisfied, the registry holding plasticos, in `environment`."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.core.auth import verify_api_key
+    from app.core.config import get_settings
+
+    converge, discover = _converge(), _discover()
+    api = FastAPI()
+    api.include_router(converge.router)
+    api.include_router(discover.router)
+    api.dependency_overrides[verify_api_key] = lambda: None
+    monkeypatch.setattr(converge, "_domain_specs", {"plasticos": _spec("plasticos")})
+    monkeypatch.setenv("L9_ENVIRONMENT", environment)
+    get_settings.cache_clear()
+    return TestClient(api)
+
+
+_DIRECT_STATUS = {"local": 200, "dev": 200, "test": 200, "staging": 403, "prod": 403}
+
+
+@requires_db_runtime
+@pytest.mark.unit
+@pytest.mark.parametrize("environment", sorted(_DIRECT_STATUS))
+def test_both_scan_routes_share_one_tenant_posture(
+    monkeypatch: pytest.MonkeyPatch, environment: str
+) -> None:
+    """F-247-4 / F-247-5: one posture, one status per environment on both scan routes.
+
+    A single deployment key binds its holder to no tenant, so a direct scan of a
+    tenant's spec is served only where the runtime is unsigned (local/dev/test)
+    and refused (403) everywhere else.
+    """
+    from app.core.config import get_settings
+
+    try:
+        client = _direct_client(monkeypatch, environment)
+        v1 = client.post("/v1/scan", json={"fields": [], "domain": "plasticos"})
+        api_v1 = client.post(
+            "/api/v1/scan", json={"fields": [], "domain": "plasticos", "tenant_id": "plasticos"}
+        )
+    finally:
+        get_settings.cache_clear()
+    assert v1.status_code == api_v1.status_code
+    assert v1.status_code == _DIRECT_STATUS[environment]
+
+
+@requires_db_runtime
+@pytest.mark.unit
+@pytest.mark.parametrize("environment", ["staging", "prod", "production"])
+def test_tenant_scoped_converge_routes_are_refused_outside_unsigned_runtimes(
+    monkeypatch: pytest.MonkeyPatch, environment: str
+) -> None:
+    """Approval and proposals are tenant-scoped too: refused before any run or spec is read."""
+    from app.core.config import get_settings
+
+    try:
+        client = _direct_client(monkeypatch, environment)
+        approve = client.post(
+            "/v1/converge/00000000-0000-0000-0000-000000000000/approve",
+            json={"decisions": [{"field_name": "annual_capacity_mt", "approved": True}]},
+        )
+        proposals = client.get("/v1/converge/proposals/plasticos")
+    finally:
+        get_settings.cache_clear()
+    assert approve.status_code == 403
+    assert proposals.status_code == 403
 
 
 # ── 4. Approvals: one transaction, replayed at startup ───────────────────────
@@ -388,7 +520,13 @@ def test_startup_replays_approved_rows_batch_by_batch() -> None:
 @requires_app_runtime
 @pytest.mark.parametrize(
     ("state", "expected"),
-    [("loaded", 200), ("not_attempted", 200), ("empty", 503), ("failed", 503)],
+    [
+        ("loaded", 200),
+        ("not_attempted", 200),
+        ("empty", 503),
+        ("failed", 503),
+        ("hydrate_failed", 503),
+    ],
 )
 def test_readiness_is_503_while_registry_is_empty_or_failed(
     monkeypatch: pytest.MonkeyPatch, state: str, expected: int
@@ -398,7 +536,7 @@ def test_readiness_is_503_while_registry_is_empty_or_failed(
     from app import main as main_module
     from app.core.config import get_settings
 
-    assert frozenset({"empty", "failed"}) == main_module.DOMAIN_REGISTRY_DEGRADED
+    assert frozenset({"empty", "failed", "hydrate_failed"}) == main_module.DOMAIN_REGISTRY_DEGRADED
     monkeypatch.setenv("GATE_REGISTRATION_ENABLED", "false")
     monkeypatch.setattr(main_module, "_domain_registry_state", state)
     get_settings.cache_clear()
@@ -408,3 +546,35 @@ def test_readiness_is_503_while_registry_is_empty_or_failed(
         get_settings.cache_clear()
     assert resp.status_code == expected
     assert resp.json()["ready"] is (expected == 200)
+
+
+# ── 6. The API contract documents the registry statuses (no runtime) ─────────
+
+
+def _openapi_paths() -> dict[str, Any]:
+    root = Path(__file__).resolve().parents[2]
+    spec = yaml.safe_load((root / "docs/contracts/api/openapi.yaml").read_text(encoding="utf-8"))
+    return spec["paths"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("method", "path", "statuses"),
+    [
+        ("post", "/v1/converge/{run_id}/approve", {"200", "403", "404", "409", "503"}),
+        ("post", "/v1/scan", {"200", "403", "404"}),
+        ("post", "/api/v1/scan", {"200", "403", "404"}),
+        ("get", "/v1/converge/proposals/{domain}", {"200", "403"}),
+    ],
+)
+def test_openapi_documents_registry_statuses(method: str, path: str, statuses: set[str]) -> None:
+    responses = _openapi_paths()[path][method]["responses"]
+    assert statuses <= set(responses)
+
+
+@pytest.mark.unit
+def test_openapi_approve_body_is_the_decisions_shape() -> None:
+    """`/v1/converge/{run_id}/approve` takes decisions, not discover's single-proposal body."""
+    body = _openapi_paths()["/v1/converge/{run_id}/approve"]["post"]["requestBody"]
+    ref = body["content"]["application/json"]["schema"]["$ref"]
+    assert ref == "#/components/schemas/ConvergeApprovalRequest"
