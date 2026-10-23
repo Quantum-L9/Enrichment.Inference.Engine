@@ -254,10 +254,19 @@ def _evidence(**overrides: Any) -> dict[str, tuple[Any, float]]:
     return evidence
 
 
-def _provider(evidence: dict[str, tuple[Any, float]]) -> AsyncMock:
-    """Stand-in for enrich_entity: the LLM/network boundary, nothing else."""
+def _provider(
+    evidence: dict[str, tuple[Any, float]] | list[dict[str, tuple[Any, float]]],
+) -> AsyncMock:
+    """Stand-in for enrich_entity: the LLM/network boundary, nothing else.
+
+    A list is per-pass evidence; the last entry answers every later pass.
+    """
+    passes = evidence if isinstance(evidence, list) else [evidence]
+    calls = {"n": 0}
 
     async def _enrich(request, settings, kb_resolver=None, idem_store=None, **_kw):
+        evidence = passes[min(calls["n"], len(passes) - 1)]
+        calls["n"] += 1
         return EnrichResponse(
             fields={k: v for k, (v, _c) in evidence.items()},
             confidence=0.9,
@@ -302,6 +311,7 @@ def sdk_converge():
         patch("app.services.event_emitter.get_emitter") as emitter_factory,
     ):
         persist.return_value = None
+        state["persist"] = persist  # the persistence sink, for tests that assert on it
         router = router_factory.return_value
         router.notify_graph_sync = AsyncMock(return_value=None)
         router.notify_score_invalidate = AsyncMock(return_value=None)
@@ -463,6 +473,133 @@ class TestLiveDomainInference:
         assert response["pass_count"] == 1
         # The serialized flag agrees with the decision that stopped the loop.
         assert response["feature_vector"]["confidence_tracking"]["converged"] is True
+
+    @pytest.mark.parametrize(
+        "polymer_types",
+        [pytest.param(5, id="numeric"), pytest.param([{"name": "HDPE"}], id="list-of-dict")],
+    )
+    async def test_malformed_provider_value_fails_the_rule_not_the_converge(
+        self, sdk_converge, polymer_types: Any
+    ) -> None:
+        """Provider values are untrusted shapes; a rule that cannot read one is False.
+
+        On the pre-fix head both shapes raised TypeError out of the SDK handler
+        with nothing persisted, where main completed and persisted the same answer.
+        """
+        state, run, _router = sdk_converge
+        state["evidence"] = _evidence(polymer_types=(polymer_types, 0.95))
+        response, _provider_mock = await run(_canonical_payload())
+
+        assert response["state"] == "completed"
+        assert state["persist"].call_count == 1
+        assert response["fields"]["polymer_types"] == polymer_types  # the evidence is kept
+        assert "material_grade" not in response["fields"]
+        assert "facility_tier" not in response["fields"]
+        assert _inferred(response) == {}
+        inference = response["feature_vector"]["inference"]
+        assert inference["status"] == "active"  # the rule set is fine; this value is not
+        assert inference["errors"] == []
+
+    async def test_rule_execution_fault_is_reported_not_raised(self, sdk_converge) -> None:
+        """A fault inside rule execution degrades the inference, never the converge."""
+        state, run, _router = sdk_converge
+        with patch(
+            "app.engines.inference_bridge_adapter.infer",
+            side_effect=RuntimeError("operator exploded"),
+        ):
+            response, _provider_mock = await run(_canonical_payload())
+
+        assert response["state"] == "completed"
+        assert state["persist"].call_count == 1
+        assert _inferred(response) == {}
+        inference = response["feature_vector"]["inference"]
+        assert inference["status"] == "active"  # the rules parsed; a run over values failed
+        assert inference["errors"] == [
+            "condition rules did not execute: RuntimeError: operator exploded"
+        ]
+
+    async def test_input_crossing_a_rule_boundary_is_rederived_on_the_next_pass(
+        self, sdk_converge
+    ) -> None:
+        """A derivation follows its inputs: pass 2 evidence replaces pass 1's grade.
+
+        Pass 1 researches contamination at 0.02 (weak, 0.40) -> grade A, tier 1.
+        Pass 2 corrects it to 0.05 (0.95): grade-assignment-hdpe-b applies, and
+        tier-1-high-capacity (A/A+ only) no longer does. On the pre-fix head the
+        pass-1 derivations were treated as facts on pass 2 and never re-run, so
+        the response carried contamination 0.05 beside grade A and tier 1 with
+        provenance inputs frozen at 0.02.
+        """
+        state, run, _router = sdk_converge
+        state["evidence"] = [
+            _evidence(contamination_tolerance=(0.02, 0.40)),
+            _evidence(contamination_tolerance=(0.05, 0.95)),
+        ]
+        response, provider = await run(_canonical_payload())
+
+        assert response["state"] == "completed"
+        assert provider.await_count == 2
+        assert response["fields"]["contamination_tolerance"] == 0.05
+        assert response["fields"]["material_grade"] == "B"
+        assert "facility_tier" not in response["fields"]  # retracted: B is not A/A+
+
+        per_pass = {entry["pass"]: entry for entry in response["inferences"]}
+        pass1 = per_pass[1]["inference_provenance"]
+        assert pass1["material_grade"]["rule_id"] == "grade-assignment-hdpe-a"
+        assert pass1["material_grade"]["inputs"]["contamination_tolerance"] == 0.02
+        assert "facility_tier" in pass1
+        pass2 = per_pass[2]["inference_provenance"]
+        assert set(pass2) == {"material_grade"}
+        assert pass2["material_grade"]["rule_id"] == "grade-assignment-hdpe-b"
+        assert pass2["material_grade"]["inputs"]["contamination_tolerance"] == 0.05
+        # Re-bounded by the inputs now in the response: min(rule 0.85, 0.95, 0.95).
+        assert pass2["material_grade"]["confidence"] == pytest.approx(0.85)
+
+        tracked = response["feature_vector"]["confidence_tracking"]["fields"]
+        assert tracked["material_grade"]["value"] == "B"
+        assert tracked["material_grade"]["confidence"] == pytest.approx(0.85)
+        assert "facility_tier" not in tracked
+
+    async def test_provider_evidence_for_a_derived_field_becomes_the_fact(
+        self, sdk_converge
+    ) -> None:
+        """Once the provider evidences material_grade, it is no longer a derivation."""
+        state, run, _router = sdk_converge
+        state["evidence"] = [
+            _evidence(contamination_tolerance=(0.02, 0.40)),  # pass 1 derives A, tier 1
+            _evidence(contamination_tolerance=(0.02, 0.95), material_grade=("C", 0.95)),
+        ]
+        response, provider = await run(_canonical_payload())
+
+        assert provider.await_count == 2
+        assert response["fields"]["material_grade"] == "C"  # the evidence, not the rule
+        assert "facility_tier" not in response["fields"]  # C is not A/A+: retracted
+        assert "material_grade" not in response["inferences"][1]["inference_provenance"]
+        tracked = response["feature_vector"]["confidence_tracking"]["fields"]
+        assert tracked["material_grade"]["value"] == "C"
+        assert tracked["material_grade"]["confidence"] == pytest.approx(0.95)
+
+    async def test_missing_referenced_rules_file_is_refused_not_silent(
+        self, sdk_converge, tmp_path: Path
+    ) -> None:
+        """A declared rules file that cannot be read is `invalid_rules`, not `not_configured`."""
+        state, run, _router = sdk_converge
+        spec = yaml.safe_load((_REPO_DOMAINS / "plasticos" / "spec.yaml").read_text())
+        spec.pop("inference_rules")
+        spec["inference_rules_path"] = str(tmp_path / "no-such-rules.yaml")
+        (tmp_path / "plasticos").mkdir()
+        (tmp_path / "plasticos" / "spec.yaml").write_text(yaml.safe_dump(spec))
+        state["domains"] = tmp_path
+
+        response, _provider_mock = await run(_canonical_payload())
+
+        assert response["state"] == "completed"  # enrichment itself is unaffected
+        inference = response["feature_vector"]["inference"]
+        assert inference["status"] == "invalid_rules"
+        assert inference["errors"]
+        assert all(isinstance(err, str) for err in inference["errors"])
+        assert _inferred(response) == {}
+        assert "material_grade" not in response["fields"]
 
     async def test_rules_from_inference_rules_path_document(
         self, sdk_converge, tmp_path: Path
