@@ -53,7 +53,7 @@ dev = [
     "respx>=0.22",
     "ruff==0.16.8",
     "mypy==2.3.1",
-    "coverage==7.16.1",
+    "coverage==7.16.2",
     "jsonschema>=4.23.0",
 ]
 
