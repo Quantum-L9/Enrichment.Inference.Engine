@@ -28,6 +28,7 @@ __all__ = [
     "RuleDefinition",
     "RuleRegistry",
     "load_rules",
+    "parse_rules",
     "reload_rules",
     "build_unlock_index",
     "score_unlock_potential",
@@ -109,6 +110,9 @@ class RuleDefinition(BaseModel):
     priority: int = Field(default=10, ge=0, le=100)
     domain: str | None = None
     description: str | None = None
+    # Provenance: the rule-set version the domain YAML declares. Without this
+    # field the default `extra="ignore"` dropped it silently on load.
+    rule_or_model_version: str | None = None
 
     @property
     def trigger_fields(self) -> set[str]:
@@ -190,6 +194,66 @@ class RuleRegistry:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def parse_rules(
+    rules_data: Any,
+    *,
+    source: str = "<inline>",
+    strict: bool = False,
+) -> RuleRegistry:
+    """
+    Validate an `inference_rules` list into a RuleRegistry.
+
+    Lenient (default): an invalid rule is logged and skipped; only a list in
+    which every rule fails raises. That is the historical `load_rules` contract.
+
+    Strict: the rule set is accepted whole or not at all. Any invalid rule, or
+    a duplicated rule_id, raises ValueError naming every failure. Rules form
+    chains (one rule's output is another's condition), so silently dropping one
+    would leave a partial chain that looks like a working one.
+
+    Raises:
+        ValueError: `rules_data` is not a list, or validation failed as above
+    """
+    if not isinstance(rules_data, list):
+        raise ValueError(f"inference_rules must be a list, got {type(rules_data).__name__}")
+
+    registry = RuleRegistry()
+    loaded_count = 0
+    errors: list[str] = []
+
+    for idx, rule_dict in enumerate(rules_data):
+        rule_id = rule_dict.get("rule_id", "unknown") if isinstance(rule_dict, dict) else "unknown"
+        try:
+            rule = RuleDefinition.model_validate(rule_dict)
+        except Exception as exc:
+            errors.append(f"rule[{idx}] {rule_id}: {exc}")
+            logger.warning(
+                "rule_validation_failed",
+                rule_index=idx,
+                rule_id=rule_id,
+                error=str(exc),
+            )
+            continue
+        if strict and registry.get(rule.rule_id) is not None:
+            errors.append(f"rule[{idx}] {rule.rule_id}: duplicate rule_id")
+            continue
+        registry.add_rule(rule)
+        loaded_count += 1
+
+    logger.info(
+        "rules_loaded",
+        source=source,
+        loaded=loaded_count,
+        errors=len(errors),
+        total=len(rules_data),
+    )
+
+    if errors and (strict or loaded_count == 0):
+        raise ValueError(f"Invalid inference_rules in {source}: " + "; ".join(errors))
+
+    return registry
+
+
 def load_rules(yaml_path: str | Path) -> RuleRegistry:
     """
     Load inference rules from domain YAML file.
@@ -214,40 +278,7 @@ def load_rules(yaml_path: str | Path) -> RuleRegistry:
     if not data:
         raise ValueError(f"Empty YAML file: {yaml_path}")
 
-    rules_data = data.get("inference_rules", [])
-    if not isinstance(rules_data, list):
-        raise ValueError(f"inference_rules must be a list, got {type(rules_data).__name__}")
-
-    registry = RuleRegistry()
-    loaded_count = 0
-    error_count = 0
-
-    for idx, rule_dict in enumerate(rules_data):
-        try:
-            rule = RuleDefinition.model_validate(rule_dict)
-            registry.add_rule(rule)
-            loaded_count += 1
-        except Exception as exc:
-            error_count += 1
-            logger.warning(
-                "rule_validation_failed",
-                rule_index=idx,
-                rule_id=rule_dict.get("rule_id", "unknown"),
-                error=str(exc),
-            )
-
-    logger.info(
-        "rules_loaded",
-        yaml_path=str(yaml_path),
-        loaded=loaded_count,
-        errors=error_count,
-        total=len(rules_data),
-    )
-
-    if error_count > 0 and loaded_count == 0:
-        raise ValueError(f"All rules failed validation in {yaml_path}")
-
-    return registry
+    return parse_rules(data.get("inference_rules", []), source=str(yaml_path))
 
 
 def reload_rules(yaml_path: str | Path, registry: RuleRegistry) -> None:

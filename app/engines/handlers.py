@@ -474,10 +474,24 @@ async def _load_domain_convergence_context(
     *,
     domain_id: str | None,
     node_label: str | None,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Load optional domain hints + inference rules for converge."""
+) -> tuple[dict[str, Any], Any]:
+    """Load optional domain hints + inference rules for converge.
+
+    An unknown domain converges without inference. A loaded domain's rules come
+    from `inference_rules_path`, else the spec's own `inference_rules`; they are
+    returned unvalidated — InferenceBridge accepts the set whole or reports it refused.
+
+    A relative `inference_rules_path` resolves against the process working
+    directory — the service runs from the repository root, beside `domains/` —
+    not against the spec's own directory; an absolute path is unambiguous. A
+    referenced file that is missing or unreadable is returned as its error text:
+    InferenceBridge refuses any non-list rule set, so the response reports
+    `invalid_rules`, and the warning logged here names the path and the cause. A
+    declared rule set that failed to load must not read like a domain that
+    declared none.
+    """
     domain_hints: dict[str, Any] = {}
-    inference_rules: list[dict[str, Any]] = []
+    inference_rules: Any = []
     if not domain_id or not _domain_reader:
         return domain_hints, inference_rules
 
@@ -507,12 +521,35 @@ async def _load_domain_convergence_context(
         import yaml
 
         rules_path = Path(config.inference_rules_path)
-        if rules_path.exists():
+        try:
             async with aiofiles.open(rules_path) as f:
                 content = await f.read()
-                inference_rules = yaml.safe_load(content) or []
+            inference_rules = _rules_section(yaml.safe_load(content))
+        except (OSError, yaml.YAMLError) as exc:
+            logger.warning(
+                "handlers.converge_inference_rules_unreadable",
+                domain_id=domain_id,
+                path=str(rules_path.resolve()),
+                error=str(exc),
+            )
+            inference_rules = (
+                f"inference_rules_path {rules_path.resolve()} could not be loaded: {exc}"
+            )
+    else:
+        inference_rules = config.raw_spec.get("inference_rules") or []
 
     return domain_hints, inference_rules
+
+
+def _rules_section(document: Any) -> Any:
+    """A referenced rules file is a YAML document with an `inference_rules` section.
+
+    That is `rule_loader.load_rules`'s contract. A bare list is also accepted.
+    Anything else is passed through so InferenceBridge reports it refused.
+    """
+    if isinstance(document, dict) and "inference_rules" in document:
+        return document["inference_rules"]
+    return document or []
 
 
 async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:

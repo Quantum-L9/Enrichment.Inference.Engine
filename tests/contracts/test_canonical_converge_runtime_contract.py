@@ -230,3 +230,79 @@ async def test_compatibility_dialect_still_has_a_home(converge_runtime) -> None:
         await _handle_converge()("plasticos", payload)
 
     assert compat.await_count == 1
+
+
+# Keys every derived-field provenance record carries. Additive to EnrichResponse:
+# they live inside the free-form `inferences[*]` entries and `feature_vector`.
+INFERENCE_PROVENANCE_KEYS = {
+    "rule_id",
+    "rule_version",
+    "derivation_type",
+    "inputs",
+    "input_confidence",
+    "rule_confidence",
+    "confidence",
+    "cascade_level",
+}
+INFERENCE_CONTEXT_KEYS = {
+    "status",
+    "engines",
+    "rule_count",
+    "derivation_edges",
+    "rule_versions",
+    "errors",
+}
+
+
+@requires_app_runtime
+async def test_converge_inference_provenance_shape() -> None:
+    """Domain inference rides the response additively, with complete provenance.
+
+    The live loop runs with the repository's PlasticOS rules; only the provider
+    and the side-effect sinks are replaced. The response must still be exactly an
+    EnrichResponse, and every derived field must say which rule, at which
+    rule-set version, from which inputs, at what confidence.
+    """
+    from pathlib import Path
+
+    from app.engines.domain_yaml_reader import DomainYamlReader
+    from app.services.side_effect_coordinator import get_side_effect_coordinator
+
+    evidence = {
+        "polymer_types": (["HDPE"], 0.95),
+        "contamination_tolerance": (0.02, 0.90),
+        "annual_capacity_mt": (6000.0, 0.90),
+    }
+
+    async def provider(request, settings, kb_resolver=None, idem_store=None, **_kw):
+        return EnrichResponse(
+            state="completed",
+            fields={k: v for k, (v, _c) in evidence.items()},
+            confidence=0.9,
+            tokens_used=100,
+            feature_vector={"per_field_confidence": {k: c for k, (_v, c) in evidence.items()}},
+        )
+
+    domains = Path(__file__).resolve().parents[2] / "domains"
+    with (
+        patch("app.engines.handlers._domain_reader", DomainYamlReader(domains)),
+        patch("app.engines.enrichment_orchestrator.enrich_entity", AsyncMock(side_effect=provider)),
+        patch("app.services.result_store.ResultStore.persist_enrich_response"),
+        patch("app.engines.packet_router.get_router") as router_factory,
+        patch("app.services.event_emitter.get_emitter") as emitter_factory,
+    ):
+        router_factory.return_value.notify_graph_sync = AsyncMock()
+        router_factory.return_value.notify_score_invalidate = AsyncMock()
+        emitter_factory.return_value.emit_enrichment_completed = AsyncMock()
+        get_side_effect_coordinator().reset_for_tests()
+        result = await _handle_converge()("tenant-a", _live_producer_payload())
+        get_side_effect_coordinator().reset_for_tests()
+
+    assert EnrichResponse.model_validate(result).model_dump() == result
+    assert set(result["feature_vector"]["inference"]) == INFERENCE_CONTEXT_KEYS
+    provenance = result["inferences"][0]["inference_provenance"]
+    assert set(provenance) == {"material_grade", "facility_tier"}
+    for record in provenance.values():
+        assert set(record) == INFERENCE_PROVENANCE_KEYS
+        assert record["rule_version"] == "plasticos-inference-0.3.0"
+        assert record["confidence"] <= min(record["input_confidence"].values())

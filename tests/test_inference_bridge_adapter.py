@@ -228,3 +228,107 @@ class TestCatalogParity:
         idx_grade = names.index("material_grade_lookup")
         idx_tier = names.index("facility_tier_compute")
         assert idx_grade < idx_tier
+
+
+# ── Domain `inference_rules` (condition rules) ───────────
+
+
+@pytest.fixture
+def condition_rules():
+    """The production PlasticOS rule shape: conditions → literal outputs."""
+    return [
+        {
+            "rule_id": "grade-a",
+            "conditions": [
+                {"field": "polymer_types", "operator": "CONTAINS", "value": "HDPE"},
+                {"field": "contamination_tolerance", "operator": "LT", "value": 0.03},
+            ],
+            "outputs": [
+                {"field": "material_grade", "value_expr": "A", "derivation_type": "classification"}
+            ],
+            "confidence": 0.92,
+            "priority": 10,
+            "rule_or_model_version": "v-test",
+        },
+        {
+            "rule_id": "tier-1",
+            "conditions": [
+                {"field": "annual_capacity_mt", "operator": "GTE", "value": 5000},
+                {"field": "material_grade", "operator": "IN", "value": ["A", "A+"]},
+            ],
+            "outputs": [
+                {
+                    "field": "facility_tier",
+                    "value_expr": "tier_1",
+                    "derivation_type": "classification",
+                }
+            ],
+            "confidence": 0.90,
+            "priority": 8,
+        },
+    ]
+
+
+@pytest.fixture
+def evidence():
+    return {
+        "polymer_types": ["HDPE"],
+        "contamination_tolerance": 0.01,
+        "annual_capacity_mt": 7000,
+    }
+
+
+class TestConditionRules:
+    def test_status_and_catalog(self, condition_rules):
+        bridge = InferenceBridge(rules=condition_rules)
+        assert bridge.status == "active"
+        assert bridge.describe()["engines"] == ["condition_rules"]
+        assert bridge.describe()["rule_versions"] == ["v-test"]
+        catalog = {r["name"]: r for r in bridge.get_rule_catalog()}
+        assert catalog["tier-1"]["requires"] == ["annual_capacity_mt", "material_grade"]
+
+    def test_multi_hop_with_bounded_confidence(self, condition_rules, evidence):
+        conf = {"polymer_types": 0.95, "contamination_tolerance": 0.80, "annual_capacity_mt": 0.99}
+        result = InferenceBridge(rules=condition_rules).run(evidence, conf)
+
+        assert result.derived_fields == {"material_grade": "A", "facility_tier": "tier_1"}
+        assert result.confidence_map["material_grade"] == pytest.approx(0.80)
+        assert result.confidence_map["facility_tier"] == pytest.approx(0.80)
+        assert result.rules_fired == 2
+        assert result.provenance["facility_tier"]["inputs"] == {
+            "annual_capacity_mt": 7000,
+            "material_grade": "A",
+        }
+        assert result.provenance["material_grade"]["rule_version"] == "v-test"
+
+    def test_record_supplied_inputs_bound_nothing(self, condition_rules, evidence):
+        result = InferenceBridge(rules=condition_rules).run(evidence, {})
+        assert result.confidence_map["material_grade"] == pytest.approx(0.92)
+
+    def test_present_field_is_not_overwritten(self, condition_rules, evidence):
+        result = InferenceBridge(rules=condition_rules).run(
+            {**evidence, "material_grade": "B"}, {"material_grade": 0.3}
+        )
+        assert "material_grade" not in result.derived_fields
+        assert "facility_tier" not in result.derived_fields  # "B" fails tier-1
+
+    def test_rerun_on_own_output_derives_nothing_new(self, condition_rules, evidence):
+        bridge = InferenceBridge(rules=condition_rules)
+        first = bridge.run(evidence, {})
+        second = bridge.run({**evidence, **first.derived_fields}, dict(first.confidence_map))
+        assert second.derived_fields == {}
+
+    def test_invalid_rule_refuses_whole_set(self, condition_rules, evidence):
+        condition_rules[1]["outputs"][0]["derivation_type"] = "guess"
+        bridge = InferenceBridge(rules=condition_rules)
+        assert bridge.status == "invalid_rules"
+        assert "tier-1" in bridge.describe()["errors"][0]
+        assert bridge.run(evidence, {}).derived_fields == {}
+
+    def test_flat_v1_rules_stay_catalog_only(self, flat_rules):
+        bridge = InferenceBridge(rules=flat_rules)
+        assert bridge.status == "catalog_only"
+        assert bridge.run({"polymer_type": "HDPE"}, {}).derived_fields == {}
+
+    def test_no_context_is_reported(self):
+        assert InferenceBridge().describe()["status"] == "not_configured"
