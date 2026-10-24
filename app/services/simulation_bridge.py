@@ -1,10 +1,28 @@
 """
-Simulation Bridge — ENRICH ↔ GRAPH Integration Test Engine.
+Simulation Bridge — DEMO / TEST FIXTURE (PREVIEW-01). Not a runtime action.
+
+Status
+------
+This module is a sales-demo and test fixture, not part of the node's served
+action surface:
+
+- ``simulate`` is absent from ``app.main.RUNTIME_ALLOWED_ACTIONS`` and from
+  ``app.engines.handlers.get_handler_map()``; the SDK runtime refuses a
+  ``simulate`` TransportPacket before any handler runs, and Gate holds no
+  route for it (Gate PR #29).
+- Every entity, statistic and brief produced here is SYNTHETIC: entities are
+  generated (seeded static data, optionally Sonar-researched), and the gate /
+  score / community numbers are computed over those generated entities. The
+  serialised brief carries ``synthetic: true`` and a ``provenance`` block
+  (``SYNTHETIC_OUTPUT_LABEL``) so no consumer can mistake it for enrichment
+  output.
+- Drivers: ``scripts/run_simulation_demo.py``, ``tests/test_simulation_bridge.py``
+  and the in-process ``handle_simulate`` demo driver.
 
 Bridges the CRM Field Scanner (intake) and Enrichment Engine (ENRICH, Layer 2)
-to a deterministic Graph simulation (GRAPH, Layer 3) to produce empirical
-statistics on what a customer's data WOULD look like fully enriched and
-graph-analyzed — with real numbers, not projections.
+to a deterministic Graph simulation (GRAPH, Layer 3) to produce statistics on
+what a customer's data WOULD look like fully enriched and graph-analyzed, over
+generated entities.
 
 Pipeline:
   1. Intake scan → identify gaps
@@ -15,8 +33,9 @@ Pipeline:
   5. Leverage analysis → convert capabilities into business leverage
   6. Executive brief → combined RevOps narrative
 
-Zero fabrication: every number comes from deterministic simulation
-against the customer's actual field schema + domain YAML.
+Every number is computed deterministically from the simulation inputs (the
+customer's field schema + domain YAML + generated entities); none of it is an
+observation of the customer's records.
 """
 
 from __future__ import annotations
@@ -42,6 +61,16 @@ _SONAR_SIMULATION_MODEL = "sonar"
 _SONAR_ENTITY_TIMEOUT = 30
 _MIN_SONAR_FIELDS_THRESHOLD = 3
 _COST_PER_ENRICHED_FIELD = 0.002
+
+# PREVIEW-01: the label every serialised brief carries. Consumers key on
+# `synthetic` to keep demo output out of persistence, graph sync and scoring.
+SYNTHETIC_OUTPUT_LABEL: dict[str, Any] = {
+    "kind": "simulation",
+    "source": "app.services.simulation_bridge",
+    "role": "demo/test fixture",
+    "runtime_action": False,
+    "note": "Entities are generated; statistics are computed over generated entities.",
+}
 
 
 # ══════════════════════════════════════════════════════════
@@ -1497,7 +1526,7 @@ def generate_executive_brief(
     coverage_lift = enriched_stats.field_coverage - seed_stats.field_coverage
 
     headline = (
-        f"{customer_name}: Simulation shows +{gate_unlock:.0f}% match rate, "
+        f"{customer_name}: Synthetic simulation shows +{gate_unlock:.0f}% match rate, "
         f"+{coverage_lift:.0f}% data coverage, "
         f"{enriched_stats.communities_found} partner clusters — "
         f"at ${enriched_stats.cost_per_entity_usd:.3f}/entity"
@@ -1508,11 +1537,11 @@ def generate_executive_brief(
     ]
 
     combined = (
-        f"The simulation ran {enriched_stats.total_entities} entities through the full "
-        f"ENRICH → GRAPH pipeline against the {domain_id} domain specification. "
-        f"Every number below is empirical — computed from deterministic gate evaluation, "
-        f"weighted scoring, Louvain community detection, and rule-based inference. "
-        f"No projections, no AI-generated estimates.\n\n"
+        f"SYNTHETIC SIMULATION. The simulation ran {enriched_stats.total_entities} generated "
+        f"entities through the ENRICH → GRAPH pipeline against the {domain_id} domain "
+        f"specification. Every number below is computed over those generated entities — "
+        f"deterministic gate evaluation, weighted scoring, community detection, and "
+        f"rule-based inference — and is not an observation of the customer's records.\n\n"
         + "\n\n".join(narrative_parts)
         + f"\n\n**Combined effect**: These leverage points compound. Better matching "
         f"({enriched_stats.gate_pass_rate}% pass rate) feeds better scoring "
@@ -1619,7 +1648,10 @@ def leverage_to_dict(lp: LeveragePoint) -> dict[str, Any]:
 
 
 def brief_to_dict(b: ExecutiveBrief) -> dict[str, Any]:
+    """Serialise the brief, labelled as synthetic output (PREVIEW-01)."""
     return {
+        "synthetic": True,
+        "provenance": dict(SYNTHETIC_OUTPUT_LABEL),
         "headline": b.headline,
         "customer": b.customer_name,
         "domain": b.domain,

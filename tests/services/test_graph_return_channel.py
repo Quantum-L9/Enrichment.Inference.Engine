@@ -4,11 +4,13 @@ import pytest
 from constellation_node_sdk.transport import create_transport_packet
 from constellation_node_sdk.transport.errors import TransportValidationError
 
+from app.services.chassis_handlers import handle_community_export, handle_schema_proposal
 from app.services.graph_return_channel import (
     EnrichmentTarget,
     GraphReturnChannel,
     build_graph_inference_result_envelope,
     extract_targets_from_packet,
+    handle_graph_inference_result,
     validate_graph_inference_packet,
 )
 
@@ -154,6 +156,59 @@ async def test_invalid_envelope_raises(return_channel):
     )
     with pytest.raises(TransportValidationError):
         await return_channel.submit(bad_packet)
+
+
+# ── EIE-SEC-01: tenant comes only from packet.tenant.org_id ──────────────────
+#
+# The SDK runtime calls every handler as (packet.tenant.org_id, packet.payload[,
+# packet]). A `tenant_id` inside the payload is caller-asserted data. Before this
+# fix community-export and schema-proposal read it as an override, so a packet
+# addressed to tenant A could queue enrichment targets under tenant B.
+
+
+@pytest.mark.asyncio
+async def test_community_export_ignores_payload_tenant_id(return_channel):
+    """Targets land in the queue of the packet tenant, never the payload tenant."""
+    result = await handle_community_export(
+        "tenant-a",
+        {
+            "tenant_id": "tenant-b",
+            "communities": [{"entity_id": "e1", "community_id": 42}],
+        },
+    )
+    assert result["status"] == "accepted"
+    assert result["targets_queued"] == 1
+
+    assert await return_channel.drain("tenant-b", timeout=0.05) == []
+    targets_a = await return_channel.drain("tenant-a", timeout=0.05)
+    assert [t.entity_id for t in targets_a] == ["e1"]
+    assert targets_a[0].tenant_id == "tenant-a"
+
+
+@pytest.mark.asyncio
+async def test_schema_proposal_ignores_payload_tenant_id():
+    result = await handle_schema_proposal(
+        "tenant-a", {"tenant_id": "tenant-b", "proposed_fields": [{"name": "f1"}]}
+    )
+    assert result["tenant_id"] == "tenant-a"
+
+
+@pytest.mark.asyncio
+async def test_graph_inference_result_queues_under_packet_tenant(return_channel):
+    """graph-inference-result keys on packet.tenant.org_id; payload carries no tenant."""
+    packet = build_graph_inference_result_envelope(
+        tenant_id="tenant-a",
+        inference_outputs=[
+            {"entity_id": "e1", "field": "f1", "value": 1, "confidence": 0.9, "rule": "r1"}
+        ],
+    )
+    forged_payload = {**packet.payload, "tenant_id": "tenant-b"}
+    result = await handle_graph_inference_result(packet.tenant.org_id, forged_payload, packet)
+    assert result["tenant"] == "tenant-a"
+    assert await return_channel.drain("tenant-b", timeout=0.05) == []
+    assert [t.tenant_id for t in await return_channel.drain("tenant-a", timeout=0.05)] == [
+        "tenant-a"
+    ]
 
 
 def test_enrichment_target_to_dict():

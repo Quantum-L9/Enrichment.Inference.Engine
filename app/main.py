@@ -335,6 +335,10 @@ async def stop_reregistration_loop() -> None:
     await asyncio.gather(task, return_exceptions=True)
 
 
+# PREVIEW-01: `simulate` is not a runtime action. app/services/simulation_bridge.py
+# is a demo/test fixture whose output is synthetic; the SDK runtime refuses a
+# `simulate` packet (TransportAuthorizationError) because it is absent here, and
+# Gate holds no route for it (Gate PR #29).
 RUNTIME_ALLOWED_ACTIONS: tuple[str, ...] = (
     "community-export",
     "converge",
@@ -344,7 +348,6 @@ RUNTIME_ALLOWED_ACTIONS: tuple[str, ...] = (
     "enrichbatch",
     "graph-inference-result",
     "schema-proposal",
-    "simulate",
     "writeback",
 )
 
