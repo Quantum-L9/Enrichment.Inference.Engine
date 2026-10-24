@@ -28,7 +28,11 @@ from ..services.circuit_breaker import CircuitBreaker
 from ..services.consensus_engine import apply_field_confidence_thresholds, synthesize
 from ..services.deterministic_provider import PROVIDER_NAME as DETERMINISTIC_PROVIDER
 from ..services.deterministic_provider import query_deterministic
-from ..services.idempotency import IdempotencyStore
+from ..services.idempotency import (
+    IdempotencyConflictError,
+    IdempotencyStore,
+    request_fingerprint,
+)
 from ..services.perplexity_client import SonarResponse, query_perplexity
 from ..services.prompt_builder import build_prompt, build_schema_hash
 from ..services.request_deadline import current_deadline, provider_attempt_timeout
@@ -40,12 +44,41 @@ logger = structlog.get_logger("orchestrator")
 breaker = CircuitBreaker(failure_threshold=5, cooldown=60)
 
 
+def _conflict_response(exc: IdempotencyConflictError, start: float) -> EnrichResponse:
+    return EnrichResponse(
+        state="failed",
+        failure_reason=f"idempotency_key_conflict: {exc}",
+        processing_time_ms=int((time.monotonic() - start) * 1000),
+    )
+
+
+def _replay_binding(
+    request: EnrichRequest,
+    idem_store: IdempotencyStore | None,
+    idempotency_scope: str | None,
+) -> tuple[IdempotencyStore, str, str, str] | None:
+    """(store, scope, key, fingerprint) when this request takes part in replay.
+
+    A caller key with no authenticated scope is not cached at all (EIE-FIX-001):
+    caching it would put it back in a namespace every caller shares.
+    """
+    if not request.idempotency_key or idem_store is None:
+        return None
+    if idempotency_scope is None:
+        logger.warning("idempotency_unscoped_bypass")
+        return None
+    fingerprint = request_fingerprint(request.model_dump(mode="json", exclude={"idempotency_key"}))
+    return idem_store, idempotency_scope, request.idempotency_key, fingerprint
+
+
 async def enrich_entity(
     request: EnrichRequest,
     settings: Settings,
     kb_resolver,
     idem_store: IdempotencyStore | None = None,
     sonar_config=None,
+    *,
+    idempotency_scope: str | None = None,
 ) -> EnrichResponse:
     """Full enrichment pipeline for a single entity.
 
@@ -55,11 +88,20 @@ async def enrich_entity(
         When provided by the convergence controller, overrides default model,
         search_context_size, domain_filter, max_tokens, temperature, and
         variation count. This enables right-sized API calls per pass.
+    idempotency_scope : str | None
+        The authenticated identity that owns `request.idempotency_key`
+        (app.services.idempotency.tenant_scope / api_key_scope). Without it
+        the key is not replayed or recorded.
     """
     start = time.monotonic()
 
-    if request.idempotency_key and idem_store:
-        cached = await idem_store.get(request.idempotency_key)
+    replay = _replay_binding(request, idem_store, idempotency_scope)
+    if replay is not None:
+        store, scope, key, fingerprint = replay
+        try:
+            cached = await store.get(scope, key, fingerprint)
+        except IdempotencyConflictError as exc:
+            return _conflict_response(exc, start)
         if cached:
             return EnrichResponse(**cached)
 
@@ -288,8 +330,17 @@ async def enrich_entity(
             state="completed",
         )
 
-        if request.idempotency_key and idem_store:
-            await idem_store.set(request.idempotency_key, resp.model_dump())
+        if replay is not None:
+            store, scope, key, fingerprint = replay
+            # A duplicate that was in flight alongside this one may have bound
+            # the key first. Answer with what the key holds, never with a result
+            # a later retry would contradict.
+            try:
+                bound = await store.set(scope, key, fingerprint, resp.model_dump())
+            except IdempotencyConflictError as exc:
+                return _conflict_response(exc, start)
+            if bound is not None:
+                resp = EnrichResponse(**bound)
 
         logger.info(
             "pipeline_completed",
@@ -438,13 +489,17 @@ async def enrich_batch(
     settings: Settings,
     kb_resolver,
     idem_store: IdempotencyStore | None = None,
+    *,
+    idempotency_scope: str | None = None,
 ) -> list[EnrichResponse]:
     """Batch enrichment with bounded concurrency."""
     sem = asyncio.Semaphore(10)
 
     async def _bounded(req: EnrichRequest) -> EnrichResponse:
         async with sem:
-            return await enrich_entity(req, settings, kb_resolver, idem_store)
+            return await enrich_entity(
+                req, settings, kb_resolver, idem_store, idempotency_scope=idempotency_scope
+            )
 
     results = await asyncio.gather(*[_bounded(r) for r in requests])
     return list(results)

@@ -17,7 +17,7 @@ default_url: redis://localhost:6379/0
 usages:
   - purpose: Idempotency store
     source_file: app/services/idempotency.py
-    pattern: Redis key per idempotency_key value
+    pattern: "enrich:idem:v2:{sha256(scope)}:{sha256(idempotency_key)} -> {fingerprint, response}, SET EX NX; scope = SDK tenant or HTTP API-key principal (EIE-FIX-001)"
 
   - purpose: Event streaming (publish)
     source_file: app/services/event_emitter.py
@@ -31,4 +31,3 @@ usages:
       # TODO: Verify exact rate limiter backend from middleware/rate_limiter.py
 
 health_check: "redis-cli ping"  # from docker-compose.yml healthcheck
-
