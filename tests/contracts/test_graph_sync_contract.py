@@ -177,7 +177,8 @@ def test_resolution_order_label_then_single_then_ontology() -> None:
     single = {"sync": {"endpoints": [{"path": "/v1/sync/metals", "idproperty": "metal_id"}]}}
     for label in (None, "Account"):
         contract = resolve_graph_sync_contract(single, node_label=label)
-        assert contract is not None and contract.entity_type == "metals"
+        assert contract is not None
+        assert contract.entity_type == "metals"
 
     assert resolve_graph_sync_contract(AMBIGUOUS_SPEC) is None
     assert resolve_graph_sync_contract(NO_SYNC_SPEC) is None
@@ -217,7 +218,8 @@ async def test_ack_is_checked_against_the_domains_resolved_endpoint(specs_reader
             domain="plastics",
             node_label="PolymerFamily",
         )
-    assert confirmed is not None and confirmed["synced_count"] == 1
+    assert confirmed is not None
+    assert confirmed["synced_count"] == 1
 
 
 # ── Ambiguous: skipped, never defaulted ──────────────────────────────────────
@@ -269,7 +271,8 @@ async def test_no_declared_endpoint_uses_the_labeled_fallback(specs_reader) -> N
             tenant_id="plain", entity_id="t-1", fields={}, domain="plain"
         )
     assert execute.await_args.kwargs["payload"]["entity_type"] == "facilities"
-    assert result is not None and result["status"] == "success"
+    assert result is not None
+    assert result["status"] == "success"
 
 
 @pytest.mark.unit
@@ -300,7 +303,8 @@ def test_unparseable_spec_is_declares_none(tmp_path: Path, body: str) -> None:
         fallback_entity_type="facilities",
         fallback_id_property="facility_id",
     ).graph_sync_contract("odd")
-    assert fallback is not None and fallback.source == GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK
+    assert fallback is not None
+    assert fallback.source == GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK
 
 
 # ── F-248-1: an illegal id never reaches the filesystem ──────────────────────

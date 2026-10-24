@@ -375,45 +375,23 @@ class PacketRouter:
         spec outside the domains root.
         """
         contract: GraphSyncContract | None = None
-        if domain and self._domain_reader is not None:
-            # AttributeError / TypeError / KeyError: an empty file (YAML `None`)
-            # or a list root makes DomainYamlReader._parse raise before any
-            # spec exists; that is "declares none", not a resolution failure.
-            try:
-                spec = self._domain_reader.load(domain).raw_spec
-            except (
-                FileNotFoundError,
-                ValueError,
-                OSError,
-                yaml.YAMLError,
-                AttributeError,
-                TypeError,
-                KeyError,
-            ) as exc:
+        spec = self._load_domain_spec(domain) if domain else None
+        if spec is not None:
+            contract = resolve_graph_sync_contract(spec, node_label=node_label)
+            declared = _usable_sync_endpoints(spec) if contract is None else []
+            if declared:
                 logger.warning(
-                    "graph_sync_domain_spec_unavailable",
+                    "graph_sync_skipped_ambiguous_contract",
                     domain=domain,
-                    error=f"{type(exc).__name__}: {exc}",
+                    node_label=node_label,
+                    candidates=[
+                        {"entity_type": e, "id_property": i, "targetnode": t}
+                        for e, i, t in declared
+                    ],
+                    fix="pass the entity's node label, or declare one endpoint per "
+                    "ontology node so the label selects it",
                 )
-            else:
-                if not isinstance(spec, dict):
-                    spec = {}
-                contract = resolve_graph_sync_contract(spec, node_label=node_label)
-                if contract is None:
-                    declared = _usable_sync_endpoints(spec)
-                    if declared:
-                        logger.warning(
-                            "graph_sync_skipped_ambiguous_contract",
-                            domain=domain,
-                            node_label=node_label,
-                            candidates=[
-                                {"entity_type": e, "id_property": i, "targetnode": t}
-                                for e, i, t in declared
-                            ],
-                            fix="pass the entity's node label, or declare one endpoint per "
-                            "ontology node so the label selects it",
-                        )
-                        return None
+                return None
         if contract is None:
             contract = self._fallback_contract
         if contract is None:
@@ -426,6 +404,35 @@ class PacketRouter:
             source=contract.source,
         )
         return contract
+
+    def _load_domain_spec(self, domain: str) -> dict[str, Any] | None:
+        """The raw spec for ``domain``, ``{}`` for a non-mapping root, None when unreadable.
+
+        None ("declares no endpoint") covers a missing reader, an unknown or
+        illegal id, and an unreadable or malformed file; each is logged, never
+        raised. AttributeError / TypeError / KeyError: an empty file (YAML
+        `None`) or a list root makes DomainYamlReader._parse raise before any
+        spec exists.
+        """
+        if self._domain_reader is None:
+            return None
+        try:
+            spec = self._domain_reader.load(domain).raw_spec
+        except (
+            ValueError,
+            OSError,
+            yaml.YAMLError,
+            AttributeError,
+            TypeError,
+            KeyError,
+        ) as exc:
+            logger.warning(
+                "graph_sync_domain_spec_unavailable",
+                domain=domain,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return None
+        return spec if isinstance(spec, dict) else {}
 
     async def route(
         self,

@@ -18,7 +18,6 @@ import pytest
 import yaml
 from constellation_node_sdk.transport import create_transport_packet
 
-import app.engines.packet_router as packet_router_module
 from app.engines.domain_yaml_reader import DomainYamlReader
 from app.engines.packet_router import (
     GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
@@ -258,7 +257,8 @@ async def test_graph_sync_fallback_is_labeled_and_only_used_without_a_spec_contr
     payload = mock_exec.await_args.kwargs["payload"]
     assert payload["entity_type"] == "facilities"
     assert payload["batch"][0]["facility_id"] == "ent-9"
-    assert result is not None and result["synced_count"] == 1
+    assert result is not None
+    assert result["synced_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -285,8 +285,9 @@ async def test_acknowledgment_is_checked_against_the_domains_own_endpoint(tmp_pa
     assert result is None, "a `facilities` ack does not confirm a `polymerfamilies` sync"
 
 
-def test_get_router_reads_specs_from_settings_domains_dir(tmp_path):
+def test_get_router_reads_specs_from_settings_domains_dir(tmp_path, monkeypatch):
     """The singleton resolves contracts from the same domains/ the converge path reads."""
+    import app.engines.packet_router as packet_router_module
 
     class SettingsStub:
         gate_url = "https://gate:8080"
@@ -294,18 +295,14 @@ def test_get_router_reads_specs_from_settings_domains_dir(tmp_path):
         graph_sync_entity_type = ""
         graph_sync_id_property = ""
 
-    original = packet_router_module._router_singleton
-    packet_router_module._router_singleton = None
-    try:
-        router = get_router(SettingsStub())
-        contract = router.graph_sync_contract("plastics")
-        assert contract is not None
-        assert contract.entity_type == "facilities"
-        assert contract.source == GRAPH_SYNC_SOURCE_DOMAIN_SPEC
-        # Empty fallback pair: a domain without a spec endpoint fails closed.
-        assert router.graph_sync_contract("metals") is None
-    finally:
-        packet_router_module._router_singleton = original
+    monkeypatch.setattr(packet_router_module, "_router_singleton", None)
+    router = get_router(SettingsStub())
+    contract = router.graph_sync_contract("plastics")
+    assert contract is not None
+    assert contract.entity_type == "facilities"
+    assert contract.source == GRAPH_SYNC_SOURCE_DOMAIN_SPEC
+    # Empty fallback pair: a domain without a spec endpoint fails closed.
+    assert router.graph_sync_contract("metals") is None
 
 
 def test_unmatched_label_still_selects_a_single_declared_endpoint():
