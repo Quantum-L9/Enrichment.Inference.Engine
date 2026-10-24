@@ -326,6 +326,9 @@ def test_both_scan_routes_share_one_tenant_posture(
         get_settings.cache_clear()
     assert v1.status_code == api_v1.status_code
     assert v1.status_code == _DIRECT_STATUS[environment]
+    if v1.status_code == 403:
+        # One owner (auth.ensure_direct_tenant_read_allowed): the same refusal on both.
+        assert v1.json() == api_v1.json()
 
 
 @requires_db_runtime

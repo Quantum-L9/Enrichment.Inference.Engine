@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.engines.domain_yaml_reader import TENANT_ID_PATTERN, TENANT_ID_RESERVED_PREFIX
 
 # ── Identity contract (operator decision 2026-10-22) ─────────
 #
@@ -29,9 +30,14 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # digits, dots or dashes, 3-63 characters, and never the reserved `system`
 # prefix. Vertical templates are provenance only. A value that violates the
 # grammar is rejected; nothing lowercases, trims or otherwise normalises it.
+#
+# The grammar has ONE owner: app/engines/domain_yaml_reader.py
+# (`TENANT_ID_PATTERN`, `is_legal_tenant_id`; docs/contracts/DOMAIN_IDENTITY_REGISTRY.md).
+# `validate_tenant_id` applies that same pattern and reserved prefix and only
+# adds the reason a value was refused; it never restates the regex.
 
-TENANT_ID_RE = re.compile(r"^[a-z][a-z0-9.-]{2,62}$")
-_RESERVED_TENANT_PREFIX = "system"
+TENANT_ID_RE = TENANT_ID_PATTERN
+_RESERVED_TENANT_PREFIX = TENANT_ID_RESERVED_PREFIX
 
 
 def validate_tenant_id(value: Any) -> str:

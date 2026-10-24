@@ -38,8 +38,8 @@ from pydantic import BaseModel, Field
 
 from app.utils.safe_convert import safe_float
 
-from ...core.auth import verify_api_key
-from ...core.config import DETERMINISTIC_PROVIDER_ENVIRONMENTS, Settings, get_settings
+from ...core.auth import ensure_direct_tenant_read_allowed, verify_api_key
+from ...core.config import Settings, get_settings
 from ...engines.convergence.loop_state import LoopState, LoopStateStore, LoopStatus
 from ...engines.convergence.schema_proposer import (
     ApprovalDecision,
@@ -91,18 +91,10 @@ _domain_locks: dict[str, asyncio.Lock] = {}
 # re-exported here for the API-side callers and tests that pin it.
 __all__ = ["is_legal_tenant_id"]
 
-# F-247-4: the environments in which a direct, key-authenticated read or
-# revision of one tenant's spec is served. It is the one unsigned set the node
-# already keeps (app/core/config.py: the SDK runs `dev_mode` there and the
-# deterministic provider is permitted there because no real tenant is served).
-# Outside it the node is signed and tenant-facing, a single deployment key binds
-# its holder to no tenant, and the direct route is refused -- fail closed, no
-# fallback tenant.
-DIRECT_DOMAIN_ACCESS_ENVIRONMENTS: frozenset[str] = DETERMINISTIC_PROVIDER_ENVIRONMENTS
-_DIRECT_DOMAIN_ACCESS_REFUSED = (
-    "tenant-scoped domain spec access is not served directly in this environment; "
-    "an X-API-Key request is not bound to a tenant"
-)
+# F-247-4 / F-247-5: direct, key-authenticated reads and revisions of one
+# tenant's spec follow the node's one direct-tenant-access posture (EIE-SEC-03,
+# app/core/auth.py `ensure_direct_tenant_read_allowed`): served only in the
+# unsigned runtimes, 403 everywhere else -- fail closed, no fallback tenant.
 # OpenAPI entry for every route guarded by require_direct_domain_access.
 _DIRECT_DOMAIN_ACCESS_RESPONSE: dict[str, Any] = {
     "description": "Direct tenant-scoped access is refused outside local/dev/test"
@@ -119,10 +111,11 @@ def require_direct_domain_access() -> None:
     Called first by :func:`get_domain_spec` (so both scan routes share it), by
     :func:`approve_proposals` and by :func:`get_pending_proposals`: before any
     run, spec or registry listing is read, so a refused caller learns nothing
-    about which tenants exist.
+    about which tenants exist. The rule is `ensure_direct_tenant_read_allowed`,
+    the same one `require_direct_tenant_read` applies to `/fields`,
+    `/proposals`, `/discover` and `/score`.
     """
-    if get_settings().l9_environment not in DIRECT_DOMAIN_ACCESS_ENVIRONMENTS:
-        raise HTTPException(status_code=403, detail=_DIRECT_DOMAIN_ACCESS_REFUSED)
+    ensure_direct_tenant_read_allowed()
 
 
 def _domain_lock(domain: str) -> asyncio.Lock:

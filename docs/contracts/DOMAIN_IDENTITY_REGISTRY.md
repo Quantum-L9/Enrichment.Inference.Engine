@@ -21,7 +21,7 @@ A tenant id is therefore a legal Neo4j database name:
 | Grammar | `^[a-z][a-z0-9.-]{2,62}$` — lowercase letter first, then lowercase letters, digits, dots or dashes, 3–63 characters |
 | Case | lowercase only; a mixed-case id is refused, never lowercased into a different identity |
 | Reserved | an id starting with `system` is refused |
-| Single source | `app.engines.domain_yaml_reader.is_legal_tenant_id`. The reader applies it to every id that reaches the filesystem; the registry (`app.api.v1.converge`) imports the same function. There is no second regex. |
+| Single source | `app.engines.domain_yaml_reader.is_legal_tenant_id`. The reader applies it to every id that reaches the filesystem; the registry (`app.api.v1.converge`) imports the same function. `app.models.schemas.validate_tenant_id` (and `app.core.auth.tenant_scope`, which calls it) applies the reader's `TENANT_ID_PATTERN` and `TENANT_ID_RESERVED_PREFIX` and only adds the reason a value was refused. There is no second regex. |
 
 Vertical templates are provenance only (`metadata.template.id` / `metadata.template.version`). There is no tenant-to-domain mapping layer anywhere in EIE.
 
@@ -71,7 +71,7 @@ A routable node with no domain spec can serve no tenant's converge or scan, so i
 
 `converge.get_domain_spec(domain)` is the only way a scan resolves a spec; `converge.scan_registered_domain` wraps it for both `POST /v1/scan` and `POST /api/v1/scan`, so:
 
-- **Direct tenant access.** The X-API-Key authenticates the caller but binds it to no tenant (one key hash serves the deployment). `converge.require_direct_domain_access` therefore serves a direct, tenant-scoped spec read or revision only where `L9_ENVIRONMENT` is `local`, `dev` or `test` (`DIRECT_DOMAIN_ACCESS_ENVIRONMENTS`, the node's one unsigned set, `app.core.config.DETERMINISTIC_PROVIDER_ENVIRONMENTS`) and answers **403** everywhere else, before any run, spec or registry listing is read. It guards both scan routes (through `get_domain_spec`), `POST /v1/converge/{run_id}/approve` and `GET /v1/converge/proposals/{domain}`. Tenant identity outside those runtimes arrives through Gate ingress.
+- **Direct tenant access.** The X-API-Key authenticates the caller but binds it to no tenant (one key hash serves the deployment). `converge.require_direct_domain_access` therefore serves a direct, tenant-scoped spec read or revision only where `L9_ENVIRONMENT` is `local`, `dev` or `test` and answers **403** everywhere else, before any run, spec or registry listing is read. The rule has one owner, `app.core.auth.ensure_direct_tenant_read_allowed` (`DIRECT_TENANT_READ_ENVIRONMENTS`, EIE-SEC-03), which `require_direct_tenant_read` also applies, so `/v1/scan` and `/api/v1/scan` answer the same status in every environment. It guards both scan routes (through `get_domain_spec`), `POST /v1/converge/{run_id}/approve` and `GET /v1/converge/proposals/{domain}`. Tenant identity outside those runtimes arrives through Gate ingress.
 - **Unknown domain.** An unregistered domain answers **HTTP 404** on both scan routes, with the same detail (`Domain '<id>' not found. Available: [...]`). 404 is the status `docs/contracts/api/openapi.yaml` documents for `/api/v1/scan` and `/v1/scan`.
 - **Scan identity.** The scan's `domain_id` is the registry key and its `domain_version` the declared version, so two tenants sharing one ontology scan to distinct ids and `scan_hash` values.
 
