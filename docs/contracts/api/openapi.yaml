@@ -2,7 +2,7 @@
 # Contract: Unified OpenAPI Specification
 # Source:   app/main.py, app/api/v1/*, app/models/schemas.py
 # Version:  2.3.1
-# Updated:  2026-04-07
+# Updated:  2026-10-23
 # ═══════════════════════════════════════════════════════════════
 
 openapi: "3.1.0"
@@ -73,6 +73,20 @@ components:
           example:
             name: "Acme Plastics Ltd"
             industry: "Plastics Recycling"
+        entity_id:
+          type: string
+          nullable: true
+          description: |
+            Entity identity (SEAM-02 producer envelope). Resolves before
+            entity.id and entity.entity_id. Optional on this HTTP surface — the
+            callers above send neither envelope field; the SDK `enrich` and
+            `converge` consumers require a resolvable identity.
+          example: "res.partner:55"
+        domain:
+          type: string
+          nullable: true
+          description: Domain spec id (== tenant id under the identity contract).
+          example: plasticos
         object_type:
           type: string
           description: Source object API name (Account, Lead, res.partner, etc.).
@@ -127,7 +141,7 @@ components:
           nullable: true
           description: Caller-supplied UUID for duplicate prevention.
           example: "550e8400-e29b-41d4-a716-446655440000"
-      x-source-file: app/models/schemas.py:26
+      x-source-file: app/models/schemas.py:106
       additionalProperties: false
 
     EnrichResponse:

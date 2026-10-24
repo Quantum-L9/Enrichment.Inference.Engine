@@ -16,9 +16,89 @@ from __future__ import annotations
 
 import json
 import math
+import re
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+# ── Identity contract (operator decision 2026-10-22) ─────────
+#
+# tenant id == domain spec id == Neo4j database name. A tenant id is therefore
+# a legal Neo4j database name: lowercase, starts with a letter, then letters,
+# digits, dots or dashes, 3-63 characters, and never the reserved `system`
+# prefix. Vertical templates are provenance only. A value that violates the
+# grammar is rejected; nothing lowercases, trims or otherwise normalises it.
+
+TENANT_ID_RE = re.compile(r"^[a-z][a-z0-9.-]{2,62}$")
+_RESERVED_TENANT_PREFIX = "system"
+
+
+def validate_tenant_id(value: Any) -> str:
+    """Return ``value`` when it is a legal tenant id, else raise ValueError.
+
+    Fail closed: no case folding, no whitespace stripping, no substitution.
+    """
+    if not isinstance(value, str):
+        msg = f"tenant id must be a string, got {type(value).__name__}"
+        raise ValueError(msg)
+    if value != value.lower():
+        msg = f"tenant id {value!r} must be lowercase"
+        raise ValueError(msg)
+    if not TENANT_ID_RE.fullmatch(value):
+        msg = f"tenant id {value!r} is not a legal Neo4j database name ({TENANT_ID_RE.pattern})"
+        raise ValueError(msg)
+    if value.startswith(_RESERVED_TENANT_PREFIX):
+        msg = f"tenant id {value!r} must not start with {_RESERVED_TENANT_PREFIX!r}"
+        raise ValueError(msg)
+    return value
+
+
+# SEAM-02: the producer (CEG) sends an EnrichRequest body with a top-level
+# `entity_id`, plus `entity.id`; older emitters carry only `entity.entity_id`.
+# Identity resolves in exactly this order. There is no literal fallback: a body
+# that names no identity has none, and the consumer rejects it.
+ENTITY_IDENTITY_ORDER: tuple[str, ...] = ("entity_id", "entity.id", "entity.entity_id")
+
+
+def resolve_entity_identity(payload: Mapping[str, Any]) -> str | None:
+    """Resolve entity identity: top-level ``entity_id``, then ``entity.id``, then
+    ``entity.entity_id``. Returns None when none of them carries a non-blank string."""
+    top = payload.get("entity_id")
+    if isinstance(top, str) and top.strip():
+        return top.strip()
+    entity = payload.get("entity")
+    if isinstance(entity, Mapping):
+        for key in ("id", "entity_id"):
+            value = entity.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+# The converge consumer accepts one more carrier. The live Odoo builder
+# (IB-Odoo_19 build_converge_request) puts the record reference on
+# `entity._odoo_entity_id` beside `entity.id`, and older builders sent only the
+# alias. It is the documented last fallback after the SEAM-02 order — the
+# superset below is the whole converge grammar, resolved once per operation so
+# the convergence loop, GraphReturnChannel and persistence key on one id.
+CONVERGE_IDENTITY_ORDER: tuple[str, ...] = (*ENTITY_IDENTITY_ORDER, "entity._odoo_entity_id")
+
+
+def resolve_converge_identity(payload: Mapping[str, Any]) -> str | None:
+    """Resolve converge identity: the SEAM-02 order, then ``entity._odoo_entity_id``.
+
+    Returns None when none of them carries a non-blank string."""
+    resolved = resolve_entity_identity(payload)
+    if resolved is not None:
+        return resolved
+    entity = payload.get("entity")
+    if isinstance(entity, Mapping):
+        value = entity.get("_odoo_entity_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
 
 # ── Request ──────────────────────────────────────────────────
 
@@ -36,6 +116,18 @@ class EnrichRequest(BaseModel):
     entity: dict[str, Any] = Field(
         ...,
         description="Record fields as key-value pairs.",
+    )
+
+    # SEAM-02 producer envelope: identity and domain at the top level. Both are
+    # optional on the HTTP surface (Salesforce/Odoo/Clay send neither); the SDK
+    # `enrich` consumer requires an identity — see resolve_entity_identity().
+    entity_id: str | None = Field(
+        default=None,
+        description="Entity identity; resolves before entity.id and entity.entity_id.",
+    )
+    domain: str | None = Field(
+        default=None,
+        description="Domain spec id (== tenant id under the identity contract).",
     )
 
     # What kind of record (Account, Lead, res.partner, etc)
