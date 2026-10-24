@@ -107,11 +107,19 @@ class Settings(BaseSettings):
     # restarts the process. The loop closes that without a restart. 0 disables it.
     # C-09 (EIE-212-F004): env name L9_GATE_REREGISTRATION_INTERVAL_SECONDS.
     l9_gate_reregistration_interval_seconds: float = 300.0
-    # CEG `sync` contract projection for post-enrichment graph sync: the CEG sync
-    # endpoint suffix and its id property (Cognitive.Engine.Graphs domain spec
-    # `sync.endpoints`). Defaults match the plasticos domain.
-    graph_sync_entity_type: str = "facilities"
-    graph_sync_id_property: str = "facility_id"
+    # GRAPH-IDENT-02: the CEG `sync` contract for post-enrichment graph sync is
+    # read per tenant from the tenant's own spec (tenant id == domain spec id;
+    # `sync.endpoints[]`, the owner-native `path` / `targetnode` / `idproperty`
+    # keys of Cognitive.Engine.Graphs' SyncEndpointSpec) by
+    # app/engines/packet_router.py. These two values are the clearly labeled
+    # FALLBACK, used only when that spec declares no resolvable sync endpoint;
+    # every use is logged as `graph_sync_contract_resolved` with
+    # `source="settings_fallback"` and the id it stood in for. Both default to
+    # "": a tenant without a spec-declared endpoint fails closed (no sync is
+    # sent, `graph_sync_skipped_no_contract` names it). plasticos declares its
+    # endpoints in domains/plasticos/spec.yaml and needs no fallback.
+    graph_sync_entity_type: str = ""
+    graph_sync_id_property: str = ""
 
     database_url: str = "postgresql+asyncpg://enrich:changeme@localhost:5432/enrich"
 

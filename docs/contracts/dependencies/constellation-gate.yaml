@@ -4,8 +4,13 @@
 #           app/engines/graph_sync_client.py, app/main.py,
 #           app/services/graph_return_channel.py,
 #           app/engines/convergence_controller.py
-# Version:  1.2.0
-# Updated:  2026-10-11 (RV-DOMAIN-RD-07: graph sync is CEG's acknowledgment, not EIE's dispatch)
+# Version:  1.4.0
+# Updated:  2026-10-23 (PR #248 audit: resolved per TENANT, the spec CEG validates
+#           against; illegal ids refused by the reader's tenant grammar; an unmatched
+#           explicit label is ambiguous; the settings fallback is empty by default)
+#           2026-10-22 (GRAPH-IDENT-02: the CEG sync endpoint is resolved per domain
+#           from the domain spec; ambiguous declarations are refused, not defaulted)
+#           2026-10-11 (RV-DOMAIN-RD-07: graph sync is CEG's acknowledgment, not EIE's dispatch)
 # ═══════════════════════════════════════════════════════════════
 
 service_name: Constellation.Gate
@@ -58,5 +63,40 @@ invariants:
     the fields that were persisted and emitted on the first attempt, never the
     retrying call's — without re-persisting, re-emitting or re-invalidating
     (RV-DOMAIN-RD-07).
+  - The `sync` endpoint and its id property are resolved PER TENANT from the
+    tenant's own spec (tenant id == domain spec id; `domains/<tenant>/spec.yaml`
+    `sync.endpoints[]`, CEG's owner-native `path` / `targetnode` / `idproperty`;
+    `entity_type` is the path's last segment), by `PacketRouter.graph_sync_contract`
+    keyed by the packet's `tenant_id` — the spec CEG loads (`load_domain(tenant)`)
+    to validate the same sync. The payload `domain` never selects the spec; it is
+    carried on the row, and a `domain` other than the tenant is logged as
+    `graph_sync_domain_is_not_tenant`. Selection order — the caller's `node_label`
+    matching exactly one `targetnode`; else the single declared endpoint; else, only
+    when the caller supplied NO `node_label`, the single endpoint whose `targetnode`
+    is a label of the spec's own ontology. `notify_graph_sync` checks CEG's
+    acknowledgment against the endpoint it resolved, never a global default
+    (GRAPH-IDENT-02).
+  - A spec that declares endpoints but none can be selected is AMBIGUOUS — including
+    an explicit `node_label` that no endpoint among several targets — nothing is
+    sent, `graph_sync_skipped_ambiguous_contract` names the domain and the
+    candidates, `notify_graph_sync` returns None (not synced), and the settings
+    fallback is not consulted. A row whose entity type the spec cannot name must
+    not land on another entity type's endpoint.
+  - An id outside the one tenant grammar (`is_legal_tenant_id` in
+    app/engines/domain_yaml_reader.py) never reaches the filesystem;
+    `DomainYamlReader.load` refuses it with `ValueError` before building a path, so
+    `../x` or an absolute path cannot select a spec outside the domains root. The
+    router treats that refusal as "declares no endpoint" (next invariant).
+  - The labeled fallback `Settings.graph_sync_entity_type` / `graph_sync_id_property`
+    applies only when the spec declares no endpoint at all (no `sync` section, an
+    unknown tenant, an illegal id, an unreadable, malformed or wrong-shaped file);
+    every use is logged as `graph_sync_contract_resolved` with `source="settings_fallback"`.
+    Both default to empty, so such a tenant fails closed — nothing is sent and
+    `graph_sync_skipped_no_contract` names it. The plasticos spec declares CEG's
+    endpoints itself (`domains/plasticos/spec.yaml` `sync`, in lockstep with CEG's).
+  - The entity's node label travels from the handler (`payload["node_label"]`, else
+    `object_type`) through `SideEffectCoordinator.commit_after_enrich(node_label=)` to
+    `notify_graph_sync(node_label=)`; a graph-leg retry re-sends the label of the
+    first attempt together with the fields and domain it pins.
 
 health_check: "GET {GATE_URL}/v1/health"

@@ -23,6 +23,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   converge path is unchanged.
 
 ### Changed
+- **Graph-sync contract per tenant (GRAPH-IDENT-02, PR #248).**
+  - The CEG `sync` endpoint and its id property are read from the tenant's own
+    spec (`domains/<tenant>/spec.yaml` `sync.endpoints[]`; tenant id == domain
+    spec id), the spec CEG validates the same sync against. The payload
+    `domain` no longer selects it; a `domain` other than the tenant is logged
+    as `graph_sync_domain_is_not_tenant`.
+  - `domains/plasticos/spec.yaml` declares CEG's five plasticos sync endpoints
+    (`facilities`, `polymerfamilies`, `materialforms`, `supply-opportunities`,
+    `buyer-demands`), so plasticos resolves `source=domain_spec`.
+  - `Settings.graph_sync_entity_type` / `graph_sync_id_property` default to
+    `""` (were `facilities` / `facility_id`): a tenant whose spec declares no
+    endpoint is skipped and nothing is sent, unless an operator sets both as
+    the labeled fallback (`source=settings_fallback`). Deployments that set
+    `GRAPH_SYNC_ENTITY_TYPE` / `GRAPH_SYNC_ID_PROPERTY` explicitly keep it.
+  - An explicit node label that no endpoint among several targets is
+    ambiguous: nothing is sent (`graph_sync_skipped_ambiguous_contract`). The
+    ontology rule applies only when no label is supplied. An enrich whose
+    `object_type` is not a CEG `targetnode` (e.g. `Account`) needs
+    `node_label` in its payload to be synced.
+  - `DomainYamlReader.load` refuses an id outside the tenant grammar
+    (`is_legal_tenant_id`) with `ValueError` before building a path, so a
+    payload id such as `../x` cannot read a spec outside the domains root.
 - **PR #212 audit closure (EIE-212-F001..F004).**
   - `GET /api/v1/ready` answers HTTP 503 while Gate registration is enabled
     but `failed` or `not_attempted`, 200 when `registered` or `disabled`.

@@ -72,6 +72,37 @@ chassisbinding:
   - match
   - outcomes
 
+# CEG `sync` endpoints (GRAPH-IDENT-02). Mirrors the owner's declaration in
+# Cognitive.Engine.Graphs domains/plasticos/spec.yaml `sync.endpoints` (CEG
+# SyncEndpointSpec keys path / targetnode / idproperty; CEG keys its sync handler
+# on the path's last segment and validates the batch against this same tenant's
+# spec). EIE's packet_router selects one per row: the node label, else the
+# single endpoint, else (no label given) the one whose targetnode is in this
+# ontology. Keep it in lockstep with CEG's: an endpoint CEG does not declare is
+# rejected there.
+sync:
+  endpoints:
+  - path: /v1/sync/facilities
+    targetnode: Facility
+    idproperty: facility_id
+    batchstrategy: UNWINDMERGE
+  - path: /v1/sync/polymerfamilies
+    targetnode: PolymerFamily
+    idproperty: code
+    batchstrategy: UNWINDMERGE
+  - path: /v1/sync/materialforms
+    targetnode: MaterialForm
+    idproperty: form_id
+    batchstrategy: UNWINDMERGE
+  - path: /v1/sync/supply-opportunities
+    targetnode: SupplyOpportunity
+    idproperty: opportunity_id
+    batchstrategy: UNWINDMERGE
+  - path: /v1/sync/buyer-demands
+    targetnode: BuyerDemand
+    idproperty: demand_id
+    batchstrategy: UNWINDMERGE
+
 semantic_registry:
   enabled: true
   canonical_entities:
