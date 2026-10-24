@@ -1,5 +1,6 @@
 {
  "entity": {
+  "id": "Account:plasticos-supply-001",
   "Name": "PlasticOS Supply Ltd",
   "BillingCountry": "DE",
   "Industry": "Plastics Recycling",
