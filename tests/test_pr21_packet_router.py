@@ -287,7 +287,6 @@ async def test_acknowledgment_is_checked_against_the_domains_own_endpoint(tmp_pa
 
 def test_get_router_reads_specs_from_settings_domains_dir(tmp_path, monkeypatch):
     """The singleton resolves contracts from the same domains/ the converge path reads."""
-    import app.engines.packet_router as packet_router_module
 
     class SettingsStub:
         gate_url = "https://gate:8080"
@@ -295,7 +294,7 @@ def test_get_router_reads_specs_from_settings_domains_dir(tmp_path, monkeypatch)
         graph_sync_entity_type = ""
         graph_sync_id_property = ""
 
-    monkeypatch.setattr(packet_router_module, "_router_singleton", None)
+    monkeypatch.setattr("app.engines.packet_router._router_singleton", None)
     router = get_router(SettingsStub())
     contract = router.graph_sync_contract("plastics")
     assert contract is not None
