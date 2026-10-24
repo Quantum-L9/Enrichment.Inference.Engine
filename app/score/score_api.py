@@ -40,6 +40,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from ..core.auth import require_direct_tenant_read, verify_api_key
 from ..core.exceptions import DependencyNotConfiguredError
 from .score_models import (
     BatchScoreRequest,
@@ -192,7 +193,19 @@ def _envelope(
 
 SCORING_PROFILE_NOT_FOUND = "Scoring profile not found"
 
-router = APIRouter(prefix="/score", tags=["score"])
+# EIE-SEC-02: the guard lives on the router, not on the mount, so every mount
+# of these routes is guarded. `verify_api_key` authenticates the caller;
+# `require_direct_tenant_read` applies the tenant trust posture: scores are
+# tenant data, no request model here names a tenant, and the shared key binds
+# its holder to none — so outside the unsigned dev environments a direct read
+# is refused and scoring is reached through Gate as an action. Router-level
+# dependencies resolve before the per-route provider dependencies, so an
+# unauthenticated call is answered 401/403 before DependencyNotConfiguredError.
+router = APIRouter(
+    prefix="/score",
+    tags=["score"],
+    dependencies=[Depends(verify_api_key), Depends(require_direct_tenant_read)],
+)
 
 
 # -- Score Endpoints -------------------------------------------

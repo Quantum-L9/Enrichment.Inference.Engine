@@ -87,7 +87,7 @@
     "inferences": {
       "type": "array",
       "items": { "type": "object" },
-      "description": "Deterministic KB inference results (JSONB)."
+      "description": "Deterministic KB inference results (JSONB). Converge writes one entry per pass; an entry's optional `inference_provenance` maps each derived field to {rule_id, rule_version, derivation_type, inputs, input_confidence, rule_confidence, confidence, cascade_level}, where confidence = min(rule_confidence, input confidences)."
     },
     "kb_fragment_ids": {
       "type": "array",
@@ -97,7 +97,7 @@
     "feature_vector": {
       "type": ["object", "null"],
       "additionalProperties": true,
-      "description": "Extracted feature vector for downstream scoring (JSONB). Nullable."
+      "description": "Extracted feature vector for downstream scoring (JSONB). Nullable. Converge adds `inference`: {status (active | invalid_rules | catalog_only | not_configured), engines, rule_count, derivation_edges, rule_versions, errors} describing the domain inference context the run executed."
     },
     "convergence_run_id": {
       "type": ["string", "null"],

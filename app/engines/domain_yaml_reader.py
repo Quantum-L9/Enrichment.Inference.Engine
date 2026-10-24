@@ -187,19 +187,32 @@ class DomainYamlReader:
         }
 
     def list_domains(self) -> list[str]:
+        """Every id :meth:`load` resolves: directory specs, then flat-file stems."""
+        directories, flat_files = self._spec_sources()
+        return directories + [Path(name).stem for name in flat_files]
+
+    def list_directory_domains(self) -> list[str]:
+        """Ids with a ``<root>/<id>/spec.yaml``: the only layout that names a tenant."""
+        return self._spec_sources()[0]
+
+    def list_flat_specs(self) -> list[str]:
+        """File names of ``<root>/*.yaml`` / ``*.yml`` specs (the legacy flat layout)."""
+        return self._spec_sources()[1]
+
+    def _spec_sources(self) -> tuple[list[str], list[str]]:
+        directories: list[str] = []
+        flat_files: list[str] = []
         if not self._root.exists():
-            return []
-        domains = []
+            return directories, flat_files
         for p in self._root.iterdir():
             if p.is_dir() and (p / "spec.yaml").exists():
-                domains.append(p.name)
+                directories.append(p.name)
             elif p.suffix in (".yaml", ".yml") and p.stem != "__pycache__":
-                domains.append(p.stem)
-        return domains
+                flat_files.append(p.name)
+        return directories, flat_files
 
     def _parse(self, domain_id: str, raw: dict) -> DomainEnrichmentConfig:
-        identity = raw.get("domain_identity", raw.get("domain", {}))
-        version = identity.get("version", raw.get("version", "0.1.0-seed"))
+        version = declared_spec_identity(raw)[1] or "0.1.0-seed"
 
         ontology = raw.get("ontology", {})
         nodes_raw = ontology.get("nodes", [])

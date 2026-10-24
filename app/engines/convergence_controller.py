@@ -86,6 +86,9 @@ def get_or_classify_domain(domain_spec: dict[str, Any]) -> DomainClassification:
 # graph-inference-result packet (EIE-POST-F001).
 GRAPH_INFERENCE_SOURCE = "graph_inference"
 
+# Confidence-tracker source label for values this loop's InferenceBridge derived.
+INFERENCE_SOURCE = "inference"
+
 # Convergence stopped because the shared request deadline ran out. Not a
 # successful convergence — see _assemble_convergence_response.
 DEADLINE_EXHAUSTED_REASON = "deadline_exhausted"
@@ -105,6 +108,7 @@ class PassResult:
     inference_fired: int = 0
     per_field_confidence: dict[str, float] = field(default_factory=dict)  # NEW
     graph_seeded_fields: dict[str, Any] = field(default_factory=dict)
+    inference_provenance: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -175,7 +179,10 @@ async def run_convergence_loop(
 
     # ── Convergence config ─────────────────────────────────
     config = convergence_config or ConvergenceConfig()
-    confidence_tracker = ConfidenceTracker(confidence_threshold=config.confidence_threshold)  # NEW
+    confidence_tracker = ConfidenceTracker(
+        confidence_threshold=config.confidence_threshold,
+        exclude_sources=frozenset({INFERENCE_SOURCE}),
+    )
 
     # ── Domain classification (cached per domain) ──────────
     domain_classification: DomainClassification | None = None
@@ -347,6 +354,9 @@ async def run_convergence_loop(
             field_conf = per_field_conf.get(field_name, pass_response.confidence)
             state.known_fields[field_name] = value
             state.confidence_map[field_name] = field_conf
+            # Provider evidence for a field this loop had inferred makes it a
+            # fact: it is no longer a derivation to re-run or retract.
+            state.inferred_fields.pop(field_name, None)
 
             # NEW: Update confidence tracker
             confidence_tracker.update_field(
@@ -361,12 +371,25 @@ async def run_convergence_loop(
         cost_tracker.record_pass(pass_num, pass_result.tokens_used)
 
         # --- INFERENCE PASS ---
+        # Rules run over facts only — the record's values, provider evidence and
+        # graph-seeded targets — never over this loop's own earlier derivations.
+        # A derivation is a function of its inputs: when a later pass moves an
+        # input across a rule boundary, re-running the rules replaces it (and
+        # re-bounds its confidence by the inputs now in the response); a
+        # derivation whose rule no longer fires is retracted rather than carried
+        # forward beside the evidence that contradicts it.
+        derived_before = _own_derivations(confidence_tracker)
+        facts = {k: v for k, v in state.known_fields.items() if k not in derived_before}
         inference_result = bridge.run(
-            entity=state.known_fields,
-            confidence_map=state.confidence_map,
+            entity=facts,
+            confidence_map={k: v for k, v in state.confidence_map.items() if k in facts},
         )
         pass_result.inferred_fields = inference_result.derived_fields
         pass_result.inference_fired = inference_result.rules_fired
+        pass_result.inference_provenance = inference_result.provenance
+
+        for field_name in sorted(derived_before - set(inference_result.derived_fields)):
+            _retract_derivation(field_name, state, confidence_tracker, pass_num)
 
         for field_name, value in inference_result.derived_fields.items():
             state.inferred_fields[field_name] = value
@@ -380,7 +403,7 @@ async def run_convergence_loop(
                 value=value,
                 confidence=inferred_conf,
                 pass_num=pass_num,
-                source="inference",
+                source=INFERENCE_SOURCE,
             )
 
         if hasattr(inference_result, "unlock_map"):
@@ -423,7 +446,13 @@ async def run_convergence_loop(
 
     elapsed = int((time.monotonic() - start) * 1000)
     return _assemble_convergence_response(
-        state, request, elapsed, domain_classification, cost_tracker, confidence_tracker
+        state,
+        request,
+        elapsed,
+        domain_classification,
+        cost_tracker,
+        confidence_tracker,
+        inference_context=bridge.describe(),
     )
 
 
@@ -441,8 +470,11 @@ def _pass_meets_convergence(
 
     With a schema, every requested field must be present. A consumer field
     threshold wins over the loop's own confidence bar. With no schema, every
-    field this loop has tracked must clear the loop bar. An empty tracker has
-    not converged.
+    field this loop has tracked must clear the loop bar — except values this
+    loop's inference derived. A derived confidence is bounded by its inputs and
+    its rule; another provider pass cannot raise it except by raising those
+    inputs, which are tracked themselves. Counting it would buy paid passes
+    that cannot change the outcome. An empty tracker has not converged.
     """
     names = [name for name in (request.schema_ or {}) if name != "confidence"]
     if not names:
@@ -456,6 +488,34 @@ def _pass_meets_convergence(
         if field_state.confidence < required:
             return False
     return True
+
+
+def _own_derivations(confidence_tracker: ConfidenceTracker) -> set[str]:
+    """Fields whose current value this loop's InferenceBridge derived.
+
+    The tracker records the source of each field's latest value, so a field the
+    bridge derived on an earlier pass and the provider later evidenced reads as
+    a fact here, not as a derivation.
+    """
+    return {
+        name
+        for name, field_state in confidence_tracker.fields.items()
+        if field_state.source_variation == INFERENCE_SOURCE
+    }
+
+
+def _retract_derivation(
+    name: str,
+    state: ConvergenceState,
+    confidence_tracker: ConfidenceTracker,
+    pass_num: int,
+) -> None:
+    """Drop a derivation whose rule did not fire over this pass's facts."""
+    state.known_fields.pop(name, None)
+    state.inferred_fields.pop(name, None)
+    state.confidence_map.pop(name, None)
+    confidence_tracker.fields.pop(name, None)
+    logger.info("inference_derivation_retracted", pass_number=pass_num, field=name)
 
 
 def _apply_graph_targets(
@@ -518,6 +578,7 @@ def _assemble_convergence_response(
     domain_classification: DomainClassification | None = None,
     cost_tracker: CostTracker | None = None,
     confidence_tracker: ConfidenceTracker | None = None,  # NEW
+    inference_context: dict[str, Any] | None = None,
 ) -> EnrichResponse:
     """Build the final EnrichResponse from accumulated convergence state."""
     enriched_or_inferred: set[str] = set()
@@ -541,6 +602,7 @@ def _assemble_convergence_response(
             "graph_seeded": list(pr.graph_seeded_fields.keys()),
             "confidence": pr.confidence,
             "rules_fired": pr.inference_fired,
+            "inference_provenance": pr.inference_provenance,
             "per_field_confidence": pr.per_field_confidence,  # NEW
         }
         if pr.sonar_config:
@@ -559,6 +621,10 @@ def _assemble_convergence_response(
         ).model_dump()
     if confidence_tracker:  # NEW
         feature_vector["confidence_tracking"] = confidence_tracker.to_dict()
+    if inference_context is not None:
+        # Which inference context this run executed — or why it executed none.
+        # A refused rule set must not read like a run where no rule happened to fire.
+        feature_vector["inference"] = inference_context
 
     # A loop that stopped because the shared request deadline ran out has not
     # converged, however many fields it managed to accumulate first. Reporting

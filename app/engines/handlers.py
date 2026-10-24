@@ -22,6 +22,7 @@ from typing import Any
 
 import aiofiles
 import structlog
+import yaml
 
 from ..core.config import get_settings
 from ..engines.convergence.convergence_config import ConvergenceConfig
@@ -29,10 +30,17 @@ from ..engines.convergence_controller import run_convergence_loop
 from ..engines.domain_yaml_reader import DomainYamlReader
 from ..engines.enrichment_orchestrator import enrich_batch, enrich_entity
 from ..engines.schema_discovery import SchemaDiscoveryEngine
-from ..models.schemas import BatchEnrichRequest, EnrichRequest, EnrichResponse
+from ..models.schemas import (
+    ENTITY_IDENTITY_ORDER,
+    BatchEnrichRequest,
+    EnrichRequest,
+    EnrichResponse,
+    resolve_converge_identity,
+    resolve_entity_identity,
+)
 from ..services.crm.base import CRMType
 from ..services.crm.writeback import WriteBackOrchestrator
-from ..services.idempotency import IdempotencyStore
+from ..services.idempotency import IdempotencyStore, tenant_scope
 from ..services.kb_resolver import KBResolver
 from ..services.odoo_gate_converge import (
     DEFAULT_CONVERGE_TIMEOUT_SECONDS,
@@ -102,7 +110,14 @@ async def _persist_and_sync(
     app/services/side_effect_coordinator.py for the full reasoning).
     """
     settings = get_settings()
-    entity_id = payload.get("entity_id", payload.get("entity", {}).get("id", "unknown"))
+    # SEAM-02: identity resolves top-level entity_id, then entity.id, then
+    # entity.entity_id. There is no literal fallback — persisting under a
+    # placeholder would collapse every unidentified entity of a tenant into one
+    # row, so an unidentified payload is refused here instead.
+    entity_id = resolve_entity_identity(payload)
+    if entity_id is None:
+        msg = f"entity identity required: one of {', '.join(ENTITY_IDENTITY_ORDER)}"
+        raise ValueError(msg)
     domain = payload.get("domain", settings.default_domain)
     packet_id = None
     if payload.get("packet_id"):
@@ -126,9 +141,22 @@ async def _persist_and_sync(
 
 
 async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """SDK handler for action='enrich' (SEAM-02 consumer).
+
+    The producer's EnrichRequest body carries identity at the top level
+    (`entity_id`) and in `entity.id`; `entity.entity_id` is the last accepted
+    fallback. A body that names none of them is rejected before any provider
+    call — identity is what persistence, graph sync and score invalidation key
+    on, and `'unknown'` is not an identity.
+    """
+    if resolve_entity_identity(payload) is None:
+        msg = f"enrich: entity identity required: one of {', '.join(ENTITY_IDENTITY_ORDER)}"
+        raise ValueError(msg)
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
-    response = await enrich_entity(request, settings, _kb, _idem)
+    response = await enrich_entity(
+        request, settings, _kb, _idem, idempotency_scope=tenant_scope(tenant)
+    )
     result = response.model_dump()
 
     if response.state == "completed":
@@ -140,7 +168,9 @@ async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
 async def handle_enrichbatch(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     batch_req = BatchEnrichRequest.model_validate(payload)
-    results = await enrich_batch(batch_req.entities, settings, _kb, _idem)
+    results = await enrich_batch(
+        batch_req.entities, settings, _kb, _idem, idempotency_scope=tenant_scope(tenant)
+    )
     succeeded = sum(1 for r in results if r.state == "completed")
     failed = sum(1 for r in results if r.state == "failed")
     return {
@@ -207,12 +237,17 @@ async def _handle_canonical_converge(
         logger.warning("handlers.converge_parse_failed", tenant=tenant, error=str(exc))
         return _canonical_failure(f"invalid converge request: {exc}")
 
-    entity_id = _canonical_entity_id(payload)
+    # Identity is resolved exactly once, here, and handed down: it is what the
+    # convergence loop gives GraphReturnChannel and what persistence keys on, so
+    # nothing downstream re-derives it from `entity`. There is no placeholder id
+    # — `'unknown'` would collapse every unidentified entity of a tenant into
+    # one row; a body that names no identity is refused by `_persist_and_sync`.
+    entity_id = resolve_converge_identity(payload)
 
     try:
         with deadline_scope(deadline):
             return await asyncio.wait_for(
-                _run_canonical_converge(tenant, payload, request, deadline),
+                _run_canonical_converge(tenant, payload, request, deadline, entity_id),
                 timeout=max(deadline.remaining(), 0.0),
             )
     except TimeoutError:
@@ -242,8 +277,15 @@ async def _run_canonical_converge(
     payload: dict[str, Any],
     request: EnrichRequest,
     deadline: Deadline,
+    entity_id: str | None,
 ) -> dict[str, Any]:
-    """The complete canonical operation, run under the outer deadline."""
+    """The complete canonical operation, run under the outer deadline.
+
+    `entity_id` is the identity the caller resolved once from the body
+    (`resolve_converge_identity`; None when the body names none); it is not
+    re-derived here. The loop, the GraphReturnChannel lookups it performs, and
+    persistence all key on it.
+    """
     settings = get_settings()
 
     # `object_type` is where the live Odoo builder carries the domain
@@ -267,7 +309,6 @@ async def _run_canonical_converge(
 
     # EIE-POST-F001: identity lets each pass consume this entity's
     # graph-inference-result targets from GraphReturnChannel.
-    entity_id = _canonical_entity_id(payload)
     response = await run_convergence_loop(
         request=request,
         settings=settings,
@@ -276,17 +317,26 @@ async def _run_canonical_converge(
         inference_rules=inference_rules,
         domain_hints=domain_hints,
         tenant_id=tenant,
-        entity_id=None if entity_id == "unknown" else entity_id,
+        entity_id=entity_id,
         **loop_kwargs,
     )
     result = response.model_dump()
 
     if response.state == ODOO_COMPLETED_STATE:
-        persist_payload = {**payload, "domain": domain_id or settings.default_domain}
+        # The top-level `entity_id` is the first key of the SEAM-02 order that
+        # `_persist_and_sync` applies, so writing the once-resolved id there is
+        # what makes persistence key on the same id the loop used, rather than
+        # re-deriving one from `entity` (which may carry only the Odoo alias).
+        persist_payload = {
+            **payload,
+            "entity_id": entity_id,
+            "domain": domain_id or settings.default_domain,
+        }
         # E14: zero Graph calls on the canonical path. Graph sync awaits up to
-        # three Gate attempts at 30 s each with backoff between them — 93 s in
-        # the worst case, against a caller that waits 30 s. Persistence stays
-        # synchronous because the response depends on it; Graph does not.
+        # two Gate attempts at 10 s each with a 1 s backoff between them
+        # (packet_router._MAX_ATTEMPTS / _ROUTE_TIMEOUT) — 21 s in the worst
+        # case, most of a caller's 30 s budget. Persistence stays synchronous
+        # because the response depends on it; Graph does not.
         #
         # require_persistence=True is what makes `completed` mean durable. The
         # producer treats a completed EnrichResponse as the authoritative record
@@ -307,7 +357,7 @@ async def _run_canonical_converge(
             logger.error(
                 "handlers.converge_persistence_failed",
                 tenant=tenant,
-                entity_id=_canonical_entity_id(payload),
+                entity_id=entity_id,
                 error=str(exc),
             )
             # Reported in EnrichResponse semantics: the producer's mapper reads
@@ -318,24 +368,13 @@ async def _run_canonical_converge(
     logger.info(
         "handlers.converge_ok",
         tenant=tenant,
-        entity_id=_canonical_entity_id(payload),
+        entity_id=entity_id,
         fields=sorted(result.get("fields", {}).keys()),
         pass_count=result.get("pass_count"),
         state=result.get("state"),
         remaining_s=round(deadline.remaining(), 3),
     )
     return result
-
-
-def _canonical_entity_id(payload: dict[str, Any]) -> str:
-    """Canonical identity: `entity["id"]` — e.g. "res.partner:55" from Odoo."""
-    entity = payload.get("entity")
-    if isinstance(entity, dict):
-        for key in ("id", "_odoo_entity_id"):
-            value = entity.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return "unknown"
 
 
 def _canonical_failure(reason: str) -> dict[str, Any]:
@@ -471,17 +510,33 @@ async def _load_domain_convergence_context(
     *,
     domain_id: str | None,
     node_label: str | None,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Load optional domain hints + inference rules for converge."""
+) -> tuple[dict[str, Any], Any]:
+    """Load optional domain hints + inference rules for converge.
+
+    An unknown domain converges without inference. A loaded domain's rules come
+    from `inference_rules_path`, else the spec's own `inference_rules`; they are
+    returned unvalidated — InferenceBridge accepts the set whole or reports it refused.
+
+    A relative `inference_rules_path` resolves against the process working
+    directory — the service runs from the repository root, beside `domains/` —
+    not against the spec's own directory; an absolute path is unambiguous. A
+    referenced file that is missing or unreadable is returned as its error text:
+    InferenceBridge refuses any non-list rule set, so the response reports
+    `invalid_rules`, and the warning logged here names the path and the cause. A
+    declared rule set that failed to load must not read like a domain that
+    declared none.
+    """
     domain_hints: dict[str, Any] = {}
-    inference_rules: list[dict[str, Any]] = []
+    inference_rules: Any = []
     if not domain_id or not _domain_reader:
         return domain_hints, inference_rules
 
     label = node_label or "Partner"
+    # yaml.YAMLError is not a ValueError: a malformed spec file used to escape
+    # these guards and fail the converge instead of converging without a domain.
     try:
         domain_hints = _domain_reader.get_enrichment_hints(domain_id, label)
-    except (FileNotFoundError, ValueError, OSError, KeyError) as exc:
+    except (FileNotFoundError, ValueError, OSError, KeyError, yaml.YAMLError) as exc:
         logger.warning(
             "handlers.converge_domain_hints_failed",
             domain_id=domain_id,
@@ -490,7 +545,7 @@ async def _load_domain_convergence_context(
 
     try:
         config = _domain_reader.load(domain_id)
-    except (FileNotFoundError, ValueError, OSError) as exc:
+    except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:
         logger.warning(
             "handlers.converge_domain_load_failed",
             domain_id=domain_id,
@@ -501,21 +556,44 @@ async def _load_domain_convergence_context(
     if config.inference_rules_path:
         from pathlib import Path
 
-        import yaml
-
         rules_path = Path(config.inference_rules_path)
-        if rules_path.exists():
+        try:
             async with aiofiles.open(rules_path) as f:
                 content = await f.read()
-                inference_rules = yaml.safe_load(content) or []
+            inference_rules = _rules_section(yaml.safe_load(content))
+        except (OSError, yaml.YAMLError) as exc:
+            logger.warning(
+                "handlers.converge_inference_rules_unreadable",
+                domain_id=domain_id,
+                path=str(rules_path.resolve()),
+                error=str(exc),
+            )
+            inference_rules = (
+                f"inference_rules_path {rules_path.resolve()} could not be loaded: {exc}"
+            )
+    else:
+        inference_rules = config.raw_spec.get("inference_rules") or []
 
     return domain_hints, inference_rules
+
+
+def _rules_section(document: Any) -> Any:
+    """A referenced rules file is a YAML document with an `inference_rules` section.
+
+    That is `rule_loader.load_rules`'s contract. A bare list is also accepted.
+    Anything else is passed through so InferenceBridge reports it refused.
+    """
+    if isinstance(document, dict) and "inference_rules" in document:
+        return document["inference_rules"]
+    return document or []
 
 
 async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     request = EnrichRequest.model_validate(payload)
-    response = await enrich_entity(request, settings, _kb, _idem)
+    response = await enrich_entity(
+        request, settings, _kb, _idem, idempotency_scope=tenant_scope(tenant)
+    )
 
     current_schema = payload.get("current_schema", {})
     version = payload.get("schema_version", "0.1.0-seed")
@@ -546,10 +624,22 @@ async def handle_discover(tenant: str, payload: dict[str, Any]) -> dict[str, Any
 
 
 async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Demo-only driver for the simulation fixture (PREVIEW-01).
+
+    `simulate` is not a runtime action: it is absent from
+    app.main.RUNTIME_ALLOWED_ACTIONS and from get_handler_map(), so the SDK
+    runtime refuses a `simulate` packet before any handler runs, and Gate holds
+    no route for it. This function remains importable for in-process demo and
+    test drivers only. Its output is synthetic and is labelled as such by
+    simulation_bridge.brief_to_dict.
+
+    EIE-SEC-01: `customer_name` is a display label the caller supplies
+    explicitly; it never defaults to the tenant id.
+    """
     settings = get_settings()
     crm_field_names: list[str] = payload.get("crm_field_names", [])
     domain_id: str = payload.get("domain_id", "plastics")
-    customer_name: str = payload.get("customer_name", tenant)
+    customer_name = payload.get("customer_name")
     query_profile: dict[str, Any] | None = payload.get("query_profile")
     entity_count: int = int(payload.get("entity_count", 20))
     seed: int = int(payload.get("seed", 42))
@@ -558,6 +648,8 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
 
     if not crm_field_names:
         raise ValueError("simulate: crm_field_names is required and must be non-empty")
+    if not isinstance(customer_name, str) or not customer_name.strip():
+        raise ValueError("simulate: customer_name is required; it does not default to the tenant")
 
     domain_spec: dict[str, Any] = {}
     if _domain_reader:
@@ -621,11 +713,12 @@ async def handle_writeback(tenant: str, payload: dict[str, Any]) -> dict[str, An
 
 
 def get_handler_map() -> dict[str, Any]:
+    # PREVIEW-01: `simulate` is deliberately absent — it is a demo fixture, not
+    # a runtime action (see handle_simulate and app.main.RUNTIME_ALLOWED_ACTIONS).
     return {
         "enrich": handle_enrich,
         "enrichbatch": handle_enrichbatch,
         "converge": handle_converge,
         "discover": handle_discover,
-        "simulate": handle_simulate,
         "writeback": handle_writeback,
     }

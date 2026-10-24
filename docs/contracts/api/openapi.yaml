@@ -2,7 +2,7 @@
 # Contract: Unified OpenAPI Specification
 # Source:   app/main.py, app/api/v1/*, app/models/schemas.py
 # Version:  2.3.1
-# Updated:  2026-04-07
+# Updated:  2026-10-23
 # ═══════════════════════════════════════════════════════════════
 
 openapi: "3.1.0"
@@ -73,6 +73,20 @@ components:
           example:
             name: "Acme Plastics Ltd"
             industry: "Plastics Recycling"
+        entity_id:
+          type: string
+          nullable: true
+          description: |
+            Entity identity (SEAM-02 producer envelope). Resolves before
+            entity.id and entity.entity_id. Optional on this HTTP surface — the
+            callers above send neither envelope field; the SDK `enrich` and
+            `converge` consumers require a resolvable identity.
+          example: "res.partner:55"
+        domain:
+          type: string
+          nullable: true
+          description: Domain spec id (== tenant id under the identity contract).
+          example: plasticos
         object_type:
           type: string
           description: Source object API name (Account, Lead, res.partner, etc.).
@@ -127,7 +141,7 @@ components:
           nullable: true
           description: Caller-supplied UUID for duplicate prevention.
           example: "550e8400-e29b-41d4-a716-446655440000"
-      x-source-file: app/models/schemas.py:26
+      x-source-file: app/models/schemas.py:106
       additionalProperties: false
 
     EnrichResponse:
@@ -534,6 +548,108 @@ components:
       x-source-file: app/api/v1/discover.py:47
       additionalProperties: false
 
+    ConvergeApprovalRequest:
+      title: ConvergeApprovalRequest
+      description: |
+        Reviewer decisions on the schema proposals of one held convergence run
+        (`POST /v1/converge/{run_id}/approve`). Every decided field is persisted
+        to `schema_proposals` (approved and rejected) in one transaction.
+      type: object
+      required:
+        - decisions
+      properties:
+        decisions:
+          type: array
+          items:
+            type: object
+            required:
+              - field_name
+            properties:
+              field_name:
+                type: string
+                example: annual_capacity_mt
+              approved:
+                type: boolean
+                default: true
+              reason:
+                type: string
+                default: ""
+        reviewed_by:
+          type: string
+          default: converge-api
+          description: Recorded on every persisted decision (schema_proposals.reviewed_by).
+      x-source-file: app/api/v1/converge.py:435
+
+    ConvergeApprovalResponse:
+      title: ConvergeApprovalResponse
+      type: object
+      properties:
+        run_id:
+          type: string
+        approved:
+          type: integer
+          description: |
+            Fields the approval applied to the spec (approved, proposed and
+            canonically named) -- not the number of approving decisions.
+        rejected:
+          type: integer
+          description: "Decisions with `approved: false`."
+        unapplied:
+          type: array
+          items:
+            type: string
+          description: |
+            Approved field names that applied nothing (not proposed for this run,
+            or not a canonical name). An approval whose list of applied fields is
+            empty publishes no revision and bumps no version.
+        persisted:
+          type: integer
+          description: Rows written to `schema_proposals` (approved and rejected).
+        new_version:
+          type: string
+          description: |
+            The registry's version of the domain spec after the approval;
+            unchanged when nothing applied.
+          example: 0.4.0-discovered
+      x-source-file: app/api/v1/converge.py:673
+
+    ConvergeScanRequest:
+      title: ConvergeScanRequest
+      type: object
+      required:
+        - fields
+      properties:
+        fields:
+          type: array
+          items:
+            type: object
+            required:
+              - name
+            properties:
+              name:
+                type: string
+              field_type:
+                type: string
+                default: string
+              sample_values:
+                type: array
+                items: {}
+              fill_rate:
+                type: number
+                nullable: true
+              source_system:
+                type: string
+                nullable: true
+              source_resource:
+                type: string
+                nullable: true
+        domain:
+          type: string
+          default: ""
+          description: Registered tenant id (== domain spec id).
+          example: plasticos
+      x-source-file: app/api/v1/converge.py:430
+
   responses:
     Unauthorized:
       description: Missing X-API-Key header
@@ -932,11 +1048,49 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ApprovalRequest"
+              $ref: "#/components/schemas/ConvergeApprovalRequest"
       responses:
         "200":
-          description: Approval recorded
-      x-source-file: app/api/v1/converge.py
+          description: |
+            Approval recorded. Decided fields are durable in `schema_proposals`;
+            the registry takes the revision only when at least one field applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConvergeApprovalResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: |
+            Invalid API key, or a direct tenant-scoped spec revision outside
+            L9_ENVIRONMENT local/dev/test (the X-API-Key binds no tenant).
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
+        "404":
+          description: Run not found, or no registered domain spec for the run's domain.
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
+        "409":
+          description: The run is not awaiting approval (status is not human_hold).
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          description: |
+            State store not configured, or the revision could not be persisted to
+            `schema_proposals`; nothing was applied and the run stays held.
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
+      x-source-file: app/api/v1/converge.py:673
 
   /v1/converge/proposals/{domain}:
     get:
@@ -952,14 +1106,110 @@ paths:
           example: plasticos
       responses:
         "200":
-          description: Pending proposals
+          description: Pending proposals of the domain's held runs
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-      x-source-file: app/api/v1/converge.py
+                type: object
+                properties:
+                  domain:
+                    type: string
+                  pending_count:
+                    type: integer
+                  proposals:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        run_id:
+                          type: string
+                        entity_id:
+                          type: string
+                        proposal:
+                          type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: |
+            Invalid API key, or a direct tenant-scoped read outside
+            L9_ENVIRONMENT local/dev/test (the X-API-Key binds no tenant).
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
+      x-source-file: app/api/v1/converge.py:724
+
+  /v1/scan:
+    post:
+      operationId: scanCRMFieldsDiscoveryReport
+      summary: CRM field scan returning the discovery report
+      description: |
+        Resolves the registered domain spec through the same path as
+        `POST /api/v1/scan` (`converge.get_domain_spec`), so both routes share
+        one tenant posture and one unknown-domain status. The report's
+        `domain_id` is the registry key (tenant id == domain spec id).
+      tags: [convergence]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConvergeScanRequest"
+            example:
+              fields:
+                - name: company_name
+                  field_type: string
+              domain: plasticos
+      responses:
+        "200":
+          description: Discovery report for the scan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  domain_id:
+                    type: string
+                    example: plasticos
+                  customer_fields:
+                    type: integer
+                  domain_fields:
+                    type: integer
+                  coverage_pct:
+                    type: number
+                  missing_entries:
+                    type: array
+                    items:
+                      type: object
+                  gate_blocked_count:
+                    type: integer
+                  scoring_degraded_count:
+                    type: integer
+                  inference_blocked_count:
+                    type: integer
+                  estimated_enrichment_cost_usd:
+                    type: number
+                  report_hash:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: |
+            Invalid API key, or a direct tenant-scoped scan outside
+            L9_ENVIRONMENT local/dev/test (the X-API-Key binds no tenant).
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain not found (formerly 400) — same detail as `/api/v1/scan`.
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+      x-source-file: app/api/v1/converge.py:740
 
   # ── Schema Discovery ───────────────────────────────────────
   /api/v1/discover:
@@ -1024,12 +1274,57 @@ paths:
               tenant_id: acme-corp
       responses:
         "200":
-          description: CRM field scan result
+          description: |
+            CRM field scan result. `domain_id` is the registry key (tenant id ==
+            domain spec id) and `domain_version` the spec's declared version, so
+            two tenants sharing one ontology scan to distinct `scan_hash` values.
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: true
+                properties:
+                  domain_id:
+                    type: string
+                    example: plasticos
+                  domain_version:
+                    type: string
+                    example: "0.3.0"
+                  total_crm_fields:
+                    type: integer
+                  total_domain_properties:
+                    type: integer
+                  matched_count:
+                    type: integer
+                  unmapped_count:
+                    type: integer
+                  missing_count:
+                    type: integer
+                  coverage_ratio:
+                    type: number
+                  scan_hash:
+                    type: string
+                  matched:
+                    type: array
+                    items:
+                      type: object
+                  unmapped:
+                    type: array
+                    items:
+                      type: object
+                  missing:
+                    type: array
+                    items:
+                      type: object
+        "403":
+          description: |
+            Invalid API key, or a direct tenant-scoped scan outside
+            L9_ENVIRONMENT local/dev/test (the X-API-Key binds no tenant); the
+            same posture and status as `POST /v1/scan`.
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
         "404":
           description: Domain not found — no matching domain spec in the registry
           content:

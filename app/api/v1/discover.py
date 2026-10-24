@@ -15,15 +15,15 @@ import uuid
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.utils.safe_convert import safe_float
 
-from ...core.auth import verify_api_key
+from ...core.auth import require_direct_tenant_read, tenant_scope, verify_api_key
 from ...engines.handlers import handle_discover
 from ...services import pg_store
-from ...services.crm_field_scanner import CRMField, scan_crm_fields, scan_result_to_dict
+from ...services.crm_field_scanner import CRMField, scan_result_to_dict
 
 logger = structlog.get_logger("api.discover")
 router = APIRouter(tags=["discover"])
@@ -67,7 +67,9 @@ class ApprovalRequest(BaseModel):
 
 @router.post(
     "/api/v1/discover",
-    dependencies=[Depends(verify_api_key)],
+    # EIE-SEC-03: the tenant travels in the body, so the key -> environment
+    # trust gate is a route dependency (it composes verify_api_key).
+    dependencies=[Depends(require_direct_tenant_read)],
     summary="Trigger schema discovery for a domain entity",
 )
 async def discover_schema(request: DiscoverRequest) -> dict[str, Any]:
@@ -99,22 +101,20 @@ async def discover_schema(request: DiscoverRequest) -> dict[str, Any]:
 
 @router.post(
     "/api/v1/scan",
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(require_direct_tenant_read)],
     summary="CRM field scan — Seed tier entry point",
-    responses={404: {"description": "Domain not found"}},
+    responses={
+        403: {"description": "Direct tenant-scoped access is refused outside local/dev/test"},
+        404: {"description": "Domain not found"},
+    },
 )
 async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
-    # scan_crm_fields is synchronous with the (crm_fields, domain_spec) contract.
-    # Resolve domain_spec from the shared converge registry; unknown domain -> 404.
+    # One scan path shared with POST /v1/scan (converge.scan_registered_domain ->
+    # get_domain_spec): one tenant posture (403 outside local/dev/test), unknown
+    # domain -> 404 on both, and the registry key + spec version as the scan's
+    # identity. HTTPException from it is re-raised below, never turned into 500.
     from . import converge as _converge
 
-    domain_spec = _converge._domain_specs.get(request.domain)
-    if not domain_spec:
-        available = sorted(_converge._domain_specs.keys())
-        raise HTTPException(
-            status_code=404,
-            detail=f"Domain '{request.domain}' not found. Available: {available}",
-        )
     try:
         crm_fields = [
             CRMField(
@@ -127,7 +127,7 @@ async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
             )
             for f in request.fields
         ]
-        result = scan_crm_fields(crm_fields, domain_spec)
+        result, _domain_spec = _converge.scan_registered_domain(request.domain, crm_fields)
         return scan_result_to_dict(result)
     except HTTPException:
         raise
@@ -138,12 +138,14 @@ async def scan_crm_fields_endpoint(request: ScanRequest) -> dict[str, Any]:
 
 @router.get(
     "/api/v1/proposals/{domain}",
-    dependencies=[Depends(verify_api_key)],
     summary="Get pending schema proposals for a domain",
 )
 async def get_proposals(
     domain: str,
-    tenant_id: Annotated[str, Query(..., description="Tenant identifier")],
+    # EIE-SEC-03: still a required `tenant_id` query parameter on the wire;
+    # tenant_scope composes verify_api_key, the environment trust gate and
+    # the identity grammar.
+    tenant_id: Annotated[str, Depends(tenant_scope)],
 ) -> list[dict[str, Any]]:
     proposals = await pg_store.get_pending_schema_proposals(tenant_id=tenant_id, domain=domain)
     return [

@@ -20,10 +20,15 @@ from app.engines.handlers import (
     handle_discover,
     handle_enrich,
     handle_enrichbatch,
-    handle_simulate,
     handle_writeback,
     init_handlers,
 )
+
+# PREVIEW-01: `simulate` is not registered. app.engines.handlers.handle_simulate
+# is a demo/test driver over app/services/simulation_bridge.py (synthetic
+# output); it is absent from app.main.RUNTIME_ALLOWED_ACTIONS, from
+# get_handler_map() and from this registry, so the SDK runtime holds no handler
+# for it and Gate holds no route (C-13 lockstep across main, handlers and here).
 
 logger = structlog.get_logger(__name__)
 
@@ -37,7 +42,6 @@ def register(kb, idem_store=None, domain_reader=None) -> None:
     register_handler("enrichbatch", handle_enrichbatch)
     register_handler("converge", handle_converge)
     register_handler("discover", handle_discover)
-    register_handler("simulate", handle_simulate)
     register_handler("writeback", handle_writeback)
     register_handler("enrich-and-sync", _make_enrich_and_sync_handler(kb, idem_store))
 
@@ -48,7 +52,6 @@ def register(kb, idem_store=None, domain_reader=None) -> None:
             "enrichbatch",
             "converge",
             "discover",
-            "simulate",
             "writeback",
             "enrich-and-sync",
         ],

@@ -147,7 +147,23 @@ def apply(
     approval_decisions: list[ApprovalDecision],
     proposal_set: SchemaProposalSet,
 ) -> dict[str, Any]:
-    """Apply approved proposals to the domain YAML, returning the updated spec."""
+    """Apply approved proposals to the domain YAML, returning the updated spec.
+
+    A decision set that applies no proposal (every decision rejected, every
+    approval naming a field that was not proposed, or only non-canonical names
+    approved) returns an unchanged copy: no version bump, no revision. Only
+    approved rows are replayed at startup (``apply_approved_records``), so a
+    bump here for a batch that wrote nothing would land the live registry on a
+    version a restart can never reproduce (F-247-2).
+    """
+    applied = applied_field_names(approval_decisions, proposal_set)
+    if not applied:
+        logger.info(
+            "schema_proposer.apply: no approved proposal applies (proposed=%d); version stays %s",
+            len(proposal_set.proposed_fields),
+            current_yaml.get("version"),
+        )
+        return copy.deepcopy(current_yaml)
     approved_fields = {d.field_name for d in approval_decisions if d.approved}
     updated = copy.deepcopy(current_yaml)
 
@@ -167,11 +183,29 @@ def apply(
 
     logger.info(
         "schema_proposer.apply: approved=%d/%d version=%s",
-        len(approved_fields),
+        len(applied),
         len(proposal_set.proposed_fields),
         proposal_set.version_bump,
     )
     return updated
+
+
+def applied_field_names(
+    approval_decisions: list[ApprovalDecision],
+    proposal_set: SchemaProposalSet,
+) -> list[str]:
+    """The proposed fields :func:`apply` writes, in proposal order.
+
+    A field applies when a decision approves it, ``proposal_set`` proposes it,
+    and its name is canonical (L9 §3.1 / §5.1 / §5.2). An approval answers this
+    count, not the count of approving decisions.
+    """
+    approved = {d.field_name for d in approval_decisions if d.approved}
+    return [
+        fp.field_name
+        for fp in proposal_set.proposed_fields
+        if fp.field_name in approved and _is_canonical_field_name(fp.field_name)
+    ]
 
 
 def _is_canonical_field_name(name: str) -> bool:
@@ -181,10 +215,30 @@ def _is_canonical_field_name(name: str) -> bool:
     return bool(_SNAKE_CASE_RE.fullmatch(name))
 
 
+def _confidence_records(confidences_raw: Any) -> dict[str, Any] | None:
+    """The per-field records of a ``FieldConfidenceMap``-like object, or None.
+
+    ``FieldConfidenceMap`` (app/models/field_confidence.py) keeps them under
+    ``fields``; the earlier look-up read ``entries``, which no model has, so the
+    live approve path -- which passes ``LoopState.accumulated_confidences`` --
+    saw every confidence as 0.0 and proposed nothing (EIE-IDENT-03).
+    """
+    for attr in ("fields", "entries"):
+        records = getattr(confidences_raw, attr, None)
+        if isinstance(records, dict):
+            return records
+    return None
+
+
 def _build_confidence_map(confidences_raw: Any) -> dict[str, float]:
     """Extract a {field_name: confidence} map from various confidences_raw formats."""
-    if hasattr(confidences_raw, "entries"):
-        return {e.field_name: e.confidence for e in confidences_raw.entries.values()}
+    records = _confidence_records(confidences_raw)
+    if records is not None:
+        return {
+            name: safe_float(getattr(rec, "confidence", 0.0))
+            for name, rec in records.items()
+            if isinstance(name, str)
+        }
     if isinstance(confidences_raw, dict):
         entries = confidences_raw.get("entries", confidences_raw)
         conf_map: dict[str, float] = {}
@@ -218,7 +272,13 @@ def _process_result_fields(
             acc.non_null += 1
             acc.values.append(value)
             acc.confidences.append(conf_map.get(field_name, 0.0))
-            if isinstance(confidences_raw, dict):
+            records = _confidence_records(confidences_raw)
+            if records is not None:
+                record = records.get(field_name)
+                source = getattr(record, "source", None)
+                if source:
+                    acc.sources.add(str(getattr(source, "value", source)))
+            elif isinstance(confidences_raw, dict):
                 entry = confidences_raw.get("entries", confidences_raw).get(field_name, {})
                 if isinstance(entry, dict):
                     acc.sources.add(entry.get("source", "enrichment"))
@@ -262,28 +322,64 @@ def _build_field_proposals(
     return proposals
 
 
+def _first_node_def(nodes: Any) -> dict[str, Any] | None:
+    """The first ontology node definition, in either spec shape.
+
+    Dict shape: ``nodes: {Label: {properties: {...}}}``. List shape (what
+    ``domains/*/spec.yaml`` carry and ``DomainYamlReader`` parses):
+    ``nodes: [{label: Label, properties: [{name, type}, ...]}]``.
+    """
+    if isinstance(nodes, dict):
+        first = next(iter(nodes.values()), None)
+        return first if isinstance(first, dict) else None
+    if isinstance(nodes, list):
+        return next((n for n in nodes if isinstance(n, dict)), None)
+    return None
+
+
+def _set_property(props: Any, field_name: str, definition: dict[str, Any]) -> None:
+    """Write one property into a dict-shaped or list-shaped ``properties`` block."""
+    if isinstance(props, dict):
+        props[field_name] = definition
+        return
+    if isinstance(props, list):
+        for entry in props:
+            if isinstance(entry, dict) and entry.get("name") == field_name:
+                entry.update(definition)
+                return
+        props.append({"name": field_name, **definition})
+
+
 def _apply_node_properties(
-    nodes: dict,
+    nodes: Any,
     approved_fields: set[str],
     proposed_fields: list[FieldProposal],
 ) -> None:
-    """Merge approved field proposals into the first ontology node's properties."""
-    first_node_key = next(iter(nodes), None) if isinstance(nodes, dict) else None
-    if first_node_key and isinstance(nodes, dict):
-        node_def = nodes[first_node_key]
-        if isinstance(node_def, dict):
-            props = node_def.setdefault("properties", {})
-            for fp in proposed_fields:
-                if fp.field_name in approved_fields:
-                    if not _is_canonical_field_name(fp.field_name):
-                        logger.warning(
-                            _KERNEL_NAME_INVARIANT_EVENT,
-                            field_name=fp.field_name,
-                            stage="apply",
-                            kernel_section=_KERNEL_SECTION,
-                        )
-                        continue
-                    props[fp.field_name] = {"type": fp.field_type, "source": fp.source}
+    """Merge approved field proposals into the first ontology node's properties.
+
+    EIE-IDENT-03: the live specs declare ``ontology.nodes`` as a list of node
+    definitions whose ``properties`` is a list of ``{name, type}`` entries; the
+    earlier dict-only walk silently applied nothing to them, so an approved
+    revision never reached the spec. Both shapes are served, each written back
+    in its own shape.
+    """
+    node_def = _first_node_def(nodes)
+    if node_def is None:
+        return
+    props = node_def.get("properties")
+    if not isinstance(props, (dict, list)):
+        props = node_def["properties"] = [] if isinstance(nodes, list) else {}
+    for fp in proposed_fields:
+        if fp.field_name in approved_fields:
+            if not _is_canonical_field_name(fp.field_name):
+                logger.warning(
+                    _KERNEL_NAME_INVARIANT_EVENT,
+                    field_name=fp.field_name,
+                    stage="apply",
+                    kernel_section=_KERNEL_SECTION,
+                )
+                continue
+            _set_property(props, fp.field_name, {"type": fp.field_type, "source": fp.source})
 
 
 def _apply_gate_proposals(
@@ -338,14 +434,60 @@ class _FieldAcc:
 
 
 def _extract_existing_fields(yaml_spec: dict[str, Any]) -> set[str]:
+    """Property names already declared by any ontology node, in either spec shape."""
     fields: set[str] = set()
     ontology = yaml_spec.get("ontology", {})
+    if not isinstance(ontology, dict):
+        return fields
     nodes = ontology.get("nodes", ontology.get("entities", {}))
-    if isinstance(nodes, dict):
-        for _node_type, node_def in nodes.items():
-            if isinstance(node_def, dict):
-                fields.update(node_def.get("properties", {}).keys())
+    node_defs: list[Any] = (
+        list(nodes.values())
+        if isinstance(nodes, dict)
+        else nodes
+        if isinstance(nodes, list)
+        else []
+    )
+    for node_def in node_defs:
+        if not isinstance(node_def, dict):
+            continue
+        props = node_def.get("properties", {})
+        if isinstance(props, dict):
+            fields.update(props.keys())
+        elif isinstance(props, list):
+            for entry in props:
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                    fields.add(entry["name"])
+                elif isinstance(entry, str):
+                    fields.add(entry)
     return fields
+
+
+def revision_from_approved(
+    current_yaml: dict[str, Any],
+    *,
+    fields: list[FieldProposal],
+    gates: list[GateProposal],
+    dims: list[ScoringDimensionProposal],
+    domain: str = "",
+) -> SchemaProposalSet:
+    """A proposal set that re-applies proposals already approved and persisted.
+
+    EIE-IDENT-03 read side: ``apply`` takes a :class:`SchemaProposalSet`, so a
+    persisted revision (``schema_proposals`` rows with ``approval_status =
+    approved``) is rebuilt into one against the spec it is being replayed onto.
+    The version bump is computed from ``current_yaml`` the same way ``propose``
+    computes it, so a replayed approval lands on the same version it did live.
+    """
+    declared = current_yaml.get("domain", "")
+    return SchemaProposalSet(
+        domain=domain or (declared if isinstance(declared, str) else ""),
+        proposed_fields=fields,
+        proposed_gates=gates,
+        proposed_scoring_dimensions=dims,
+        yaml_diff=_generate_yaml_diff(fields, gates, dims),
+        version_bump=_bump_version(str(current_yaml.get("version", "0.1.0"))),
+        entities_analysed=0,
+    )
 
 
 def _infer_type(values: list[Any]) -> str:

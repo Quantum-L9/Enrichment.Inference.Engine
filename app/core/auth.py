@@ -31,12 +31,27 @@ from typing import Annotated
 
 # FastAPI Security imports are PERMITTED in chassis auth modules.
 # Engine code must never replicate these imports (INV-ARCH-03).
-from fastapi import HTTPException, Security, status
+from fastapi import Depends, HTTPException, Query, Security, status
 from fastapi.security import APIKeyHeader
 
+from ..models.schemas import validate_tenant_id
 from .config import get_settings
 
 _header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+# EIE-SEC-03: environments in which a direct, key-authenticated HTTP read of
+# tenant-scoped data is served. This is the same set app/main.py runs the SDK
+# runtime in `dev_mode` (unsigned packets, Gate-only ingress not enforced) and
+# app/core/config.py permits the deterministic provider in. Outside it the node
+# is signed and tenant-facing: the only authority for "which tenant" is Gate,
+# carried as `packet.tenant.org_id`, and a single shared API key does not bind
+# its holder to any tenant — so a direct tenant read is refused.
+DIRECT_TENANT_READ_ENVIRONMENTS: frozenset[str] = frozenset({"local", "dev", "test"})
+
+_GATE_INGRESS_REQUIRED = (
+    "tenant-scoped reads are served through Gate ingress in this environment; "
+    "a direct X-API-Key read is not bound to a tenant"
+)
 
 
 def verify_api_key(
@@ -57,3 +72,52 @@ def verify_api_key(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Invalid API key")
 
     return api_key
+
+
+def require_direct_tenant_read(
+    _api_key: Annotated[str, Depends(verify_api_key)],
+) -> None:
+    """Gate a tenant-scoped HTTP read behind the environment's trust posture.
+
+    EIE-SEC-03. The API key authenticates the caller; it does not bind the
+    caller to a tenant, because one key hash serves the deployment. A request
+    that names its own tenant (query or body) is therefore trusted only where
+    the SDK runtime itself is unsigned (DIRECT_TENANT_READ_ENVIRONMENTS).
+    Everywhere else tenant identity must arrive through Gate, and the direct
+    read is refused with 403 — fail closed, no silent fallback tenant.
+
+    Use as a route or router dependency (`dependencies=[Depends(...)]`) when
+    the tenant travels in the request body; use `tenant_scope` when it is a
+    query parameter.
+    """
+    ensure_direct_tenant_read_allowed()
+
+
+def ensure_direct_tenant_read_allowed() -> None:
+    """The EIE-SEC-03 posture itself: 403 outside DIRECT_TENANT_READ_ENVIRONMENTS.
+
+    The one owner of the direct-tenant-access rule. `require_direct_tenant_read`
+    applies it as a FastAPI dependency; code that resolves the tenant inside a
+    route body (app/api/v1/converge.py `require_direct_domain_access`) calls it
+    directly, so every direct tenant route answers the same status.
+    """
+    if get_settings().l9_environment not in DIRECT_TENANT_READ_ENVIRONMENTS:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _GATE_INGRESS_REQUIRED)
+
+
+def tenant_scope(
+    tenant_id: Annotated[str, Query(..., description="Tenant identifier")],
+    _gate: Annotated[None, Depends(require_direct_tenant_read)],
+) -> str:
+    """Resolve the tenant a direct HTTP read is scoped to.
+
+    Composes `verify_api_key` -> `require_direct_tenant_read` -> identity
+    grammar: tenant id == domain spec id == Neo4j database name, so a value
+    that is not a legal Neo4j database name is rejected (400), never
+    normalised. Returns the tenant id verbatim for the route to scope its
+    store access by.
+    """
+    try:
+        return validate_tenant_id(tenant_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc

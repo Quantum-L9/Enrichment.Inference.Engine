@@ -110,3 +110,59 @@ async def test_transport_packet_requires_action():
             destination_node="enrichment-engine",
             reply_to="gate",
         )
+
+
+@pytest.mark.asyncio
+async def test_startup_wires_domain_reader_into_converge():
+    """Startup gives the converge handlers a domain reader.
+
+    Without one, `_load_domain_convergence_context` returned no rules for every
+    request, so the domain's inference rules never ran on the live path.
+    """
+    from app import main
+    from app.engines import handlers
+    from app.engines.domain_yaml_reader import DomainYamlReader
+
+    with (
+        patch.object(main, "setup_logging"),
+        patch.object(main, "KBResolver"),
+        patch.object(main, "IdempotencyStore", side_effect=RuntimeError("no redis")),
+        patch("app.services.chassis_handlers.register_all_handlers"),
+        patch("app.services.pg_store.init_engine"),
+        patch("app.services.event_emitter.get_emitter"),
+        patch("app.api.v1.converge.configure"),
+        patch.object(main, "_register_with_gate", AsyncMock(return_value=None)),
+        patch.object(main, "start_reregistration_loop", return_value=None),
+        patch.object(main, "_gate_registered", None),
+        # Startup records the registry (and hydrate) outcome module-wide; restore
+        # it so readiness tests that run later do not inherit this process state.
+        patch.object(main, "_domain_registry_state", "not_attempted"),
+        patch.object(handlers, "_domain_reader", None),
+    ):
+        await main.EnrichmentLifecycle().startup()
+        reader = handlers._domain_reader
+
+    assert isinstance(reader, DomainYamlReader)
+    assert reader.load("plasticos").raw_spec["inference_rules"]
+
+
+@pytest.mark.parametrize(
+    "domain_id",
+    ["../plasticos", "plasticos/../plasticos", "Res.Partner", "res_partner", "systemdb"],
+)
+def test_domain_reader_refuses_ids_outside_its_root(domain_id):
+    """Payload-supplied ids reach the filesystem once the reader is wired.
+
+    The reader applies the identity grammar (tenant id == spec id == Neo4j
+    database name): lowercase, `^[a-z][a-z0-9.-]{2,62}$`, no `system` prefix.
+    A dotted id such as `res.partner` is legal under it and resolves to
+    `domains/res.partner/spec.yaml` (absent -> FileNotFoundError), so the
+    refused cases here are path escapes and grammar violations only.
+    """
+    from pathlib import Path
+
+    from app.engines.domain_yaml_reader import DomainYamlReader
+
+    reader = DomainYamlReader(Path(__file__).resolve().parents[2] / "domains")
+    with pytest.raises(ValueError, match="Invalid domain id"):
+        reader.load(domain_id)
