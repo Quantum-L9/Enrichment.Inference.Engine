@@ -350,20 +350,39 @@ _IMPACT_RANK: dict[ImpactTier, int] = {
 # ── Core Scanner ────────────────────────────────────────────
 
 
+def _spec_block_identity(domain_spec: dict[str, Any]) -> tuple[str, str]:
+    """Identity from a spec's own ``domain`` / ``metadata`` block, for a caller holding only a spec."""
+    domain_meta = domain_spec.get("domain", domain_spec.get("metadata", {}))
+    if not isinstance(domain_meta, dict):
+        return "unknown", "0.0.0"
+    return (
+        domain_meta.get("id", "") or domain_meta.get("name", "unknown"),
+        domain_meta.get("version", "0.0.0"),
+    )
+
+
 def scan_crm_fields(
     crm_fields: list[CRMField],
     domain_spec: dict[str, Any],
+    *,
+    domain_id: str | None = None,
+    domain_version: str | None = None,
 ) -> ScanResult:
-    """Map CRM fields against domain ontology. Classify matched/unmapped/missing."""
-    domain_meta = domain_spec.get("domain", domain_spec.get("metadata", {}))
-    domain_id = (
-        (domain_meta.get("id", "") or domain_meta.get("name", "unknown"))
-        if isinstance(domain_meta, dict)
-        else "unknown"
-    )
-    domain_version = (
-        domain_meta.get("version", "0.0.0") if isinstance(domain_meta, dict) else "0.0.0"
-    )
+    """Map CRM fields against domain ontology. Classify matched/unmapped/missing.
+
+    ``domain_id`` / ``domain_version``: the identity of a spec resolved through
+    the tenant-keyed registry (app/api/v1/converge.py ``scan_registered_domain``
+    passes the registry key and the version from the one spec-identity reader).
+    The live specs declare a top-level ``name`` / ``version`` and no ``domain``
+    block, so without them every tenant scanned as ``unknown:0.0.0`` and two
+    tenants' scan hashes collided. A caller holding only a spec falls back to
+    its ``domain`` / ``metadata`` block.
+    """
+    fallback_id, fallback_version = _spec_block_identity(domain_spec)
+    if domain_id is None:
+        domain_id = fallback_id
+    if domain_version is None:
+        domain_version = fallback_version
 
     domain_properties = _extract_domain_properties(domain_spec)
     domain_lookup: dict[str, DomainProperty] = {_normalize(p.name): p for p in domain_properties}

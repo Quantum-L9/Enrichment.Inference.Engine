@@ -23,10 +23,73 @@ import yaml
 
 logger = structlog.get_logger("domain_yaml_reader")
 
-# A domain id names a directory or file directly under the domains root. It
-# arrives from request payloads (`domain_id` / `object_type`), so anything that
-# could step outside that root ("..", "/", a dotted model name) is refused.
-_DOMAIN_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
+# Identity contract (operator decision 2026-10-22): tenant id == domain spec id
+# == Neo4j database name. One customer is one directory `domains/<tenant>/spec.yaml`,
+# one versioned spec and one database, so a tenant id has to be a legal Neo4j
+# database name: lowercase, starting with a letter, then letters, digits, dots
+# or dashes, 3-63 characters, and never starting with the reserved `system`
+# prefix. Vertical templates are provenance only (`metadata.template.*`); there
+# is no tenant-to-domain mapping layer anywhere.
+#
+# This is the ONE grammar. The reader applies it to every id that reaches the
+# filesystem (ids arrive from request payloads: `domain_id` / `object_type`,
+# so "..", "/" and any other escape from the domains root are refused by the
+# same check), and the API-side registry (app/api/v1/converge.py) imports it
+# rather than keeping a second regex that could drift.
+TENANT_ID_PATTERN: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9.-]{2,62}$")
+TENANT_ID_RESERVED_PREFIX = "system"
+
+
+def is_legal_tenant_id(value: object) -> bool:
+    """Whether ``value`` can name a tenant, its domain spec and its Neo4j database.
+
+    The lowercase check runs before the pattern so a mixed-case id is refused
+    outright rather than silently lowercased into a different identity.
+    """
+    if not isinstance(value, str) or value != value.lower():
+        return False
+    if value.startswith(TENANT_ID_RESERVED_PREFIX):
+        return False
+    return TENANT_ID_PATTERN.fullmatch(value) is not None
+
+
+def _declared_id(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _declared_version(value: Any) -> str | None:
+    # YAML reads an unquoted `version: 1.0` as a float; a bool is never a version.
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    return str(value) if isinstance(value, (str, int, float)) else None
+
+
+def declared_spec_identity(spec: Any) -> tuple[str | None, str | None]:
+    """The ``(id, version)`` a domain spec declares for itself; ``None`` where it declares none.
+
+    The ONE spec-identity reader. The registry (app/api/v1/converge.py) checks
+    the declared id against the spec's directory, the reader reports the
+    version, and a registry scan stamps the version onto its result, so the
+    three cannot disagree about which spec they hold.
+
+    The live specs carry top-level ``name`` / ``version``; older fixtures carry
+    ``domain`` as a string, or a ``domain_identity`` / ``domain`` block with
+    ``id`` (or ``name``) and ``version``. Top-level keys win: an approved
+    revision bumps the top-level ``version`` (schema_proposer.apply), never a
+    block's. Template provenance (``metadata.template.*``) is not identity.
+    """
+    if not isinstance(spec, dict):
+        return None, None
+    spec_id = _declared_id(spec.get("name"))
+    version = _declared_version(spec.get("version"))
+    for key in ("domain_identity", "domain"):
+        block = spec.get(key)
+        if isinstance(block, dict):
+            spec_id = spec_id or _declared_id(block.get("id")) or _declared_id(block.get("name"))
+            version = version or _declared_version(block.get("version"))
+        else:
+            spec_id = spec_id or _declared_id(block)
+    return spec_id, version
 
 
 @dataclass
@@ -76,7 +139,7 @@ class DomainYamlReader:
     def load(self, domain_id: str) -> DomainEnrichmentConfig:
         if domain_id in self._cache:
             return self._cache[domain_id]
-        if not isinstance(domain_id, str) or not _DOMAIN_ID_PATTERN.fullmatch(domain_id):
+        if not is_legal_tenant_id(domain_id):
             raise ValueError(f"Invalid domain id: {domain_id!r}")
 
         spec_path = self._root / domain_id / "spec.yaml"
@@ -124,19 +187,32 @@ class DomainYamlReader:
         }
 
     def list_domains(self) -> list[str]:
+        """Every id :meth:`load` resolves: directory specs, then flat-file stems."""
+        directories, flat_files = self._spec_sources()
+        return directories + [Path(name).stem for name in flat_files]
+
+    def list_directory_domains(self) -> list[str]:
+        """Ids with a ``<root>/<id>/spec.yaml``: the only layout that names a tenant."""
+        return self._spec_sources()[0]
+
+    def list_flat_specs(self) -> list[str]:
+        """File names of ``<root>/*.yaml`` / ``*.yml`` specs (the legacy flat layout)."""
+        return self._spec_sources()[1]
+
+    def _spec_sources(self) -> tuple[list[str], list[str]]:
+        directories: list[str] = []
+        flat_files: list[str] = []
         if not self._root.exists():
-            return []
-        domains = []
+            return directories, flat_files
         for p in self._root.iterdir():
             if p.is_dir() and (p / "spec.yaml").exists():
-                domains.append(p.name)
+                directories.append(p.name)
             elif p.suffix in (".yaml", ".yml") and p.stem != "__pycache__":
-                domains.append(p.stem)
-        return domains
+                flat_files.append(p.name)
+        return directories, flat_files
 
     def _parse(self, domain_id: str, raw: dict) -> DomainEnrichmentConfig:
-        identity = raw.get("domain_identity", raw.get("domain", {}))
-        version = identity.get("version", raw.get("version", "0.1.0-seed"))
+        version = declared_spec_identity(raw)[1] or "0.1.0-seed"
 
         ontology = raw.get("ontology", {})
         nodes_raw = ontology.get("nodes", [])

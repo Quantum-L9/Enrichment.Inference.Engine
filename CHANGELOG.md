@@ -42,6 +42,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The two application controls this branch introduced take C-09 names:
     `L9_ENRICHMENT_PROVIDER` and `L9_GATE_REREGISTRATION_INTERVAL_SECONDS`
     (F004). Pre-existing unprefixed variables are unchanged.
+- **Domain identity registry (EIE-IDENT-02 / EIE-IDENT-03, PR #247).**
+  - The domain spec registry is built from `domains/<tenant>/spec.yaml`, one
+    spec per tenant (tenant id == domain spec id == Neo4j database name); a
+    flat `domains/<name>.yaml` is refused with `domain_registry_refused_flat_spec`.
+  - `POST /v1/scan` answers **404** (was 400) for an unregistered domain, the
+    status and detail of `POST /api/v1/scan`. Both scans report the registry
+    key as `domain_id` and the spec's declared version, so tenants sharing an
+    ontology no longer scan as `unknown:0.0.0` with one hash.
+  - `POST /v1/scan`, `POST /api/v1/scan`, `POST /v1/converge/{run_id}/approve`
+    and `GET /v1/converge/proposals/{domain}` answer **403** unless
+    `L9_ENVIRONMENT` is `local`, `dev` or `test`: the X-API-Key binds no tenant.
+  - `POST /v1/converge/{run_id}/approve` persists decisions to
+    `schema_proposals` before the registry takes the revision (**503** and no
+    revision when the store is unavailable). `approved` now counts applied
+    fields; a batch that applies none bumps no version. New response field
+    `unapplied`. Request body is `{decisions, reviewed_by}`.
+  - `GET /api/v1/ready` answers **503** while the registry is `empty`,
+    `failed` or `hydrate_failed` (approved revisions could not be replayed).
 - **Seam-audit repairs (IB-Odoo_19 -> Gate_SDK -> Constellation.Gate -> EIE).**
   - SDK pin moves to the 1.1.0 release commit
     `2b2f53a28a59bbfb2fa45f5eac32b722d802209a`; every consumer of the

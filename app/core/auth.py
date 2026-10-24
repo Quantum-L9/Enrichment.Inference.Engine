@@ -90,6 +90,17 @@ def require_direct_tenant_read(
     the tenant travels in the request body; use `tenant_scope` when it is a
     query parameter.
     """
+    ensure_direct_tenant_read_allowed()
+
+
+def ensure_direct_tenant_read_allowed() -> None:
+    """The EIE-SEC-03 posture itself: 403 outside DIRECT_TENANT_READ_ENVIRONMENTS.
+
+    The one owner of the direct-tenant-access rule. `require_direct_tenant_read`
+    applies it as a FastAPI dependency; code that resolves the tenant inside a
+    route body (app/api/v1/converge.py `require_direct_domain_access`) calls it
+    directly, so every direct tenant route answers the same status.
+    """
     if get_settings().l9_environment not in DIRECT_TENANT_READ_ENVIRONMENTS:
         raise HTTPException(status.HTTP_403_FORBIDDEN, _GATE_INGRESS_REQUIRED)
 
