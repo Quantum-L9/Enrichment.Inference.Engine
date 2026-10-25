@@ -63,6 +63,14 @@ STAGED_ARTIFACTS = {
         "wiring is removed; the module is kept because C-13 names it as part of "
         "the transport contract. Wire it or retire it under C-13, not ad hoc."
     ),
+    "app.services.crm.observed_relationship_producer": (
+        "QM.POC0.EIE.OBSERVED_RELATIONSHIP_PRODUCER.003. One explicitly invoked "
+        "POC producer (operator calls produce_observed_relationship with an "
+        "ObservedAssociationBinding); deliberately not wired into enrichment or "
+        "SideEffectCoordinator until a tenant spec declares the association "
+        "binding and live HubSpot access exists (CONTRACT_NOT_DECLARED / "
+        "SOURCE_NOT_AVAILABLE at authoring)."
+    ),
 }
 
 # Pre-existing unreachable modules, recorded as a shrink-only baseline in the

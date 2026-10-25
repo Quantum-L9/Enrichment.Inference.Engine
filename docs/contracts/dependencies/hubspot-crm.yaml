@@ -1,9 +1,12 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: HubSpot CRM Dependency
 # Source:   app/services/crm/hubspot_client.py,
+#           app/services/crm/observed_relationship_producer.py,
 #           config/crm/hubspot_mapping.yaml
-# Version:  1.0.0
-# Updated:  2026-04-05
+# Version:  1.1.0
+# Updated:  2026-10-25 (QM.POC0.EIE.OBSERVED_RELATIONSHIP_PRODUCER.003: read-only
+#           association lookup for one explicitly invoked observed-relationship producer)
+#           2026-04-05
 # ═══════════════════════════════════════════════════════════════
 
 service_name: HubSpotCRM
@@ -11,8 +14,31 @@ type: external
 protocol: http
 auth_method: Bearer token (HUBSPOT_ACCESS_TOKEN)
 
-role: CRM consumer #3. HubSpot private app integration for enrichment writeback.
+role: >-
+  CRM consumer #3. HubSpot private app integration for enrichment writeback, and
+  (since 1.1.0) the read-only source of one observed record association for graph
+  relationship evidence.
 
 field_mapping: config/crm/hubspot_mapping.yaml
 source_file: app/services/crm/hubspot_client.py
 
+association_read:
+  method: HubSpotClient.read_associations
+  endpoint: "GET /crm/v4/objects/{fromObjectType}/{objectId}/associations/{toObjectType}?limit=500"
+  access: read-only; no association, record or property is ever written by this path
+  scopes: the read scope of both object types (e.g. crm.objects.companies.read, crm.objects.deals.read)
+  returns: every association type HubSpot reports (toObjectId, category, typeId, label)
+  invariants:
+    - Fail closed. Any non-200 answer (401/403 scope, 404 unknown record, 429 rate limit,
+      5xx), a transport failure, a malformed body, or a result that needs a second page
+      raises HubSpotAssociationReadError. An empty list means HubSpot answered 200 with
+      no associations, never that the read failed.
+    - Record ids must be numeric and object types plain names or type ids, so neither can
+      reshape the request path.
+  consumer: >-
+    app/services/crm/observed_relationship_producer.py. Explicitly invoked only (not
+    wired into enrichment). It proposes the matching association through
+    PacketRouter.notify_relationship_sync as observed / positive / confidence 1.0
+    (certainty of membership, never commercial relevance), source_revision unset.
+    The provider association to tenant edge binding is supplied per invocation and
+    must match an edge the tenant spec declares.
