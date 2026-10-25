@@ -466,10 +466,27 @@ def _relationship_sync_row(assertion: RelationshipAssertion) -> dict[str, Any]:
     return row
 
 
-def _relationship_idempotency_key(tenant_id: str, row: dict[str, Any]) -> str:
-    """Pinned to the exact row: a retry resends this assertion, never another."""
+def _relationship_idempotency_key(
+    tenant_id: str, contract: RelationshipSyncContract, row: dict[str, Any]
+) -> str:
+    """Pinned to the exact assertion: a retry resends this assertion, never another.
+
+    The row carries only endpoint ids and evidence; the structural identity
+    (endpoint, relationship type, endpoint labels) comes from the resolved
+    contract. All of it is hashed with the tenant, so one ``evidence_ref``
+    proposed for a different relationship or endpoint is a different request
+    and can never be answered from Gate's keyed cache for the first one.
+    """
+    identity = {
+        "tenant": tenant_id,
+        "entity_type": contract.entity_type,
+        "relation_type": contract.relation_type,
+        "from_label": contract.from_label,
+        "to_label": contract.to_label,
+        "row": row,
+    }
     digest = hashlib.sha256(
-        json.dumps(row, sort_keys=True, default=str).encode("utf-8")
+        json.dumps(identity, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()[:16]
     return f"eie:relsync:{tenant_id}:{row['evidence_ref']}:{digest}"
 
@@ -901,7 +918,7 @@ class PacketRouter:
                 tenant_id,
                 {"entity_type": contract.entity_type, "batch": [row]},
                 correlation_id,
-                idempotency_key=_relationship_idempotency_key(tenant_id, row),
+                idempotency_key=_relationship_idempotency_key(tenant_id, contract, row),
             )
         except NodeUnreachableError as exc:
             logger.warning(

@@ -4,8 +4,11 @@
 #           app/engines/graph_sync_client.py, app/main.py,
 #           app/services/graph_return_channel.py,
 #           app/engines/convergence_controller.py
-# Version:  1.5.0
-# Updated:  2026-10-25 (QM.POC0.EIE.GRAPH_EVIDENCE.002B: relationship evidence sync over
+# Version:  1.6.0
+# Updated:  2026-10-25 (QM.POC0 closure: the relationship idempotency key hashes the tenant
+#           and the resolved contract's entity_type / relation_type / from_label /
+#           to_label with the row, not the row alone)
+#           2026-10-25 (QM.POC0.EIE.GRAPH_EVIDENCE.002B: relationship evidence sync over
 #           the same Gate `sync` action, to a spec-declared targetedge endpoint)
 #           2026-10-23 (PR #248 audit: resolved per TENANT, the spec CEG validates
 #           against; illegal ids refused by the reader's tenant grammar; an unmatched
@@ -123,10 +126,13 @@ invariants:
     `relationship_sync_acknowledged` requires `graph_sync_acknowledged` for the resolved endpoint
     AND integer `created_count` + `replayed_count` equal to the rows sent. A node-shaped
     acknowledgment never marks a relationship synced. The idempotency key
-    (`eie:relsync:<tenant>:<evidence_ref>:<row digest>`) is pinned to the exact row, so a
-    retry resends the same assertion and Gate answers a completed one from its keyed
-    cache; a changed assertion gets a new key and CEG refuses the conflicting reuse.
-  - No live EIE producer of typed relationships exists as of 1.5.0; nothing on the
+    (`eie:relsync:<tenant>:<evidence_ref>:<digest>`) is pinned to the exact assertion; the
+    digest covers the tenant, the resolved contract's `entity_type`, `relation_type`,
+    `from_label` and `to_label`, and the complete row. A retry resends the same assertion
+    and Gate answers a completed one from its keyed cache; a changed row, or the same
+    `evidence_ref` proposed for a different relationship or endpoint, gets a new key, and
+    CEG refuses the conflicting reuse.
+  - No live EIE producer of typed relationships exists as of 1.6.0; nothing on the
     enrichment path calls `notify_relationship_sync` (SOURCE_NOT_AVAILABLE).
 
 health_check: "GET {GATE_URL}/v1/health"

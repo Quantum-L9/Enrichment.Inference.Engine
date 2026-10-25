@@ -29,6 +29,8 @@ from app.engines.domain_yaml_reader import DomainYamlReader
 from app.engines.packet_router import (
     PacketRouter,
     RelationshipAssertion,
+    RelationshipSyncContract,
+    _relationship_idempotency_key,
     relationship_assertion_defects,
     relationship_sync_acknowledged,
     resolve_graph_sync_contract,
@@ -342,6 +344,39 @@ async def test_retry_reuses_the_pinned_key_and_a_different_assertion_does_not(
         keys.append(execute.await_args.kwargs["idempotency_key"])
     assert keys[0] == keys[1]
     assert keys[2] != keys[0]
+
+
+def test_idempotency_key_binds_tenant_and_every_structural_contract_field() -> None:
+    contract = RelationshipSyncContract(
+        entity_type="stocks",
+        relation_type="STOCKS",
+        from_label="OrbitalDepot",
+        to_label="PropellantGrade",
+    )
+    row = {"from_id": "d:1", "to_id": "g:1", "evidence_ref": "e:1", "source_ref": "s:1"}
+    key = _relationship_idempotency_key("orbit-yard", contract, row)
+    assert key == _relationship_idempotency_key(
+        "orbit-yard", contract, dict(row)
+    )  # exact retry is stable
+    assert key.startswith("eie:relsync:orbit-yard:e:1:")
+    variants = [
+        _relationship_idempotency_key("other-yard", contract, row),
+        _relationship_idempotency_key(
+            "orbit-yard", dataclasses.replace(contract, entity_type="stocks-v2"), row
+        ),
+        _relationship_idempotency_key(
+            "orbit-yard", dataclasses.replace(contract, relation_type="SUPPLIES"), row
+        ),
+        _relationship_idempotency_key(
+            "orbit-yard", dataclasses.replace(contract, from_label="Depot"), row
+        ),
+        _relationship_idempotency_key(
+            "orbit-yard", dataclasses.replace(contract, to_label="Grade"), row
+        ),
+        _relationship_idempotency_key("orbit-yard", contract, {**row, "to_id": "g:2"}),
+    ]
+    digests = {k.rsplit(":", 1)[1] for k in [key, *variants]}
+    assert len(digests) == len(variants) + 1
 
 
 @pytest.mark.parametrize(
