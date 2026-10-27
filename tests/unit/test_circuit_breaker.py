@@ -150,3 +150,27 @@ def test_provider_success_feeds_the_breaker(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert breaker.failures == 0
     assert breaker.state == "closed"
+
+
+def test_cancellation_is_not_a_provider_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A request deadline cancelling sibling variations says nothing about the provider."""
+
+    def slow(*_: Any) -> perplexity_client.SonarResponse:
+        import time
+
+        time.sleep(0.2)
+        return _sonar()
+
+    monkeypatch.setattr(perplexity_client, "_sync_call", slow)
+    breaker = CircuitBreaker(failure_threshold=1, cooldown=60)
+
+    async def cancel_it() -> None:
+        task = asyncio.ensure_future(perplexity_client.query_perplexity({}, "k", breaker=breaker))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cancel_it())
+    assert breaker.failures == 0
+    assert breaker.state == "closed"

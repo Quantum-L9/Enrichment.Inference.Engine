@@ -257,9 +257,12 @@ async def query_perplexity(
         return await asyncio.to_thread(_sync_call, payload, api_key, timeout)
     try:
         result = await asyncio.to_thread(_sync_call, payload, api_key, timeout)
-    except BaseException:
-        # Includes cancellation by the request deadline: a provider that did
-        # not answer in time is a failed call as far as the breaker is concerned.
+    except Exception:
+        # Provider errors, including the transport timeout _sync_call raises.
+        # Cancellation (asyncio.CancelledError, a BaseException) is NOT counted:
+        # one request's deadline cancelling its sibling variations says nothing
+        # about provider health, and counting it let a single slow request open
+        # the breaker for the whole worker.
         breaker.record_failure()
         raise
     breaker.record_success()
