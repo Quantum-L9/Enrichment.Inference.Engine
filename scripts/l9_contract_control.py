@@ -126,6 +126,11 @@ def verify_constitution() -> tuple[bool, list[str]]:
 
 def verify_attestation() -> tuple[bool, list[str]]:
     errors: list[str] = []
+    # Run as `python scripts/l9_contract_control.py`, sys.path[0] is scripts/,
+    # not the repository root, so `app` was unimportable in any job that does
+    # not pip-install the package — and that failure used to read as a SKIP.
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
     try:
         from app.services.runtime_attestation import build_runtime_attestation
     except Exception as exc:

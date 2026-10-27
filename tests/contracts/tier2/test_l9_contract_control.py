@@ -97,3 +97,33 @@ def test_verify_attestation_fails_closed_when_app_is_unimportable(
 
     monkeypatch.setattr(sys, "argv", ["l9_contract_control.py", "verify-attestation"])
     assert l9_contract_control.main() == 1
+
+
+def test_verify_attestation_script_imports_the_repo_app_without_an_install(tmp_path) -> None:
+    """The CI condition behind F-029: dependencies installed, `app` not pip-installed,
+    script invoked as `python scripts/l9_contract_control.py`. The script must
+    find the repository's own `app` rather than skip (or now, fail) on it."""
+    import site
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    # -S: no site processing, so no editable-install finder for `app`; the
+    # dependencies stay importable through PYTHONPATH.
+    deps = [p for p in site.getsitepackages() if Path(p).is_dir()]
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(repo / "scripts" / "l9_contract_control.py"),
+            "verify-attestation",
+        ],
+        cwd=tmp_path,
+        env={"PYTHONPATH": ":".join(deps), "PATH": "/usr/bin:/bin", "OTEL_SDK_DISABLED": "true"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "verification passed" in proc.stdout

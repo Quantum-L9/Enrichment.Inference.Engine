@@ -503,12 +503,8 @@ jobs:
 
       - name: Verify attestation (l9_contract_control)
         run: |
-          python scripts/l9_contract_control.py verify-attestation || {
-            if python -c "import app" 2>/dev/null; then
-              exit 1
-            fi
-            echo "[l9] SKIP: app module not installed, attestation verification skipped"
-          }
+          # F-029: an attestation that cannot be built is a failure, not a skip.
+          python scripts/l9_contract_control.py verify-attestation
 
       - name: Select and run gates (PR only)
         if: github.event_name == 'pull_request' && !inputs.l9_minimal
