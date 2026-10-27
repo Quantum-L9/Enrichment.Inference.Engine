@@ -129,7 +129,7 @@ async def test_handle_enrich_calls_persist_on_completed():
 
     persist_calls: list = []
 
-    async def mock_persist_and_sync(tenant, payload, result, object_type):
+    async def mock_persist_and_sync(tenant, payload, result, object_type, **kwargs):
         persist_calls.append({"tenant": tenant, "payload": payload, "result": result})
 
     with (
@@ -174,7 +174,7 @@ async def test_handle_enrich_skips_persist_on_failed():
 
     persist_calls: list = []
 
-    async def mock_persist_and_sync(tenant, payload, result, object_type):
+    async def mock_persist_and_sync(tenant, payload, result, object_type, **kwargs):
         persist_calls.append(True)
 
     with (

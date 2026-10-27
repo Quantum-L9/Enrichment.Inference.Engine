@@ -92,9 +92,15 @@ async def _persist_and_sync(
     *,
     graph_sync: bool = True,
     require_persistence: bool = False,
+    operation_id: str | None = None,
 ) -> None:
     """
     Delegate post-enrich side effects to the single SideEffectCoordinator (TASK-021).
+
+    `operation_id` is the transport packet id (`packet.header.packet_id`, D-7),
+    read by the SDK handler from the immutable, signed header. It is never read
+    from the payload: a `payload.packet_id` is caller data and cannot name the
+    operation (WU-01 / F-001).
 
     Fire-and-forward by default — failures are logged inside the coordinator.
     With `require_persistence=True` a persist failure raises
@@ -119,9 +125,6 @@ async def _persist_and_sync(
         msg = f"entity identity required: one of {', '.join(ENTITY_IDENTITY_ORDER)}"
         raise ValueError(msg)
     domain = payload.get("domain", settings.default_domain)
-    packet_id = None
-    if payload.get("packet_id"):
-        packet_id = str(payload["packet_id"])
     from app.services.side_effect_coordinator import get_side_effect_coordinator
 
     await get_side_effect_coordinator().commit_after_enrich(
@@ -131,7 +134,7 @@ async def _persist_and_sync(
         domain=domain,
         response_dict=response_dict,
         settings=settings,
-        packet_id=packet_id,
+        packet_id=operation_id,
         idempotency_key=payload.get("idempotency_key"),
         emit_event=True,
         graph_sync=graph_sync,
@@ -140,8 +143,22 @@ async def _persist_and_sync(
     )
 
 
-async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _operation_id(packet: Any) -> str | None:
+    """The operation identity: the transport header's packet id (D-7), if any."""
+    packet_id = getattr(getattr(packet, "header", None), "packet_id", None)
+    return str(packet_id) if packet_id else None
+
+
+async def handle_enrich(
+    tenant: str,
+    payload: dict[str, Any],
+    packet: Any = None,
+) -> dict[str, Any]:
     """SDK handler for action='enrich' (SEAM-02 consumer).
+
+    Declaring a third parameter makes the SDK call it as
+    `(tenant, payload, packet)`; the packet is read only for
+    `header.packet_id`, the operation identity side effects key on (D-7).
 
     The producer's EnrichRequest body carries identity at the top level
     (`entity_id`) and in `entity.id`; `entity.entity_id` is the last accepted
@@ -160,7 +177,9 @@ async def handle_enrich(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
     result = response.model_dump()
 
     if response.state == "completed":
-        await _persist_and_sync(tenant, payload, result, request.object_type)
+        await _persist_and_sync(
+            tenant, payload, result, request.object_type, operation_id=_operation_id(packet)
+        )
 
     return result
 
@@ -203,15 +222,17 @@ async def handle_converge(
         packet_timeout_ms(packet),
         ceiling_seconds=DEFAULT_CONVERGE_TIMEOUT_SECONDS,
     )
+    operation_id = _operation_id(packet)
     if is_odoo_compat_converge_payload(payload):
-        return await _handle_odoo_compat_converge(tenant, payload, budget)
-    return await _handle_canonical_converge(tenant, payload, budget)
+        return await _handle_odoo_compat_converge(tenant, payload, budget, operation_id)
+    return await _handle_canonical_converge(tenant, payload, budget, operation_id)
 
 
 async def _handle_canonical_converge(
     tenant: str,
     payload: dict[str, Any],
     budget_seconds: float | None = None,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     """Canonical converge — EnrichRequest in, EnrichResponse out, bounded.
 
@@ -247,7 +268,9 @@ async def _handle_canonical_converge(
     try:
         with deadline_scope(deadline):
             return await asyncio.wait_for(
-                _run_canonical_converge(tenant, payload, request, deadline, entity_id),
+                _run_canonical_converge(
+                    tenant, payload, request, deadline, entity_id, operation_id
+                ),
                 timeout=max(deadline.remaining(), 0.0),
             )
     except TimeoutError:
@@ -278,6 +301,7 @@ async def _run_canonical_converge(
     request: EnrichRequest,
     deadline: Deadline,
     entity_id: str | None,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     """The complete canonical operation, run under the outer deadline.
 
@@ -352,6 +376,7 @@ async def _run_canonical_converge(
                 request.object_type,
                 graph_sync=False,
                 require_persistence=True,
+                operation_id=operation_id,
             )
         except PersistenceRequiredError as exc:
             logger.error(
@@ -386,6 +411,7 @@ async def _handle_odoo_compat_converge(
     tenant: str,
     payload: dict[str, Any],
     budget_seconds: float | None = None,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     """Compatibility branch for the pre-canonical `entity_snapshot` dialect.
 
@@ -410,7 +436,7 @@ async def _handle_odoo_compat_converge(
     try:
         with deadline_scope(deadline):
             return await asyncio.wait_for(
-                _run_odoo_compat_converge(tenant, payload, parsed, run_id),
+                _run_odoo_compat_converge(tenant, payload, parsed, run_id, operation_id),
                 timeout=max(deadline.remaining(), 0.0),
             )
     except TimeoutError:
@@ -441,6 +467,7 @@ async def _run_odoo_compat_converge(
     payload: dict[str, Any],
     parsed: dict[str, Any],
     run_id: str,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     """Complete compatibility converge operation, run under the outer deadline."""
     settings = get_settings()
@@ -480,19 +507,28 @@ async def _run_odoo_compat_converge(
             "entity": request.entity,
             "idempotency_key": request.idempotency_key,
         }
-        await _persist_and_sync(
-            tenant,
-            persist_payload,
-            {
-                "fields": result["fields"],
-                "confidence": response.confidence,
-                "tokens_used": response.tokens_used,
-                "pass_count": response.pass_count,
-                "state": response.state,
-            },
-            request.object_type,
-            graph_sync=False,
-        )
+        # F-048: the canonical launch invariants, including durability. An
+        # un-persisted result is not reported as completed; the raise makes the
+        # hub return an error packet and Odoo fall back to local, the same
+        # convention as a non-completed converge above.
+        try:
+            await _persist_and_sync(
+                tenant,
+                persist_payload,
+                {
+                    "fields": result["fields"],
+                    "confidence": response.confidence,
+                    "tokens_used": response.tokens_used,
+                    "pass_count": response.pass_count,
+                    "state": response.state,
+                },
+                request.object_type,
+                graph_sync=False,
+                require_persistence=True,
+                operation_id=operation_id,
+            )
+        except PersistenceRequiredError as exc:
+            raise RuntimeError(f"result not durable: {exc}") from exc
 
     logger.info(
         "handlers.converge_compat_ok",

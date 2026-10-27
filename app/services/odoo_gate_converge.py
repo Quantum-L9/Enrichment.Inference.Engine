@@ -353,11 +353,15 @@ def _object_type_from_entity_id(entity_id: str) -> str:
 
 
 def _idempotency_key(parsed: dict[str, Any]) -> str | None:
+    """The run's correlation id, or None.
+
+    F-037: there is no `converge:{entity_id}` fallback. Every run of an entity
+    would share it, so a later run was skipped as a duplicate and the store
+    returned the earlier run's row. Without a correlation id the operation is
+    keyed by its transport packet id or its result instead.
+    """
     odoo = parsed.get("odoo") or {}
     correlation = odoo.get("correlation_id")
     if isinstance(correlation, str) and correlation.strip():
         return f"converge:{correlation.strip()}"
-    entity_id = parsed.get("entity_id")
-    if isinstance(entity_id, str) and entity_id:
-        return f"converge:{entity_id}"
     return None

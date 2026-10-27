@@ -20,7 +20,9 @@ All egress is Gate-only via PacketRouter / event emitter.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import threading
 from dataclasses import dataclass, field
 from typing import Any
@@ -37,14 +39,43 @@ def semantic_side_effect_key(
     action: str = "enrich",
     packet_id: str | None = None,
     idempotency_key: str | None = None,
+    result_digest: str | None = None,
 ) -> str:
-    """Build a stable semantic key (packet id preferred, else idempotency, else hash)."""
+    """Key one operation's side effects (WU-01 / F-001).
+
+    Preference: the transport packet id (``packet.header.packet_id``, immutable
+    and signed — never a payload field, D-7), else the caller's idempotency key,
+    else the result itself. The result digest stands in for an operation
+    identity when the caller supplied none: two runs for one entity that
+    produced different results are different operations and persist twice,
+    while a byte-identical result is the same effect and persists once. The
+    legacy tenant|entity|action hash (no digest) collapsed every run of an
+    entity into one key, so the second run was skipped and never persisted.
+    """
     if packet_id:
         return f"pkt:{packet_id}:{action}"
     if idempotency_key:
         return f"idem:{tenant}:{idempotency_key}:{action}"
-    digest = hashlib.sha256(f"{tenant}|{entity_id}|{action}".encode()).hexdigest()[:24]
+    material = f"{tenant}|{entity_id}|{action}"
+    if result_digest:
+        digest = hashlib.sha256(f"{material}|{result_digest}".encode()).hexdigest()[:24]
+        return f"res:{digest}"
+    digest = hashlib.sha256(material.encode()).hexdigest()[:24]
     return f"hash:{digest}"
+
+
+def result_digest(response_dict: dict[str, Any]) -> str:
+    """Stable digest of what a result would persist and emit."""
+    material = json.dumps(
+        {
+            "fields": response_dict.get("fields") or {},
+            "confidence": response_dict.get("confidence"),
+            "state": response_dict.get("state"),
+        },
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(material.encode()).hexdigest()[:24]
 
 
 class PersistenceRequiredError(RuntimeError):
@@ -93,11 +124,19 @@ class SideEffectCoordinator:
 
     def __init__(self) -> None:
         self._completed: set[str] = set()
+        # Keys whose result a store accepted. A key can be completed without
+        # it when persistence was not required and failed (F-001).
+        self._persisted: set[str] = set()
         self._graph_pending: dict[str, dict[str, Any]] = {}
+        # Reserved before the first await (F-024): a concurrent call for the
+        # same key waits for the holder and then re-evaluates.
+        self._in_flight: dict[str, asyncio.Event] = {}
 
     def reset_for_tests(self) -> None:
         self._completed.clear()
+        self._persisted.clear()
         self._graph_pending.clear()
+        self._in_flight.clear()
 
     async def commit_after_enrich(
         self,
@@ -159,12 +198,65 @@ class SideEffectCoordinator:
             action="enrich",
             packet_id=packet_id,
             idempotency_key=idempotency_key,
+            result_digest=result_digest(response_dict),
         )
-        report = SideEffectReport(key=key)
+        # Reservation (F-024). Everything from here to `_in_flight[key] = …`
+        # runs without an await, so on one event loop the check and the
+        # reservation are atomic: of N concurrent calls for a key, one holds it
+        # and the rest wait for it, then see its outcome.
+        while key in self._in_flight:
+            await self._in_flight[key].wait()
         if key in self._completed:
-            report.skipped = True
+            if require_persistence and key not in self._persisted:
+                # The earlier attempt completed without a durable result (its
+                # persistence was not required and failed). Skipping now would
+                # answer `completed` for a result no store holds.
+                raise PersistenceRequiredError(
+                    f"operation {key} completed earlier without a durable result"
+                )
+            report = SideEffectReport(key=key, skipped=True)
             logger.info("side_effects_skipped_duplicate", key=key, entity_id=entity_id)
             return report
+
+        reservation = asyncio.Event()
+        self._in_flight[key] = reservation
+        try:
+            return await self._commit_reserved(
+                key=key,
+                tenant=tenant,
+                entity_id=entity_id,
+                object_type=object_type,
+                domain=domain,
+                response_dict=response_dict,
+                settings=settings,
+                idempotency_key=idempotency_key,
+                emit_event=emit_event,
+                graph_sync=graph_sync,
+                require_persistence=require_persistence,
+                node_label=node_label,
+            )
+        finally:
+            del self._in_flight[key]
+            reservation.set()
+
+    async def _commit_reserved(
+        self,
+        *,
+        key: str,
+        tenant: str,
+        entity_id: str,
+        object_type: str,
+        domain: str,
+        response_dict: dict[str, Any],
+        settings: Any,
+        idempotency_key: str | None,
+        emit_event: bool,
+        graph_sync: bool,
+        require_persistence: bool,
+        node_label: str | None,
+    ) -> SideEffectReport:
+        """Run the effects for a key this call holds the reservation for."""
+        report = SideEffectReport(key=key)
 
         # A key left pending by an unacknowledged graph sync re-runs the graph
         # leg only: persistence, score invalidation and the completion event
@@ -201,6 +293,7 @@ class SideEffectCoordinator:
                     idempotency_key=idempotency_key,
                 )
                 report.persisted = True
+                self._persisted.add(key)
             except Exception as exc:  # noqa: BLE001 — fire-and-forward unless required
                 report.errors.append(f"persist:{exc}")
                 logger.warning("side_effect_persist_failed", entity_id=entity_id, error=str(exc))
