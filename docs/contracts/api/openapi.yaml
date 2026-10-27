@@ -242,6 +242,10 @@ components:
           enum: [completed, failed, partial]
           default: completed
           description: Enrichment outcome state.
+        convergence_reason:
+          type: string
+          nullable: true
+          description: Why the convergence loop stopped (e.g. budget_exhausted, insufficient_improvement_delta_0.05, max_passes_reached). Null for single-pass enrich.
       x-source-file: app/models/schemas.py:68
       additionalProperties: false
 

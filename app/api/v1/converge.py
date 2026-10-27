@@ -506,7 +506,8 @@ async def converge_single(
     state.status = LoopStatus.CONVERGED if conv_response.state == "completed" else LoopStatus.FAILED
     await store.save(state)
 
-    convergence_reason = getattr(conv_response, "convergence_reason", "completed")
+    # F-018: the loop's actual stop reason, not a constant.
+    convergence_reason = conv_response.convergence_reason or conv_response.failure_reason or ""
     cost_usd = safe_float(conv_response.tokens_used) * settings.token_rate_usd_per_1k / 1000.0
 
     return ConvergeSingleResponse(

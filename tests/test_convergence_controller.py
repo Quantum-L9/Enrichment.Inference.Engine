@@ -1068,3 +1068,57 @@ class TestPassTargeting:
             convergence_config=ConvergenceConfig(max_passes=1),
         )
         assert list(seen[0].schema_ or {})[:2] == ["annual_tonnage", "website"]
+
+
+# ── WU-05 / F-018: the response names why the loop stopped ────────────────
+
+
+class TestConvergenceReason:
+    @pytest.mark.asyncio
+    async def test_budget_exhaustion_is_reported(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(max_budget_tokens=150),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3, tokens=200), _pass(0.5, tokens=200)]),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+        assert "budget" in (response.convergence_reason or "")
+
+    @pytest.mark.asyncio
+    async def test_insufficient_improvement_is_reported(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.31)]),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+        assert response.convergence_reason == "insufficient_improvement_delta_0.05"
+
+    @pytest.mark.asyncio
+    async def test_running_out_of_passes_is_reported(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5)]),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        assert response.convergence_reason == "max_passes_reached"
+
+    @pytest.mark.asyncio
+    async def test_threshold_stop_is_reported(self) -> None:
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.95)]),
+        )
+        assert response.convergence_reason == "all_fields_above_threshold_0.85"

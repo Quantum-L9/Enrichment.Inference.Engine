@@ -269,6 +269,10 @@ class EnrichResponse(BaseModel):
     # ── Error / state ────────────────────────────────
     failure_reason: str | None = None
     state: str = "completed"
+    # Why a convergence loop stopped (F-018), e.g. "budget_exhausted",
+    # "insufficient_improvement_delta_0.05", "max_passes_reached". None for a
+    # single-pass enrich, which has no loop.
+    convergence_reason: str | None = None
 
 
 class BatchEnrichResponse(BaseModel):

@@ -220,3 +220,69 @@ async def test_converge_batch_processes_inline_entities():
     assert body["total_tokens"] == 800
     assert len(body["run_ids"]) == 2
     assert sorted(processed) == ["e1", "e2"]
+
+
+# ── Route harness for WU-05 / WU-06 ───────────────────────────────────────
+
+
+async def _post_converge(body: dict, run_loop, **patches):
+    """POST /v1/converge with run_convergence_loop replaced; restores module wiring."""
+    from contextlib import ExitStack
+
+    from httpx import ASGITransport, AsyncClient
+
+    import app.api.v1.converge as cm
+    from app.engines.convergence.loop_state import LoopStateStore
+    from app.main import app
+    from app.services.enrichment_profile import ProfileRegistry
+
+    class _Store(LoopStateStore):
+        def __init__(self) -> None:
+            self._states: dict = {}
+
+        async def save(self, state):
+            self._states[state.run_id] = state
+
+        async def load(self, run_id):
+            return self._states.get(run_id)
+
+        async def list_active(self, domain=None):
+            return []
+
+    names = ("_state_store", "_profile_registry", "_domain_specs", "_kb_resolver", "_idem_store")
+    original = {n: getattr(cm, n) for n in names}
+    cm.configure(
+        state_store=_Store(),
+        profile_registry=ProfileRegistry(),
+        domain_specs={},
+        kb_resolver=None,
+        idem_store=None,
+    )
+    try:
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    "app.engines.convergence_controller.run_convergence_loop", side_effect=run_loop
+                )
+            )
+            for target, value in patches.items():
+                stack.enter_context(patch(target.replace("__", "."), value))
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as c:
+                return await c.post("/v1/converge", json=body, headers=_auth_headers())
+    finally:
+        for n, v in original.items():
+            setattr(cm, n, v)
+
+
+@pytest.mark.asyncio
+async def test_converge_reports_the_loops_stop_reason():
+    """WU-05 / F-018: convergence_reason is the loop's reason, not a constant."""
+
+    async def run_loop(**kw):
+        response = _make_conv_response()
+        response.convergence_reason = "budget_exhausted"
+        return response
+
+    resp = await _post_converge({"entity": {"id": "e1"}, "max_passes": 3}, run_loop)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["convergence_reason"] == "budget_exhausted"

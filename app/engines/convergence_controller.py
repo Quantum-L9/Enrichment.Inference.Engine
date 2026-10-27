@@ -469,6 +469,9 @@ async def run_convergence_loop(
             state.converged = True
             state.convergence_reason = "verification_pass_complete"
             break
+    else:
+        # The for-loop ran out of passes without any stop condition firing.
+        state.convergence_reason = "max_passes_reached"
 
     elapsed = int((time.monotonic() - start) * 1000)
     return _assemble_convergence_response(
@@ -700,6 +703,7 @@ def _assemble_convergence_response(
         tokens_used=state.total_tokens,
         state=response_state,
         failure_reason=failure_reason,
+        convergence_reason=state.convergence_reason or None,
         inferences=pass_inferences,
         feature_vector=feature_vector if feature_vector else None,
     )
