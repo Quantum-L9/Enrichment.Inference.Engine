@@ -109,6 +109,10 @@ class PassResult:
     per_field_confidence: dict[str, float] = field(default_factory=dict)  # NEW
     graph_seeded_fields: dict[str, Any] = field(default_factory=dict)
     inference_provenance: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # The enrichment pass's own outcome (F-003): a failed pass must not be
+    # folded into a "completed" converge as though it had merely found nothing.
+    state: str = "completed"
+    failure_reason: str | None = None
 
 
 @dataclass
@@ -341,6 +345,8 @@ async def run_convergence_loop(
             search_plan=search_plan,
             sonar_config=sonar_config,
             graph_seeded_fields=graph_seeded,
+            state=pass_response.state,
+            failure_reason=pass_response.failure_reason,
         )
 
         # NEW: Extract per-field confidence from consensus engine
@@ -638,6 +644,13 @@ def _assemble_convergence_response(
     if state.convergence_reason == DEADLINE_EXHAUSTED_REASON:
         response_state = "failed"
         failure_reason: str | None = DEADLINE_EXHAUSTED_REASON
+    elif state.pass_results and all(pr.state == "failed" for pr in state.pass_results):
+        # Every enrichment pass failed: the loop stopped on a bounded failure,
+        # not on convergence (F-003). Name the last pass's own reason so the
+        # consumer sees why, and so no caller persists or writes this back.
+        response_state = "failed"
+        last_reason = state.pass_results[-1].failure_reason or "unknown"
+        failure_reason = f"all_passes_failed: {last_reason}"
     else:
         response_state = "completed"
         failure_reason = None

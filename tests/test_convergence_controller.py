@@ -813,3 +813,82 @@ def test_field_thresholds_reject_non_finite() -> None:
             schema={"street": "string"},
             field_thresholds={"street": "NaN"},
         )
+
+
+# ── WU-03 / F-003: a converge whose passes all failed reports failed ──────
+
+
+def _settings(max_budget_tokens: int = 30000) -> MagicMock:
+    settings = MagicMock()
+    settings.perplexity_api_key = "test-key"
+    settings.perplexity_model = "sonar"
+    settings.max_concurrent_variations = 3
+    settings.default_timeout_seconds = 30
+    settings.max_budget_tokens = max_budget_tokens
+    return settings
+
+
+def _scripted_enricher(responses: list[EnrichResponse], seen: list | None = None):
+    """An enricher that returns the scripted responses in order (last one repeats)."""
+    calls = {"n": 0}
+
+    async def enricher(pass_request, *args, **kwargs):
+        if seen is not None:
+            seen.append(pass_request)
+        i = min(calls["n"], len(responses) - 1)
+        calls["n"] += 1
+        return responses[i]
+
+    return enricher
+
+
+def _failed_pass(reason: str = "no_valid_responses") -> EnrichResponse:
+    return EnrichResponse(state="failed", failure_reason=reason, fields={}, tokens_used=50)
+
+
+def _pass(confidence: float, fields: dict | None = None, tokens: int = 100) -> EnrichResponse:
+    fields = fields if fields is not None else {"industry": f"v{confidence}"}
+    return EnrichResponse(
+        state="completed",
+        fields=fields,
+        confidence=confidence,
+        tokens_used=tokens,
+        feature_vector={"per_field_confidence": dict.fromkeys(fields, confidence)},
+    )
+
+
+class TestPassFailurePropagation:
+    @pytest.mark.asyncio
+    async def test_all_passes_failed_reports_failed_with_reason(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_failed_pass("no_valid_responses: timeout")]),
+            convergence_config=ConvergenceConfig(max_passes=3),
+        )
+        assert response.state == "failed"
+        assert response.failure_reason
+        assert "no_valid_responses: timeout" in response.failure_reason
+        assert response.pass_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_a_later_successful_pass_still_completes(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"industry": "string"},
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_failed_pass(), _pass(0.95)]),
+            convergence_config=ConvergenceConfig(max_passes=3),
+        )
+        assert response.state == "completed"
+        assert response.failure_reason is None

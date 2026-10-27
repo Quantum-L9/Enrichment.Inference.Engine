@@ -219,7 +219,9 @@ class TestConvergenceLoopE2E:
             enricher=failing_enricher,
         )
 
-        assert result.state in ("failed", "completed")
+        # WU-03 / F-003: every pass failed, so the converge failed.
+        assert result.state == "failed"
+        assert result.failure_reason
 
 
 # ── Live inference through the SDK converge action ──────────────────────────

@@ -637,3 +637,23 @@ async def test_non_canonical_enrich_still_syncs_to_graph():
     assert report.graph_synced is True
     assert report.graph_skipped is False
     coordinator.reset_for_tests()
+
+
+async def test_failed_converge_is_not_persisted_as_completed(canonical_converge_probes):
+    """WU-03 / F-003: when every enrichment pass failed, the real loop answers
+    failed and the handler neither persists nor reports completed."""
+    from app.engines.convergence_controller import run_convergence_loop
+
+    async def failing_enricher(*args: Any, **kwargs: Any) -> EnrichResponse:
+        return EnrichResponse(state="failed", failure_reason="no_valid_responses", fields={})
+
+    async def real_loop(**kwargs: Any) -> EnrichResponse:
+        return await run_convergence_loop(**kwargs, enricher=failing_enricher)
+
+    canonical_converge_probes["loop"].side_effect = real_loop
+
+    result = await handle_converge("acme", _odoo_request())
+
+    assert result["state"] == "failed"
+    assert result["failure_reason"]
+    assert canonical_converge_probes["persist"].call_count == 0
