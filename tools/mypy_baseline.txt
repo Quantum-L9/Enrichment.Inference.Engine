@@ -4,8 +4,6 @@ app/agents/data_hygiene.py: Incompatible types in assignment (expression has typ
 app/core/telemetry.py: Argument 1 to "instrument_app" of "FastAPIInstrumentor" has incompatible type "object"; expected "FastAPI"  [arg-type]
 app/engines/convergence_controller.py: Argument "domain_spec" to "MetaPromptPlanner" has incompatible type "dict[str, Any] | None"; expected "DomainSpec | None"  [arg-type]
 app/engines/convergence_controller.py: Unexpected keyword argument "schema" for "EnrichRequest"; did you mean "schema_"?  [call-arg]
-app/engines/meta_prompt_planner.py: Item "None" of "DomainSpec | None" has no attribute "ontology"  [union-attr]
-app/engines/meta_prompt_planner.py: Item "None" of "DomainSpec | None" has no attribute "ontology"  [union-attr]
 app/engines/search_optimizer.py: Unexpected keyword argument "reason" for "info" of "Logger"  [call-arg]
 app/models/loop_schemas.py: Returning Any from function declared to return "dict[str, Any] | None"  [no-any-return]
 app/models/loop_schemas.py: Returning Any from function declared to return "dict[str, Any] | None"  [no-any-return]
