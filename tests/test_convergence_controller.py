@@ -892,3 +892,124 @@ class TestPassFailurePropagation:
         )
         assert response.state == "completed"
         assert response.failure_reason is None
+
+
+# ── WU-02 / F-002 / F-058 / D-9: per-pass uncertainty ─────────────────────
+
+
+class TestPerPassUncertainty:
+    @pytest.mark.asyncio
+    async def test_rising_confidence_runs_four_passes_and_stops_on_threshold(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5), _pass(0.7), _pass(0.9)]),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+
+        assert response.state == "completed"
+        assert response.pass_count == 4
+        modes = [entry["mode"] for entry in response.inferences]
+        assert modes == ["discovery", "targeted", "targeted", "targeted"]
+        uncertainties = [entry["uncertainty"] for entry in response.inferences]
+        assert uncertainties == pytest.approx([7.0, 5.0, 3.0, 1.0])
+        assert response.uncertainty_score == pytest.approx(1.0)
+
+    @pytest.mark.asyncio
+    async def test_reported_uncertainty_tracks_the_last_pass_not_a_constant(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5)]),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        assert response.uncertainty_score == pytest.approx(5.0)
+
+    @pytest.mark.asyncio
+    async def test_variation_budget_follows_uncertainty_not_max_variations(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen: list = []
+        await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"}, object_type="Account", objective="x", max_variations=5
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5), _pass(0.7), _pass(0.9)], seen),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+        # Pass 2 follows U=7 (> 5.0 -> 5 variations); pass 3 follows U=5 (3).
+        assert [r.max_variations for r in seen[1:3]] == [5, 3]
+
+
+class TestUncertaintyFormulaD9:
+    """D-9 candidate formula (owner acceptance pending): U = 10 * (1 - mean confidence)."""
+
+    def test_confidence_ladder_maps_to_seven_five_three_one(self) -> None:
+        from app.engines.convergence.confidence_tracker import uncertainty_from_confidences
+
+        assert [uncertainty_from_confidences([c]) for c in (0.3, 0.5, 0.7, 0.9)] == pytest.approx(
+            [7.0, 5.0, 3.0, 1.0]
+        )
+
+    def test_distinct_confidence_states_give_distinct_u(self) -> None:
+        from app.engines.convergence.confidence_tracker import uncertainty_from_confidences
+
+        assert uncertainty_from_confidences([0.4, 0.6]) != uncertainty_from_confidences([0.9, 0.9])
+
+    def test_missing_requested_field_counts_as_unknown(self) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker()
+        tracker.update_field("a", "x", 0.8, 1, "consensus")
+        assert tracker.uncertainty(["a", "b"]) == pytest.approx(6.0)
+        assert tracker.uncertainty(["a"]) == pytest.approx(2.0)
+
+    def test_nothing_known_is_maximal_uncertainty(self) -> None:
+        from app.engines.convergence.confidence_tracker import (
+            UNCERTAINTY_SCALE,
+            ConfidenceTracker,
+        )
+
+        assert ConfidenceTracker().uncertainty() == UNCERTAINTY_SCALE
+
+
+class TestTrackerStopSignals:
+    """F-058: summary agrees with converged; improvement is measured on this pass."""
+
+    def test_summary_agrees_with_converged(self) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker(exclude_sources=frozenset({"inference"}))
+        tracker.update_field("a", "x", 0.9, 1, "consensus")
+        tracker.update_field("derived", "y", 0.5, 1, "inference")
+        summary = tracker.get_pass_summary()
+        assert summary["converged"] is True
+        assert summary["fields_below_threshold"] == 0
+        assert summary["fields_above_threshold"] == 1
+
+    def test_an_earlier_pass_gain_is_not_credited_again(self) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker()
+        tracker.update_field("a", "x", 0.3, 1, "consensus")
+        tracker.update_field("a", "x", 0.6, 2, "consensus")
+        tracker.update_field("b", "y", 0.5, 2, "consensus")
+        tracker.update_field("b", "y", 0.51, 3, "consensus")
+        # Pass 3 moved only b, by 0.01; a's +0.3 belongs to pass 2.
+        assert tracker.had_meaningful_improvement(0.05) is False
+
+    def test_a_field_first_resolved_this_pass_is_an_improvement(self) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker()
+        tracker.update_field("a", "x", 0.6, 1, "consensus")
+        tracker.update_field("b", "y", 0.5, 2, "consensus")
+        assert tracker.had_meaningful_improvement(0.05) is True

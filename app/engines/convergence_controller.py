@@ -113,6 +113,9 @@ class PassResult:
     # folded into a "completed" converge as though it had merely found nothing.
     state: str = "completed"
     failure_reason: str | None = None
+    # Uncertainty U after this pass (WU-02); None when the pass failed and U
+    # was carried forward unchanged.
+    uncertainty: float | None = None
 
 
 @dataclass
@@ -415,6 +418,14 @@ async def run_convergence_loop(
         if hasattr(inference_result, "unlock_map"):
             state.unlock_map = inference_result.unlock_map
 
+        # --- UNCERTAINTY (WU-02 / F-002) ---
+        # Recomputed from required-field confidence after every successful pass;
+        # it drives the next pass's mode (targeted while U > 2.0) and variation
+        # budget. A failed pass learned nothing, so U carries forward.
+        if pass_result.state != "failed":
+            state.uncertainty_score = confidence_tracker.uncertainty(_required_fields(request))
+            pass_result.uncertainty = state.uncertainty_score
+
         state.pass_results.append(pass_result)
 
         # --- CONVERGENCE CHECK ---
@@ -460,6 +471,12 @@ async def run_convergence_loop(
         confidence_tracker,
         inference_context=bridge.describe(),
     )
+
+
+def _required_fields(request: EnrichRequest) -> list[str] | None:
+    """The fields whose confidence decides U: the caller's schema, when named."""
+    names = [name for name in (request.schema_ or {}) if name != "confidence"]
+    return names or None
 
 
 def _convergence_reason(request: EnrichRequest, config: ConvergenceConfig) -> str:
@@ -610,6 +627,7 @@ def _assemble_convergence_response(
             "rules_fired": pr.inference_fired,
             "inference_provenance": pr.inference_provenance,
             "per_field_confidence": pr.per_field_confidence,  # NEW
+            "uncertainty": pr.uncertainty,
         }
         if pr.sonar_config:
             entry["sonar_model"] = pr.sonar_config.model.value
