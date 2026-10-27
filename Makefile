@@ -1,4 +1,4 @@
-.PHONY: setup dev dev-build dev-down dev-clean test test-unit test-integration test-compliance test-ci test-contracts test-all test-watch lint lint-fix audit audit-strict audit-json verify agent-check agent-fix agent-full build prod prod-build prod-down prod-logs deploy clean push pr pr-validate pr-lint pr-semgrep pr-test pr-security pr-compliance pr-l9 pr-docs pr-quick pr-services-up pr-services-down pr-evaluate pr-merge pr-merge-dry pr-ship pr-rerun
+.PHONY: setup dev dev-build dev-down dev-clean test test-unit test-integration test-compliance test-ci test-contracts test-all test-watch lint lint-fix audit audit-strict audit-json verify agent-check agent-fix agent-full build prod prod-build prod-down prod-logs deploy clean push pr pr-guards pr-evaluate pr-merge pr-merge-dry pr-ship pr-rerun
 
 IMAGE_NAME ?= enrichment-api
 SERVICE_NAME ?= enrichment-api
@@ -85,7 +85,7 @@ agent-check:  ## THE universal gate. Agents run this before every commit.
 	@echo ""
 	@echo "=== [1/8] LINT ===" && ruff check .
 	@echo "=== [2/8] FORMAT ===" && ruff format --check .
-	@echo "=== [3/8] TYPES ===" && mypy app
+	@echo "=== [3/8] TYPES (ratchet, ADR-001) ===" && $(PYTHON) tools/mypy_ratchet.py
 	@echo "=== [4/8] UNIT TESTS ===" && $(PYTEST) tests/unit/ tests/compliance/ -v --tb=short -x
 	@echo "=== [5/8] CI TESTS ===" && $(PYTEST) tests/ci/ -v --tb=short -x
 	@echo "=== [6/8] AUDIT ===" && $(PYTHON) tools/audit_engine.py --strict
@@ -117,49 +117,29 @@ push:  ## Run agent-check, then push current branch to origin
 	git push -u origin HEAD
 
 # ============================================================
-# PR PIPELINE — local parity with GitHub CI + L9 + docs
-# See: readme/CICD_PIPELINE.md, local_pr_pipeline/pr_pipeline.sh
-# Env: ORDER=gate|failfast, COVERAGE_THRESHOLD, PR_MYPY_STRICT, PR_SKIP_SEMGREP,
-#      PR_SKIP_INTEGRATION, PR_L9_MINIMAL, PR_SKIP_L9, PR_SKIP_GITLEAKS, PR_SECURITY_STRICT
+# PR — LOCAL VALIDATION ONLY (never pushes, never opens a PR)
+# `make pr` here is this repository's local pre-PR gate. It is NOT the
+# organization publication ceremony: publication goes through the governance
+# `make pr` (make -C "$$GOV" pr WS="$$PWD" PR_BASE=...), which validates,
+# pushes and opens the PR. This target only runs the checks below.
+#   make pr                          # agent-check + local_pr_pipeline guards
+#   make pr PR_BASE=origin/main      # also the contract-bound change gate on base..HEAD
 # PYTHON: override to pin interpreter (default: .venv/bin/python if present, else python3)
 # ============================================================
 PR_PYTHON ?= $(shell if [ -x "$(CURDIR)/.venv/bin/python" ]; then printf '%s' "$(CURDIR)/.venv/bin/python"; else command -v python3; fi)
 
-pr:  ## Full local PR gate (validate → … → docs). Requires Docker for test phase; gitleaks for security.
-	PYTHON=$(PR_PYTHON) bash local_pr_pipeline/pr_pipeline.sh all
+pr: agent-check pr-guards  ## Local PR validation (agent-check + guards). Never publishes.
 
-pr-validate:
-	PYTHON=$(PR_PYTHON) bash local_pr_pipeline/pr_pipeline.sh validate
-
-pr-lint:
-	PYTHON=$(PR_PYTHON) bash local_pr_pipeline/pr_pipeline.sh lint
-
-pr-semgrep:
-	PYTHON=$(PR_PYTHON) bash local_pr_pipeline/pr_pipeline.sh semgrep
-
-pr-test:
-	PYTHON=$(PR_PYTHON) bash local_pr_pipeline/pr_pipeline.sh test
-
-pr-security:
-	PYTHON=$(PR_PYTHON) bash local_pr_pipeline/pr_pipeline.sh security
-
-pr-compliance:
-	PYTHON=$(PR_PYTHON) bash local_pr_pipeline/pr_pipeline.sh compliance
-
-pr-l9:
-	PYTHON=$(PR_PYTHON) bash local_pr_pipeline/pr_pipeline.sh l9
-
-pr-docs:
-	PYTHON=$(PR_PYTHON) bash local_pr_pipeline/pr_pipeline.sh docs
-
-pr-quick:  ## Skips Docker test + select-gates runner; still runs lint through docs phases in gate order
-	PR_SKIP_INTEGRATION=1 PR_L9_MINIMAL=1 PYTHON=$(PR_PYTHON) bash local_pr_pipeline/pr_pipeline.sh all
-
-pr-services-up:
-	docker compose -f local_pr_pipeline/docker-compose.pr.yml -p enrich_pr up -d
-
-pr-services-down:
-	docker compose -f local_pr_pipeline/docker-compose.pr.yml -p enrich_pr down -v
+pr-guards:  ## local_pr_pipeline guards: terminology, KB YAML, docs, links, contract-bound diff
+	$(PR_PYTHON) local_pr_pipeline/check_compliance_terminology.py
+	$(PR_PYTHON) local_pr_pipeline/compliance_kb_validate.py
+	bash local_pr_pipeline/docs_consistency_local.sh
+	$(PR_PYTHON) local_pr_pipeline/docs_link_check_local.py
+	@if [ -n "$(PR_BASE)" ]; then \
+		$(PR_PYTHON) local_pr_pipeline/contract_bound_local.py --base "$(PR_BASE)" --head HEAD; \
+	else \
+		echo "pr-guards: PR_BASE unset; contract-bound change gate skipped (set PR_BASE to run it)"; \
+	fi
 
 # ============================================================
 # PR EVALUATE & MERGE — pr-pipeline.yml + agent review gate (gh CLI)

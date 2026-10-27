@@ -33,6 +33,7 @@ class CircuitBreaker:
 
     @classmethod
     def from_settings(cls, settings: Any) -> CircuitBreaker:
+        """Build a breaker from ``cb_failure_threshold`` / ``cb_cooldown_seconds``."""
         return cls(
             failure_threshold=int(settings.cb_failure_threshold),
             cooldown=int(settings.cb_cooldown_seconds),

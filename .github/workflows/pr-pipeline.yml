@@ -11,9 +11,9 @@
 # Full PR Pipeline — GitHub Actions parity with `make pr`
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # VERSION: 1.0.0
-# PURPOSE: Run the full local PR pipeline (local_pr_pipeline/pr_pipeline.sh)
-#          in GitHub Actions for complete CI parity.
-# LOCAL EQUIVALENT: make pr (or make pr-quick)
+# PURPOSE: Run the full PR pipeline in GitHub Actions.
+# LOCAL EQUIVALENT: make pr (local validation: agent-check + local_pr_pipeline
+#                   guards; it never publishes)
 # SIBLING: local_pr_pipeline/pr_pipeline.sh
 #
 # WHEN IT RUNS (automatic):

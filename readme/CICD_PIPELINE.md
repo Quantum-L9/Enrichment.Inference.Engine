@@ -13,12 +13,9 @@ This document describes the production-grade CI/CD pipeline for the Enrichment.I
 
 ### Local `make pr` ↔ GitHub `pr-pipeline.yml` Parity
 
-**Local** and **GitHub** pipelines are now fully synchronized:
-
 | Local | GitHub | Description |
 |-------|--------|-------------|
-| `make pr` | `pr-pipeline.yml` | Full 8-phase gate (validate → lint → semgrep → test → security → compliance → L9 → docs) |
-| `make pr-quick` | `workflow_dispatch` with skip flags | Minimal checks (no integration tests, minimal L9) |
+| `make pr` | `pr-pipeline.yml` | Local validation: `make agent-check` (8 gates) + `local_pr_pipeline/` guards. Semgrep, Docker integration tests and gitleaks run only in GitHub. |
 
 Run **`make pr`** before opening a PR for local validation. The **`pr-pipeline.yml`** is the **intended canonical merge gate** for this repository. Its enforcement in branch protection is **Unknown** — verify in Settings → Branches before relying on it as a hard block.
 
@@ -40,7 +37,7 @@ Run **`make pr`** before opening a PR for local validation. The **`pr-pipeline.y
 - `mypy_strict` — Fail on mypy errors
 - `security_strict` — Fail on security warnings
 
-See `local_pr_pipeline/pr_pipeline.sh` for implementation details.
+The local counterpart is `make pr` (agent-check plus the `local_pr_pipeline/` guards, via the `pr-guards` target). It validates only; it never pushes or opens a PR.
 
 ---
 
