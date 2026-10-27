@@ -110,27 +110,29 @@ def test_ai_review_exit_0_is_reported_as_exit_code_0(tmp_path: Path) -> None:
 # ── F-034 ─────────────────────────────────────────────────────────────
 
 
-def _audit_policy() -> dict:
+def _audit_policy(tmp_path: Path) -> dict:
     """Load the classification functions from the workflow's inline script."""
+    import runpy
+
     run = _step("audit-pr-review.yml", "Run Audit Engine")["run"]
     source = run.split("python3 << 'PY'\n", 1)[1].split("\nPY", 1)[0]
     definitions = source.split("\ntry:\n    raw_findings", 1)[0]
-    namespace: dict = {}
-    exec(compile(definitions, "audit-pr-review.yml", "exec"), namespace)
-    return namespace
+    module = tmp_path / "audit_policy.py"
+    module.write_text(definitions)
+    return runpy.run_path(str(module))
 
 
 @pytest.mark.parametrize("identifier", ["fontStyle", "namingScheme", "lowConfidence"])
-def test_identifier_text_does_not_change_classification(identifier: str) -> None:
-    policy = _audit_policy()
+def test_identifier_text_does_not_change_classification(identifier: str, tmp_path: Path) -> None:
+    policy = _audit_policy(tmp_path)
     finding = {"rule": 1, "severity": "CRITICAL", "message": f"camelCase field '{identifier}'"}
     control = {"rule": 1, "severity": "CRITICAL", "message": "camelCase field 'colorCode'"}
     assert policy["is_advisory_category"](finding) == policy["is_advisory_category"](control)
     assert policy["is_advisory_category"](finding) is False
 
 
-def test_rule_based_advisory_still_applies() -> None:
-    policy = _audit_policy()
+def test_rule_based_advisory_still_applies(tmp_path: Path) -> None:
+    policy = _audit_policy(tmp_path)
     finding = {
         "rule": 2,
         "severity": "CRITICAL",

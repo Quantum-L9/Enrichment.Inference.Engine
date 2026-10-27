@@ -7,6 +7,7 @@ F-118: the pre-commit audit hook can fail.
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -111,9 +112,10 @@ def test_precommit_audit_hook_fails_on_a_real_critical(tmp_path: Path) -> None:
     (tmp_path / "tools" / "audit_engine.py").write_text(
         (REPO_ROOT / "tools" / "audit_engine.py").read_text()
     )
+    argv = shlex.split(entry)
+    assert argv[0] == "python", entry
     proc = subprocess.run(
-        entry.replace("python ", f"{sys.executable} ", 1),
-        shell=True,
+        [sys.executable, *argv[1:]],
         cwd=tmp_path,
         capture_output=True,
         text=True,
