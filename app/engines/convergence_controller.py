@@ -178,7 +178,6 @@ async def run_convergence_loop(
     """
     start = time.monotonic()
     state = ConvergenceState()
-    planner = MetaPromptPlanner(domain_spec=domain_spec)
     bridge = InferenceBridge(
         rules=inference_rules or [],
         domain_spec=domain_spec,
@@ -186,6 +185,14 @@ async def run_convergence_loop(
 
     # ── Convergence config ─────────────────────────────────
     config = convergence_config or ConvergenceConfig()
+    # F-017: gaps are fields below the loop's own threshold, not a fixed 0.7.
+    # F-019: the domain's priority fields (config first, else the handlers'
+    # enrichment_hints) are targeted first.
+    planner = MetaPromptPlanner(
+        domain_spec=domain_spec,
+        confidence_threshold=config.confidence_threshold,
+        priority_fields=config.priority_fields or (domain_hints or {}).get("priority_fields"),
+    )
     confidence_tracker = ConfidenceTracker(
         confidence_threshold=config.confidence_threshold,
         exclude_sources=frozenset({INFERENCE_SOURCE}),
@@ -256,7 +263,9 @@ async def run_convergence_loop(
             previous_uncertainty=state.uncertainty_score,
         )
         search_plan: PromptPlan = planner.plan_pass(
-            entity_state=state.known_fields,
+            # The request's null fields stay visible as gaps (F-016); known_fields
+            # drops None values on seeding.
+            entity_state={**request.entity, **state.known_fields},
             pass_context=pass_context,
             field_confidences=confidence_tracker.get_all_confidences(),
             uncertainty_score=state.uncertainty_score,

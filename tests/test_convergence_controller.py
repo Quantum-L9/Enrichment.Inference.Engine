@@ -1013,3 +1013,58 @@ class TestTrackerStopSignals:
         tracker.update_field("a", "x", 0.6, 1, "consensus")
         tracker.update_field("b", "y", 0.5, 2, "consensus")
         assert tracker.had_meaningful_improvement(0.05) is True
+
+
+# ── WU-04 / F-016 F-017 F-019: pass schemas built by the loop ─────────────
+
+
+class TestPassTargeting:
+    @pytest.mark.asyncio
+    async def test_pass_one_schema_targets_null_entity_fields(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen: list = []
+        await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme", "industry": None, "employees": None},
+                object_type="Account",
+                objective="x",
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.95, {"industry": "x", "employees": 10})], seen),
+            convergence_config=ConvergenceConfig(max_passes=1),
+        )
+        assert {"industry", "employees"} <= set(seen[0].schema_ or {})
+
+    @pytest.mark.asyncio
+    async def test_field_at_point_eight_is_in_the_pass_two_schema(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen: list = []
+        await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.8), _pass(0.9)], seen),
+            convergence_config=ConvergenceConfig(max_passes=3, confidence_threshold=0.85),
+        )
+        assert len(seen) >= 2
+        assert "industry" in (seen[1].schema_ or {})
+
+    @pytest.mark.asyncio
+    async def test_domain_priority_fields_lead_the_pass_one_schema(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen: list = []
+        await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme", "industry": None}, object_type="Account", objective="x"
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.95, {"annual_tonnage": 5})], seen),
+            domain_hints={"priority_fields": ["annual_tonnage", "website"]},
+            convergence_config=ConvergenceConfig(max_passes=1),
+        )
+        assert list(seen[0].schema_ or {})[:2] == ["annual_tonnage", "website"]

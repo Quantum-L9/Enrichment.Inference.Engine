@@ -43,16 +43,25 @@ class MetaPromptPlanner:
         domain_spec: DomainSpec | None = None,
         rule_registry: Any = None,  # RuleRegistry from inference.rule_loader
         unlock_index: dict[str, list[str]] | None = None,
+        confidence_threshold: float = 0.7,
+        priority_fields: list[str] | None = None,
     ):
         """
         Args:
             domain_spec: Domain YAML specification (optional)
             rule_registry: Optional rule registry for unlock-aware targeting
             unlock_index: Optional pre-built unlock index (output of build_unlock_index)
+            confidence_threshold: A field below this confidence is a gap to
+                re-target (F-017). The convergence loop passes its configured
+                threshold; 0.7 is only the standalone default.
+            priority_fields: Domain hint fields (enrichment_hints.priority_fields)
+                that are targeted first, in the order given (F-019).
         """
         self.domain_spec = domain_spec
         self.rule_registry = rule_registry
         self.unlock_index = unlock_index
+        self.confidence_threshold = confidence_threshold
+        self.priority_fields = list(priority_fields or [])
 
     def plan(
         self,
@@ -114,7 +123,7 @@ class MetaPromptPlanner:
         """
         mode = self._determine_mode(pass_context.pass_number, uncertainty_score)
         missing_fields = self._identify_missing_fields(entity_state, field_confidences)
-        priority_fields = self._rank_fields(missing_fields, mode)
+        priority_fields = self._hints_first(self._rank_fields(missing_fields, mode))
         kb_fragments = self._select_kb_fragments(priority_fields, mode)
         variation_budget = self._compute_variation_budget(
             uncertainty_score, pass_context.budget_remaining
@@ -169,9 +178,13 @@ class MetaPromptPlanner:
         Returns list of FieldGap objects with field name, current value, confidence.
         """
         gaps: list[FieldGap] = []
-        for field_name, value in entity_state.items():
+        # Hint fields the entity does not carry yet are gaps too (F-019).
+        candidates = dict(entity_state)
+        for hinted in self.priority_fields:
+            candidates.setdefault(hinted, None)
+        for field_name, value in candidates.items():
             confidence = field_confidences.get(field_name, 0.0)
-            is_missing = value is None or value == "" or confidence < 0.7
+            is_missing = value is None or value == "" or confidence < self.confidence_threshold
 
             if is_missing:
                 gaps.append(
@@ -237,6 +250,12 @@ class MetaPromptPlanner:
         )
         return [f.field_name for f in ranked]
 
+    def _hints_first(self, ranked: list[str]) -> list[str]:
+        """Put the domain's priority fields that are gaps first, in hint order."""
+        gaps = set(ranked)
+        hinted = [name for name in dict.fromkeys(self.priority_fields) if name in gaps]
+        return hinted + [name for name in ranked if name not in set(hinted)]
+
     def _select_kb_fragments(self, priority_fields: list[str], mode: str) -> list[str]:
         """
         Select KB fragment IDs relevant to priority fields.
@@ -268,10 +287,11 @@ class MetaPromptPlanner:
 
     def _is_gate_critical(self, field_name: str) -> bool:
         """Check if field is gate-critical in domain spec."""
-        if not hasattr(self.domain_spec, "ontology"):
+        spec = self.domain_spec
+        if spec is None or not hasattr(spec, "ontology"):
             return False
 
-        for node in self.domain_spec.ontology.nodes:
+        for node in spec.ontology.nodes:
             if not hasattr(node, "properties"):
                 continue
             for prop in node.properties:
@@ -285,10 +305,11 @@ class MetaPromptPlanner:
 
     def _get_scoring_weight(self, field_name: str) -> float:
         """Get scoring weight for field from domain spec."""
-        if not hasattr(self.domain_spec, "ontology"):
+        spec = self.domain_spec
+        if spec is None or not hasattr(spec, "ontology"):
             return 0.0
 
-        for node in self.domain_spec.ontology.nodes:
+        for node in spec.ontology.nodes:
             if not hasattr(node, "properties"):
                 continue
             for prop in node.properties:
