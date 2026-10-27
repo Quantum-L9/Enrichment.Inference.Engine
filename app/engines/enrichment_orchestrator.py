@@ -41,7 +41,10 @@ from ..services.validation_engine import ValidationError, validate_response
 
 logger = structlog.get_logger("orchestrator")
 
-breaker = CircuitBreaker(failure_threshold=5, cooldown=60)
+# CB_FAILURE_THRESHOLD / CB_COOLDOWN_SECONDS (F-023). Settings() rather than the
+# cached get_settings(): building the breaker at import must not freeze the
+# process-wide settings cache before tests or the app configure the environment.
+breaker = CircuitBreaker.from_settings(Settings())
 
 
 def _conflict_response(exc: IdempotencyConflictError, start: float) -> EnrichResponse:

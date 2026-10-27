@@ -221,7 +221,9 @@ def _sync_call(payload: dict[str, Any], api_key: str, timeout: float) -> SonarRe
                 continue
             raise
 
-    raise last_err  # unreachable but satisfies type checker
+    if last_err is None:  # only reachable when _MAX_RETRIES < 1
+        raise RuntimeError("perplexity call made no attempt")
+    raise last_err
 
 
 # ── Async interface (unchanged signature from v1) ──────────
@@ -251,4 +253,14 @@ async def query_perplexity(
     if breaker and not breaker.allow():
         raise RuntimeError("circuit_open")
 
-    return await asyncio.to_thread(_sync_call, payload, api_key, timeout)
+    if breaker is None:
+        return await asyncio.to_thread(_sync_call, payload, api_key, timeout)
+    try:
+        result = await asyncio.to_thread(_sync_call, payload, api_key, timeout)
+    except BaseException:
+        # Includes cancellation by the request deadline: a provider that did
+        # not answer in time is a failed call as far as the breaker is concerned.
+        breaker.record_failure()
+        raise
+    breaker.record_success()
+    return result
