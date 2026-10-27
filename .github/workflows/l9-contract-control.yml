@@ -60,14 +60,8 @@ jobs:
       - name: Verify attestation
         if: env.DEPENDABOT_SKIP != '1'
         run: |
-          python scripts/l9_contract_control.py verify-attestation || {
-            if python -c "import app" 2>/dev/null; then
-              exit 1
-            else
-              echo "[l9-control] SKIP: app module not installed, attestation verification skipped"
-              exit 0
-            fi
-          }
+          # F-029: an attestation that cannot be built is a failure, not a skip.
+          python scripts/l9_contract_control.py verify-attestation
 
   review-signal:
     name: Review Signal

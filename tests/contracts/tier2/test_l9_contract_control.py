@@ -80,3 +80,20 @@ def test_select_gates_output_shape_is_json_serializable() -> None:
     selection = select_gates(["docs/contracts/events/asyncapi.yaml"])
     payload: dict[str, Any] = {"gate_ids": selection.ids, "commands": selection.commands}
     json.dumps(payload)
+
+
+def test_verify_attestation_fails_closed_when_app_is_unimportable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WU-23 / F-029 negative control: an attestation that cannot be built is a FAIL."""
+    import sys
+
+    from scripts import l9_contract_control
+
+    monkeypatch.setitem(sys.modules, "app.services.runtime_attestation", None)
+    ok, errors = verify_attestation()
+    assert ok is False
+    assert errors
+
+    monkeypatch.setattr(sys, "argv", ["l9_contract_control.py", "verify-attestation"])
+    assert l9_contract_control.main() == 1

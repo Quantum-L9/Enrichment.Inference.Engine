@@ -112,6 +112,13 @@ def _review_threads(pr: int) -> list[dict]:
 def _audit_comment_blocking(body: str) -> bool:
     if MARKER_L9_AUDIT not in body:
         return False
+    # F-032: the format .github/workflows/audit-pr-review.yml writes today.
+    if re.search(r"Result:\s*`blocking`", body):
+        return True
+    m = re.search(r"Blocking findings:\s*\*\*(\d+)\*\*", body)
+    if m and int(m.group(1)) > 0:
+        return True
+    # Legacy comment formats.
     if "Blocking Issues Found" in body:
         return True
     if re.search(r"\*\*\d+ CRITICAL\*\*", body):
@@ -120,10 +127,16 @@ def _audit_comment_blocking(body: str) -> bool:
 
 
 def _ai_review_blocking(body: str) -> bool:
+    """Follow the review's own verdict (F-033), never the workflow's
+    ``blocking`` input echo (``**Blocking:** true|false``), which only decides
+    whether that workflow run exits non-zero. A comment with no verdict was not
+    a usable review and blocks (F-031)."""
     if MARKER_AI_REVIEW not in body:
         return False
-    m = re.search(r"\*\*Blocking:\*\*\s*(true|false)", body, re.I)
-    return bool(m and m.group(1).lower() == "true")
+    verdicts = re.findall(r"L9-AI-REVIEW-VERDICT:\s*(block|pass)\b", body, re.I)
+    if not verdicts:
+        return True
+    return verdicts[-1].lower() == "block"
 
 
 def _pipeline_comment_blocking(body: str) -> bool:
@@ -184,8 +197,9 @@ def analyze(pr: int) -> tuple[list[str], list[str]]:
 
     try:
         threads = _review_threads(pr)
-    except subprocess.CalledProcessError as exc:
-        advisory.append(f"Could not fetch review threads: {exc}")
+    except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        # Unresolved agent threads cannot be ruled out, so the gate cannot pass.
+        blocking.append(f"Could not fetch review threads (fail-closed): {exc}")
         threads = []
 
     for thread in threads:
