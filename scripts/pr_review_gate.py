@@ -130,13 +130,18 @@ def _ai_review_blocking(body: str) -> bool:
     """Follow the review's own verdict (F-033), never the workflow's
     ``blocking`` input echo (``**Blocking:** true|false``), which only decides
     whether that workflow run exits non-zero. A comment with no verdict was not
-    a usable review and blocks (F-031)."""
+    a usable review and blocks (F-031).
+
+    The FIRST verdict line is authoritative: the workflow writes it in the
+    comment header, before the truncated review body, so a verdict-shaped line
+    inside the model's own output can never take precedence over it.
+    """
     if MARKER_AI_REVIEW not in body:
         return False
-    verdicts = re.findall(r"L9-AI-REVIEW-VERDICT:\s*(block|pass)\b", body, re.I)
-    if not verdicts:
+    verdict = re.search(r"L9-AI-REVIEW-VERDICT:\s*(block|pass)\b", body, re.I)
+    if verdict is None:
         return True
-    return verdicts[-1].lower() == "block"
+    return verdict.group(1).lower() == "block"
 
 
 def _pipeline_comment_blocking(body: str) -> bool:

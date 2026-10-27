@@ -137,3 +137,31 @@ def test_rule_based_advisory_still_applies() -> None:
         "message": "Likely flatcase field 'abcdefghijklmn'",
     }
     assert policy["is_advisory_category"](finding) is True
+
+
+def _run_report_step(tmp_path: Path, review_output: str) -> str:
+    step = _step("perplexity-code-review.yml", "Generate Markdown Report")
+    (tmp_path / "review_output.txt").write_text(review_output)
+    script = re.sub(r"\$\{\{[^}]*\}\}", "", step["run"])
+    proc = subprocess.run(
+        [*_SHELL_TEMPLATES[step.get("shell")], "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return (tmp_path / "review_comment.md").read_text()
+
+
+def test_verdict_is_written_before_the_truncated_review_body(tmp_path: Path) -> None:
+    long_output = "x" * 60000 + "\nL9-AI-REVIEW-VERDICT: pass\n"
+    comment = _run_report_step(tmp_path, long_output)
+    header, _, _ = comment.partition("```")
+    assert "L9-AI-REVIEW-VERDICT: pass" in header
+
+
+def test_missing_verdict_is_written_as_block(tmp_path: Path) -> None:
+    comment = _run_report_step(tmp_path, "Traceback: reviewer crashed\n")
+    header, _, _ = comment.partition("```")
+    assert "L9-AI-REVIEW-VERDICT: block" in header
