@@ -84,6 +84,9 @@ jobs:
           python -m pip install pyyaml
 
       - name: Emit review signal
+        # shell: bash runs `bash --noprofile --norc -eo pipefail`; the default
+        # `bash -e` lets `review-signal … | tee` swallow a blocking exit (F-030).
+        shell: bash
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.sha }}

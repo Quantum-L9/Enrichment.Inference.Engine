@@ -127,6 +127,7 @@ jobs:
       - name: Run AI Review
         id: review
         if: steps.diff.outputs.empty != 'true'
+        shell: bash
         env:
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
         run: |
@@ -147,7 +148,8 @@ jobs:
             --diff-path pr_diff.txt \
             $CONTEXT_FLAG \
             $BLOCK_FLAG 2>&1 | tee review_output.txt
-          EXIT_CODE=$?
+          # ai_review's status, not tee's (F-030).
+          EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
