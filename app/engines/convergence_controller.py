@@ -221,6 +221,7 @@ async def run_convergence_loop(
     state.known_fields = {k: v for k, v in request.entity.items() if v is not None}
 
     for pass_num in range(1, config.max_passes + 1):
+        confidence_tracker.begin_pass(pass_num)
         logger.info(
             "pass_started",
             pass_number=pass_num,

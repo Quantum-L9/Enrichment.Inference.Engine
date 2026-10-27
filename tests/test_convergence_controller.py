@@ -1156,3 +1156,30 @@ async def test_request_budget_never_raises_the_settings_budget() -> None:
         convergence_config=ConvergenceConfig(max_passes=5, max_budget_tokens=1_000_000),
     )
     assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_passes_do_not_reuse_an_earlier_passes_gain() -> None:
+    """A pass that records nothing must not be credited with the previous
+    pass's improvement; the loop stops instead of paying for every remaining pass."""
+    from app.engines.convergence.convergence_config import ConvergenceConfig
+
+    seen: list = []
+    response = await run_convergence_loop(
+        request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+        settings=_settings(),
+        kb_resolver=MagicMock(),
+        enricher=_scripted_enricher([_pass(0.5, {"a": 1, "b": 2}), _failed_pass()], seen),
+        convergence_config=ConvergenceConfig(max_passes=6),
+    )
+    assert len(seen) == 2
+    assert response.convergence_reason == "insufficient_improvement_delta_0.05"
+
+
+def test_begin_pass_advances_current_pass_without_fields() -> None:
+    from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+    tracker = ConfidenceTracker()
+    tracker.update_field("a", "x", 0.5, 1, "consensus")
+    tracker.begin_pass(2)
+    assert tracker.had_meaningful_improvement(0.05) is False

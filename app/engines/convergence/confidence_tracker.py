@@ -71,6 +71,16 @@ class ConfidenceTracker:
         self.exclude_sources = exclude_sources
         self.current_pass = 0
 
+    def begin_pass(self, pass_num: int) -> None:
+        """Open pass ``pass_num`` before any field of it is recorded.
+
+        ``current_pass`` must advance even when the pass records nothing (it
+        failed, or returned no fields): otherwise had_meaningful_improvement()
+        credits the previous pass's gains to it and the loop keeps paying for
+        passes that change nothing.
+        """
+        self.current_pass = max(self.current_pass, pass_num)
+
     def update_field(
         self,
         name: str,
