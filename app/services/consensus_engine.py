@@ -20,6 +20,8 @@ from typing import Any
 
 import structlog
 
+from app.utils.safe_convert import safe_float
+
 logger = structlog.get_logger("consensus")
 
 
@@ -206,7 +208,7 @@ def _select_value(values: list[Any]) -> Any:
         return None
 
     if all(_is_number(v) for v in values):
-        median = _median([float(v) for v in values])
+        median = _median([safe_float(v) for v in values])
         if all(isinstance(v, int) for v in values) and median.is_integer():
             return int(median)
         return median

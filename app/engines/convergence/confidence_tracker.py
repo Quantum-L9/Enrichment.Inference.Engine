@@ -18,6 +18,8 @@ from typing import Any
 
 import structlog
 
+from app.utils.safe_convert import safe_float
+
 logger = structlog.get_logger("confidence_tracker")
 
 #: Scale of the uncertainty score U. The planner reads U > 2.0 as "targeted"
@@ -36,7 +38,7 @@ def uncertainty_from_confidences(confidences: Iterable[float | None]) -> float:
     D-9 status: this formula is the candidate pending owner acceptance; it is
     deliberately the only place U is computed so it can be replaced whole.
     """
-    values = [0.0 if c is None else min(max(float(c), 0.0), 1.0) for c in confidences]
+    values = [min(max(safe_float(c), 0.0), 1.0) for c in confidences]
     if not values:
         return UNCERTAINTY_SCALE
     return UNCERTAINTY_SCALE * (1.0 - sum(values) / len(values))

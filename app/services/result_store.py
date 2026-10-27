@@ -51,7 +51,7 @@ def field_confidence_from_feature_vector(
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             continue
-        confidence_map[name] = float(value)
+        confidence_map[name] = safe_float(value)
     return confidence_map
 
 
