@@ -24,6 +24,37 @@ from .pg_models import ConvergenceRun, EnrichmentResult
 logger = structlog.get_logger("result_store")
 
 
+def field_confidence_from_feature_vector(
+    feature_vector: dict[str, Any], enriched: dict[str, Any] | None = None
+) -> dict[str, float]:
+    """Per-field confidence of a result, keyed by real field names (F-022).
+
+    The convergence loop writes ``ConfidenceTracker.to_dict()`` under
+    ``confidence_tracking``: ``{"fields": {name: {"confidence": ...}}, ...}``.
+    The single-pass path writes ``per_field_confidence`` instead. Only fields
+    the result actually enriched get a history row.
+    """
+    source: dict[str, Any] = {}
+    tracking = feature_vector.get("confidence_tracking")
+    if isinstance(tracking, dict) and isinstance(tracking.get("fields"), dict):
+        source = {
+            name: data.get("confidence")
+            for name, data in tracking["fields"].items()
+            if isinstance(data, dict)
+        }
+    elif isinstance(feature_vector.get("per_field_confidence"), dict):
+        source = feature_vector["per_field_confidence"]
+
+    confidence_map: dict[str, float] = {}
+    for name, value in source.items():
+        if enriched is not None and name not in enriched:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        confidence_map[name] = float(value)
+    return confidence_map
+
+
 class ResultStore:
     """
     High-level persistence facade for enrichment results and convergence runs.
@@ -56,12 +87,9 @@ class ResultStore:
         Returns the database record UUID.
         """
         if field_confidence_map is None and response.feature_vector:
-            tracking = response.feature_vector.get("confidence_tracking", {})
-            field_confidence_map = {
-                fname: fdata.get("latest_confidence", response.confidence)
-                for fname, fdata in tracking.items()
-                if isinstance(fdata, dict)
-            }
+            field_confidence_map = field_confidence_from_feature_vector(
+                response.feature_vector, enriched=response.fields
+            )
 
         record = await pg_store.save_enrichment_result(
             tenant_id=self.tenant_id,
@@ -178,10 +206,17 @@ class ResultStore:
         return await pg_store.list_active_convergence_runs(self.tenant_id, domain)
 
     async def get_field_confidence_history(
-        self, entity_id: str, field_name: str
+        self,
+        entity_id: str,
+        field_name: str,
+        enrichment_result_id: Any | None = None,
     ) -> list[dict[str, Any]]:
         """
         Return per-field confidence history across all enrichment passes.
+
+        With ``enrichment_result_id`` the history is limited to that one run,
+        so a caller reporting a result's provenance reads that result's rows
+        rather than the highest pass number of any earlier run (F-042).
 
         Returns list of {pass_number, confidence, source, field_value,
         variation_agreement, recorded_at} sorted by pass_number ASC.
@@ -204,6 +239,10 @@ class ResultStore:
                     FieldConfidenceHistory.recorded_at.asc(),
                 )
             )
+            if enrichment_result_id is not None:
+                stmt = stmt.where(
+                    FieldConfidenceHistory.enrichment_result_id == enrichment_result_id
+                )
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [

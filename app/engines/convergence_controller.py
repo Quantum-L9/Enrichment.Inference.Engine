@@ -613,6 +613,9 @@ def _assemble_convergence_response(
 
     # Build feature_vector with classification + cost + confidence metadata
     feature_vector: dict[str, Any] = {}
+    if request.schema_:
+        # The denominator the fields API needs for real coverage (F-042).
+        feature_vector["requested_fields"] = sorted(request.schema_)
     if domain_classification:
         feature_vector["domain_classification"] = domain_classification.to_dict()
     if cost_tracker:

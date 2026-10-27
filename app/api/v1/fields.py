@@ -66,7 +66,9 @@ async def get_field_confidence_map(
     total_confidence = 0.0
 
     for field_name, value in latest.fields.items():
-        history = await store.get_field_confidence_history(entity_id, field_name)
+        history = await store.get_field_confidence_history(
+            entity_id, field_name, enrichment_result_id=latest.id
+        )
         if history:
             latest_entry = history[-1]
             conf = latest_entry["confidence"]
@@ -88,8 +90,7 @@ async def get_field_confidence_map(
     field_count = len(field_entries)
     avg_conf = total_confidence / field_count if field_count else 0.0
 
-    total_schema_fields = max(field_count, 1)
-    coverage_ratio = field_count / total_schema_fields
+    coverage_ratio = _coverage_ratio(latest.fields, getattr(latest, "feature_vector", None))
 
     return FieldsResponse(
         entity_id=entity_id,
@@ -98,6 +99,35 @@ async def get_field_confidence_map(
         coverage_ratio=round(coverage_ratio, 4),
         last_enriched_at=latest.created_at,
     )
+
+
+def _is_populated(value: Any) -> bool:
+    return value not in (None, "", [], {})
+
+
+def _coverage_ratio(fields: dict[str, Any], feature_vector: dict[str, Any] | None) -> float:
+    """Share of the run's target fields that hold a value (F-042).
+
+    The denominator is the requested schema when the run recorded one
+    (``feature_vector["requested_fields"]``), otherwise every field the run
+    attempted (tracked, scored, or returned). It is never the returned field
+    count itself, which made coverage 1.0 by construction.
+    """
+    fv = feature_vector or {}
+    requested = fv.get("requested_fields")
+    if isinstance(requested, list) and requested:
+        targets = {str(name) for name in requested}
+    else:
+        targets = set(fields)
+        tracking = fv.get("confidence_tracking")
+        if isinstance(tracking, dict) and isinstance(tracking.get("fields"), dict):
+            targets |= set(tracking["fields"])
+        if isinstance(fv.get("per_field_confidence"), dict):
+            targets |= set(fv["per_field_confidence"])
+    if not targets:
+        return 0.0
+    filled = sum(1 for name in targets if _is_populated(fields.get(name)))
+    return filled / len(targets)
 
 
 @router.get(

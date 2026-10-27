@@ -329,6 +329,7 @@ async def enrich_entity(
                 "schema_hash": schema_hash,
                 "fields_enriched": list(synthesis["fields"].keys()),
                 "per_field_confidence": per_field_confidence,  # NEW
+                "requested_fields": sorted(request.schema_ or {}),
             },
             state="completed",
         )

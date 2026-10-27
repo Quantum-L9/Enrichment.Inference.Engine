@@ -71,10 +71,23 @@ async def test_result_store_extracts_field_confidence_from_feature_vector():
         tokens_used=300,
         processing_time_ms=800,
         pass_count=1,
+        # The shape ConfidenceTracker.to_dict() actually produces. The previous
+        # fixture used a flat {field: {"latest_confidence": ...}} mapping that no
+        # producer in this codebase writes (WU-19 / F-022).
         feature_vector={
             "confidence_tracking": {
-                "material_type": {"latest_confidence": 0.92},
-                "contamination_tolerance": {"latest_confidence": 0.68},
+                "threshold": 0.85,
+                "current_pass": 2,
+                "converged": False,
+                "fields": {
+                    "material_type": {"confidence": 0.92, "value": "PP", "pass_number": 2},
+                    "contamination_tolerance": {
+                        "confidence": 0.68,
+                        "value": "low",
+                        "pass_number": 1,
+                    },
+                },
+                "summary": {"fields_tracked": 2},
             }
         },
     )
@@ -187,3 +200,89 @@ async def test_handle_enrich_skips_persist_on_failed():
         )
 
     assert len(persist_calls) == 0, "persist_and_sync must not fire on failed enrichment"
+
+
+@pytest.mark.asyncio
+async def test_field_confidence_map_keys_real_field_names_from_tracker():
+    """WU-19 / F-022: tracker polymer_type 0.97 -> {'polymer_type': 0.97}."""
+    from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+    tracker = ConfidenceTracker(confidence_threshold=0.85)
+    tracker.update_field("polymer_type", "HDPE", 0.97, 1, "consensus")
+
+    response = EnrichResponse(
+        fields={"polymer_type": "HDPE"},
+        confidence=0.5,
+        state="completed",
+        feature_vector={"confidence_tracking": tracker.to_dict()},
+    )
+    captured: dict = {}
+
+    async def capture_save(**kwargs):
+        captured.update(kwargs)
+        return MagicMock(id=uuid.uuid4())
+
+    with patch(
+        "app.services.result_store.pg_store.save_enrichment_result",
+        side_effect=capture_save,
+    ):
+        await ResultStore(tenant_id="t").persist_enrich_response(
+            response=response, entity_id="e", object_type="Account"
+        )
+
+    assert captured["field_confidence_map"] == {"polymer_type": 0.97}
+
+
+@pytest.mark.asyncio
+async def test_field_confidence_map_falls_back_to_single_pass_scores():
+    """Single-pass results carry per_field_confidence, not confidence_tracking."""
+    response = EnrichResponse(
+        fields={"a": 1, "b": "x"},
+        confidence=0.5,
+        state="completed",
+        feature_vector={"per_field_confidence": {"a": 0.8, "b": 0.6, "dropped": 0.9}},
+    )
+    captured: dict = {}
+
+    async def capture_save(**kwargs):
+        captured.update(kwargs)
+        return MagicMock(id=uuid.uuid4())
+
+    with patch(
+        "app.services.result_store.pg_store.save_enrichment_result",
+        side_effect=capture_save,
+    ):
+        await ResultStore(tenant_id="t").persist_enrich_response(
+            response=response, entity_id="e", object_type="Account"
+        )
+
+    assert captured["field_confidence_map"] == {"a": 0.8, "b": 0.6}
+
+
+@pytest.mark.asyncio
+async def test_field_history_can_be_scoped_to_one_run():
+    """WU-19 / F-042: history for a given result reads only that run's rows."""
+    from contextlib import asynccontextmanager
+
+    statements: list = []
+
+    class _Session:
+        async def execute(self, stmt):
+            statements.append(stmt)
+            result = MagicMock()
+            result.scalars.return_value.all.return_value = []
+            return result
+
+    @asynccontextmanager
+    async def fake_session():
+        yield _Session()
+
+    run_id = uuid.uuid4()
+    with patch("app.services.result_store.pg_store.get_session", fake_session):
+        store = ResultStore(tenant_id="t")
+        await store.get_field_confidence_history("e", "f", enrichment_result_id=run_id)
+        await store.get_field_confidence_history("e", "f")
+
+    scoped, unscoped = (str(s.whereclause) for s in statements)
+    assert "field_confidence_history.enrichment_result_id =" in scoped
+    assert "enrichment_result_id" not in unscoped
