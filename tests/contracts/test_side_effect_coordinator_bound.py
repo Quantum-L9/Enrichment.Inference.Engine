@@ -87,7 +87,8 @@ def _sdk_packet(payload: dict, packet_id: str):
 
 async def test_enrich_keys_side_effects_on_the_header_packet_id_not_the_payload() -> None:
     """D-7: the SDK three-argument call hands the handler the immutable header;
-    a payload `packet_id` cannot name (or spoof) the operation."""
+    a payload `packet_id` cannot name (or spoof) the operation. (No idempotency
+    key here: a caller-declared key would name the operation first.)"""
     from unittest.mock import AsyncMock, patch
 
     from constellation_node_sdk.runtime.execution import _invoke_handler

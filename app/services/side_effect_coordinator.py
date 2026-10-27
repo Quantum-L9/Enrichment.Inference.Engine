@@ -24,6 +24,7 @@ import asyncio
 import hashlib
 import json
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -43,25 +44,77 @@ def semantic_side_effect_key(
 ) -> str:
     """Key one operation's side effects (WU-01 / F-001).
 
-    Preference: the transport packet id (``packet.header.packet_id``, immutable
-    and signed — never a payload field, D-7), else the caller's idempotency key,
-    else the result itself. The result digest stands in for an operation
-    identity when the caller supplied none: two runs for one entity that
-    produced different results are different operations and persist twice,
-    while a byte-identical result is the same effect and persists once. The
-    legacy tenant|entity|action hash (no digest) collapsed every run of an
-    entity into one key, so the second run was skipped and never persisted.
+    Preference:
+
+    1. the caller's idempotency key — the caller's own declaration of the
+       logical operation. A caller retrying after a timeout sends a NEW packet
+       with the SAME key; keying on the packet first re-ran every effect;
+    2. the transport packet id (``packet.header.packet_id``, immutable and
+       signed — never a payload field, D-7), scoped by tenant;
+    3. the result itself. Two runs for one entity that produced different
+       results are different operations and persist twice; a byte-identical
+       result is the same effect and persists once. The legacy
+       tenant|entity|action hash (no digest) collapsed every run of an entity
+       into one key, so the second run was skipped and never persisted.
     """
-    if packet_id:
-        return f"pkt:{packet_id}:{action}"
     if idempotency_key:
         return f"idem:{tenant}:{idempotency_key}:{action}"
+    if packet_id:
+        return f"pkt:{packet_id}:{tenant}:{action}"
     material = f"{tenant}|{entity_id}|{action}"
     if result_digest:
         digest = hashlib.sha256(f"{material}|{result_digest}".encode()).hexdigest()[:24]
         return f"res:{digest}"
     digest = hashlib.sha256(material.encode()).hexdigest()[:24]
     return f"hash:{digest}"
+
+
+#: Upper bound on remembered keys per marker. Every SDK packet and every distinct
+#: result adds a key, so the markers must not grow for the life of the process.
+#: The oldest key is forgotten first; a replay older than this many operations
+#: is no longer recognised as a duplicate (the store's own idempotency key
+#: still dedupes the row).
+MAX_TRACKED_KEYS = 100_000
+
+
+class _BoundedKeys:
+    """Insertion-ordered key set that forgets its oldest entries past a bound."""
+
+    def __init__(self, maxsize: int = MAX_TRACKED_KEYS) -> None:
+        self._keys: OrderedDict[str, None] = OrderedDict()
+        self._maxsize = maxsize
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._keys
+
+    def __len__(self) -> int:
+        return len(self._keys)
+
+    def add(self, key: str) -> None:
+        self._keys[key] = None
+        self._keys.move_to_end(key)
+        while len(self._keys) > self._maxsize:
+            self._keys.popitem(last=False)
+
+    def discard(self, key: str) -> None:
+        self._keys.pop(key, None)
+
+    def clear(self) -> None:
+        self._keys.clear()
+
+
+class _BoundedPending(OrderedDict[str, dict[str, Any]]):
+    """Graph-pending entries, bounded like the key markers."""
+
+    def __init__(self, maxsize: int = MAX_TRACKED_KEYS) -> None:
+        super().__init__()
+        self._maxsize = maxsize
+
+    def __setitem__(self, key: str, value: dict[str, Any]) -> None:
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self._maxsize:
+            self.popitem(last=False)
 
 
 def result_digest(response_dict: dict[str, Any]) -> str:
@@ -122,12 +175,12 @@ class SideEffectCoordinator:
     A key is never in both. Both are process-local, like the guard always was.
     """
 
-    def __init__(self) -> None:
-        self._completed: set[str] = set()
+    def __init__(self, max_keys: int = MAX_TRACKED_KEYS) -> None:
+        self._completed = _BoundedKeys(max_keys)
         # Keys whose result a store accepted. A key can be completed without
         # it when persistence was not required and failed (F-001).
-        self._persisted: set[str] = set()
-        self._graph_pending: dict[str, dict[str, Any]] = {}
+        self._persisted = _BoundedKeys(max_keys)
+        self._graph_pending: dict[str, dict[str, Any]] = _BoundedPending(max_keys)
         # Reserved before the first await (F-024): a concurrent call for the
         # same key waits for the holder and then re-evaluates.
         self._in_flight: dict[str, asyncio.Event] = {}
@@ -257,6 +310,13 @@ class SideEffectCoordinator:
     ) -> SideEffectReport:
         """Run the effects for a key this call holds the reservation for."""
         report = SideEffectReport(key=key)
+
+        if require_persistence and key in self._graph_pending and key not in self._persisted:
+            # A graph-leg retry skips persistence. When the first attempt did not
+            # persist, that would answer `completed` for a result no store holds.
+            raise PersistenceRequiredError(
+                f"operation {key} is pending its graph leg without a durable result"
+            )
 
         # A key left pending by an unacknowledged graph sync re-runs the graph
         # leg only: persistence, score invalidation and the completion event

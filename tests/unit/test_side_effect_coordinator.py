@@ -76,10 +76,22 @@ async def test_commit_once_per_key() -> None:
     assert emitter.emit_enrichment_completed.await_count == 1
 
 
-def test_semantic_key_prefers_packet_id() -> None:
-    assert semantic_side_effect_key(
+def test_semantic_key_prefers_the_callers_idempotency_key_over_the_packet_id() -> None:
+    """A caller retry is a new packet carrying the same idempotency key.
+
+    This test used to pin the opposite order (packet first). That was harmless
+    while packet_id came from the payload and was rarely set; since WU-01 the
+    signed header id is present on every SDK call, and packet-first re-ran every
+    effect of a retried operation. The idempotency key is the caller's own name
+    for the logical operation, so it wins; the packet id keys calls without one.
+    """
+    key = semantic_side_effect_key(
         tenant="t", entity_id="e", packet_id="p-1", idempotency_key="i-1"
-    ).startswith("pkt:p-1")
+    )
+    assert key == "idem:t:i-1:enrich"
+    assert semantic_side_effect_key(tenant="t", entity_id="e", packet_id="p-1").startswith(
+        "pkt:p-1"
+    )
 
 
 @pytest.mark.asyncio
@@ -622,3 +634,78 @@ def test_result_digest_separates_results_but_not_identical_ones() -> None:
     )
     assert a != b
     assert a == a2
+
+
+# ── WU-01 review fixes ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_retry_with_a_new_packet_and_the_same_idempotency_key_is_a_duplicate() -> None:
+    coord = SideEffectCoordinator()
+    persist = AsyncMock()
+
+    await _commit_result(coord, persist, _result({"x": 1}), packet_id="p-1", idempotency_key="k")
+    retry = await _commit_result(
+        coord, persist, _result({"x": 1}), packet_id="p-2", idempotency_key="k"
+    )
+
+    assert retry.skipped is True
+    assert persist.await_count == 1
+
+
+def test_packet_keys_are_tenant_scoped() -> None:
+    a = semantic_side_effect_key(tenant="t1", entity_id="e", packet_id="p-1")
+    b = semantic_side_effect_key(tenant="t2", entity_id="e", packet_id="p-1")
+    assert a != b
+
+
+@pytest.mark.asyncio
+async def test_remembered_keys_are_bounded() -> None:
+    coord = SideEffectCoordinator(max_keys=2)
+    persist = AsyncMock()
+    for n in range(3):
+        await _commit_result(coord, persist, _result({"x": n}), idempotency_key=f"k{n}")
+
+    assert len(coord._completed) == 2
+    assert len(coord._persisted) == 2
+    assert "idem:t1:k0:enrich" not in coord._completed
+    assert "idem:t1:k2:enrich" in coord._completed
+
+
+@pytest.mark.asyncio
+async def test_graph_retry_without_a_durable_result_is_refused_under_required_persistence() -> None:
+    from app.services.side_effect_coordinator import PersistenceRequiredError
+
+    coord = SideEffectCoordinator()
+    router, emitter = _collaborators(graph_ack=None)
+    failing = AsyncMock(side_effect=ConnectionError("store down"))
+    with (
+        patch("app.models.schemas.EnrichResponse.model_validate", side_effect=lambda d: d),
+        patch("app.services.result_store.ResultStore") as result_store_cls,
+        patch("app.engines.packet_router.get_router", return_value=router),
+        patch("app.services.event_emitter.get_emitter", return_value=emitter),
+    ):
+        result_store_cls.return_value.persist_enrich_response = failing
+        first = await coord.commit_after_enrich(
+            tenant="t1",
+            entity_id="e1",
+            object_type="Account",
+            domain="plasticos",
+            response_dict=_result({"x": 1}),
+            settings=SimpleNamespace(gate_url="https://gate.example"),
+            idempotency_key="k",
+        )
+        assert first.persisted is False
+        assert "idem:t1:k:enrich" in coord._graph_pending
+
+        with pytest.raises(PersistenceRequiredError):
+            await coord.commit_after_enrich(
+                tenant="t1",
+                entity_id="e1",
+                object_type="Account",
+                domain="plasticos",
+                response_dict=_result({"x": 1}),
+                settings=SimpleNamespace(gate_url="https://gate.example"),
+                idempotency_key="k",
+                require_persistence=True,
+            )
