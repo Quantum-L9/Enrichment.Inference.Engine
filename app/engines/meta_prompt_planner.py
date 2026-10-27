@@ -45,6 +45,7 @@ class MetaPromptPlanner:
         unlock_index: dict[str, list[str]] | None = None,
         confidence_threshold: float = 0.7,
         priority_fields: list[str] | None = None,
+        uncertainty_threshold: float = 2.0,
     ):
         """
         Args:
@@ -62,6 +63,7 @@ class MetaPromptPlanner:
         self.unlock_index = unlock_index
         self.confidence_threshold = confidence_threshold
         self.priority_fields = list(priority_fields or [])
+        self.uncertainty_threshold = uncertainty_threshold
 
     def plan(
         self,
@@ -160,11 +162,11 @@ class MetaPromptPlanner:
         Select enrichment mode based on pass number and uncertainty.
 
         - Pass 1: Always discovery (broad research)
-        - Pass 2+: Targeted if uncertainty > 2.0, else verification
+        - Pass 2+: Targeted if uncertainty > uncertainty_threshold (2.0), else verification
         """
         if pass_number == 1:
             return "discovery"
-        elif uncertainty_score > 2.0:
+        elif uncertainty_score > self.uncertainty_threshold:
             return "targeted"
         else:
             return "verification"

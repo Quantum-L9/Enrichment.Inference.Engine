@@ -59,7 +59,8 @@ from ...engines.domain_yaml_reader import (
     declared_spec_identity,
     is_legal_tenant_id,
 )
-from ...models.schemas import EnrichRequest
+from ...models.loop_schemas import ApprovalMode
+from ...models.schemas import EnrichRequest, validate_tenant_id
 from ...services import pg_store
 from ...services.crm_field_scanner import (
     CRMField,
@@ -464,6 +465,32 @@ async def converge_single(
     """
     from ...engines.convergence.convergence_config import ConvergenceConfig
     from ...engines.convergence_controller import run_convergence_loop
+    from ...engines.handlers import _load_domain_convergence_context
+
+    try:
+        approval_mode = ApprovalMode(body.approval_mode)
+    except ValueError as exc:
+        allowed = [m.value for m in ApprovalMode]
+        raise HTTPException(
+            status_code=422, detail=f"approval_mode must be one of {allowed}"
+        ) from exc
+
+    # F-007 / D-10: `domain` selects that tenant's inference rules and
+    # enrichment hints — and only those, never the full domain_spec — through
+    # the same loader the SDK converge path uses. It is a tenant-scoped read,
+    # so it takes the direct-tenant posture (403) and the tenant id grammar
+    # (400) every other direct route applies (tenant id == domain spec id).
+    domain_hints: dict[str, Any] = {}
+    inference_rules: Any = []
+    if body.domain:
+        require_direct_domain_access()
+        try:
+            domain_id = validate_tenant_id(body.domain)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        domain_hints, inference_rules = await _load_domain_convergence_context(
+            domain_id=domain_id, node_label=None
+        )
 
     store = _get_state_store()
 
@@ -480,10 +507,14 @@ async def converge_single(
         objective=body.objective,
         idempotency_key=body.idempotency_key,
     )
+    # convergence_threshold is the uncertainty boundary between targeted and
+    # verification passes (U scale 0-10). It is not the improvement delta
+    # (default 0.05) and not the field confidence threshold (default 0.85),
+    # which it used to set: 2.0 as a confidence delta could never be met.
     convergence_cfg = ConvergenceConfig(
         max_passes=body.max_passes,
-        min_improvement_delta=body.convergence_threshold,
-        confidence_threshold=min(body.convergence_threshold / 10.0, 1.0),
+        max_budget_tokens=body.max_budget_tokens,
+        uncertainty_threshold=body.convergence_threshold,
     )
 
     try:
@@ -492,6 +523,8 @@ async def converge_single(
             settings=settings,
             kb_resolver=_kb_resolver,
             idem_store=_idem_store,
+            inference_rules=inference_rules,
+            domain_hints=domain_hints,
             convergence_config=convergence_cfg,
         )
     except Exception as exc:
@@ -503,7 +536,13 @@ async def converge_single(
 
     state.accumulated_fields = conv_response.fields or {}
     state.current_pass = conv_response.pass_count
-    state.status = LoopStatus.CONVERGED if conv_response.state == "completed" else LoopStatus.FAILED
+    if conv_response.state != "completed":
+        state.status = LoopStatus.FAILED
+    elif approval_mode is ApprovalMode.HUMAN:
+        # Schema proposals from this run wait for /converge/{run_id}/approve.
+        state.status = LoopStatus.HUMAN_HOLD
+    else:
+        state.status = LoopStatus.CONVERGED
     await store.save(state)
 
     # F-018: the loop's actual stop reason, not a constant.

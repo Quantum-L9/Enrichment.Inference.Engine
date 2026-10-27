@@ -192,6 +192,7 @@ async def run_convergence_loop(
         domain_spec=domain_spec,
         confidence_threshold=config.confidence_threshold,
         priority_fields=config.priority_fields or (domain_hints or {}).get("priority_fields"),
+        uncertainty_threshold=config.uncertainty_threshold,
     )
     confidence_tracker = ConfidenceTracker(
         confidence_threshold=config.confidence_threshold,
@@ -211,6 +212,9 @@ async def run_convergence_loop(
 
     # ── Cost tracker ───────────────────────────────────────
     max_budget = getattr(settings, "max_budget_tokens", 30000)
+    if config.max_budget_tokens is not None:
+        # A per-run cap can only lower the deployment's budget (F-007).
+        max_budget = min(max_budget, config.max_budget_tokens)
     cost_tracker = CostTracker(max_budget_tokens=max_budget)
 
     # Seed known_fields from the entity's existing data

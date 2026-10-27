@@ -1122,3 +1122,37 @@ class TestConvergenceReason:
             enricher=_scripted_enricher([_pass(0.95)]),
         )
         assert response.convergence_reason == "all_fields_above_threshold_0.85"
+
+
+# ── WU-06 / F-007: a per-run budget below settings caps spend ─────────────
+
+
+@pytest.mark.asyncio
+async def test_request_budget_below_settings_caps_spend() -> None:
+    from app.engines.convergence.convergence_config import ConvergenceConfig
+
+    seen: list = []
+    response = await run_convergence_loop(
+        request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+        settings=_settings(max_budget_tokens=30000),
+        kb_resolver=MagicMock(),
+        enricher=_scripted_enricher([_pass(0.3, tokens=200), _pass(0.5, tokens=200)], seen),
+        convergence_config=ConvergenceConfig(max_passes=5, max_budget_tokens=150),
+    )
+    assert len(seen) == 1
+    assert response.convergence_reason == "budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_request_budget_never_raises_the_settings_budget() -> None:
+    from app.engines.convergence.convergence_config import ConvergenceConfig
+
+    seen: list = []
+    await run_convergence_loop(
+        request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+        settings=_settings(max_budget_tokens=150),
+        kb_resolver=MagicMock(),
+        enricher=_scripted_enricher([_pass(0.3, tokens=200), _pass(0.5, tokens=200)], seen),
+        convergence_config=ConvergenceConfig(max_passes=5, max_budget_tokens=1_000_000),
+    )
+    assert len(seen) == 1
