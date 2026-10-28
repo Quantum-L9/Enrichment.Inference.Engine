@@ -30,10 +30,18 @@ _OBJECT_TYPE_MAP = {
     "opportunity": "deals",
 }
 
-# One page of associations; a record with more is refused, never truncated.
-_ASSOCIATION_PAGE_LIMIT = 500
+# Date-versioned CRM API (HubSpot retires the semantic v4 associations API in
+# March 2027). One page is read; a record with more is refused, never truncated.
+_ASSOCIATIONS_API_VERSION = "2026-09"
 # Standard names (``companies``) and object type ids (``0-3``, ``2-1234``).
-_OBJECT_TYPE_SEGMENT = re.compile(r"[a-z][a-z0-9_]{0,63}|\d+-\d+")
+_OBJECT_TYPE_SEGMENT = re.compile(r"[a-z][a-z0-9_]{0,63}|[0-9]+-[0-9]+")
+# A canonical HubSpot record id: ASCII digits, no leading zero.
+_RECORD_ID = re.compile(r"[1-9][0-9]{0,30}")
+
+
+def is_canonical_record_id(value: object) -> bool:
+    """Whether ``value`` is a record id exactly as HubSpot renders it (``str(int)``)."""
+    return isinstance(value, str) and _RECORD_ID.fullmatch(value) is not None
 
 
 class HubSpotAssociationReadError(RuntimeError):
@@ -318,12 +326,12 @@ class HubSpotClient(CRMClientBase):
     ) -> list[HubSpotAssociation]:
         """Read one record's associations to one object type. Read-only.
 
-        ``GET /crm/v4/objects/{from}/{id}/associations/{to}`` (legacy v4 path,
-        still served alongside the date-versioned API, matching this client's
-        ``/crm/v3`` idiom). Every association type HubSpot reports is returned
-        with its category, numeric ``typeId`` and label. Any failure raises
+        ``GET /crm/objects/2026-09/{from}/{id}/associations/{to}`` (the
+        date-versioned successor of the v4 associations read; same response
+        shape). Every association type HubSpot reports is returned with its
+        category, numeric ``typeId`` and label. Any failure raises
         ``HubSpotAssociationReadError``; an empty list means HubSpot answered
-        200 with no associations.
+        200 with one complete page holding no associations.
         """
         from_type = _OBJECT_TYPE_MAP.get(from_object_type, from_object_type)
         to_type = _OBJECT_TYPE_MAP.get(to_object_type, to_object_type)
@@ -334,21 +342,22 @@ class HubSpotClient(CRMClientBase):
             raise HubSpotAssociationReadError(
                 "object type must be a plain HubSpot object type name"
             )
-        if not str(from_record_id).isdigit():
-            raise HubSpotAssociationReadError("record id must be a numeric HubSpot id")
-        url = f"{self._base_url}/crm/v4/objects/{from_type}/{from_record_id}/associations/{to_type}"
+        if not is_canonical_record_id(from_record_id):
+            raise HubSpotAssociationReadError("record id must be a canonical numeric HubSpot id")
+        url = (
+            f"{self._base_url}/crm/objects/{_ASSOCIATIONS_API_VERSION}/"
+            f"{from_type}/{from_record_id}/associations/{to_type}"
+        )
 
         self._respect_rate_limit()
         try:
-            resp = httpx.get(
-                url,
-                params={"limit": _ASSOCIATION_PAGE_LIMIT},
-                headers=self._headers(),
-                timeout=15,
-            )
+            resp = httpx.get(url, headers=self._headers(), timeout=15)
         except httpx.HTTPError as exc:
             raise HubSpotAssociationReadError(f"transport failure: {type(exc).__name__}") from exc
-        self._update_rate_limit(resp)
+        try:
+            self._update_rate_limit(resp)
+        except ValueError as exc:
+            raise HubSpotAssociationReadError("malformed rate-limit headers") from exc
         if resp.status_code != 200:
             raise HubSpotAssociationReadError(
                 f"HubSpot answered {resp.status_code}", status_code=resp.status_code
@@ -360,11 +369,15 @@ class HubSpotClient(CRMClientBase):
         results = body.get("results") if isinstance(body, dict) else None
         if not isinstance(results, list):
             raise HubSpotAssociationReadError("response has no results list")
-        paging = body.get("paging")
-        if isinstance(paging, dict) and paging.get("next"):
-            raise HubSpotAssociationReadError(
-                f"more than {_ASSOCIATION_PAGE_LIMIT} associations; refusing a truncated read"
-            )
+        # Completeness must be proven: any paging object that is not a dict, or
+        # that carries a ``next`` key at all, means the page may not be the last.
+        if "paging" in body:
+            paging = body["paging"]
+            if not isinstance(paging, dict) or "next" in paging:
+                raise HubSpotAssociationReadError(
+                    "associations span more than one page or paging is malformed; "
+                    "refusing an unproven-complete read"
+                )
         associations: list[HubSpotAssociation] = []
         for entry in results:
             associations.extend(

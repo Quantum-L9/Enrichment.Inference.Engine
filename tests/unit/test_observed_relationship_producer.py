@@ -100,6 +100,8 @@ def _binding(tenant: str, **overrides: Any) -> ObservedAssociationBinding:
         "subject_label": subject,
         "relation_type": relation,
         "object_label": obj,
+        "subject_ref_namespace": f"{tenant}.subject",
+        "object_ref_namespace": f"{tenant}.object",
     }
     fields.update(overrides)
     return ObservedAssociationBinding(**fields)
@@ -206,8 +208,10 @@ def test_read_associations_returns_every_reported_type(hubspot: HubSpotClient) -
     with patch.object(hubspot_module.httpx, "get", get):
         associations = hubspot.read_associations("company", FROM_ID, "deal")
     url = get.call_args.args[0]
-    assert url == f"https://api.hubapi.com/crm/v4/objects/companies/{FROM_ID}/associations/deals"
-    assert get.call_args.kwargs["params"] == {"limit": 500}
+    assert (
+        url == f"https://api.hubapi.com/crm/objects/2026-09/companies/{FROM_ID}/associations/deals"
+    )
+    assert "params" not in get.call_args.kwargs  # no undocumented query parameter is sent
     assert [(a.to_record_id, a.category, a.type_id) for a in associations] == [
         (TO_ID, "HUBSPOT_DEFINED", 342),
         (TO_ID, "USER_DEFINED", 99),
@@ -235,6 +239,8 @@ def test_any_non_200_answer_raises_never_empty(hubspot: HubSpotClient, status: i
         {"results": [{"toObjectId": 5, "associationTypes": [{"category": "HUBSPOT_DEFINED"}]}]},
         {"results": [{"toObjectId": 5, "associationTypes": [{"typeId": "1", "category": "X"}]}]},
         {"results": [], "paging": {"next": {"after": "abc"}}},
+        {"results": [], "paging": {"next": {}}},
+        {"results": [], "paging": "corrupt"},
     ],
     ids=[
         "no-body",
@@ -244,6 +250,8 @@ def test_any_non_200_answer_raises_never_empty(hubspot: HubSpotClient, status: i
         "no-type-id",
         "type-id-text",
         "truncated",
+        "empty-next",
+        "paging-not-object",
     ],
 )
 def test_malformed_or_truncated_bodies_raise(hubspot: HubSpotClient, body: Any) -> None:
@@ -260,13 +268,35 @@ def test_transport_failure_raises(hubspot: HubSpotClient) -> None:
         hubspot.read_associations("companies", FROM_ID, "deals")
 
 
+def test_malformed_rate_limit_headers_raise_the_read_error(hubspot: HubSpotClient) -> None:
+    response = _http(body=_associations_body("orbit-yard"))
+    response.headers = {"X-HubSpot-RateLimit-Remaining": "n/a"}
+    with (
+        patch.object(hubspot_module.httpx, "get", MagicMock(return_value=response)),
+        pytest.raises(HubSpotAssociationReadError, match="rate-limit"),
+    ):
+        hubspot.read_associations("companies", FROM_ID, "deals")
+
+
 @pytest.mark.parametrize(
     ("from_type", "record_id"),
     [
         ("companies", "../deals"),
         ("companies", "12a"),
+        ("companies", "0123"),
+        ("companies", "０１"),
+        ("companies", "٣"),
         ("companies/../x", FROM_ID),
         ("Deals", FROM_ID),
+    ],
+    ids=[
+        "traversal",
+        "alnum",
+        "leading-zero",
+        "fullwidth-digits",
+        "arabic-digit",
+        "type-path",
+        "type-case",
     ],
 )
 def test_ids_and_types_never_reshape_the_url(
@@ -300,11 +330,11 @@ async def test_an_observed_association_is_proposed_and_acknowledged(
         "entity_type": VOCABULARIES[tenant][3],
         "batch": [
             {
-                "from_id": FROM_ID,
-                "to_id": TO_ID,
+                "from_id": f"{tenant}.subject:{FROM_ID}",
+                "to_id": f"{tenant}.object:{TO_ID}",
                 "evidence_ref": result.evidence_ref,
                 "source_ref": (
-                    f"hubspot:crm/v4/associations/{from_type}/{FROM_ID}->{to_type}/{TO_ID}"
+                    f"hubspot:crm/associations/{from_type}/{FROM_ID}->{to_type}/{TO_ID}"
                     f"#HUBSPOT_DEFINED:{type_id}"
                 ),
                 "confidence": 1.0,
@@ -349,9 +379,36 @@ def test_evidence_ref_separates_tenant_direction_and_type() -> None:
         producer_module.observed_evidence_ref(
             "orbit-yard", _binding("orbit-yard", association_category="USER_DEFINED"), association
         ),
+        producer_module.observed_evidence_ref(
+            "orbit-yard", _binding("orbit-yard", object_ref_namespace="other.object"), association
+        ),
     }
     assert base not in variants
-    assert len(variants) == 4
+    assert len(variants) == 5
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"subject_ref_namespace": ""},
+        {"object_ref_namespace": "Has Space"},
+        {"subject_ref_namespace": "ns:with-colon"},
+    ],
+    ids=["empty", "space-and-case", "colon"],
+)
+async def test_an_invalid_ref_namespace_never_reaches_the_provider(
+    router: PacketRouter, hubspot: HubSpotClient, overrides: dict[str, Any]
+) -> None:
+    result, get, execute = await _produce(
+        router,
+        hubspot,
+        "orbit-yard",
+        http=_http(body=_associations_body("orbit-yard")),
+        binding=_binding("orbit-yard", **overrides),
+    )
+    assert result.status is ProducerStatus.INVALID_INPUT
+    get.assert_not_called()
+    execute.assert_not_awaited()
 
 
 # ── Refusals: never a success, and Gate is never called ───────────────────────
@@ -460,7 +517,7 @@ async def test_reversed_record_ids_are_not_the_observed_association(
 
 @pytest.mark.parametrize(
     ("from_id", "to_id"),
-    [("", TO_ID), ("abc", TO_ID), (FROM_ID, "2002/../1")],
+    [("", TO_ID), ("abc", TO_ID), (FROM_ID, "2002/../1"), ("0123", TO_ID), (FROM_ID, "\u0663")],
 )
 async def test_invalid_record_ids_never_reach_the_provider(
     router: PacketRouter, hubspot: HubSpotClient, from_id: str, to_id: str

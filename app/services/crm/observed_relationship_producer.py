@@ -20,11 +20,15 @@ and ``confidence=1.0`` state certainty of that membership only. They are not
 purchase intent or commercial relevance; relevance is CEG's server-side map.
 HubSpot reports no revision for an association, so ``source_revision`` is None.
 
-Endpoint identity. The graph node ids are the HubSpot record ids
-(``hs_object_id``), the identity EIE's HubSpot mapping already uses
-(``config/crm/hubspot_mapping.yaml``). The producer cannot read the graph; CEG
-refuses a row whose endpoints do not already exist under the tenant, and that
-refusal is reported as ``NOT_ACKNOWLEDGED``. No node is created here.
+Endpoint identity. A graph node's stable id is a namespaced ref
+``<namespace>:<record id>`` -- CEG scores only refs of that shape
+(``engine/scoring/evidence_priority.py``: ``[a-z0-9_.-]+``, a colon, a non-blank id) -- so the binding
+names the ref namespace of each endpoint and the producer emits
+``<subject_ref_namespace>:<from record id>`` and
+``<object_ref_namespace>:<to record id>``. Nothing defaults it. The producer
+cannot read the graph; CEG refuses a row whose endpoints do not already exist
+under the tenant with exactly that id, and that refusal is reported as
+``NOT_ACKNOWLEDGED``. No node is created here.
 
 Every outcome is a typed ``ObservedRelationshipResult``; only ``SYNCED`` means
 CEG acknowledged the edge.
@@ -35,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -47,13 +52,20 @@ from app.engines.packet_router import (
     relationship_assertion_defects,
 )
 
-from .hubspot_client import HubSpotAssociation, HubSpotAssociationReadError, HubSpotClient
+from .hubspot_client import (
+    HubSpotAssociation,
+    HubSpotAssociationReadError,
+    HubSpotClient,
+    is_canonical_record_id,
+)
 
 logger = structlog.get_logger("observed_relationship_producer")
 
 PROVIDER = "hubspot"
 # Certainty that the association is present in the source -- never relevance.
 OBSERVED_MEMBERSHIP_CONFIDENCE = 1.0
+# The namespace half of CEG's entity ref grammar (``<namespace>:<id>``).
+_REF_NAMESPACE = re.compile(r"[a-z0-9_.-]{1,64}")
 
 
 class ProducerStatus(StrEnum):
@@ -71,7 +83,8 @@ class ObservedAssociationBinding:
 
     Supplied explicitly by the operator for one invocation; there is no default.
     ``from_object_type`` records are the edge's subject, ``to_object_type``
-    records its object.
+    records its object; ``*_ref_namespace`` turns each record id into the
+    endpoint node's stable id.
     """
 
     from_object_type: str
@@ -81,6 +94,8 @@ class ObservedAssociationBinding:
     subject_label: str
     relation_type: str
     object_label: str
+    subject_ref_namespace: str
+    object_ref_namespace: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,10 +112,10 @@ def observed_evidence_ref(
 ) -> str:
     """Deterministic identity of one observed association for one tenant.
 
-    Hashes tenant, provider, the ordered (from, to) object types and record ids
-    and the association category/typeId. No timestamp, randomness or label:
-    the same association always yields the same ref, a different direction or
-    type a different one.
+    Hashes tenant, provider, the ordered (from, to) object types and record ids,
+    the association category/typeId and the endpoint ref namespaces. No
+    timestamp, randomness or label: the same association always yields the
+    same ref; a different direction, type or endpoint identity a different one.
     """
     identity = {
         "tenant": tenant_id,
@@ -109,6 +124,7 @@ def observed_evidence_ref(
         "to": [association.to_object_type, association.to_record_id],
         "category": binding.association_category,
         "type_id": binding.association_type_id,
+        "ref_namespaces": [binding.subject_ref_namespace, binding.object_ref_namespace],
     }
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
     return f"evidence:{PROVIDER}:association:{digest[:24]}"
@@ -117,7 +133,7 @@ def observed_evidence_ref(
 def observed_source_ref(association: HubSpotAssociation) -> str:
     """The provider association the evidence was read from (record ids only, no PII)."""
     return (
-        f"{PROVIDER}:crm/v4/associations/"
+        f"{PROVIDER}:crm/associations/"
         f"{association.from_object_type}/{association.from_record_id}->"
         f"{association.to_object_type}/{association.to_record_id}"
         f"#{association.category}:{association.type_id}"
@@ -140,6 +156,10 @@ def _binding_defects(binding: ObservedAssociationBinding) -> list[str]:
     type_id = binding.association_type_id
     if isinstance(type_id, bool) or not isinstance(type_id, int):
         defects.append("association_type_id must be an integer")
+    for name in ("subject_ref_namespace", "object_ref_namespace"):
+        value = getattr(binding, name)
+        if not isinstance(value, str) or not _REF_NAMESPACE.fullmatch(value):
+            defects.append(f"{name} must match [a-z0-9_.-]{{1,64}}")
     return defects
 
 
@@ -171,8 +191,8 @@ async def produce_observed_relationship(
     """Read one observed association and propose it as graph evidence. Never raises for a refusal."""
     defects = _binding_defects(binding)
     for name, value in (("from_record_id", from_record_id), ("to_record_id", to_record_id)):
-        if not isinstance(value, str) or not value.isdigit():
-            defects.append(f"{name} must be a numeric HubSpot record id")
+        if not is_canonical_record_id(value):
+            defects.append(f"{name} must be a canonical numeric HubSpot record id")
     if not isinstance(tenant_id, str) or not tenant_id.strip():
         defects.append("tenant_id missing")
     if defects:
@@ -207,10 +227,10 @@ async def produce_observed_relationship(
     source_ref = observed_source_ref(association)
     assertion = RelationshipAssertion(
         subject_label=binding.subject_label,
-        subject_id=association.from_record_id,
+        subject_id=f"{binding.subject_ref_namespace}:{association.from_record_id}",
         relation_type=binding.relation_type,
         object_label=binding.object_label,
-        object_id=association.to_record_id,
+        object_id=f"{binding.object_ref_namespace}:{association.to_record_id}",
         evidence_ref=evidence_ref,
         source_ref=source_ref,
         confidence=OBSERVED_MEMBERSHIP_CONFIDENCE,

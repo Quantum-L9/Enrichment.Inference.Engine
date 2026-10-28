@@ -24,21 +24,29 @@ source_file: app/services/crm/hubspot_client.py
 
 association_read:
   method: HubSpotClient.read_associations
-  endpoint: "GET /crm/v4/objects/{fromObjectType}/{objectId}/associations/{toObjectType}?limit=500"
+  endpoint: "GET /crm/objects/2026-09/{fromObjectType}/{objectId}/associations/{toObjectType}"
+  api_version: >-
+    2026-09 (date-versioned). HubSpot retires the semantic v4 associations API in
+    March 2027; no undocumented query parameter is sent.
   access: read-only; no association, record or property is ever written by this path
   scopes: the read scope of both object types (e.g. crm.objects.companies.read, crm.objects.deals.read)
   returns: every association type HubSpot reports (toObjectId, category, typeId, label)
   invariants:
     - Fail closed. Any non-200 answer (401/403 scope, 404 unknown record, 429 rate limit,
-      5xx), a transport failure, a malformed body, or a result that needs a second page
-      raises HubSpotAssociationReadError. An empty list means HubSpot answered 200 with
-      no associations, never that the read failed.
-    - Record ids must be numeric and object types plain names or type ids, so neither can
-      reshape the request path.
+      5xx), a transport failure, malformed rate-limit headers, a malformed body, or any
+      paging object that is not a dict or carries a next key raises
+      HubSpotAssociationReadError. An empty list means HubSpot answered 200 with one
+      complete page holding no associations, never that the read failed.
+    - Record ids must be canonical (ASCII digits, no leading zero, as HubSpot renders
+      them) and object types plain names or type ids, so neither can reshape the request
+      path or yield two identities for one record.
   consumer: >-
     app/services/crm/observed_relationship_producer.py. Explicitly invoked only (not
     wired into enrichment). It proposes the matching association through
     PacketRouter.notify_relationship_sync as observed / positive / confidence 1.0
     (certainty of membership, never commercial relevance), source_revision unset.
-    The provider association to tenant edge binding is supplied per invocation and
-    must match an edge the tenant spec declares.
+    Endpoint node ids are <ref namespace>:<record id>, the namespaced ref shape CEG
+    scores. The provider association to tenant edge binding (including the two ref
+    namespaces) is supplied per invocation and must match an edge the tenant spec
+    declares; moving it into tenant configuration is a pending cross-repository
+    contract.
