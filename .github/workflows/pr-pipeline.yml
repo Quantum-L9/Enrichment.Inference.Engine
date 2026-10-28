@@ -12,8 +12,9 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # VERSION: 1.0.0
 # PURPOSE: Run the full PR pipeline in GitHub Actions.
-# LOCAL EQUIVALENT: make pr (local validation: agent-check + local_pr_pipeline
-#                   guards; it never publishes)
+# LOCAL EQUIVALENT: make pr-check (agent-check + local_pr_pipeline guards;
+#                   never publishes). `make pr PR_BASE=<ref>` = pr-check, then
+#                   publish through the governance ceremony.
 # SIBLING: local_pr_pipeline/pr_pipeline.sh
 #
 # WHEN IT RUNS (automatic):

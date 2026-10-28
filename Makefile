@@ -1,4 +1,4 @@
-.PHONY: setup dev dev-build dev-down dev-clean test test-unit test-integration test-compliance test-ci test-contracts test-all test-watch lint lint-fix audit audit-strict audit-json verify agent-check agent-fix agent-full build prod prod-build prod-down prod-logs deploy clean push pr pr-guards pr-evaluate pr-merge pr-merge-dry pr-ship pr-rerun
+.PHONY: setup dev dev-build dev-down dev-clean test test-unit test-integration test-compliance test-ci test-contracts test-all test-watch lint lint-fix audit audit-strict audit-json verify agent-check agent-fix agent-full build prod prod-build prod-down prod-logs deploy clean push pr pr-base-guard pr-check pr-guards pr-evaluate pr-merge pr-merge-dry pr-ship pr-rerun
 
 IMAGE_NAME ?= enrichment-api
 SERVICE_NAME ?= enrichment-api
@@ -117,18 +117,35 @@ push:  ## Run agent-check, then push current branch to origin
 	git push -u origin HEAD
 
 # ============================================================
-# PR — LOCAL VALIDATION ONLY (never pushes, never opens a PR)
-# `make pr` here is this repository's local pre-PR gate. It is NOT the
-# organization publication ceremony: publication goes through the governance
-# `make pr` (make -C "$$GOV" pr WS="$$PWD" PR_BASE=...), which validates,
-# pushes and opens the PR. This target only runs the checks below.
-#   make pr                          # agent-check + local_pr_pipeline guards
-#   make pr PR_BASE=origin/main      # also the contract-bound change gate on base..HEAD
+# PR — VALIDATE, THEN PUBLISH THROUGH THE GOVERNANCE CEREMONY
+#   make pr PR_BASE=origin/main     # validate here, then publish/update ONE PR into PR_BASE
+#   make pr-check [PR_BASE=...]      # validation only: agent-check + local_pr_pipeline guards
+# PR_BASE is required and must resolve to a commit; there is no default base.
+# Publication is delegated to the governance `make pr` (GOV, default
+# ~/.cursor-governance): changed-file gate -> push -> open or update exactly one
+# PR -> report its URL. It never merges; there is no raw `git push` here.
+# Anything that fails before the hand-off publishes nothing.
 # PYTHON: override to pin interpreter (default: .venv/bin/python if present, else python3)
 # ============================================================
 PR_PYTHON ?= $(shell if [ -x "$(CURDIR)/.venv/bin/python" ]; then printf '%s' "$(CURDIR)/.venv/bin/python"; else command -v python3; fi)
+GOV ?= $(HOME)/.cursor-governance
+PR_REMEDIATE ?= 0
 
-pr: agent-check pr-guards  ## Local PR validation (agent-check + guards). Never publishes.
+pr: pr-base-guard pr-check  ## Validate, then publish/update one PR against an explicit PR_BASE (never merges)
+	L9_EIE_PR_DELEGATED=1 PR_REMEDIATE="$(PR_REMEDIATE)" \
+		make -C "$(GOV)" pr WS="$(CURDIR)" PR_BASE="$(PR_BASE)" PR_REMEDIATE="$(PR_REMEDIATE)"
+
+pr-base-guard:  # runs before any validation or publication; fails closed
+	@if [ -n "$$L9_EIE_PR_DELEGATED" ]; then \
+		echo "pr: refusing re-entry from the governance ceremony; nothing published" >&2; exit 2; fi
+	@if [ -z "$(PR_BASE)" ]; then \
+		echo "pr: PR_BASE is required (e.g. make pr PR_BASE=origin/main); nothing published" >&2; exit 2; fi
+	@if ! git rev-parse --verify --quiet "$(PR_BASE)^{commit}" >/dev/null; then \
+		echo "pr: PR_BASE '$(PR_BASE)' does not resolve to a commit (fetch it first); nothing published" >&2; exit 2; fi
+	@if [ ! -f "$(GOV)/Makefile" ]; then \
+		echo "pr: governance ceremony not found at GOV=$(GOV); nothing published" >&2; exit 2; fi
+
+pr-check: agent-check pr-guards  ## Local PR validation only. Never publishes.
 
 pr-guards:  ## local_pr_pipeline guards: terminology, KB YAML, docs, links, contract-bound diff
 	$(PR_PYTHON) local_pr_pipeline/check_compliance_terminology.py

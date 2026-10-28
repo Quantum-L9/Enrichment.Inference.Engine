@@ -15,7 +15,8 @@ This document describes the production-grade CI/CD pipeline for the Enrichment.I
 
 | Local | GitHub | Description |
 |-------|--------|-------------|
-| `make pr` | `pr-pipeline.yml` | Local validation: `make agent-check` (8 gates) + `local_pr_pipeline/` guards. Semgrep, Docker integration tests and gitleaks run only in GitHub. |
+| `make pr-check` | `pr-pipeline.yml` | Local validation: `make agent-check` (8 gates) + `local_pr_pipeline/` guards. Semgrep, Docker integration tests and gitleaks run only in GitHub. |
+| `make pr PR_BASE=<ref>` | — | `pr-check`, then publish: the governance `make pr` pushes and opens or updates exactly one PR into `PR_BASE` and reports its URL. Never merges. |
 
 Run **`make pr`** before opening a PR for local validation. The **`pr-pipeline.yml`** is the **intended canonical merge gate** for this repository. Its enforcement in branch protection is **Unknown** — verify in Settings → Branches before relying on it as a hard block.
 
@@ -37,7 +38,7 @@ Run **`make pr`** before opening a PR for local validation. The **`pr-pipeline.y
 - `mypy_strict` — Fail on mypy errors
 - `security_strict` — Fail on security warnings
 
-The local counterpart is `make pr` (agent-check plus the `local_pr_pipeline/` guards, via the `pr-guards` target). It validates only; it never pushes or opens a PR.
+The local validation counterpart is `make pr-check` (agent-check plus the `local_pr_pipeline/` guards, via the `pr-guards` target); it never publishes. `make pr PR_BASE=<ref>` runs it and then publishes through the governance ceremony. `PR_BASE` is required and must resolve; a missing or unresolvable base, a failed check, or a missing governance checkout publishes nothing.
 
 ---
 
