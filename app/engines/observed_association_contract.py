@@ -120,7 +120,9 @@ def declared_ref_namespaces(domain_spec: dict[str, Any]) -> dict[str, str] | Non
     """Label -> declared ref namespace, or None when the declarations are malformed or conflict.
 
     Mirrors CEG: node endpoints only, one namespace per label across all its
-    endpoints (declared on every one or none), and one label per namespace.
+    endpoints (declared on every one or none), one label per namespace, and a
+    namespaced label is never the target of a ``childsync`` / ``taxonomyedges``
+    write.
     """
     endpoints = _endpoints(domain_spec)
     if endpoints is None:
@@ -148,7 +150,49 @@ def declared_ref_namespaces(domain_spec: dict[str, Any]) -> dict[str, str] | Non
         resolved[label] = declared.pop()
     if len(set(resolved.values())) != len(resolved):
         return None
+    for label in _indirectly_written_labels(endpoints):
+        if label in resolved:
+            return None
     return resolved
+
+
+def _indirectly_written_labels(endpoints: list[Any]) -> set[str]:
+    """Labels a ``childsync`` or ``taxonomyedges`` entry writes (CEG forbids namespacing them)."""
+    labels: set[str] = set()
+    for endpoint in endpoints:
+        if not isinstance(endpoint, dict):
+            continue
+        for key, field in (("childsync", "targetnode"), ("taxonomyedges", "targetlabel")):
+            entries = endpoint.get(key)
+            for entry in entries if isinstance(entries, list) else []:
+                if isinstance(entry, dict) and isinstance(entry.get(field), str):
+                    labels.add(entry[field])
+    return labels
+
+
+def _has_stable_id(domain_spec: dict[str, Any], label: str) -> bool:
+    """CEG's id rule for a relationship endpoint label: one node-endpoint idproperty, else a required property."""
+    declared = {
+        endpoint.get("idproperty")
+        for endpoint in _endpoints(domain_spec) or []
+        if isinstance(endpoint, dict)
+        and endpoint.get("targetnode") == label
+        and endpoint.get("idproperty")
+    }
+    if len(declared) > 1:
+        return False
+    if declared:
+        return True
+    ontology = domain_spec.get("ontology")
+    nodes = ontology.get("nodes") if isinstance(ontology, dict) else None
+    for node in nodes if isinstance(nodes, list) else []:
+        if isinstance(node, dict) and node.get("label") == label:
+            properties = node.get("properties")
+            return any(
+                isinstance(prop, dict) and prop.get("required") is True
+                for prop in (properties if isinstance(properties, list) else [])
+            )
+    return False
 
 
 def _declared_associations(
@@ -184,9 +228,10 @@ def resolve_observed_association_contract(
 ) -> ObservedAssociationResolution:
     """The tenant relationship this exact association is declared for, or why there is none.
 
-    All-or-nothing: a malformed declaration anywhere in the spec refuses every
-    association (uniqueness cannot be proven over it). Direction is part of the
-    key, so a reversed object-type pair is a different, undeclared association.
+    All-or-nothing: a malformed declaration, or any association declared more
+    than once, anywhere in the spec refuses every association -- CEG would not
+    load that spec at all. Direction is part of the key, so a reversed
+    object-type pair is a different, undeclared association.
     """
     declared = _declared_associations(domain_spec)
     namespaces = declared_ref_namespaces(domain_spec)
@@ -201,14 +246,22 @@ def resolve_observed_association_contract(
         association_category,
         association_type_id,
     )
+    keys = [declared_key for declared_key, _ in declared]
+    duplicated = {k for k in keys if keys.count(k) > 1}
+    if key in duplicated:
+        return ObservedAssociationResolution(
+            None, ResolutionFailure.AMBIGUOUS, f"{key} declared {keys.count(key)} times"
+        )
+    if duplicated:
+        return ObservedAssociationResolution(
+            None,
+            ResolutionFailure.MALFORMED_DECLARATION,
+            f"associations declared more than once: {sorted(duplicated)}",
+        )
     owners = [endpoint for declared_key, endpoint in declared if declared_key == key]
     if not owners:
         return ObservedAssociationResolution(
             None, ResolutionFailure.UNDECLARED, f"{key} not declared"
-        )
-    if len(owners) > 1:
-        return ObservedAssociationResolution(
-            None, ResolutionFailure.AMBIGUOUS, f"{key} declared {len(owners)} times"
         )
     endpoint = owners[0]
     sync = resolve_relationship_sync_contract(
@@ -217,7 +270,9 @@ def resolve_observed_association_contract(
         from_label=endpoint.get("fromnode"),  # type: ignore[arg-type]
         to_label=endpoint.get("tonode"),  # type: ignore[arg-type]
     )
-    if sync is None:
+    if sync is None or not all(
+        _has_stable_id(domain_spec, label) for label in (sync.from_label, sync.to_label)
+    ):
         return ObservedAssociationResolution(
             None,
             ResolutionFailure.INVALID_ENDPOINT,
@@ -248,15 +303,39 @@ def resolve_observed_association_contract(
 def mapping_projection(domain_spec: dict[str, Any]) -> dict[str, Any]:
     """The part of a tenant spec that decides observed relationships, in canonical form.
 
-    Endpoints that declare ``observedfrom`` or ``refnamespace`` (with their
-    structural keys) and the ontology edges they write. Relevance is CEG's and is
-    not part of the mirror contract.
+    Every endpoint that can change what an observation resolves to: those that
+    declare ``observedfrom`` or ``refnamespace``, every other endpoint of a label
+    they involve (it decides namespace and id consistency), and any endpoint whose
+    ``childsync`` / ``taxonomyedges`` write such a label -- with their structural
+    keys -- plus the ontology edges the observed endpoints write. Relevance is
+    CEG's and is not part of the mirror contract.
     """
-    endpoints = _endpoints(domain_spec) or []
+    endpoints = [e for e in _endpoints(domain_spec) or [] if isinstance(e, dict)]
+    labels = {
+        label
+        for e in endpoints
+        if "observedfrom" in e or "refnamespace" in e
+        for label in (e.get("targetnode"), e.get("fromnode"), e.get("tonode"))
+        if isinstance(label, str)
+    }
     relevant = [
-        e for e in endpoints if isinstance(e, dict) and ("observedfrom" in e or "refnamespace" in e)
+        e
+        for e in endpoints
+        if "observedfrom" in e
+        or "refnamespace" in e
+        or e.get("targetnode") in labels
+        or _indirectly_written_labels([e]) & labels
     ]
-    structural = ("path", "targetnode", "targetedge", "fromnode", "tonode", "idproperty")
+    structural = (
+        "path",
+        "targetnode",
+        "targetedge",
+        "fromnode",
+        "tonode",
+        "idproperty",
+        "childsync",
+        "taxonomyedges",
+    )
     projected = []
     for endpoint in relevant:
         item = {k: endpoint.get(k) for k in structural}
@@ -268,7 +347,11 @@ def mapping_projection(domain_spec: dict[str, Any]) -> dict[str, Any]:
             else entries
         )
         projected.append(item)
-    edge_signatures = {(e.get("targetedge"), e.get("fromnode"), e.get("tonode")) for e in relevant}
+    edge_signatures = {
+        (e.get("targetedge"), e.get("fromnode"), e.get("tonode"))
+        for e in relevant
+        if "observedfrom" in e
+    }
     ontology = domain_spec.get("ontology")
     edges = ontology.get("edges") if isinstance(ontology, dict) else None
     written = sorted(

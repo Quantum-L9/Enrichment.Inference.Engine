@@ -346,3 +346,71 @@ def test_schema_proposal_apply_never_adds_or_changes_sync() -> None:
     )
     assert updated["sync"] == current["sync"]
     assert mapping_fingerprint(updated) == mapping_fingerprint(current)
+
+
+# ── Review #265: whole-spec validity, and drift that changes validity ──────────
+
+
+def test_a_duplicate_of_another_association_refuses_every_association() -> None:
+    other = {**ENTRY, "associationtypeid": 999}
+    spec = _spec(observedfrom=[dict(ENTRY), other, dict(other)])
+    resolution = _resolve(spec)  # the requested key itself is declared once
+    assert resolution.failure is ResolutionFailure.MALFORMED_DECLARATION
+    assert "999" in resolution.detail
+
+
+def test_a_namespaced_label_written_by_child_sync_refuses_every_association() -> None:
+    spec = _spec()
+    _endpoint(spec, "/v1/sync/orbital-depots")["childsync"] = [
+        {
+            "field": "grades",
+            "targetnode": "PropellantGrade",
+            "targetid": "grade_code",
+            "edgetype": "STOCKS",
+            "edgedirection": "parenttochild",
+        }
+    ]
+    assert _resolve(spec).failure is ResolutionFailure.MALFORMED_DECLARATION
+
+
+def test_conflicting_id_properties_for_an_observed_label_do_not_resolve() -> None:
+    spec = _spec()
+    spec["sync"]["endpoints"].append(
+        {
+            "path": "/v1/sync/depots-by-code",
+            "targetnode": "OrbitalDepot",
+            "idproperty": "depot_code",
+            "batchstrategy": "UNWINDMERGE",
+            "refnamespace": "orbit.depot",
+        }
+    )
+    assert _resolve(spec).failure is ResolutionFailure.INVALID_ENDPOINT
+
+
+@pytest.mark.parametrize("side", ["mirror", "authority"])
+def test_an_unnamespaced_endpoint_for_a_namespaced_label_is_drift(side: str) -> None:
+    changed = _spec()
+    changed["sync"]["endpoints"].append(
+        {
+            "path": "/v1/sync/depots-patch",
+            "targetnode": "OrbitalDepot",
+            "idproperty": "depot_id",
+            "batchstrategy": "UNWINDMATCHSET",
+        }
+    )
+    mirror, authority = (changed, _spec()) if side == "mirror" else (_spec(), changed)
+    assert mirror_drift(mirror, authority), "a validity-changing endpoint went undetected"
+    assert mapping_fingerprint(changed) != mapping_fingerprint(_spec())
+
+
+def test_endpoints_that_cannot_affect_the_mapping_are_not_drift() -> None:
+    unrelated = _spec()
+    unrelated["sync"]["endpoints"].append(
+        {
+            "path": "/v1/sync/inspections",
+            "targetnode": "Inspection",
+            "idproperty": "inspection_id",
+            "batchstrategy": "UNWINDMERGE",
+        }
+    )
+    assert mirror_drift(unrelated, _spec()) == []
