@@ -3,11 +3,8 @@
 # Source:   app/services/crm/hubspot_client.py,
 #           app/services/crm/observed_relationship_producer.py,
 #           config/crm/hubspot_mapping.yaml
-# Version:  1.3.0
-# Updated:  2026-10-29 (QM.POC0.TENANT_ASSOCIATION_MAPPING.004: the producer takes an
-#           ObservedAssociationKey only; the tenant spec maps it to a relationship and
-#           node refs, resolved before the HubSpot read)
-#           2026-10-29 (producer outcome TRANSPORT_UNAVAILABLE split from
+# Version:  1.2.0
+# Updated:  2026-10-29 (producer outcome TRANSPORT_UNAVAILABLE split from
 #           NOT_ACKNOWLEDGED on transport signals only, GAR A5)
 #           2026-10-25 (QM.POC0.EIE.OBSERVED_RELATIONSHIP_PRODUCER.003: read-only
 #           association lookup for one explicitly invoked observed-relationship producer)
@@ -50,7 +47,8 @@ association_read:
     wired into enrichment). It proposes the matching association through
     PacketRouter.notify_relationship_sync as observed / positive / confidence 1.0
     (certainty of membership, never commercial relevance), source_revision unset.
-    The operator supplies only an ObservedAssociationKey (object types, association
+    Since QM.POC0.TENANT_ASSOCIATION_MAPPING.004 the operator supplies only an
+    ObservedAssociationKey (object types, association
     category and typeId) and the two record ids. The tenant spec's
     sync.endpoints[].observedfrom decides which relationship that association is, and
     the node endpoints' refnamespace turn record ids into graph refs
