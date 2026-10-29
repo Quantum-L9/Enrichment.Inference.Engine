@@ -22,7 +22,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import yaml
-from constellation_node_sdk.gate import GateConnectionError
+from constellation_node_sdk.gate import (
+    GateConnectionError,
+    GateHTTPError,
+    GateTimeoutError,
+)
 from constellation_node_sdk.transport import create_transport_packet
 
 from app.engines.domain_yaml_reader import DomainYamlReader
@@ -534,6 +538,45 @@ async def test_invalid_record_ids_never_reach_the_provider(
     "gate",
     [
         GateConnectionError("gate down"),
+        GateTimeoutError("deadline elapsed", timeout_seconds=10.0),
+        GateHTTPError("gate overloaded", status_code=503),
+    ],
+    ids=["gate-unreachable", "gate-timeout", "gate-5xx"],
+)
+async def test_a_gate_outage_is_transport_unavailable_not_a_refusal(
+    router: PacketRouter, hubspot: HubSpotClient, gate: Exception
+) -> None:
+    with patch("app.engines.packet_router.asyncio.sleep", new_callable=AsyncMock):
+        result, _get, execute = await _produce(
+            router,
+            hubspot,
+            "orbit-yard",
+            http=_http(body=_associations_body("orbit-yard")),
+            gate=gate,
+        )
+    assert result.status is ProducerStatus.TRANSPORT_UNAVAILABLE
+    assert result.ceg_ack is None
+    assert result.evidence_ref is not None and result.source_ref is not None
+    assert execute.await_count == 2  # retries under the pinned key were spent first
+
+
+def _failure_packet() -> Any:
+    """Gate relays a worker ``failure`` packet with HTTP 200; its error name is never read."""
+    request = _ack("orbit-yard", "stocks")
+    return request.derive(
+        packet_type="failure",
+        source_node="graph-engine",
+        destination_node="enrichment-engine",
+        reply_to="graph-engine",
+        payload={"status": "failed", "error": "AnyWorkerError", "message": "refused"},
+    )
+
+
+@pytest.mark.parametrize(
+    "gate",
+    [
+        GateHTTPError("unprocessable", status_code=422),
+        _failure_packet(),
         create_transport_packet(
             action="sync",
             payload={"status": "success", "entity_type": "stocks", "synced_count": 1},
@@ -543,16 +586,22 @@ async def test_invalid_record_ids_never_reach_the_provider(
             reply_to="gate",
         ),
     ],
-    ids=["gate-outage", "node-shaped-ack"],
+    ids=["gate-4xx", "worker-failure-packet", "node-shaped-ack"],
 )
-async def test_an_unacknowledged_send_is_not_synced(
+async def test_a_refused_or_unconfirmed_send_is_not_acknowledged(
     router: PacketRouter, hubspot: HubSpotClient, gate: Any
 ) -> None:
-    result, _get, _execute = await _produce(
-        router, hubspot, "orbit-yard", http=_http(body=_associations_body("orbit-yard")), gate=gate
-    )
+    with patch("app.engines.packet_router.asyncio.sleep", new_callable=AsyncMock):
+        result, _get, execute = await _produce(
+            router,
+            hubspot,
+            "orbit-yard",
+            http=_http(body=_associations_body("orbit-yard")),
+            gate=gate,
+        )
     assert result.status is ProducerStatus.NOT_ACKNOWLEDGED
     assert result.ceg_ack is None
+    assert execute.await_count == 1  # a refusal is never retried
 
 
 # ── Domain neutrality ─────────────────────────────────────────────────────────

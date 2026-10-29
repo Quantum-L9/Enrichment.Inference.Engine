@@ -3,8 +3,10 @@
 # Source:   app/services/crm/hubspot_client.py,
 #           app/services/crm/observed_relationship_producer.py,
 #           config/crm/hubspot_mapping.yaml
-# Version:  1.1.0
-# Updated:  2026-10-25 (QM.POC0.EIE.OBSERVED_RELATIONSHIP_PRODUCER.003: read-only
+# Version:  1.2.0
+# Updated:  2026-10-29 (producer outcome TRANSPORT_UNAVAILABLE split from
+#           NOT_ACKNOWLEDGED on transport signals only, GAR A5)
+#           2026-10-25 (QM.POC0.EIE.OBSERVED_RELATIONSHIP_PRODUCER.003: read-only
 #           association lookup for one explicitly invoked observed-relationship producer)
 #           2026-04-05
 # ═══════════════════════════════════════════════════════════════
@@ -50,3 +52,15 @@ association_read:
     namespaces) is supplied per invocation and must match an edge the tenant spec
     declares; moving it into tenant configuration is a pending cross-repository
     contract.
+  producer_outcomes:
+    - SYNCED -- CEG's relationship endpoint acknowledged the edge (the only success).
+    - INVALID_INPUT -- binding, record ids or tenant are malformed; nothing is read or sent.
+    - PROVIDER_UNAVAILABLE -- the HubSpot read failed closed (HubSpotAssociationReadError).
+    - SOURCE_NOT_AVAILABLE -- HubSpot reports no association of the bound category/typeId.
+    - CONTRACT_NOT_DECLARED -- the tenant spec declares no matching DIRECTED sync edge.
+    - TRANSPORT_UNAVAILABLE -- Gate unreachable, timed out or 5xx after the router's
+      retries (RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE); repeating the invocation
+      reuses the evidence ref and Gate idempotency key.
+    - NOT_ACKNOWLEDGED -- Gate carried the row and the answer is not a confirmation (a
+      worker failure packet, a Gate 4xx, an unconfirming ack, or nothing proposed by the
+      router). Decided on transport signals only; CEG exception names are never read.

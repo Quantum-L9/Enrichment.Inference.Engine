@@ -31,7 +31,11 @@ under the tenant with exactly that id, and that refusal is reported as
 ``NOT_ACKNOWLEDGED``. No node is created here.
 
 Every outcome is a typed ``ObservedRelationshipResult``; only ``SYNCED`` means
-CEG acknowledged the edge.
+CEG acknowledged the edge. The router's typed answer decides the rest on
+transport signals only (GAR A5): Gate unreachable, timed out or 5xx after the
+retries are spent is ``TRANSPORT_UNAVAILABLE`` (the same invocation may be
+repeated; it reuses the evidence ref and Gate key); a worker ``failure``
+packet, a Gate 4xx or an unconfirming answer is ``NOT_ACKNOWLEDGED``.
 """
 
 from __future__ import annotations
@@ -49,6 +53,7 @@ import structlog
 from app.engines.packet_router import (
     PacketRouter,
     RelationshipAssertion,
+    RelationshipSyncOutcome,
     relationship_assertion_defects,
 )
 
@@ -74,6 +79,7 @@ class ProducerStatus(StrEnum):
     PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
     SOURCE_NOT_AVAILABLE = "SOURCE_NOT_AVAILABLE"
     CONTRACT_NOT_DECLARED = "CONTRACT_NOT_DECLARED"
+    TRANSPORT_UNAVAILABLE = "TRANSPORT_UNAVAILABLE"
     NOT_ACKNOWLEDGED = "NOT_ACKNOWLEDGED"
 
 
@@ -252,14 +258,21 @@ async def produce_observed_relationship(
             source_ref,
         )
 
-    ceg_ack = await router.notify_relationship_sync(tenant_id, assertion, correlation_id)
-    if ceg_ack is None:
+    sync = await router.notify_relationship_sync(tenant_id, assertion, correlation_id)
+    if sync.outcome is RelationshipSyncOutcome.ACKNOWLEDGED and sync.ack is not None:
         return ObservedRelationshipResult(
-            ProducerStatus.NOT_ACKNOWLEDGED,
-            "CEG did not acknowledge the relationship (refused endpoints, flag off, or Gate failure)",
+            ProducerStatus.SYNCED, "acknowledged by CEG", evidence_ref, source_ref, sync.ack
+        )
+    if sync.outcome is RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE:
+        return ObservedRelationshipResult(
+            ProducerStatus.TRANSPORT_UNAVAILABLE,
+            f"Gate could not carry the relationship after retries: {sync.detail}",
             evidence_ref,
             source_ref,
         )
     return ObservedRelationshipResult(
-        ProducerStatus.SYNCED, "acknowledged by CEG", evidence_ref, source_ref, ceg_ack
+        ProducerStatus.NOT_ACKNOWLEDGED,
+        f"CEG did not acknowledge the relationship: {sync.detail}",
+        evidence_ref,
+        source_ref,
     )
