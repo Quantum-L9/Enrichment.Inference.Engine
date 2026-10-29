@@ -27,7 +27,7 @@ from ..models.schemas import EnrichRequest, EnrichResponse
 from ..services.graph_return_channel import EnrichmentTarget, GraphReturnChannel
 from ..services.idempotency import IdempotencyStore
 from ..services.request_deadline import current_deadline
-from .convergence.confidence_tracker import ConfidenceTracker  # NEW
+from .convergence.confidence_tracker import UNCERTAINTY_SCALE, ConfidenceTracker
 from .convergence.convergence_config import ConvergenceConfig  # NEW
 from .convergence.cost_tracker import CostTracker
 from .field_classifier import DomainClassification, auto_classify_domain
@@ -130,7 +130,10 @@ class ConvergenceState:
     converged: bool = False
     convergence_reason: str = ""
     unlock_map: dict[str, float] = field(default_factory=dict)
-    uncertainty_score: float = 1.0
+    # Pass 1 plans with this seed before any pass has measured U. Nothing is
+    # known yet, which D-9 defines as maximal uncertainty — so the discovery
+    # pass gets the largest variation budget, not the smallest.
+    uncertainty_score: float = UNCERTAINTY_SCALE
 
 
 async def run_convergence_loop(

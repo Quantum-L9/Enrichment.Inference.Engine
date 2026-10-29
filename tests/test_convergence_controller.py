@@ -948,6 +948,39 @@ class TestPerPassUncertainty:
         # Pass 2 follows U=7 (> 5.0 -> 5 variations); pass 3 follows U=5 (3).
         assert [r.max_variations for r in seen[1:3]] == [5, 3]
 
+    @pytest.mark.asyncio
+    async def test_discovery_pass_plans_with_maximal_uncertainty(self) -> None:
+        """D-9: nothing known yet is maximal uncertainty, so pass 1 gets the largest budget.
+
+        Pass 1 used to plan with a stale seed of U=1.0 and ran the *smallest*
+        budget (observed [2, 5, 3, 3]) on the pass that knows the least.
+        """
+        from app.engines.convergence.confidence_tracker import UNCERTAINTY_SCALE
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+        from app.engines.convergence_controller import ConvergenceState
+        from app.engines.meta_prompt_planner import MetaPromptPlanner
+
+        assert ConvergenceState().uncertainty_score == UNCERTAINTY_SCALE
+
+        seen: list = []
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"}, object_type="Account", objective="x", max_variations=5
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5), _pass(0.7), _pass(0.9)], seen),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+
+        maximal_budget = MetaPromptPlanner()._compute_variation_budget(
+            UNCERTAINTY_SCALE, budget_remaining=30000
+        )
+        assert maximal_budget == 5
+        assert seen[0].max_variations == maximal_budget
+        assert [r.max_variations for r in seen] == [5, 5, 3, 3]
+        assert response.inferences[0]["mode"] == "discovery"
+
 
 class TestUncertaintyFormulaD9:
     """D-9 candidate formula (owner acceptance pending): U = 10 * (1 - mean confidence)."""
