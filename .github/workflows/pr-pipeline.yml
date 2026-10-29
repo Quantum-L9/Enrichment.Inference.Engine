@@ -15,7 +15,6 @@
 # LOCAL EQUIVALENT: make pr-check (agent-check + local_pr_pipeline guards;
 #                   never publishes). `make pr PR_BASE=<ref>` = pr-check, then
 #                   publish through the governance ceremony.
-# SIBLING: local_pr_pipeline/pr_pipeline.sh
 #
 # WHEN IT RUNS (automatic):
 #   • Every pull_request (opened, synchronize, reopened) — all target branches GitHub allows.
