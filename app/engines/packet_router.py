@@ -513,6 +513,63 @@ def relationship_sync_acknowledged(
     return bool(created + replayed == expected_count)
 
 
+class RelationshipSyncOutcome(StrEnum):
+    """What became of one proposed relationship, read from transport signals only.
+
+    * ``ACKNOWLEDGED`` -- CEG's relationship endpoint confirmed this row.
+    * ``NOT_PROPOSED`` -- nothing was sent: the assertion is incomplete or the
+      tenant declares no endpoint for it.
+    * ``TRANSPORT_UNAVAILABLE`` -- Gate could not carry the row: unreachable, a
+      timeout, or a Gate 5xx, after the retries the pinned idempotency key
+      allows were spent. The graph may or may not hold the row; a later retry of
+      the same assertion reuses the same key.
+    * ``NOT_ACKNOWLEDGED`` -- Gate carried it and the answer is not a
+      confirmation: a ``failure`` packet, a Gate 4xx, an answer that does not
+      confirm this row on this endpoint, or any other client failure.
+
+    The worker's own error vocabulary (its exception name inside a ``failure``
+    packet) is never read: telling a refusal apart from an outage by a peer's
+    class names would couple EIE to that peer (GAR A5).
+    """
+
+    ACKNOWLEDGED = "acknowledged"
+    NOT_PROPOSED = "not_proposed"
+    TRANSPORT_UNAVAILABLE = "transport_unavailable"
+    NOT_ACKNOWLEDGED = "not_acknowledged"
+
+
+@dataclass(frozen=True, slots=True)
+class RelationshipSyncResult:
+    """Typed answer of ``PacketRouter.notify_relationship_sync``; ``ack`` only when acknowledged."""
+
+    outcome: RelationshipSyncOutcome
+    detail: str
+    ack: dict[str, Any] | None = None
+
+    @property
+    def acknowledged(self) -> bool:
+        return self.outcome is RelationshipSyncOutcome.ACKNOWLEDGED
+
+
+def relationship_failure_outcome(exc: NodeUnreachableError) -> RelationshipSyncOutcome:
+    """Classify a failed relationship route on Gate-client transport signals only.
+
+    ``route`` raises ``NodeOperationFailedError`` for a ``failure`` packet and
+    ``NodeUnreachableError`` chained (``from``) to the last ``GateClientError``
+    once its retries are spent. Unreachable, timed out and Gate 5xx mean the
+    transport was unavailable; everything else -- a failure packet, a 4xx, any
+    other client error -- is a refusal or an unconfirmed answer.
+    """
+    if isinstance(exc, NodeOperationFailedError):
+        return RelationshipSyncOutcome.NOT_ACKNOWLEDGED
+    cause = exc.__cause__
+    if isinstance(cause, GateConnectionError | GateTimeoutError):
+        return RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE
+    if isinstance(cause, GateHTTPError) and cause.is_server_error:
+        return RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE
+    return RelationshipSyncOutcome.NOT_ACKNOWLEDGED
+
+
 class PacketRouter:
     """
     Dispatches transport work through Gate.
@@ -868,16 +925,18 @@ class PacketRouter:
         tenant_id: str,
         assertion: RelationshipAssertion,
         correlation_id: str | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> RelationshipSyncResult:
         """Propose one evidenced relationship to the graph through Gate ``sync``.
 
         The endpoint comes from the TENANT's spec (tenant id == domain spec id),
         exactly as for node sync; there is no settings fallback for a
-        relationship. Returns CEG's acknowledgment only when its relationship
-        endpoint confirms this row (``relationship_sync_acknowledged``), else
-        None: an incomplete assertion, an undeclared or mismatched relationship,
-        a Gate outage, a worker failure, or any other answer is logged and NOT
-        synced. A retry with the same assertion reuses the same idempotency key.
+        relationship. Always answers a typed ``RelationshipSyncResult``; only
+        ``ACKNOWLEDGED`` (CEG's relationship endpoint confirmed this row,
+        ``relationship_sync_acknowledged``) carries the ack and means synced.
+        An incomplete assertion or an undeclared or mismatched relationship is
+        ``NOT_PROPOSED``; a Gate outage after retries is ``TRANSPORT_UNAVAILABLE``;
+        a worker failure, a 4xx or any unconfirming answer is ``NOT_ACKNOWLEDGED``.
+        A retry with the same assertion reuses the same idempotency key.
         """
         defects = relationship_assertion_defects(assertion)
         if defects:
@@ -887,7 +946,9 @@ class PacketRouter:
                 evidence_ref=assertion.evidence_ref,
                 defects=defects,
             )
-            return None
+            return RelationshipSyncResult(
+                RelationshipSyncOutcome.NOT_PROPOSED, "incomplete assertion: " + "; ".join(defects)
+            )
         contract = self.relationship_sync_contract(tenant_id, assertion)
         if contract is None:
             logger.warning(
@@ -899,7 +960,10 @@ class PacketRouter:
                 fix="declare a sync endpoint with this targetedge/fromnode/tonode and the "
                 "matching DIRECTED, managedby: sync edge in ontology.edges",
             )
-            return None
+            return RelationshipSyncResult(
+                RelationshipSyncOutcome.NOT_PROPOSED,
+                "tenant declares no sync endpoint for this relationship",
+            )
         return await self._send_relationship(tenant_id, assertion, contract, correlation_id)
 
     async def _send_relationship(
@@ -908,8 +972,8 @@ class PacketRouter:
         assertion: RelationshipAssertion,
         contract: RelationshipSyncContract,
         correlation_id: str | None,
-    ) -> dict[str, Any] | None:
-        """Route one relationship row through Gate; the ack only when it confirms that row."""
+    ) -> RelationshipSyncResult:
+        """Route one relationship row through Gate and classify the answer."""
         row = _relationship_sync_row(assertion)
         try:
             ack = await self.route(
@@ -921,12 +985,14 @@ class PacketRouter:
                 idempotency_key=_relationship_idempotency_key(tenant_id, contract, row),
             )
         except NodeUnreachableError as exc:
+            outcome = relationship_failure_outcome(exc)
             logger.warning(
                 "relationship_sync_failed",
                 evidence_ref=assertion.evidence_ref,
+                outcome=outcome.value,
                 error=str(exc),
             )
-            return None
+            return RelationshipSyncResult(outcome, str(exc))
         if not relationship_sync_acknowledged(
             ack, entity_type=contract.entity_type, expected_count=1
         ):
@@ -937,8 +1003,14 @@ class PacketRouter:
                 entity_type=ack.get("entity_type"),
                 expected_entity_type=contract.entity_type,
             )
-            return None
-        return ack
+            return RelationshipSyncResult(
+                RelationshipSyncOutcome.NOT_ACKNOWLEDGED,
+                f"answer does not confirm the row on endpoint {contract.entity_type!r} "
+                f"(status {ack.get('status')!r})",
+            )
+        return RelationshipSyncResult(
+            RelationshipSyncOutcome.ACKNOWLEDGED, "acknowledged by CEG", ack
+        )
 
     async def notify_score_invalidate(
         self,
