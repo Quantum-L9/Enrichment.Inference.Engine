@@ -22,14 +22,22 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
-from constellation_node_sdk.gate import GateConnectionError
+from constellation_node_sdk.gate import (
+    GateAuthorizationError,
+    GateConnectionError,
+    GateHTTPError,
+    GateTimeoutError,
+)
 from constellation_node_sdk.transport import create_transport_packet
+from constellation_node_sdk.transport.hop_trace import make_response_hop
 
 from app.engines.domain_yaml_reader import DomainYamlReader
 from app.engines.packet_router import (
     PacketRouter,
     RelationshipAssertion,
     RelationshipSyncContract,
+    RelationshipSyncOutcome,
+    RelationshipSyncResult,
     _relationship_idempotency_key,
     relationship_assertion_defects,
     relationship_sync_acknowledged,
@@ -306,8 +314,10 @@ async def test_relationship_is_sent_as_ceg_sync_through_gate(
         new_callable=AsyncMock,
         return_value=_response(_relationship_ack(entity_type), tenant),
     ) as execute:
-        ack = await router.notify_relationship_sync(tenant, assertion)
-    assert ack is not None and ack["created_count"] == 1
+        result = await router.notify_relationship_sync(tenant, assertion)
+    assert result.outcome is RelationshipSyncOutcome.ACKNOWLEDGED
+    assert result.acknowledged
+    assert result.ack is not None and result.ack["created_count"] == 1
     kwargs = execute.await_args.kwargs
     assert kwargs["action"] == "sync"
     assert kwargs["tenant"] == tenant
@@ -392,32 +402,154 @@ async def test_unsendable_assertions_never_reach_gate(
     router: PacketRouter, assertion: RelationshipAssertion
 ) -> None:
     with patch.object(router._client, "execute", new_callable=AsyncMock) as execute:
-        assert await router.notify_relationship_sync("orbit-yard", assertion) is None
+        result = await router.notify_relationship_sync("orbit-yard", assertion)
+    assert result.outcome is RelationshipSyncOutcome.NOT_PROPOSED
+    assert result.ack is None and not result.acknowledged
     execute.assert_not_awaited()
 
 
 async def test_unknown_tenant_is_skipped(router: PacketRouter) -> None:
     with patch.object(router._client, "execute", new_callable=AsyncMock) as execute:
-        assert await router.notify_relationship_sync("no-such-tenant", _assertion()) is None
+        result = await router.notify_relationship_sync("no-such-tenant", _assertion())
+    assert result.outcome is RelationshipSyncOutcome.NOT_PROPOSED
     execute.assert_not_awaited()
 
 
-async def test_node_shaped_or_failed_answers_are_not_synced(router: PacketRouter) -> None:
-    node_ack = {"status": "success", "entity_type": "stocks", "synced_count": 1}
-    with patch.object(
-        router._client, "execute", new_callable=AsyncMock, return_value=_response(node_ack)
-    ):
-        assert await router.notify_relationship_sync("orbit-yard", _assertion()) is None
+def _failure_packet(*, with_hop: bool) -> Any:
+    """What Gate relays (HTTP 200) when the graph worker's handler raised.
+
+    Gate_SDK ``create_error_transport_packet`` shape. The error name inside the
+    payload is the worker's own and is deliberately NOT read by EIE: the
+    outcome below is decided by the ``failure`` packet type alone.
+    """
+    request = _response(_relationship_ack("stocks"))
+    failure = request.derive(
+        packet_type="failure",
+        source_node="graph-engine",
+        destination_node="enrichment-engine",
+        reply_to="graph-engine",
+        payload={"status": "failed", "error": "AnyWorkerError", "message": "refused"},
+    )
+    if with_hop:
+        failure = failure.with_hop(
+            make_response_hop(
+                packet=failure,
+                node="graph-engine",
+                action="sync",
+                status="failed",
+                error_code="AnyWorkerError",
+            )
+        )
+    return failure
+
+
+# ── Typed outcome: transport unavailable vs not acknowledged (GAR A5) ──────────
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        GateConnectionError("gate down"),
+        GateTimeoutError("deadline elapsed", timeout_seconds=10.0),
+        GateHTTPError("gate overloaded", status_code=503),
+        GateHTTPError("bad gateway", status_code=502),
+    ],
+    ids=["connection", "timeout", "5xx-503", "5xx-502"],
+)
+async def test_gate_outage_after_retries_is_transport_unavailable(
+    router: PacketRouter, error: Exception
+) -> None:
+    """Gate could not carry the row: retried under the pinned key, then reported as an outage."""
     with (
         patch.object(
-            router._client,
-            "execute",
-            new_callable=AsyncMock,
-            side_effect=GateConnectionError("gate down"),
-        ),
+            router._client, "execute", new_callable=AsyncMock, side_effect=error
+        ) as execute,
         patch("app.engines.packet_router.asyncio.sleep", new_callable=AsyncMock),
     ):
-        assert await router.notify_relationship_sync("orbit-yard", _assertion()) is None
+        result = await router.notify_relationship_sync("orbit-yard", _assertion())
+    assert isinstance(result, RelationshipSyncResult)
+    assert result.outcome is RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE
+    assert result.ack is None and not result.acknowledged
+    # Retries are spent before the outage is reported (the key makes them safe).
+    assert execute.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        GateHTTPError("unprocessable", status_code=422),
+        GateHTTPError("no route", status_code=404),
+        GateAuthorizationError("action not permitted", status_code=403),
+    ],
+    ids=["4xx-422", "4xx-404", "4xx-403"],
+)
+async def test_gate_4xx_is_not_acknowledged_and_not_retried(
+    router: PacketRouter, error: Exception
+) -> None:
+    with (
+        patch.object(
+            router._client, "execute", new_callable=AsyncMock, side_effect=error
+        ) as execute,
+        patch("app.engines.packet_router.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        result = await router.notify_relationship_sync("orbit-yard", _assertion())
+    assert result.outcome is RelationshipSyncOutcome.NOT_ACKNOWLEDGED
+    assert result.ack is None
+    assert execute.await_count == 1
+
+
+@pytest.mark.parametrize("with_hop", [False, True], ids=["failure-type", "failure-type+hop"])
+async def test_worker_failure_packet_is_not_acknowledged(
+    router: PacketRouter, with_hop: bool
+) -> None:
+    with patch.object(
+        router._client,
+        "execute",
+        new_callable=AsyncMock,
+        return_value=_failure_packet(with_hop=with_hop),
+    ) as execute:
+        result = await router.notify_relationship_sync("orbit-yard", _assertion())
+    assert result.outcome is RelationshipSyncOutcome.NOT_ACKNOWLEDGED
+    assert result.ack is None
+    assert execute.await_count == 1
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"status": "success", "entity_type": "stocks", "synced_count": 1},
+        {"status": "all_rejected", "entity_type": "stocks", "synced_count": 0},
+        _relationship_ack("tended-by"),
+        _relationship_ack("stocks", created=0, replayed=0),
+    ],
+    ids=["node-shaped", "all-rejected", "other-endpoint", "zero-rows"],
+)
+async def test_unconfirming_answers_are_not_acknowledged(
+    router: PacketRouter, answer: dict[str, Any]
+) -> None:
+    with patch.object(
+        router._client, "execute", new_callable=AsyncMock, return_value=_response(answer)
+    ):
+        result = await router.notify_relationship_sync("orbit-yard", _assertion())
+    assert result.outcome is RelationshipSyncOutcome.NOT_ACKNOWLEDGED
+    assert result.ack is None
+
+
+def test_outcome_is_decided_on_transport_signals_only() -> None:
+    """EIE never couples to the graph worker's exception vocabulary (GAR A5)."""
+    source = Path("app/engines/packet_router.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    names = {"RelationshipSyncOutcome", "relationship_failure_outcome", "_send_relationship"}
+    segments = [
+        ast.get_source_segment(source, node) or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.name in names
+    ]
+    assert len(segments) == len(names)
+    classifier = "\n".join(segments)
+    for worker_vocabulary in ("ValidationError", "ExecutionError", "payload"):
+        assert worker_vocabulary not in classifier
 
 
 def test_assertion_is_immutable() -> None:
