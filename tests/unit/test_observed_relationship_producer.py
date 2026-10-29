@@ -3,7 +3,10 @@ tests/unit/test_observed_relationship_producer.py
 
 QM.POC0.EIE.OBSERVED_RELATIONSHIP_PRODUCER.003 — one observed HubSpot
 association becomes one RelationshipAssertion over the existing
-``PacketRouter.notify_relationship_sync``.
+``PacketRouter.notify_relationship_sync``. Since
+QM.POC0.TENANT_ASSOCIATION_MAPPING.004 the operator names only the provider
+association (``ObservedAssociationKey``); the tenant spec's ``observedfrom`` and
+``refnamespace`` decide the relationship and the node refs.
 
 Every HubSpot response here is SYNTHETIC (a patched ``httpx.get``), shaped as
 the documented ``GET /crm/v4/objects/{from}/{id}/associations/{to}`` answer;
@@ -30,13 +33,18 @@ from constellation_node_sdk.gate import (
 from constellation_node_sdk.transport import create_transport_packet
 
 from app.engines.domain_yaml_reader import DomainYamlReader
-from app.engines.packet_router import PacketRouter
+from app.engines.observed_association_contract import (
+    MAPPING_UNVERIFIED_MIRROR,
+    ObservedRelationshipContract,
+    mapping_fingerprint,
+)
+from app.engines.packet_router import PacketRouter, RelationshipSyncContract
 from app.services.crm import hubspot_client as hubspot_module
 from app.services.crm import observed_relationship_producer as producer_module
 from app.services.crm.base import CRMCredentials, CRMType
 from app.services.crm.hubspot_client import HubSpotAssociationReadError, HubSpotClient
 from app.services.crm.observed_relationship_producer import (
-    ObservedAssociationBinding,
+    ObservedAssociationKey,
     ProducerStatus,
     produce_observed_relationship,
 )
@@ -45,7 +53,13 @@ pytestmark = pytest.mark.unit
 
 
 def _spec(
-    domain_id: str, subject: str, relation: str, obj: str, entity_type: str
+    domain_id: str,
+    subject: str,
+    relation: str,
+    obj: str,
+    entity_type: str,
+    provider_pair: tuple[str, str],
+    type_id: int,
 ) -> dict[str, Any]:
     return {
         "domain": {"id": domain_id, "name": "synthetic", "version": "0.1.0"},
@@ -67,12 +81,35 @@ def _spec(
         "sync": {
             "endpoints": [
                 {
+                    "path": "/v1/sync/subjects",
+                    "targetnode": subject,
+                    "idproperty": "subject_id",
+                    "batchstrategy": "UNWINDMERGE",
+                    "refnamespace": f"{domain_id}.subject",
+                },
+                {
+                    "path": "/v1/sync/objects",
+                    "targetnode": obj,
+                    "idproperty": "object_id",
+                    "batchstrategy": "UNWINDMERGE",
+                    "refnamespace": f"{domain_id}.object",
+                },
+                {
                     "path": f"/v1/sync/{entity_type}",
                     "targetedge": relation,
                     "fromnode": subject,
                     "tonode": obj,
                     "batchstrategy": "UNWINDMERGE",
-                }
+                    "observedfrom": [
+                        {
+                            "provider": "hubspot",
+                            "fromobjecttype": provider_pair[0],
+                            "toobjecttype": provider_pair[1],
+                            "associationcategory": "HUBSPOT_DEFINED",
+                            "associationtypeid": type_id,
+                        }
+                    ],
+                },
             ]
         },
     }
@@ -94,21 +131,28 @@ FROM_ID = "1001"
 TO_ID = "2002"
 
 
-def _binding(tenant: str, **overrides: Any) -> ObservedAssociationBinding:
-    subject, relation, obj, _entity, (from_type, to_type), type_id = VOCABULARIES[tenant]
+def _tenant_spec(tenant: str) -> dict[str, Any]:
+    subject, relation, obj, entity_type, pair, type_id = VOCABULARIES[tenant]
+    return _spec(tenant, subject, relation, obj, entity_type, pair, type_id)
+
+
+def _key(tenant: str, **overrides: Any) -> ObservedAssociationKey:
+    _subject, _relation, _obj, _entity, (from_type, to_type), type_id = VOCABULARIES[tenant]
     fields: dict[str, Any] = {
         "from_object_type": from_type,
         "to_object_type": to_type,
         "association_category": "HUBSPOT_DEFINED",
         "association_type_id": type_id,
-        "subject_label": subject,
-        "relation_type": relation,
-        "object_label": obj,
-        "subject_ref_namespace": f"{tenant}.subject",
-        "object_ref_namespace": f"{tenant}.object",
     }
     fields.update(overrides)
-    return ObservedAssociationBinding(**fields)
+    return ObservedAssociationKey(**fields)
+
+
+def _router_over(root: Path, specs: dict[str, dict[str, Any]]) -> PacketRouter:
+    for tenant, spec in specs.items():
+        (root / tenant).mkdir(parents=True)
+        (root / tenant / "spec.yaml").write_text(yaml.safe_dump(spec), encoding="utf-8")
+    return PacketRouter(gate_url="https://gate-node:8080", domain_reader=DomainYamlReader(root))
 
 
 def _associations_body(tenant: str, *, to_id: str = TO_ID, **extra: Any) -> dict[str, Any]:
@@ -137,12 +181,7 @@ def _http(status: int = 200, body: Any = None) -> MagicMock:
 
 @pytest.fixture
 def router(tmp_path: Path) -> PacketRouter:
-    root = tmp_path / "domains"
-    for tenant, (subject, relation, obj, entity_type, *_rest) in VOCABULARIES.items():
-        (root / tenant).mkdir(parents=True)
-        spec = _spec(tenant, subject, relation, obj, entity_type)
-        (root / tenant / "spec.yaml").write_text(yaml.safe_dump(spec), encoding="utf-8")
-    return PacketRouter(gate_url="https://gate-node:8080", domain_reader=DomainYamlReader(root))
+    return _router_over(tmp_path / "domains", {t: _tenant_spec(t) for t in VOCABULARIES})
 
 
 @pytest.fixture
@@ -177,7 +216,7 @@ async def _produce(
     *,
     http: Any,
     gate: Any = None,
-    binding: ObservedAssociationBinding | None = None,
+    key: ObservedAssociationKey | None = None,
     from_id: str = FROM_ID,
     to_id: str = TO_ID,
 ) -> tuple[Any, MagicMock, AsyncMock]:
@@ -195,7 +234,7 @@ async def _produce(
     ):
         result = await produce_observed_relationship(
             tenant_id=tenant,
-            binding=binding or _binding(tenant),
+            key=key or _key(tenant),
             from_record_id=from_id,
             to_record_id=to_id,
             hubspot=hubspot,
@@ -349,58 +388,94 @@ async def test_an_observed_association_is_proposed_and_acknowledged(
     }  # no source_revision: HubSpot reports none for an association, so none is invented
 
 
+# Golden: the values the predecessor (EIE #256, operator-supplied binding) produced
+# for the same association. Moving the mapping into the spec changes none of them.
+GOLDEN = {
+    "orbit-yard": (
+        "evidence:hubspot:association:a7dfc7ac47114097f8a05629",
+        "eie:relsync:orbit-yard:evidence:hubspot:association:a7dfc7ac47114097f8a05629:7d2d2d9d18bba05b",
+    ),
+    "cave-works": (
+        "evidence:hubspot:association:2c08674ed058d7985e2aa34e",
+        "eie:relsync:cave-works:evidence:hubspot:association:2c08674ed058d7985e2aa34e:3836cf8a57ef9f5b",
+    ),
+}
+
+
+@pytest.mark.parametrize("tenant", sorted(VOCABULARIES))
 async def test_replay_reproduces_the_evidence_ref_and_gate_key(
-    router: PacketRouter, hubspot: HubSpotClient
+    router: PacketRouter, hubspot: HubSpotClient, tenant: str
 ) -> None:
     runs = [
-        await _produce(
-            router, hubspot, "orbit-yard", http=_http(body=_associations_body("orbit-yard"))
-        )
+        await _produce(router, hubspot, tenant, http=_http(body=_associations_body(tenant)))
         for _ in range(2)
     ]
     (first, _g1, e1), (second, _g2, e2) = runs
     assert first.evidence_ref == second.evidence_ref
-    assert first.evidence_ref.startswith("evidence:hubspot:association:")
     assert e1.await_args.kwargs["idempotency_key"] == e2.await_args.kwargs["idempotency_key"]
+    assert (first.evidence_ref, e1.await_args.kwargs["idempotency_key"]) == GOLDEN[tenant]
 
 
-def test_evidence_ref_separates_tenant_direction_and_type() -> None:
+def _contract(**overrides: Any) -> ObservedRelationshipContract:
+    fields: dict[str, Any] = {
+        "sync": RelationshipSyncContract("stocks", "STOCKS", "OrbitalDepot", "PropellantGrade"),
+        "provider": "hubspot",
+        "from_object_type": "companies",
+        "to_object_type": "deals",
+        "association_category": "HUBSPOT_DEFINED",
+        "association_type_id": 342,
+        "subject_ref_namespace": "orbit-yard.subject",
+        "object_ref_namespace": "orbit-yard.object",
+        "mapping_fingerprint": "sha256:synthetic",
+    }
+    fields.update(overrides)
+    return ObservedRelationshipContract(**fields)
+
+
+def test_evidence_ref_separates_tenant_direction_type_and_identity_but_not_labels() -> None:
     association = hubspot_module.HubSpotAssociation(
         "companies", FROM_ID, "deals", TO_ID, "HUBSPOT_DEFINED", 342, None
     )
     reversed_association = hubspot_module.HubSpotAssociation(
         "deals", TO_ID, "companies", FROM_ID, "HUBSPOT_DEFINED", 342, None
     )
-    base = producer_module.observed_evidence_ref("orbit-yard", _binding("orbit-yard"), association)
+    ref = producer_module.observed_evidence_ref
+    base = ref("orbit-yard", _contract(), association)
     variants = {
-        producer_module.observed_evidence_ref("other-yard", _binding("orbit-yard"), association),
-        producer_module.observed_evidence_ref(
-            "orbit-yard", _binding("orbit-yard"), reversed_association
-        ),
-        producer_module.observed_evidence_ref(
-            "orbit-yard", _binding("orbit-yard", association_type_id=341), association
-        ),
-        producer_module.observed_evidence_ref(
-            "orbit-yard", _binding("orbit-yard", association_category="USER_DEFINED"), association
-        ),
-        producer_module.observed_evidence_ref(
-            "orbit-yard", _binding("orbit-yard", object_ref_namespace="other.object"), association
-        ),
+        ref("other-yard", _contract(), association),
+        ref("orbit-yard", _contract(), reversed_association),
+        ref("orbit-yard", _contract(association_type_id=341), association),
+        ref("orbit-yard", _contract(association_category="USER_DEFINED"), association),
+        ref("orbit-yard", _contract(object_ref_namespace="other.object"), association),
     }
     assert base not in variants
     assert len(variants) == 5
+    # Labels, relation type and the mapping digest never enter the identity.
+    relabelled = _contract(
+        sync=RelationshipSyncContract("other", "OTHER", "A", "B"), mapping_fingerprint="sha256:x"
+    )
+    assert ref("orbit-yard", relabelled, association) == base
+
+
+def test_the_key_cannot_carry_tenant_edge_semantics() -> None:
+    for field in ("subject_label", "relation_type", "object_label", "subject_ref_namespace"):
+        with pytest.raises(TypeError):
+            ObservedAssociationKey(  # type: ignore[call-arg]
+                "companies", "deals", "HUBSPOT_DEFINED", 342, **{field: "X"}
+            )
 
 
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"subject_ref_namespace": ""},
-        {"object_ref_namespace": "Has Space"},
-        {"subject_ref_namespace": "ns:with-colon"},
+        {"association_type_id": 0},
+        {"association_type_id": True},
+        {"association_category": " "},
+        {"from_object_type": ""},
     ],
-    ids=["empty", "space-and-case", "colon"],
+    ids=["zero-id", "bool-id", "blank-category", "blank-type"],
 )
-async def test_an_invalid_ref_namespace_never_reaches_the_provider(
+async def test_an_invalid_key_never_reaches_the_provider(
     router: PacketRouter, hubspot: HubSpotClient, overrides: dict[str, Any]
 ) -> None:
     result, get, execute = await _produce(
@@ -408,11 +483,46 @@ async def test_an_invalid_ref_namespace_never_reaches_the_provider(
         hubspot,
         "orbit-yard",
         http=_http(body=_associations_body("orbit-yard")),
-        binding=_binding("orbit-yard", **overrides),
+        key=_key("orbit-yard", **overrides),
     )
     assert result.status is ProducerStatus.INVALID_INPUT
+    assert result.mapping_verification is None
     get.assert_not_called()
     execute.assert_not_awaited()
+
+
+async def test_an_eie_alias_resolves_only_through_the_provider_native_name(
+    router: PacketRouter, hubspot: HubSpotClient
+) -> None:
+    aliased, get, _execute = await _produce(
+        router,
+        hubspot,
+        "orbit-yard",
+        http=_http(body=_associations_body("orbit-yard")),
+        key=_key("orbit-yard", from_object_type="company", to_object_type="deal"),
+    )
+    assert aliased.status is ProducerStatus.SYNCED
+    assert "/companies/" in get.call_args.args[0]
+    unknown, get, _execute = await _produce(
+        router,
+        hubspot,
+        "orbit-yard",
+        http=_http(body=_associations_body("orbit-yard")),
+        key=_key("orbit-yard", from_object_type="firm"),
+    )
+    assert unknown.status is ProducerStatus.CONTRACT_NOT_DECLARED
+    get.assert_not_called()
+
+
+async def test_a_resolved_result_names_the_unverified_mirror_it_came_from(
+    router: PacketRouter, hubspot: HubSpotClient
+) -> None:
+    result, _get, _execute = await _produce(
+        router, hubspot, "orbit-yard", http=_http(body=_associations_body("orbit-yard"))
+    )
+    assert result.status is ProducerStatus.SYNCED
+    assert result.mapping_verification == MAPPING_UNVERIFIED_MIRROR
+    assert result.mapping_fingerprint == mapping_fingerprint(_tenant_spec("orbit-yard"))
 
 
 # ── Refusals: never a success, and Gate is never called ───────────────────────
@@ -440,64 +550,101 @@ async def test_provider_failures_and_absent_associations_send_nothing(
     result, _get, execute = await _produce(router, hubspot, "orbit-yard", http=http)
     assert result.status is status
     assert result.ceg_ack is None
+    assert result.mapping_verification == MAPPING_UNVERIFIED_MIRROR
     execute.assert_not_awaited()
 
 
-@pytest.mark.parametrize(
-    "binding_overrides",
-    [{"association_type_id": 341}, {"association_category": "USER_DEFINED"}],
-    ids=["wrong-type-id", "wrong-category"],
-)
-async def test_an_unbound_association_type_is_not_observed(
-    router: PacketRouter, hubspot: HubSpotClient, binding_overrides: dict[str, Any]
+async def test_a_declared_type_the_provider_does_not_report_is_not_observed(
+    router: PacketRouter, hubspot: HubSpotClient
 ) -> None:
-    result, _get, execute = await _produce(
+    body = _associations_body("orbit-yard")
+    body["results"][0]["associationTypes"] = [
+        {"category": "HUBSPOT_DEFINED", "typeId": 341, "label": None}
+    ]
+    result, get, execute = await _produce(router, hubspot, "orbit-yard", http=_http(body=body))
+    assert result.status is ProducerStatus.SOURCE_NOT_AVAILABLE
+    get.assert_called_once()
+    execute.assert_not_awaited()
+
+
+def _mutated(mutate: Any) -> dict[str, Any]:
+    spec = _tenant_spec("orbit-yard")
+    mutate(spec)
+    return spec
+
+
+def _relationship_endpoint(spec: dict[str, Any]) -> dict[str, Any]:
+    return next(e for e in spec["sync"]["endpoints"] if e.get("targetedge"))
+
+
+@pytest.mark.parametrize(
+    ("spec", "key_overrides"),
+    [
+        (None, {"association_type_id": 341}),
+        (None, {"association_category": "USER_DEFINED"}),
+        (None, {"from_object_type": "deals", "to_object_type": "companies"}),
+        (
+            None,
+            {"from_object_type": "deals", "to_object_type": "contacts", "association_type_id": 3},
+        ),
+        (
+            _mutated(
+                lambda s: _relationship_endpoint(s)["observedfrom"].append(
+                    dict(_relationship_endpoint(s)["observedfrom"][0])
+                )
+            ),
+            {},
+        ),
+        (
+            _mutated(
+                lambda s: _relationship_endpoint(s)["observedfrom"][0].update(
+                    associationtypeid="342"
+                )
+            ),
+            {},
+        ),
+        (_mutated(lambda s: s["sync"]["endpoints"][1].pop("refnamespace")), {}),
+        (_mutated(lambda s: s["sync"]["endpoints"][1].update(refnamespace="Has Space")), {}),
+        (_mutated(lambda s: s["ontology"]["edges"][0].update(direction="UNDIRECTED")), {}),
+        (
+            _mutated(
+                lambda s: s["ontology"]["edges"][0].update(
+                    {"from": "PropellantGrade", "to": "OrbitalDepot"}
+                )
+            ),
+            {},
+        ),
+        ("no-spec", {}),
+    ],
+    ids=[
+        "undeclared-type-id",
+        "undeclared-category",
+        "reversed-object-types",
+        "foreign-tenant-key",
+        "declared-twice",
+        "malformed-entry",
+        "object-namespace-missing",
+        "object-namespace-malformed",
+        "undirected-edge",
+        "reversed-edge",
+        "no-tenant-spec",
+    ],
+)
+async def test_an_unresolvable_mapping_reads_nothing_and_sends_nothing(
+    tmp_path: Path, hubspot: HubSpotClient, spec: Any, key_overrides: dict[str, Any]
+) -> None:
+    specs = {} if spec == "no-spec" else {"orbit-yard": spec or _tenant_spec("orbit-yard")}
+    router = _router_over(tmp_path / "domains", specs)
+    result, get, execute = await _produce(
         router,
         hubspot,
         "orbit-yard",
         http=_http(body=_associations_body("orbit-yard")),
-        binding=_binding("orbit-yard", **binding_overrides),
+        key=_key("orbit-yard", **key_overrides),
     )
-    assert result.status is ProducerStatus.SOURCE_NOT_AVAILABLE
-    execute.assert_not_awaited()
-
-
-@pytest.mark.parametrize(
-    ("tenant", "binding_overrides"),
-    [
-        ("orbit-yard", {"relation_type": "SUPPLIES"}),
-        ("orbit-yard", {"subject_label": "PropellantGrade", "object_label": "OrbitalDepot"}),
-        (
-            "orbit-yard",
-            {
-                "relation_type": "TENDED_BY",
-                "subject_label": "AgingCave",
-                "object_label": "Affineur",
-            },
-        ),
-        ("unknown-tenant", {}),
-    ],
-    ids=["undeclared-type", "reversed-labels", "foreign-tenant-edge", "no-tenant-spec"],
-)
-async def test_an_undeclared_tenant_edge_sends_nothing(
-    router: PacketRouter, hubspot: HubSpotClient, tenant: str, binding_overrides: dict[str, Any]
-) -> None:
-    vocabulary = "orbit-yard" if tenant == "unknown-tenant" else tenant
-    get = MagicMock(return_value=_http(body=_associations_body(vocabulary)))
-    execute = AsyncMock()
-    with (
-        patch.object(hubspot_module.httpx, "get", get),
-        patch.object(router._client, "execute", execute),
-    ):
-        result = await produce_observed_relationship(
-            tenant_id=tenant,
-            binding=_binding(vocabulary, **binding_overrides),
-            from_record_id=FROM_ID,
-            to_record_id=TO_ID,
-            hubspot=hubspot,
-            router=router,
-        )
     assert result.status is ProducerStatus.CONTRACT_NOT_DECLARED
+    assert result.mapping_verification is None
+    get.assert_not_called()  # resolved before any provider I/O
     execute.assert_not_awaited()
 
 

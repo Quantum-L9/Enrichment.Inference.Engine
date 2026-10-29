@@ -1,7 +1,8 @@
 """
 tests/integration/test_observed_relationship_producer.py
 
-QM.POC0.EIE.OBSERVED_RELATIONSHIP_PRODUCER.003 — SYNTHETIC end-to-end witness.
+QM.POC0.EIE.OBSERVED_RELATIONSHIP_PRODUCER.003 + QM.POC0.TENANT_ASSOCIATION_MAPPING.004
+— SYNTHETIC end-to-end witness.
 
 Real processes, real sockets, nothing mocked between the producer and the score:
 
@@ -13,9 +14,17 @@ Real processes, real sockets, nothing mocked between the producer and the score:
 What is synthetic, and labelled so everywhere: the HubSpot answer (a local
 ``http.server`` returning the documented
 ``GET /crm/objects/2026-09/{from}/{id}/associations/{to}`` shape), the record ids,
-the two tenant vocabularies (CEG's own synthetic verification domains,
-``tests/fixtures/domains``) and the relevance map passed to the binding. This
-is not live CRM evidence.
+and the two disposable tenants (CEG's own synthetic verification domains,
+``tests/fixtures/domains``, extended with a synthetic ``observedfrom`` mapping,
+node ``refnamespace`` declarations and a reviewed ``evidencerelevance``). This is
+not live CRM evidence and none of it is a real tenant's configuration.
+
+What is real: the Gate, EIE and CEG processes and their signed TransportPackets,
+the Neo4j database, CEG's spec validation and write path, and CEG's scorer with
+relevance loaded from the tenant spec. The operator passes only an
+``ObservedAssociationKey`` and two record ids; the relationship, direction and
+node refs come from the tenant spec. CEG reads ``domains_root``; EIE reads its
+own lockstep mirror copy (``eie_domains_root``), as in production.
 
 The processes come from Constellation.Gate's seam harness
 (``constellation-gate/tests/e2e/seam/harness.py``), imported from the sibling
@@ -42,6 +51,12 @@ from typing import Any
 import httpx
 import pytest
 import yaml
+
+from app.engines.observed_association_contract import (
+    MAPPING_UNVERIFIED_MIRROR,
+    mapping_fingerprint,
+    mirror_drift,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -80,6 +95,8 @@ VOCABULARIES: dict[str, dict[str, Any]] = {
         "subjects": ["71000001", "71000002"],
         "target": "81000009",
         "ref_namespaces": ("it.cave", "it.affineur"),
+        "node_endpoints": ("/v1/sync/aging-caves", "/v1/sync/affineurs"),
+        "relevance": 0.5,
     },
     "it-observed-orbit": {
         "source": "orbital-logistics",
@@ -98,6 +115,8 @@ VOCABULARIES: dict[str, dict[str, Any]] = {
         "subjects": ["72000001", "72000002"],
         "target": "82000009",
         "ref_namespaces": ("it.depot", "it.grade"),
+        "node_endpoints": ("/v1/sync/orbital-depots", "/v1/sync/propellant-grades"),
+        "relevance": 1.0,
     },
 }
 CAVE, ORBIT = "it-observed-cave", "it-observed-orbit"
@@ -155,13 +174,13 @@ async def main():
     from app.services.crm.base import CRMCredentials, CRMType
     from app.services.crm.hubspot_client import HubSpotClient
     from app.services.crm.observed_relationship_producer import (
-        ObservedAssociationBinding, produce_observed_relationship,
+        ObservedAssociationKey, produce_observed_relationship,
     )
     client = HubSpotClient(CRMCredentials(crm_type=CRMType.HUBSPOT, credentials={"access_token": "synthetic-e2e"}))
     client._base_url = f"http://127.0.0.1:{server.server_address[1]}"  # synthetic source only
     result = await produce_observed_relationship(
         tenant_id=args["tenant"],
-        binding=ObservedAssociationBinding(**args["binding"]),
+        key=ObservedAssociationKey(**args["key"]),
         from_record_id=args["from_id"],
         to_record_id=args["to_id"],
         hubspot=client,
@@ -170,7 +189,9 @@ async def main():
     server.shutdown()
     out({"ok": True, "status": str(result.status), "detail": result.detail,
          "evidence_ref": result.evidence_ref, "source_ref": result.source_ref,
-         "ceg_ack": result.ceg_ack, "hubspot_requests": seen})
+         "ceg_ack": result.ceg_ack, "hubspot_requests": seen,
+         "mapping_fingerprint": result.mapping_fingerprint,
+         "mapping_verification": result.mapping_verification})
 
 asyncio.run(main())
 """
@@ -191,11 +212,12 @@ async def main():
             rows = await driver.execute_query(args["cypher"], args.get("parameters", {}), database=args["database"])
             out({"ok": True, "rows": rows})
         elif args["op"] == "score":
+            from engine.config.loader import DomainPackLoader
             from engine.handlers import handle_score
-            from engine.scoring.evidence_priority import approved_relevance_map
-            from engine.scoring.graph_evidence import GraphEvidenceBinding
-            # SYNTHETIC server-side relevance for this witness only.
-            binding = GraphEvidenceBinding(driver, approved_relevance_map(args["relevance"]))
+            from engine.scoring.graph_evidence import GraphEvidenceBinding, approved_relevance_from_spec
+            # Relevance is the tenant spec's own reviewed evidencerelevance (D-8/D-8b).
+            spec = DomainPackLoader(config_path=os.environ["DOMAINS_ROOT"]).load_domain(args["tenant"])
+            binding = GraphEvidenceBinding(driver, approved_relevance_from_spec(spec))
             result = await handle_score(args["tenant"], {"entity_refs": args["refs"], "top_n": len(args["refs"])}, binding=binding)
             out({"ok": True, "result": result})
     finally:
@@ -258,10 +280,30 @@ def domains_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
         source_dir = CEG_ROOT / "tests" / "fixtures" / "domains" / vocabulary["source"]
         spec = yaml.safe_load((source_dir / "spec.yaml").read_text(encoding="utf-8"))
         spec["domain"]["id"] = tenant
+        # SYNTHETIC approval: a reviewed spec, so CEG honours its relevance (D-8b).
+        spec["domain"]["version"] = "1.0.0-reviewed"
         for endpoint in vocabulary["extra_endpoints"]:
             spec["sync"]["endpoints"].append(
                 {"method": "POST", "batchstrategy": "UNWINDMERGE", **endpoint}
             )
+        from_type, to_type, category, type_id = vocabulary["provider"]
+        for endpoint in spec["sync"]["endpoints"]:
+            if endpoint["path"] in vocabulary["node_endpoints"]:
+                index = vocabulary["node_endpoints"].index(endpoint["path"])
+                endpoint["refnamespace"] = vocabulary["ref_namespaces"][index]
+            if endpoint.get("targetedge") == vocabulary["edge"][1]:
+                endpoint["observedfrom"] = [
+                    {
+                        "provider": "hubspot",
+                        "fromobjecttype": from_type,
+                        "toobjecttype": to_type,
+                        "associationcategory": category,
+                        "associationtypeid": type_id,
+                    }
+                ]
+        for edge in spec["ontology"]["edges"]:
+            if edge["type"] == vocabulary["edge"][1]:
+                edge["evidencerelevance"] = vocabulary["relevance"]
         (root / tenant).mkdir()
         (root / tenant / "spec.yaml").write_text(
             yaml.safe_dump(spec, sort_keys=False), encoding="utf-8"
@@ -272,10 +314,20 @@ def domains_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
+@pytest.fixture(scope="module")
+def eie_domains_root(domains_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """EIE's own lockstep mirror of the tenant specs CEG serves (a copy, not the same file)."""
+    mirror = tmp_path_factory.mktemp("observed-domains-eie-mirror")
+    shutil.copytree(domains_root, mirror, dirs_exist_ok=True)
+    return mirror
+
+
 class Seam:
     """The live constellation plus the two driver entry points."""
 
-    def __init__(self, harness: ModuleType, domains_root: Path, receipt_dir: Path) -> None:
+    def __init__(
+        self, harness: ModuleType, domains_root: Path, eie_domains_root: Path, receipt_dir: Path
+    ) -> None:
         os.environ.setdefault("L9_SEAM_BASE_PORT", "19400")
         ctx = harness.build_context(receipt_dir)
         if ctx is None:
@@ -284,6 +336,7 @@ class Seam:
         ctx.eie = harness.Peer("eie", EIE_ROOT, EIE_ROOT / ".venv" / "bin" / "python", ctx.eie.port)
         ctx.ceg = harness.Peer("ceg", CEG_ROOT, CEG_ROOT / ".venv" / "bin" / "python", ctx.ceg.port)
         self.h, self.ctx, self.domains_root = harness, ctx, domains_root
+        self.eie_domains_root = eie_domains_root
         self.spec_path = receipt_dir / "ceg_spec.e2e.yaml"
         original = (CEG_ROOT / "engine" / "spec.yaml").read_text(encoding="utf-8")
         self.spec_path.write_text(
@@ -352,7 +405,7 @@ class Seam:
         )
 
     def eie_env(self) -> dict[str, str]:
-        return {**self.ctx.eie_env(), "DOMAINS_DIR": str(self.domains_root)}
+        return {**self.ctx.eie_env(), "DOMAINS_DIR": str(self.eie_domains_root)}
 
     def ceg_env(self) -> dict[str, str]:
         return {
@@ -407,7 +460,7 @@ class Seam:
         self,
         tenant: str,
         *,
-        binding_overrides: dict[str, Any] | None = None,
+        key_overrides: dict[str, Any] | None = None,
         hubspot_status: int = 200,
         hubspot_body: Any = None,
         from_id: str | None = None,
@@ -416,23 +469,19 @@ class Seam:
     ) -> dict[str, Any]:
         v = VOCABULARIES[vocabulary or tenant]
         from_type, to_type, category, type_id = v["provider"]
-        binding = {
+        # The operator names only the provider association; the tenant spec decides the rest.
+        key = {
             "from_object_type": from_type,
             "to_object_type": to_type,
             "association_category": category,
             "association_type_id": type_id,
-            "subject_label": v["subject"][1],
-            "relation_type": v["edge"][1],
-            "object_label": v["object"][1],
-            "subject_ref_namespace": v["ref_namespaces"][0],
-            "object_ref_namespace": v["ref_namespaces"][1],
-            **(binding_overrides or {}),
+            **(key_overrides or {}),
         }
         body = hubspot_body if hubspot_body is not None else association_body(vocabulary or tenant)
         return self.eie_call(
             op="produce",
             tenant=tenant,
-            binding=binding,
+            key=key,
             hubspot_status=hubspot_status,
             hubspot_body=body,
             from_id=from_id or v["subjects"][0],
@@ -450,13 +499,7 @@ class Seam:
         )["rows"]
 
     def score(self, tenant: str, refs: list[str] | None = None) -> dict[str, Any]:
-        v = VOCABULARIES[tenant]
-        return self.ceg_call(
-            op="score",
-            tenant=tenant,
-            refs=refs or subject_refs(tenant),
-            relevance={v["edge"][1]: 1.0},
-        )["result"]
+        return self.ceg_call(op="score", tenant=tenant, refs=refs or subject_refs(tenant))["result"]
 
 
 def association_body(
@@ -488,9 +531,14 @@ def association_body(
 
 @pytest.fixture(scope="module")
 def seam(
-    harness: ModuleType, domains_root: Path, tmp_path_factory: pytest.TempPathFactory
+    harness: ModuleType,
+    domains_root: Path,
+    eie_domains_root: Path,
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> Iterator[Seam]:
-    live = Seam(harness, domains_root, tmp_path_factory.mktemp("observed-e2e-receipts"))
+    live = Seam(
+        harness, domains_root, eie_domains_root, tmp_path_factory.mktemp("observed-e2e-receipts")
+    )
     for tenant in VOCABULARIES:
         live.ceg_call(
             op="cypher", database="system", cypher=f"CREATE DATABASE `{tenant}` IF NOT EXISTS WAIT"
@@ -512,6 +560,13 @@ def seam(
         live.stop()
         for tenant in VOCABULARIES:
             live.ceg_call(op="cypher", database=tenant, cypher="MATCH (n) DETACH DELETE n")
+
+
+def _spec(root: Path, tenant: str) -> dict[str, Any]:
+    loaded: dict[str, Any] = yaml.safe_load(
+        (root / tenant / "spec.yaml").read_text(encoding="utf-8")
+    )
+    return loaded
 
 
 def _by_ref(score: dict[str, Any]) -> dict[str, Any]:
@@ -554,9 +609,19 @@ def test_e2e_observed_association_becomes_one_scored_evidence_edge(seam: Seam) -
     assert props["_object_ref"] == object_ref(CAVE)
     assert "source_revision" not in props  # HubSpot reports none; none is invented
 
+    # The mapping came from EIE's mirror, labelled as not yet cross-checked by CEG (D-9).
+    assert produced["mapping_verification"] == MAPPING_UNVERIFIED_MIRROR
+    mirror = _spec(seam.eie_domains_root, CAVE)
+    authority = _spec(seam.domains_root, CAVE)
+    assert mirror_drift(mirror, authority) == []
+    assert produced["mapping_fingerprint"] == mapping_fingerprint(authority)
+
     score = _by_ref(seam.score(CAVE))
     assert subject_refs(CAVE)[0] in score["scored"], score
     assert subject_refs(CAVE)[1] in score["abstained"], score  # identical flat node, no evidence
+    # Observation certainty (confidence 1.0) and the spec's reviewed relevance (0.5) stay
+    # separate inputs: CEG's score is their product, x100.
+    assert score["scored"][subject_refs(CAVE)[0]]["score"] == 100.0 * v["relevance"]
 
 
 def test_e2e_repeated_delivery_neither_duplicates_nor_changes_the_score(seam: Seam) -> None:
@@ -606,15 +671,16 @@ def test_e2e_replay_after_full_restart_is_answered_by_ceg_identity(seam: Seam) -
         ),
         ("no-association", {"hubspot_body": {"results": []}}, "SOURCE_NOT_AVAILABLE"),
         (
-            "reversed-labels",
-            {"binding_overrides": {"subject_label": "Affineur", "object_label": "AgingCave"}},
+            "reversed-object-types",
+            {"key_overrides": {"from_object_type": "deals", "to_object_type": "companies"}},
             "CONTRACT_NOT_DECLARED",
         ),
         (
-            "undeclared-relation",
-            {"binding_overrides": {"relation_type": "SHARES_CULTURE_WITH"}},
+            "undeclared-association",
+            {"key_overrides": {"association_type_id": 343}},
             "CONTRACT_NOT_DECLARED",
         ),
+        ("foreign-tenant-key", {"vocabulary": ORBIT}, "CONTRACT_NOT_DECLARED"),
     ],
 )
 def test_e2e_refusals_never_reach_gate_or_the_graph(
@@ -624,6 +690,8 @@ def test_e2e_refusals_never_reach_gate_or_the_graph(
     refused = seam.produce(CAVE, **kwargs)
     assert refused["status"] == status, (case, refused)
     assert refused["ceg_ack"] is None
+    if status == "CONTRACT_NOT_DECLARED":
+        assert refused["hubspot_requests"] == [], f"{case} read the provider before resolving"
     assert seam.gate_executes() == executes_before, f"{case} reached Gate"
     assert seam.edges(CAVE) == edges_before
 
@@ -637,18 +705,14 @@ def test_e2e_missing_endpoint_node_is_refused_by_ceg_and_writes_nothing(seam: Se
 
 def test_e2e_tenant_isolation(seam: Seam) -> None:
     cave = VOCABULARIES[CAVE]
-    # The orbit tenant proposes the cave tenant's exact node ids (same record ids, same
-    # ref namespaces) under its own declared edge: those nodes exist only in the cave
-    # tenant's database, so CEG refuses and nothing is written in either tenant.
+    # The orbit tenant observes the cave tenant's record ids under its own mapping: its
+    # spec maps them into the orbit namespaces, where no such node exists in the orbit
+    # database, so CEG refuses and nothing is written in either tenant.
     foreign = seam.produce(
         ORBIT,
         from_id=cave["subjects"][0],
         to_id=cave["target"],
         hubspot_body=association_body(ORBIT, to_id=cave["target"]),
-        binding_overrides={
-            "subject_ref_namespace": cave["ref_namespaces"][0],
-            "object_ref_namespace": cave["ref_namespaces"][1],
-        },
     )
     assert foreign["status"] == "NOT_ACKNOWLEDGED", foreign
     assert seam.edges(ORBIT) == []
@@ -670,3 +734,58 @@ def test_e2e_removing_the_edge_makes_the_entity_abstain(seam: Seam) -> None:
     after = _by_ref(seam.score(CAVE))
     assert after["scored"] == {}
     assert set(after["abstained"]) == set(subject_refs(CAVE))
+
+
+def test_e2e_a_node_id_outside_the_declared_namespace_is_never_created(seam: Seam) -> None:
+    v = VOCABULARIES[CAVE]
+    _, label, id_property = v["subject"]
+    seeded = seam.eie_call(
+        op="seed",
+        tenant=CAVE,
+        nodes=[{"id": "71000077", "label": label, "id_property": id_property}],
+    )
+    assert seeded["results"] == [False], seeded  # CEG refused the raw provider id
+    rows = seam.ceg_call(
+        op="cypher",
+        database=CAVE,
+        cypher=f"MATCH (n:{label}) WHERE n.{id_property} = $id RETURN count(n) AS n",
+        parameters={"id": "71000077"},
+    )["rows"]
+    assert rows == [{"n": 0}]
+
+
+def test_e2e_a_drifted_mirror_is_reported_and_never_presented_as_ceg_approval(seam: Seam) -> None:
+    """Residual risk until D-9 (Cognitive.Engine.Graphs#386), witnessed, not hidden.
+
+    EIE's mirror maps an association CEG's spec does not declare. CEG cannot yet
+    tell (its row carries no provenance), so the edge is written; the producer
+    labels the result as an unverified mirror and ``mirror_drift`` names the
+    divergence. The edge is removed afterwards.
+    """
+    path = seam.eie_domains_root / CAVE / "spec.yaml"
+    original = path.read_text(encoding="utf-8")
+    drifted = yaml.safe_load(original)
+    endpoint = next(e for e in drifted["sync"]["endpoints"] if e.get("observedfrom"))
+    endpoint["observedfrom"].append({**endpoint["observedfrom"][0], "associationtypeid": 9001})
+    path.write_text(yaml.safe_dump(drifted, sort_keys=False), encoding="utf-8")
+    try:
+        drift = mirror_drift(drifted, _spec(seam.domains_root, CAVE))
+        assert any("only in EIE mirror" in line for line in drift), drift
+        produced = seam.produce(
+            CAVE,
+            key_overrides={"association_type_id": 9001},
+            hubspot_body=association_body(CAVE, type_id=9001),
+        )
+        assert produced["status"] == "SYNCED", produced
+        assert produced["mapping_verification"] == MAPPING_UNVERIFIED_MIRROR
+        assert produced["mapping_fingerprint"] != mapping_fingerprint(
+            _spec(seam.domains_root, CAVE)
+        )
+    finally:
+        path.write_text(original, encoding="utf-8")
+        seam.ceg_call(
+            op="cypher",
+            database=CAVE,
+            cypher="MATCH ()-[r]->() WHERE r.source_ref ENDS WITH $suffix DELETE r",
+            parameters={"suffix": ":9001"},
+        )

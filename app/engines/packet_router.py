@@ -37,7 +37,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 import yaml
@@ -49,6 +49,9 @@ from constellation_node_sdk.gate import (
 )
 
 from app.engines.domain_yaml_reader import DomainYamlReader
+
+if TYPE_CHECKING:
+    from app.engines.observed_association_contract import ObservedRelationshipContract
 from app.services.gate_client import EIE_NODE_NAME, build_gate_client
 
 logger = structlog.get_logger("packet_router")
@@ -919,6 +922,55 @@ class PacketRouter:
             from_label=assertion.subject_label,
             to_label=assertion.object_label,
         )
+
+    def observed_association_contract(
+        self,
+        tenant_id: str,
+        *,
+        provider: str,
+        from_object_type: str,
+        to_object_type: str,
+        association_category: str,
+        association_type_id: int,
+    ) -> ObservedRelationshipContract | None:
+        """The tenant relationship one provider association is declared for, else None.
+
+        Read from the tenant's spec (``sync.endpoints[].observedfrom`` and the
+        node endpoints' ``refnamespace``); nothing is defaulted and there is no
+        settings fallback. Every refusal is logged with its reason and a fix.
+        """
+        # Imported here: the resolver reuses this module's relationship contract.
+        from app.engines.observed_association_contract import (
+            resolve_observed_association_contract,
+        )
+
+        spec = self._load_domain_spec(tenant_id)
+        if spec is None:
+            logger.warning(
+                "observed_association_skipped_no_spec",
+                tenant_id=tenant_id,
+                fix="provide domains/<tenant_id>/spec.yaml mirroring CEG's tenant spec",
+            )
+            return None
+        resolution = resolve_observed_association_contract(
+            spec,
+            provider=provider,
+            from_object_type=from_object_type,
+            to_object_type=to_object_type,
+            association_category=association_category,
+            association_type_id=association_type_id,
+        )
+        if resolution.contract is None:
+            failure = resolution.failure.value if resolution.failure else "unknown"
+            logger.warning(
+                f"observed_association_skipped_{failure}",
+                tenant_id=tenant_id,
+                provider=provider,
+                detail=resolution.detail,
+                fix="declare exactly one sync.endpoints[].observedfrom entry for this association "
+                "on a valid relationship endpoint, and refnamespace on both node endpoints",
+            )
+        return resolution.contract
 
     async def notify_relationship_sync(
         self,

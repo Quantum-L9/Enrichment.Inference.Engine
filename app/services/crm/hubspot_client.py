@@ -39,6 +39,11 @@ _OBJECT_TYPE_SEGMENT = re.compile(r"[a-z][a-z0-9_]{0,63}|[0-9]+-[0-9]+")
 _RECORD_ID = re.compile(r"[1-9][0-9]{0,30}")
 
 
+def native_object_type(object_type: str) -> str:
+    """The provider-native object type for an EIE alias (``company`` -> ``companies``); else unchanged."""
+    return _OBJECT_TYPE_MAP.get(object_type, object_type)
+
+
 def is_canonical_record_id(value: object) -> bool:
     """Whether ``value`` is a record id exactly as HubSpot renders it (``str(int)``)."""
     return isinstance(value, str) and _RECORD_ID.fullmatch(value) is not None
@@ -163,7 +168,8 @@ class HubSpotClient(CRMClientBase):
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
-            return resp.json().get("properties", {})
+            properties: dict[str, Any] = resp.json().get("properties", {})
+            return properties
         except Exception as exc:
             logger.exception("HS get_record error: %s", exc)
             return None
@@ -333,8 +339,8 @@ class HubSpotClient(CRMClientBase):
         ``HubSpotAssociationReadError``; an empty list means HubSpot answered
         200 with one complete page holding no associations.
         """
-        from_type = _OBJECT_TYPE_MAP.get(from_object_type, from_object_type)
-        to_type = _OBJECT_TYPE_MAP.get(to_object_type, to_object_type)
+        from_type = native_object_type(from_object_type)
+        to_type = native_object_type(to_object_type)
         # Path segments: an object type name or id must never reshape the URL.
         if not (
             _OBJECT_TYPE_SEGMENT.fullmatch(from_type) and _OBJECT_TYPE_SEGMENT.fullmatch(to_type)
