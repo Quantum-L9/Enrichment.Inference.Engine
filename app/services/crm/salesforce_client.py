@@ -53,6 +53,22 @@ def _soql_literal(value: Any) -> str:
     return _soql_escape(str(value))
 
 
+def _build_soql_select(
+    object_type: str,
+    filters: dict[str, Any],
+    fields: list[str] | None,
+) -> str:
+    """Validate SOQL tokens and build the canonical SELECT query from safe parts."""
+    _validate_soql_identifiers([object_type], "object type")
+    _validate_soql_identifiers(fields or [], "field name")
+    _validate_soql_identifiers(filters, "field name")
+
+    field_list = ", ".join(fields) if fields else "Id, Name"
+    where_parts = [" ".join((field, "=", _soql_literal(value))) for field, value in filters.items()]
+    where_clause = " AND ".join(where_parts) if where_parts else "Id != null"
+    return " ".join(("SELECT", field_list, "FROM", object_type, "WHERE", where_clause))
+
+
 class SalesforceClient(CRMClientBase):
     """Salesforce REST adapter; only journaled update-by-id is enabled in R1."""
 
@@ -187,13 +203,7 @@ class SalesforceClient(CRMClientBase):
         A response that indicates additional pages without a valid next URL is
         incomplete, and therefore cannot establish absence or uniqueness.
         """
-        _validate_soql_identifiers([object_type], "object type")
-        _validate_soql_identifiers(fields or [], "field name")
-        _validate_soql_identifiers(filters, "field name")
-        field_list = ", ".join(fields) if fields else "Id, Name"
-        where_parts = [f"{field} = {_soql_literal(value)}" for field, value in filters.items()]
-        where_clause = " AND ".join(where_parts) if where_parts else "Id != null"
-        soql = f"SELECT {field_list} FROM {object_type} WHERE {where_clause}"
+        soql = _build_soql_select(object_type, filters, fields)
         url = f"{self._instance_url}/services/data/{self._api_version}/query"
         parameters: dict[str, str] | None = {"q": soql}
         records: list[dict[str, Any]] = []

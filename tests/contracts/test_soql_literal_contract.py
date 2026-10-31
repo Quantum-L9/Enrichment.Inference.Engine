@@ -187,8 +187,40 @@ class TestQueryRecordsEmitsSafeSoql:
 
         assert captured["q"] == r"SELECT Id, Name FROM Account WHERE Name = 'O\'Brien'"
 
+    def test_multiple_filter_types_preserve_canonical_output(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The builder preserves query order, spacing, and literal representations."""
+        captured = _capture_query(monkeypatch)
+        _client().query_records(
+            "Contact",
+            {"FirstName": "Ada", "IsActive": True, "Score": 1.5, "DeletedAt": None},
+            fields=["Id", "Account.Name"],
+        )
+
+        assert captured["q"] == (
+            "SELECT Id, Account.Name FROM Contact WHERE FirstName = 'Ada' AND "
+            "IsActive = true AND Score = 1.5 AND DeletedAt = null"
+        )
+
     def test_no_filters_uses_tautology_guard(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured = _capture_query(monkeypatch)
         _client().query_records("Account", {})
 
         assert captured["q"] == "SELECT Id, Name FROM Account WHERE Id != null"
+
+
+def test_salesforce_client_has_no_sql_keyword_fstrings() -> None:
+    """Rule 10 must not flag an interpolated SOQL statement in this adapter."""
+    import inspect
+
+    from app.services.crm import salesforce_client as mod
+    from tools.audit_engine import sql_keywords_in_fstring
+
+    findings = [
+        line.strip()
+        for line in inspect.getsource(mod).splitlines()
+        if sql_keywords_in_fstring(line)
+    ]
+
+    assert findings == []
