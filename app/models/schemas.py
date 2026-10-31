@@ -184,7 +184,7 @@ class EnrichRequest(BaseModel):
                 return parsed if isinstance(parsed, dict) else None
             except json.JSONDecodeError:
                 return None
-        return cast(dict[str, str] | None, v)
+        return cast("dict[str, str] | None", v)
 
     @field_validator("field_thresholds")
     @classmethod

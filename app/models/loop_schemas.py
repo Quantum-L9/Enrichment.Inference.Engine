@@ -181,10 +181,10 @@ class ConvergeRequest(BaseModel):
     def parse_schema_string(cls, v: Any) -> dict[str, Any] | None:
         if isinstance(v, str):
             try:
-                return cast(dict[str, Any] | None, json.loads(v))
+                return cast("dict[str, Any] | None", json.loads(v))
             except json.JSONDecodeError:
                 return None
-        return cast(dict[str, Any] | None, v)
+        return cast("dict[str, Any] | None", v)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
