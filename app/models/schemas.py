@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -184,7 +184,7 @@ class EnrichRequest(BaseModel):
                 return parsed if isinstance(parsed, dict) else None
             except json.JSONDecodeError:
                 return None
-        return v
+        return cast(dict[str, str] | None, v)
 
     @field_validator("field_thresholds")
     @classmethod
