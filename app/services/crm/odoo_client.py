@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import socket
-import xmlrpc.client
 from typing import Any
 
 import structlog
+from defusedxml import xmlrpc as defused_xmlrpc
 
 from .base import (
     CRMClientBase,
@@ -23,6 +24,12 @@ from .base import (
 
 logger = structlog.get_logger("odoo_client")
 
+# Odoo responses are remote XML. Patch the standard XML-RPC parser before the
+# client module is loaded so entity expansion and gzip decompression limits are
+# enforced for every XML-RPC response in this process.
+defused_xmlrpc.monkey_patch()
+xmlrpc_client = importlib.import_module("xmlrpc.client")
+
 
 class OdooClient(CRMClientBase):
     """Odoo XML-RPC adapter; only permit-bound update-by-id is mutating in R1."""
@@ -35,8 +42,8 @@ class OdooClient(CRMClientBase):
         self.username: str = creds["username"]
         self.password: str = creds["password"]
         self._uid: int | None = None
-        self._common = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/common")
-        self._models = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/object")
+        self._common = xmlrpc_client.ServerProxy(f"{self.url}/xmlrpc/2/common")
+        self._models = xmlrpc_client.ServerProxy(f"{self.url}/xmlrpc/2/object")
 
     def connect(self) -> bool:
         """Authenticate with Odoo and cache the UID without logging credentials."""
@@ -170,7 +177,7 @@ class OdooClient(CRMClientBase):
             )
         try:
             acknowledged = self._execute(object_type, "write", [[int(normalized_id)], dict(data)])
-        except (TimeoutError, OSError, xmlrpc.client.ProtocolError) as exc:
+        except (TimeoutError, OSError, xmlrpc_client.ProtocolError) as exc:
             logger.warning("odoo_update_indeterminate", error_type=type(exc).__name__)
             return WriteResult(
                 success=False,
@@ -179,7 +186,7 @@ class OdooClient(CRMClientBase):
                 status=CRMWriteState.INDETERMINATE,
                 reconciliation_state="required",
             )
-        except xmlrpc.client.Fault as exc:
+        except xmlrpc_client.Fault as exc:
             logger.warning("odoo_update_rejected", fault_code=exc.faultCode)
             return WriteResult(
                 success=False,
@@ -279,9 +286,9 @@ class OdooClient(CRMClientBase):
         """Classify Odoo XML-RPC read failures without leaking request data."""
         if isinstance(exc, (TimeoutError, socket.timeout)):
             return CRMReadError(CRMErrorCode.TIMEOUT, message, retriable=True)
-        if isinstance(exc, (OSError, xmlrpc.client.ProtocolError)):
+        if isinstance(exc, (OSError, xmlrpc_client.ProtocolError)):
             return CRMReadError(CRMErrorCode.TRANSPORT, message, retriable=True)
-        if isinstance(exc, xmlrpc.client.Fault):
+        if isinstance(exc, xmlrpc_client.Fault):
             return CRMReadError(CRMErrorCode.REMOTE, message)
         return CRMReadError(CRMErrorCode.REMOTE, message)
 

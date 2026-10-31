@@ -78,6 +78,14 @@ class TestOdooClient:
             },
         )
 
+    def test_xmlrpc_parser_is_hardened_before_remote_proxy_creation(self):
+        """Remote Odoo XML responses use defusedxml protections rather than Expat defaults."""
+        import xmlrpc.client
+
+        from defusedxml.xmlrpc import DefusedExpatParser
+
+        assert xmlrpc.client.FastParser is DefusedExpatParser
+
     @patch("xmlrpc.client.ServerProxy")
     def test_connect_success(self, mock_proxy, odoo_creds):
         mock_common = MagicMock()
