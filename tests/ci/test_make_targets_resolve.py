@@ -112,14 +112,27 @@ def test_missing_governance_ceremony_publishes_nothing(tmp_path: Path) -> None:
 
 
 def test_failed_validation_publishes_nothing(tmp_path: Path) -> None:
-    """agent-check's first stage fails (a failing `ruff`), so nothing is handed off."""
+    """agent-check's venv-safe first stage fails, so nothing is handed off."""
     gov, marker = _fake_gov(tmp_path)
     stubs = tmp_path / "stubs"
     stubs.mkdir()
-    ruff = stubs / "ruff"
-    ruff.write_text("#!/bin/sh\necho 'lint failure' >&2\nexit 1\n")
-    ruff.chmod(0o755)
-    proc = _make_pr(tmp_path, f"GOV={gov}", "PR_BASE=HEAD", path_prefix=stubs)
+    python = stubs / "python"
+    python.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-m" ] && [ "$2" = "ruff" ]; then\n'
+        "  echo 'lint failure' >&2\n"
+        "  exit 1\n"
+        "fi\n"
+        'exec /usr/bin/python3 "$@"\n'
+    )
+    python.chmod(0o755)
+    proc = _make_pr(
+        tmp_path,
+        f"GOV={gov}",
+        "PR_BASE=HEAD",
+        f"PYTHON={python}",
+        path_prefix=stubs,
+    )
     assert proc.returncode != 0
     assert "lint failure" in proc.stderr
     assert not marker.exists()

@@ -1,9 +1,10 @@
-.PHONY: setup dev dev-build dev-down dev-clean test test-unit test-integration test-compliance test-ci test-contracts test-all test-watch lint lint-fix audit audit-strict audit-json verify agent-check agent-fix agent-full build prod prod-build prod-down prod-logs deploy clean push pr pr-base-guard pr-check pr-guards pr-evaluate pr-merge pr-merge-dry pr-ship pr-rerun
+.PHONY: setup dev dev-build dev-down dev-clean test test-unit test-integration test-compliance test-ci test-contracts test-all test-watch lint lint-fix type-check audit audit-strict audit-json verify agent-check agent-fix agent-full build prod prod-build prod-down prod-logs deploy clean push pr pr-base-guard pr-check pr-guards pr-evaluate pr-merge pr-merge-dry pr-ship pr-rerun
 
 IMAGE_NAME ?= enrichment-api
 SERVICE_NAME ?= enrichment-api
 COMPOSE_FILE ?= docker-compose.prod.yml
 COVERAGE_MIN ?= 71
+PR_MYPY_STRICT ?= 0
 
 PYTHON := $(shell if [ -x "$(CURDIR)/.venv/bin/python" ]; then printf '%s' "$(CURDIR)/.venv/bin/python"; else command -v python3; fi)
 PYTEST := $(PYTHON) -m pytest
@@ -37,9 +38,9 @@ test-contracts:  ## Repository contract call enforcement only
 	$(PYTEST) tests/ci/test_repository_contract_calls.py -v --tb=short
 
 test-all:  ## Full test suite with coverage
-	ruff check .
-	ruff format --check .
-	mypy app
+	$(PYTHON) -m ruff check .
+	$(PYTHON) -m ruff format --check .
+	$(MAKE) type-check
 	$(PYTEST) tests/ -v --tb=short --cov=app --cov-report=term-missing --cov-fail-under=$(COVERAGE_MIN)
 
 test-watch:  ## Watch mode for unit tests
@@ -49,13 +50,36 @@ test-watch:  ## Watch mode for unit tests
 # QUALITY — LINT + TYPE CHECK
 # ============================================================
 lint:  ## Lint + format check + type check
-	ruff check .
-	ruff format --check .
-	mypy app
+	$(PYTHON) -m ruff check .
+	$(PYTHON) -m ruff format --check .
+	$(MAKE) type-check
 
 lint-fix:  ## Auto-fix lint and format issues
-	ruff check . --fix
-	ruff format .
+	$(PYTHON) -m ruff check . --fix
+	$(PYTHON) -m ruff format .
+
+type-check:  ## Run ratcheted MyPy (WAIVER-001 advisory; PR_MYPY_STRICT=1 blocks findings)
+	@set +e; \
+	$(PYTHON) -m mypy app --show-error-codes; \
+	rc=$$?; \
+	if [ "$$rc" -ge 2 ]; then \
+		echo "MyPy failed with exit code $$rc; failing."; \
+		exit "$$rc"; \
+	fi; \
+	$(PYTHON) tools/mypy_ratchet.py; \
+	ratchetrc=$$?; \
+	if [ "$$ratchetrc" -ne 0 ]; then \
+		echo "MyPy ratchet found unrecorded rollout debt; failing."; \
+		exit "$$ratchetrc"; \
+	elif [ "$$rc" -eq 0 ]; then \
+		exit 0; \
+	elif [ "$(PR_MYPY_STRICT)" != "1" ]; then \
+		echo "MyPy findings are advisory under WAIVER-001; set PR_MYPY_STRICT=1 to make them blocking."; \
+		exit 0; \
+	else \
+		echo "MyPy findings are blocking because PR_MYPY_STRICT=1."; \
+		exit "$$rc"; \
+	fi
 
 # ============================================================
 # AUDIT — 27-RULE ENGINE
@@ -83,9 +107,9 @@ agent-check:  ## THE universal gate. Agents run this before every commit.
 	@echo "║  L9 Agent Check — Enrichment.Inference.Engine ║"
 	@echo "╚══════════════════════════════════════════════╝"
 	@echo ""
-	@echo "=== [1/8] LINT ===" && ruff check .
-	@echo "=== [2/8] FORMAT ===" && ruff format --check .
-	@echo "=== [3/8] TYPES (ratchet, ADR-001) ===" && $(PYTHON) tools/mypy_ratchet.py
+	@echo "=== [1/8] LINT ===" && $(PYTHON) -m ruff check .
+	@echo "=== [2/8] FORMAT ===" && $(PYTHON) -m ruff format --check .
+	@echo "=== [3/8] TYPES (ratchet + WAIVER-001) ===" && $(MAKE) type-check
 	@echo "=== [4/8] UNIT TESTS ===" && $(PYTEST) tests/unit/ tests/compliance/ -v --tb=short -x
 	@echo "=== [5/8] CI TESTS ===" && $(PYTEST) tests/ci/ -v --tb=short -x
 	@echo "=== [6/8] AUDIT ===" && $(PYTHON) tools/audit_engine.py --strict
@@ -97,8 +121,8 @@ agent-check:  ## THE universal gate. Agents run this before every commit.
 	@echo "╚══════════════════════════════════════════════╝"
 
 agent-fix:  ## Auto-fix what can be fixed
-	ruff check . --fix
-	ruff format .
+	$(PYTHON) -m ruff check . --fix
+	$(PYTHON) -m ruff format .
 
 agent-full:  ## Full agent workflow: fix → check → coverage
 	$(MAKE) agent-fix
