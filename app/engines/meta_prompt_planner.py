@@ -13,6 +13,7 @@ derived-field output per Sonar token spent.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import structlog
@@ -40,7 +41,7 @@ class MetaPromptPlanner:
 
     def __init__(
         self,
-        domain_spec: DomainSpec | None = None,
+        domain_spec: Mapping[str, Any] | DomainSpec | None = None,
         rule_registry: Any = None,  # RuleRegistry from inference.rule_loader
         unlock_index: dict[str, list[str]] | None = None,
         confidence_threshold: float = 0.7,
@@ -49,7 +50,8 @@ class MetaPromptPlanner:
     ):
         """
         Args:
-            domain_spec: Domain YAML specification (optional)
+            domain_spec: Raw Domain YAML mapping (canonical), or a legacy
+                ``DomainSpec`` object without ontology metadata (optional)
             rule_registry: Optional rule registry for unlock-aware targeting
             unlock_index: Optional pre-built unlock index (output of build_unlock_index)
             confidence_threshold: A field below this confidence is a gap to
@@ -289,39 +291,49 @@ class MetaPromptPlanner:
 
     def _is_gate_critical(self, field_name: str) -> bool:
         """Check if field is gate-critical in domain spec."""
-        spec = self.domain_spec
-        if spec is None or not hasattr(spec, "ontology"):
+        metadata = self._property_metadata(field_name)
+        if metadata is None:
             return False
-
-        for node in spec.ontology.nodes:
-            if not hasattr(node, "properties"):
-                continue
-            for prop in node.properties:
-                if (
-                    prop.name == field_name
-                    and hasattr(prop, "metadata")
-                    and isinstance(prop.metadata, dict)
-                ):
-                    return bool(prop.metadata.get("gate_critical", False))
-        return False
+        return bool(metadata.get("gate_critical", False))
 
     def _get_scoring_weight(self, field_name: str) -> float:
         """Get scoring weight for field from domain spec."""
-        spec = self.domain_spec
-        if spec is None or not hasattr(spec, "ontology"):
+        metadata = self._property_metadata(field_name)
+        if metadata is None:
             return 0.0
+        return safe_float(metadata.get("scoring_weight", 0.0))
 
-        for node in spec.ontology.nodes:
-            if not hasattr(node, "properties"):
+    def _property_metadata(self, field_name: str) -> Mapping[str, Any] | None:
+        """Return a field's metadata from a raw ``ontology.nodes`` mapping.
+
+        Domain YAML reaches the convergence loop as an unvalidated mapping. A
+        malformed or incomplete spec cannot prevent enrichment, so each level
+        is checked before it is traversed.
+        """
+        if not isinstance(self.domain_spec, Mapping):
+            return None
+
+        ontology = self.domain_spec.get("ontology")
+        if not isinstance(ontology, Mapping):
+            return None
+
+        nodes = ontology.get("nodes")
+        if not isinstance(nodes, Mapping):
+            return None
+
+        for node in nodes.values():
+            if not isinstance(node, Mapping):
                 continue
-            for prop in node.properties:
-                if (
-                    prop.name == field_name
-                    and hasattr(prop, "metadata")
-                    and isinstance(prop.metadata, dict)
-                ):
-                    return safe_float(prop.metadata.get("scoring_weight", 0.0))
-        return 0.0
+            properties = node.get("properties")
+            if not isinstance(properties, Mapping):
+                continue
+            property_spec = properties.get(field_name)
+            if not isinstance(property_spec, Mapping):
+                continue
+            metadata = property_spec.get("metadata")
+            if isinstance(metadata, Mapping):
+                return metadata
+        return None
 
     def _generate_reasoning(
         self, mode: str, priority_fields: list[str], uncertainty_score: float
