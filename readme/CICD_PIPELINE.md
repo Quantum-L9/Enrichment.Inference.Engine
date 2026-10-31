@@ -1,7 +1,7 @@
 # CI/CD Pipeline — Enrichment.Inference.Engine
 
-**Version:** 1.4.0
-**Date:** 2026-05-24
+**Version:** 1.5.0
+**Date:** 2026-10-31
 **Status:** Active
 **Sibling Parity:** Cognitive.Engine.Graphs
 
@@ -25,7 +25,6 @@ Run **`make pr`** before opening a PR for local validation. The **`pr-pipeline.y
 - `PR_SKIP_SEMGREP=1` — Skip Semgrep policy checks
 - `PR_SKIP_L9=1` — Skip L9 constitution/contract checks
 - `PR_L9_MINIMAL=1` — Minimal L9 (no select-gates runner)
-- `PR_MYPY_STRICT=1` — Fail on mypy errors (non-blocking by default)
 - `PR_SECURITY_STRICT=1` — Fail on security warnings
 - `PR_SKIP_GITLEAKS=1` — Skip Gitleaks secret detection
 - `ORDER=gate|failfast` — Phase execution order
@@ -35,8 +34,10 @@ Run **`make pr`** before opening a PR for local validation. The **`pr-pipeline.y
 - `skip_semgrep` — Skip Semgrep
 - `skip_l9` — Skip L9 checks
 - `l9_minimal` — Minimal L9 only
-- `mypy_strict` — Fail on mypy errors
 - `security_strict` — Fail on security warnings
+
+MyPy is always blocking in both local and GitHub validation; every finding
+fails the type gate.
 
 The local validation counterpart is `make pr-check` (agent-check plus the `local_pr_pipeline/` guards, via the `pr-guards` target); it never publishes. `make pr PR_BASE=<ref>` runs it and then publishes through the governance ceremony. `PR_BASE` is required and must resolve; a missing or unresolvable base, a failed check, or a missing governance checkout publishes nothing.
 
