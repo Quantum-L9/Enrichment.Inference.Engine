@@ -1,34 +1,31 @@
-"""
-Odoo CRM client — XML-RPC interface with async wrappers.
-
-Uses Odoo's standard external API (xmlrpc.client) with asyncio.to_thread
-for compatibility with the async enrichment pipeline.
-
-L9 Architecture Note:
-    This module is chassis-agnostic. It never imports FastAPI.
-    It is called by WriteBackOrchestrator, which is called by handlers.py.
-"""
+"""Odoo CRM adapter with explicit read and acknowledgement semantics."""
 
 from __future__ import annotations
 
 import asyncio
+import socket
 import xmlrpc.client
 from typing import Any
 
 import structlog
 
-from .base import CRMClientBase, CRMCredentials, WriteResult
+from .base import (
+    CRMClientBase,
+    CRMCredentials,
+    CRMErrorCode,
+    CRMReadError,
+    CRMRecord,
+    CRMRecordRef,
+    CRMWritePermit,
+    CRMWriteState,
+    WriteResult,
+)
 
 logger = structlog.get_logger("odoo_client")
 
 
 class OdooClient(CRMClientBase):
-    """
-    Odoo CRM client using the standard XML-RPC external API.
-
-    All blocking xmlrpc calls are wrapped in asyncio.to_thread for
-    compatibility with async callers.
-    """
+    """Odoo XML-RPC adapter; only permit-bound update-by-id is mutating in R1."""
 
     def __init__(self, credentials: CRMCredentials) -> None:
         super().__init__(credentials)
@@ -38,50 +35,88 @@ class OdooClient(CRMClientBase):
         self.username: str = creds["username"]
         self.password: str = creds["password"]
         self._uid: int | None = None
-
         self._common = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/common")
         self._models = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/object")
 
-    # ── Connection ────────────────────────────────────────────
-
     def connect(self) -> bool:
-        """Authenticate with Odoo and cache the UID."""
+        """Authenticate with Odoo and cache the UID without logging credentials."""
         try:
-            self._uid = self._common.authenticate(self.db, self.username, self.password, {})
-            if not self._uid:
-                logger.error("odoo_auth_failed", reason="falsy_uid")
+            authenticated_uid = self._common.authenticate(self.db, self.username, self.password, {})
+            if (
+                not isinstance(authenticated_uid, int)
+                or isinstance(authenticated_uid, bool)
+                or authenticated_uid <= 0
+            ):
+                logger.warning("odoo_auth_failed", reason="invalid_uid")
                 return False
+            self._uid = authenticated_uid
             logger.info("odoo_connected", uid=self._uid)
             return True
-        except Exception as exc:
-            logger.error("odoo_connect_failed", error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - provider boundary
+            logger.warning("odoo_connect_failed", error_type=type(exc).__name__)
             return False
 
     def test_connection(self) -> bool:
-        """Verify the connection is still alive."""
+        """Verify the authenticated Odoo session remains usable."""
         if not self._uid:
             return self.connect()
         try:
             result = self._execute("res.users", "search", [[["id", "=", self._uid]]])
             return bool(result)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - provider boundary
+            logger.warning("odoo_connection_test_failed", error_type=type(exc).__name__)
             return False
 
-    # ── CRUD ──────────────────────────────────────────────────
-
-    def get_record(self, object_type: str, record_id: str) -> dict[str, Any] | None:
-        """Fetch a single record by ID."""
+    def normalize_record_id(self, record_id: object) -> str:
+        """Normalize Odoo's numeric ID as an opaque canonical string."""
+        normalized = super().normalize_record_id(record_id)
         try:
-            results = self._execute(object_type, "read", [[int(record_id)]])
-            return results[0] if results else None
-        except Exception as exc:
-            logger.error(
-                "odoo_get_record_failed",
+            numeric_id = int(normalized)
+        except (TypeError, ValueError) as exc:
+            raise CRMReadError(
+                CRMErrorCode.INVALID_IDENTIFIER,
+                "Odoo record id must be an integer-like value",
+            ) from exc
+        if numeric_id <= 0:
+            raise CRMReadError(CRMErrorCode.INVALID_IDENTIFIER, "Odoo record id must be positive")
+        return str(numeric_id)
+
+    def normalize_record(
+        self,
+        tenant_id: str,
+        connector_id: str,
+        object_type: str,
+        record: dict[str, Any],
+    ) -> CRMRecord:
+        """Normalize an Odoo read result while retaining provider properties."""
+        record_id = self.normalize_record_id(record.get("id"))
+        properties = dict(record)
+        return CRMRecord(
+            record_ref=CRMRecordRef(
+                tenant_id=tenant_id,
+                connector_id=connector_id,
+                crm_type=self.credentials.crm_type,
                 object_type=object_type,
                 record_id=record_id,
-                error=str(exc),
-            )
+            ),
+            properties=properties,
+            version_or_etag=None,
+        )
+
+    def get_record(self, object_type: str, record_id: str) -> dict[str, Any] | None:
+        """Fetch a record; return None only when Odoo returns an empty read result."""
+        normalized_id = self.normalize_record_id(record_id)
+        try:
+            results = self._execute(object_type, "read", [[int(normalized_id)]])
+        except Exception as exc:  # noqa: BLE001 - mapped immediately below
+            raise self._read_error(exc, "Odoo record read failed") from exc
+        if not isinstance(results, list):
+            raise CRMReadError(CRMErrorCode.MALFORMED_RESPONSE, "Odoo read result is not a list")
+        if not results:
             return None
+        if not isinstance(results[0], dict):
+            raise CRMReadError(CRMErrorCode.MALFORMED_RESPONSE, "Odoo record is not an object")
+        return dict(results[0])
 
     def query_records(
         self,
@@ -89,70 +124,102 @@ class OdooClient(CRMClientBase):
         filters: dict[str, Any],
         fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Query records matching filters."""
-        domain = [[k, "=", v] for k, v in filters.items()]
+        """Return all matching Odoo records or raise a typed remote read failure."""
+        domain = [[key, "=", value] for key, value in filters.items()]
         try:
             ids = self._execute(object_type, "search", [domain])
+            if not isinstance(ids, list):
+                raise CRMReadError(
+                    CRMErrorCode.MALFORMED_RESPONSE, "Odoo search result is not a list"
+                )
             if not ids:
                 return []
-            kwargs: dict[str, Any] = {}
-            if fields:
-                kwargs["fields"] = fields
-            return self._execute(object_type, "read", [ids], **kwargs)
-        except Exception as exc:
-            logger.error(
-                "odoo_query_failed",
-                object_type=object_type,
-                error=str(exc),
-            )
-            return []
+            kwargs: dict[str, Any] = {"fields": list(fields)} if fields else {}
+            records = self._execute(object_type, "read", [ids], **kwargs)
+        except CRMReadError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - mapped immediately below
+            raise self._read_error(exc, "Odoo record query failed") from exc
+        if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
+            raise CRMReadError(CRMErrorCode.MALFORMED_RESPONSE, "Odoo query records are malformed")
+        return [dict(record) for record in records]
 
     def create_record(self, object_type: str, data: dict[str, Any]) -> WriteResult:
-        """Create a new record in Odoo."""
-        try:
-            record_id = self._execute(object_type, "create", [data])
-            logger.info(
-                "odoo_record_created",
-                object_type=object_type,
-                record_id=record_id,
-                fields=list(data.keys()),
-            )
-            return WriteResult(
-                success=True,
-                record_id=str(record_id),
-                fields_written=list(data.keys()),
-            )
-        except Exception as exc:
-            logger.error(
-                "odoo_create_failed",
-                object_type=object_type,
-                error=str(exc),
-            )
-            return WriteResult(success=False, error=str(exc))
+        """Refuse create because R1 only permits trusted update-by-id operations."""
+        return self._unsafe_operation_result("create")
 
-    def update_record(self, object_type: str, record_id: str, data: dict[str, Any]) -> WriteResult:
-        """Update an existing record in Odoo."""
-        try:
-            self._execute(object_type, "write", [[int(record_id)], data])
-            logger.info(
-                "odoo_record_updated",
-                object_type=object_type,
-                record_id=record_id,
-                fields=list(data.keys()),
+    def update_record(
+        self,
+        object_type: str,
+        record_id: str,
+        data: dict[str, Any],
+        *,
+        permit: CRMWritePermit | None = None,
+    ) -> WriteResult:
+        """Perform a permit-bound update and validate Odoo's exact boolean acknowledgement."""
+        normalized_id = self.normalize_record_id(record_id)
+        denied = self.validate_update_permit(object_type, normalized_id, data, permit)
+        if denied is not None:
+            return denied
+        if not data:
+            return WriteResult(
+                success=False,
+                record_id=normalized_id,
+                error="empty_payload",
+                status=CRMWriteState.REJECTED,
             )
+        try:
+            acknowledged = self._execute(object_type, "write", [[int(normalized_id)], dict(data)])
+        except (TimeoutError, OSError, xmlrpc.client.ProtocolError) as exc:
+            logger.warning("odoo_update_indeterminate", error_type=type(exc).__name__)
+            return WriteResult(
+                success=False,
+                record_id=normalized_id,
+                error=CRMErrorCode.TIMEOUT.value,
+                status=CRMWriteState.INDETERMINATE,
+                reconciliation_state="required",
+            )
+        except xmlrpc.client.Fault as exc:
+            logger.warning("odoo_update_rejected", fault_code=exc.faultCode)
+            return WriteResult(
+                success=False,
+                record_id=normalized_id,
+                error=CRMErrorCode.REMOTE.value,
+                status=CRMWriteState.REJECTED,
+            )
+        except Exception as exc:  # noqa: BLE001 - provider boundary
+            logger.warning("odoo_update_indeterminate", error_type=type(exc).__name__)
+            return WriteResult(
+                success=False,
+                record_id=normalized_id,
+                error=CRMErrorCode.REMOTE.value,
+                status=CRMWriteState.INDETERMINATE,
+                reconciliation_state="required",
+            )
+
+        if acknowledged is True:
             return WriteResult(
                 success=True,
-                record_id=record_id,
+                record_id=normalized_id,
                 fields_written=list(data.keys()),
+                status=CRMWriteState.CONFIRMED,
+                provider_ack="odoo.write:true",
+                reconciliation_state="not_verified",
             )
-        except Exception as exc:
-            logger.error(
-                "odoo_update_failed",
-                object_type=object_type,
-                record_id=record_id,
-                error=str(exc),
+        if acknowledged is False:
+            return WriteResult(
+                success=False,
+                record_id=normalized_id,
+                error=CRMErrorCode.REMOTE.value,
+                status=CRMWriteState.REJECTED,
+                provider_ack="odoo.write:false",
             )
-            return WriteResult(success=False, error=str(exc))
+        return WriteResult(
+            success=False,
+            record_id=normalized_id,
+            error=CRMErrorCode.MALFORMED_RESPONSE.value,
+            status=CRMWriteState.REJECTED,
+        )
 
     def upsert_record(
         self,
@@ -161,20 +228,11 @@ class OdooClient(CRMClientBase):
         external_id_value: str,
         data: dict[str, Any],
     ) -> WriteResult:
-        """Create or update based on external ID lookup."""
-        existing = self.query_records(
-            object_type,
-            {external_id_field: external_id_value},
-            fields=["id"],
-        )
-        if existing:
-            rid = str(existing[0]["id"])
-            return self.update_record(object_type, rid, data)
-        data[external_id_field] = external_id_value
-        return self.create_record(object_type, data)
+        """Refuse unsafe lookup-then-create upsert until uniqueness is independently proven."""
+        return self._unsafe_operation_result("upsert")
 
     def get_field_metadata(self, object_type: str) -> dict[str, Any]:
-        """Return field schema metadata for an Odoo model."""
+        """Return Odoo field metadata when the provider responds with the documented shape."""
         try:
             fields = self._execute(
                 object_type,
@@ -182,51 +240,50 @@ class OdooClient(CRMClientBase):
                 [],
                 attributes=["string", "type", "required"],
             )
-            return {
-                "name": object_type,
-                "fields": [{"name": k, **v} for k, v in fields.items()],
-            }
-        except Exception as exc:
-            logger.error(
-                "odoo_field_metadata_failed",
-                object_type=object_type,
-                error=str(exc),
-            )
+        except Exception as exc:  # noqa: BLE001 - metadata is advisory
+            logger.warning("odoo_field_metadata_failed", error_type=type(exc).__name__)
             return {}
-
-    # ── Async wrappers ────────────────────────────────────────
+        if not isinstance(fields, dict):
+            return {}
+        return {
+            "name": object_type,
+            "fields": [
+                {"name": name, **definition}
+                for name, definition in fields.items()
+                if isinstance(name, str) and isinstance(definition, dict)
+            ],
+        }
 
     async def async_connect(self) -> bool:
-        """Async wrapper for connect()."""
+        """Run connect without blocking an async caller."""
         return await asyncio.to_thread(self.connect)
 
-    async def async_create_record(self, object_type: str, data: dict[str, Any]) -> WriteResult:
-        """Async wrapper for create_record()."""
-        return await asyncio.to_thread(self.create_record, object_type, data)
-
     async def async_update_record(
-        self, object_type: str, record_id: str, data: dict[str, Any]
-    ) -> WriteResult:
-        """Async wrapper for update_record()."""
-        return await asyncio.to_thread(self.update_record, object_type, record_id, data)
-
-    async def async_upsert_record(
         self,
         object_type: str,
-        external_id_field: str,
-        external_id_value: str,
+        record_id: str,
         data: dict[str, Any],
+        *,
+        permit: CRMWritePermit | None = None,
     ) -> WriteResult:
-        """Async wrapper for upsert_record()."""
+        """Run the permit-bound update without blocking an async caller."""
         return await asyncio.to_thread(
-            self.upsert_record,
+            self.update_record,
             object_type,
-            external_id_field,
-            external_id_value,
+            record_id,
             data,
+            permit=permit,
         )
 
-    # ── Internal ──────────────────────────────────────────────
+    def _read_error(self, exc: Exception, message: str) -> CRMReadError:
+        """Classify Odoo XML-RPC read failures without leaking request data."""
+        if isinstance(exc, (TimeoutError, socket.timeout)):
+            return CRMReadError(CRMErrorCode.TIMEOUT, message, retriable=True)
+        if isinstance(exc, (OSError, xmlrpc.client.ProtocolError)):
+            return CRMReadError(CRMErrorCode.TRANSPORT, message, retriable=True)
+        if isinstance(exc, xmlrpc.client.Fault):
+            return CRMReadError(CRMErrorCode.REMOTE, message)
+        return CRMReadError(CRMErrorCode.REMOTE, message)
 
     def _execute(
         self,
@@ -235,10 +292,9 @@ class OdooClient(CRMClientBase):
         args: list[Any],
         **kwargs: Any,
     ) -> Any:
-        """Execute an Odoo XML-RPC call."""
+        """Execute an Odoo XML-RPC call after authentication."""
         if not self._uid:
-            msg = "Not authenticated — call connect() first"
-            raise RuntimeError(msg)
+            raise RuntimeError("Not authenticated — call connect() first")
         return self._models.execute_kw(
             self.db,
             self._uid,

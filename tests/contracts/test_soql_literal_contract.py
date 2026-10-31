@@ -167,7 +167,7 @@ def _capture_query(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             return None
 
         def json(self) -> dict[str, Any]:
-            return {"records": []}
+            return {"done": True, "records": []}
 
     def _fake_get(url: str, **kwargs: Any) -> _Resp:
         captured["q"] = kwargs["params"]["q"]
