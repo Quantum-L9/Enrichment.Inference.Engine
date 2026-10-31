@@ -495,7 +495,7 @@ def resolve(
     reason = _build_resolution_reason(
         search_plan_mode, difficulty, searchable, signals, model, ctx, variations, cost
     )
-    logger.info("search_optimizer.resolve", reason=reason)
+    logger.info("search_optimizer.resolve", extra={"reason": reason})
 
     return SonarConfig(
         model=model,

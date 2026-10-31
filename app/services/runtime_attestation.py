@@ -15,11 +15,17 @@ DEPENDENCY_INDEX_PATH = REPO_ROOT / "docs/contracts/dependencies/_index.yaml"
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError(f"Expected YAML object in {path}")
+    return document
 
 
 def _load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError(f"Expected JSON object in {path}")
+    return document
 
 
 def _load_document(path: Path) -> dict[str, Any]:

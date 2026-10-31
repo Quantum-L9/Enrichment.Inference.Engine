@@ -31,6 +31,20 @@ _JSON_INSTRUCTION = (
 )
 
 
+def _message_text(response: dict[str, Any]) -> str:
+    """Return the text from the first Anthropic content block."""
+    content_blocks = response.get("content", [])
+    if not isinstance(content_blocks, list) or not content_blocks:
+        raise LLMResponseError("Anthropic returned empty content blocks")
+    first_block = content_blocks[0]
+    if not isinstance(first_block, dict):
+        raise LLMResponseError("Anthropic returned an invalid content block")
+    text = first_block.get("text")
+    if not isinstance(text, str):
+        raise LLMResponseError("Anthropic returned non-text content")
+    return text
+
+
 class AnthropicClient:
     """
     Async Anthropic Messages API client with retry and circuit breaker.
@@ -65,19 +79,19 @@ class AnthropicClient:
     async def complete(self, prompt: str, max_tokens: int = 2000) -> str:
         """Return the text content of the first response block."""
         data = await self._call(prompt=prompt, max_tokens=max_tokens)
-        content_blocks = data.get("content", [])
-        if not content_blocks:
-            raise LLMResponseError("Anthropic returned empty content blocks")
-        return content_blocks[0].get("text", "")
+        return _message_text(data)
 
     async def complete_json(self, prompt: str) -> dict[str, Any]:
         """Return parsed JSON. Raises LLMResponseError if not valid JSON."""
         json_prompt = prompt + _JSON_INSTRUCTION
         text = await self.complete(json_prompt, max_tokens=2000)
         try:
-            return json.loads(text)
+            data = json.loads(text)
         except json.JSONDecodeError as exc:
             raise LLMResponseError(f"Anthropic returned non-JSON content: {text[:200]}") from exc
+        if not isinstance(data, dict):
+            raise LLMResponseError("Anthropic returned non-object JSON content")
+        return data
 
     async def is_available(self) -> bool:
         """Health check via minimal messages call. Cached 60 seconds."""
@@ -128,6 +142,8 @@ class AnthropicClient:
 
                 resp.raise_for_status()
                 data = resp.json()
+                if not isinstance(data, dict):
+                    raise LLMResponseError("Anthropic returned a non-object response")
                 usage = data.get("usage", {})
                 self._failure_count = 0
                 logger.info(

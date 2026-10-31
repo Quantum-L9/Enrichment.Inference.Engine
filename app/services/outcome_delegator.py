@@ -179,15 +179,17 @@ def build_corrective_request(event: OutcomeEvent) -> EnrichRequest | None:
             "confidence_deltas": event.confidence_deltas,
         },
     }
-    return EnrichRequest(
-        entity=entity_payload,
-        object_type=object_type,
-        objective=(
-            f"Corrective enrichment after graph rejection (run {event.run_id}); "
-            f"target fields: {', '.join(target_fields) if target_fields else '(none)'}"
-        ),
-        schema=schema_map,
-        consensus_threshold=_ELEVATED_CONSENSUS_THRESHOLD,
-        max_variations=_ELEVATED_MAX_VARIATIONS,
-        idempotency_key=idempotency_key,
+    return EnrichRequest.model_validate(
+        {
+            "entity": entity_payload,
+            "object_type": object_type,
+            "objective": (
+                f"Corrective enrichment after graph rejection (run {event.run_id}); "
+                f"target fields: {', '.join(target_fields) if target_fields else '(none)'}"
+            ),
+            "schema": schema_map,
+            "consensus_threshold": _ELEVATED_CONSENSUS_THRESHOLD,
+            "max_variations": _ELEVATED_MAX_VARIATIONS,
+            "idempotency_key": idempotency_key,
+        }
     )

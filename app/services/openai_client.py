@@ -28,6 +28,17 @@ class LLMResponseError(Exception):
     """Raised when the LLM returns an unparseable or invalid response."""
 
 
+def _message_content(response: dict[str, Any], provider: str) -> str:
+    """Return the text content from a chat-completion response object."""
+    try:
+        content = response["choices"][0]["message"]["content"]
+    except (IndexError, KeyError, TypeError) as exc:
+        raise LLMResponseError(f"{provider} returned response without message content") from exc
+    if not isinstance(content, str):
+        raise LLMResponseError(f"{provider} returned non-text message content")
+    return content
+
+
 class OpenAIClient:
     """
     Async OpenAI chat completions client with retry and circuit breaker.
@@ -61,16 +72,19 @@ class OpenAIClient:
         response = await self._call(
             prompt=prompt, max_tokens=max_tokens, temperature=temperature, json_mode=False
         )
-        return response["choices"][0]["message"]["content"]
+        return _message_content(response, "OpenAI")
 
     async def complete_json(self, prompt: str, schema: dict | None = None) -> dict[str, Any]:
         """Return parsed JSON from the model. Raises LLMResponseError if not valid JSON."""
         response = await self._call(prompt=prompt, max_tokens=2000, temperature=0.1, json_mode=True)
-        content = response["choices"][0]["message"]["content"]
+        content = _message_content(response, "OpenAI")
         try:
-            return json.loads(content)
+            data = json.loads(content)
         except json.JSONDecodeError as exc:
             raise LLMResponseError(f"OpenAI returned non-JSON content: {content[:200]}") from exc
+        if not isinstance(data, dict):
+            raise LLMResponseError("OpenAI returned non-object JSON content")
+        return data
 
     def count_tokens(self, text: str) -> int:
         """Estimate token count using tiktoken cl100k_base encoding."""
@@ -126,6 +140,8 @@ class OpenAIClient:
 
                 resp.raise_for_status()
                 data = resp.json()
+                if not isinstance(data, dict):
+                    raise LLMResponseError("OpenAI returned a non-object response")
                 usage = data.get("usage", {})
                 self._failure_count = 0
                 logger.info(

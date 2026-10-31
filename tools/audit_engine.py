@@ -91,6 +91,7 @@ FLATCASE_ALLOWED_WORDS: frozenset[str] = frozenset(
 CHASSIS_ADAPTER_MODULES: frozenset[str] = frozenset(
     {
         "app/bootstrap/l9_contract_runtime.py",
+        "app/bootstrap/telemetry.py",
         "app/core/auth.py",
         "app/middleware/rate_limiter.py",
         "app/score/score_api.py",

@@ -225,6 +225,20 @@ class TestDataHygiene:
         assert len(report.actions) > 0
         assert any(a.action_type == "enrich" for a in report.actions)
 
+    def test_partial_records_preserve_fractional_quality(self) -> None:
+        agent = DataHygieneAgent()
+        report = agent.assess(
+            [
+                {
+                    "id": "1",
+                    "company_name": "Test",
+                    "company_domain": "test.example",
+                }
+            ],
+            domain="company",
+        )
+        assert report.quality_score == 0.4
+
     def test_invalid_email_generates_validate_action(self) -> None:
         agent = DataHygieneAgent()
         records = [{"id": "1", "contact_email": "not-an-email"}]
