@@ -983,7 +983,7 @@ class TestPerPassUncertainty:
 
 
 class TestUncertaintyFormulaD9:
-    """D-9 candidate formula (owner acceptance pending): U = 10 * (1 - mean confidence)."""
+    """D-9 formula (owner-accepted 2026-10-29): U = 10 * (1 - mean confidence)."""
 
     def test_confidence_ladder_maps_to_seven_five_three_one(self) -> None:
         from app.engines.convergence.confidence_tracker import uncertainty_from_confidences

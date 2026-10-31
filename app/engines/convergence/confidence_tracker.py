@@ -35,7 +35,7 @@ def uncertainty_from_confidences(confidences: Iterable[float | None]) -> float:
     Per-pass confidence 0.3 / 0.5 / 0.7 / 0.9 gives U 7 / 5 / 3 / 1. U depends
     only on confidence — never on how many provider variations a pass ran.
 
-    D-9 status: this formula is the candidate pending owner acceptance; it is
+    D-9 status: accepted by the owner as the default (2026-10-29). This is
     deliberately the only place U is computed so it can be replaced whole.
     """
     values = [min(max(safe_float(c), 0.0), 1.0) for c in confidences]
