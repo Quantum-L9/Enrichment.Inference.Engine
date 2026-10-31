@@ -38,8 +38,6 @@ from ..models.schemas import (
     resolve_converge_identity,
     resolve_entity_identity,
 )
-from ..services.crm.base import CRMType
-from ..services.crm.writeback import WriteBackOrchestrator
 from ..services.idempotency import IdempotencyStore, tenant_scope
 from ..services.kb_resolver import KBResolver
 from ..services.odoo_gate_converge import (
@@ -717,34 +715,32 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
     return brief_to_dict(brief)
 
 
-async def handle_writeback(tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
-    settings = get_settings()
-    domain = payload.get("domain", "company")
-    canonical = payload.get("canonical", {})
-    crm_type_str = payload.get("crm_type", "odoo")
-    credentials = payload.get(
-        "credentials",
-        {
-            "url": settings.odoo_url,
-            "db": settings.odoo_db,
-            "username": settings.odoo_username,
-            "password": settings.odoo_password,
-        },
-    )
-    mapping_path = payload.get("mapping_path", "config/crm/odoo_mapping.yaml")
+async def handle_writeback(
+    tenant: str,
+    payload: dict[str, Any],
+    packet: Any | None = None,
+) -> dict[str, Any]:
+    """Refuse CRM mutation until the protected trusted-context seam is installed.
 
-    crm_type = CRMType(crm_type_str)
-    orchestrator = WriteBackOrchestrator(
-        crm_type=crm_type,
-        credentials=credentials,
-        mapping_path=mapping_path,
-    )
-    result = await orchestrator.async_write_back(domain, canonical)
+    U00 established that this revision has no authoritative tenant-to-connector
+    binding, record/field-bound human approval source, or durable CRM operation
+    journal. The SDK supplies ``tenant`` and may supply ``packet``, but neither
+    may be treated as a source for any missing approval or credential context.
+    In particular, this handler deliberately ignores caller-supplied CRM type,
+    credentials, mapping path, tenant, policy flags, and approval references.
+    """
+    del tenant, payload, packet
+    logger.warning("writeback_refused_trusted_context_unavailable")
     return {
-        "success": result.success,
-        "record_id": result.record_id,
-        "fields_written": result.fields_written,
-        "error": result.error,
+        "success": False,
+        "status": "disabled",
+        "record_id": "",
+        "attempted_fields": [],
+        "fields_written": [],
+        "skipped_fields": [],
+        "error": "writeback_disabled_pending_trusted_context_and_durable_journal",
+        "provider_ack": None,
+        "reconciliation_state": None,
     }
 
 
