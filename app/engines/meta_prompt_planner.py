@@ -26,6 +26,20 @@ from ..services.domain_yaml_reader import DomainSpec
 logger = structlog.get_logger("meta_prompt_planner")
 
 
+def _named_property(properties: Any, field_name: str) -> Mapping[str, Any] | None:
+    """Return one property spec from a mapping or the canonical YAML list."""
+    if isinstance(properties, Mapping):
+        property_spec = properties.get(field_name)
+        if isinstance(property_spec, Mapping):
+            return property_spec
+        return None
+    if isinstance(properties, list):
+        for item in properties:
+            if isinstance(item, Mapping) and item.get("name") == field_name:
+                return item
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Planner Core
 # ═══════════════════════════════════════════════════════════════════════════
@@ -304,7 +318,7 @@ class MetaPromptPlanner:
         return safe_float(metadata.get("scoring_weight", 0.0))
 
     def _property_metadata(self, field_name: str) -> Mapping[str, Any] | None:
-        """Return a field's metadata from a raw ``ontology.nodes`` mapping.
+        """Return a field's metadata from a raw ontology mapping or YAML list.
 
         Domain YAML reaches the convergence loop as an unvalidated mapping. A
         malformed or incomplete spec cannot prevent enrichment, so each level
@@ -318,21 +332,29 @@ class MetaPromptPlanner:
             return None
 
         nodes = ontology.get("nodes")
-        if not isinstance(nodes, Mapping):
+        if isinstance(nodes, Mapping):
+            node_values = list(nodes.values())
+        elif isinstance(nodes, list):
+            node_values = nodes
+        else:
             return None
 
-        for node in nodes.values():
+        for node in node_values:
             if not isinstance(node, Mapping):
                 continue
-            properties = node.get("properties")
-            if not isinstance(properties, Mapping):
-                continue
-            property_spec = properties.get(field_name)
-            if not isinstance(property_spec, Mapping):
+            property_spec = _named_property(node.get("properties"), field_name)
+            if property_spec is None:
                 continue
             metadata = property_spec.get("metadata")
             if isinstance(metadata, Mapping):
                 return metadata
+            direct = {
+                key: property_spec[key]
+                for key in ("gate_critical", "scoring_weight")
+                if key in property_spec
+            }
+            if direct:
+                return direct
         return None
 
     def _generate_reasoning(
