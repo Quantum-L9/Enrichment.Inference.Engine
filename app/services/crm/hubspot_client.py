@@ -360,10 +360,20 @@ class HubSpotClient(CRMClientBase):
             resp = httpx.get(url, headers=self._headers(), timeout=15)
         except httpx.HTTPError as exc:
             raise HubSpotAssociationReadError(f"transport failure: {type(exc).__name__}") from exc
+        # Association evidence refuses a read whose rate-limit headers cannot be
+        # parsed. CRM advisory tracking may swallow the same headers; this check
+        # stays in front of that helper so a bad header cannot look complete.
         try:
-            self._update_rate_limit(resp)
+            for header_name in (
+                "X-HubSpot-RateLimit-Remaining",
+                "X-HubSpot-RateLimit-Interval-Milliseconds",
+            ):
+                header_value = resp.headers.get(header_name)
+                if header_value is not None:
+                    int(header_value)
         except ValueError as exc:
             raise HubSpotAssociationReadError("malformed rate-limit headers") from exc
+        self._update_rate_limit(resp)
         if resp.status_code != 200:
             raise HubSpotAssociationReadError(
                 f"HubSpot answered {resp.status_code}", status_code=resp.status_code
