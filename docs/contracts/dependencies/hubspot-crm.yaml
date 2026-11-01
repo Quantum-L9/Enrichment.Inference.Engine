@@ -3,8 +3,10 @@
 # Source:   app/services/crm/hubspot_client.py,
 #           app/services/crm/observed_relationship_producer.py,
 #           config/crm/hubspot_mapping.yaml
-# Version:  1.2.0
-# Updated:  2026-10-29 (producer outcome TRANSPORT_UNAVAILABLE split from
+# Version:  1.3.0
+# Updated:  2026-10-29 (auth_env_vars declares HUBSPOT_ACCESS_TOKEN so the
+#           runtime attestation stops counting HubSpot ready with no token)
+#           2026-10-29 (producer outcome TRANSPORT_UNAVAILABLE split from
 #           NOT_ACKNOWLEDGED on transport signals only, GAR A5)
 #           2026-10-25 (QM.POC0.EIE.OBSERVED_RELATIONSHIP_PRODUCER.003: read-only
 #           association lookup for one explicitly invoked observed-relationship producer)
@@ -15,6 +17,8 @@ service_name: HubSpotCRM
 type: external
 protocol: http
 auth_method: Bearer token (HUBSPOT_ACCESS_TOKEN)
+auth_env_vars:
+  - HUBSPOT_ACCESS_TOKEN
 
 role: >-
   CRM consumer #3. HubSpot private app integration for enrichment writeback, and
