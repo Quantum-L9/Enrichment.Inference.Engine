@@ -317,6 +317,73 @@ def test_relationship_target_is_denied_even_when_present_in_trusted_allowlist(
     assert provider.update_calls[0][2] == {"name": "Acme"}
 
 
+def test_approval_that_expires_during_connect_never_updates(
+    connector: TrustedCRMConnector,
+) -> None:
+    journal = MemoryJournal()
+    provider = FakeProvider(CRMCredentials(CRMType.HUBSPOT, {}))
+    orchestrator = WriteBackOrchestrator(
+        connector,
+        journal,
+        client_factory=lambda credentials: provider,
+    )
+    calls = {"count": 0}
+    real_now = datetime.now
+
+    def _now(tz: Any = None) -> datetime:
+        calls["count"] += 1
+        current = real_now(tz or UTC)
+        if calls["count"] > 1:
+            return current + timedelta(hours=1)
+        return current
+
+    class _Clock:
+        now = staticmethod(_now)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("app.services.crm.writeback.datetime", _Clock)
+        receipt = orchestrator.write_update_by_id(
+            domain="company",
+            record_id="42",
+            canonical={"company_name": "Acme"},
+            approval=_approval(connector, "op-expire", {"name": "Acme"}),
+            operation_id="op-expire",
+            correlation_id="correlation-expire",
+        )
+
+    assert receipt.status == CRMWriteState.REJECTED
+    assert receipt.error_code == "trusted_approval_expired"
+    assert provider.update_calls == []
+
+
+def test_expected_version_is_rejected_until_an_adapter_enforces_it(
+    connector: TrustedCRMConnector,
+) -> None:
+    journal = MemoryJournal()
+    provider = FakeProvider(CRMCredentials(CRMType.HUBSPOT, {}))
+    orchestrator = WriteBackOrchestrator(
+        connector,
+        journal,
+        client_factory=lambda credentials: provider,
+    )
+
+    receipt = orchestrator.write_update_by_id(
+        domain="company",
+        record_id="42",
+        canonical={"company_name": "Acme"},
+        approval=_approval(connector, "op-version", {"name": "Acme"}),
+        operation_id="op-version",
+        correlation_id="correlation-version",
+        expected_version="etag-1",
+    )
+
+    assert receipt.status == CRMWriteState.REJECTED
+    assert receipt.error_code == "expected_version_unsupported"
+    assert provider.connected is False
+    assert provider.update_calls == []
+    assert journal.steps == []
+
+
 def test_mismatched_approval_is_refused_before_journal_or_provider_io(
     connector: TrustedCRMConnector,
 ) -> None:

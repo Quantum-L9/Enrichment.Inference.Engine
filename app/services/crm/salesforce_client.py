@@ -158,6 +158,7 @@ class SalesforceClient(CRMClientBase):
                 crm_type=self.credentials.crm_type,
                 object_type=object_type,
                 record_id=record_id,
+                provider_account_id=self.credentials.provider_account_id,
             ),
             properties=dict(record),
             version_or_etag=None,

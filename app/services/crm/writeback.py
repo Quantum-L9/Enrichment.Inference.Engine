@@ -256,6 +256,15 @@ class WriteBackOrchestrator:
                 operation_id=operation_id,
                 correlation_id=correlation_id,
             )
+        if expected_version is not None:
+            return self._rejected_receipt(
+                record_ref,
+                CRMWriteState.REJECTED,
+                "expected_version_unsupported",
+                operation_id,
+                correlation_id,
+                skipped,
+            )
 
         payload_hash = _payload_hash(record_ref, payload, expected_version)
         intent = CRMWriteIntent(
@@ -329,7 +338,19 @@ class WriteBackOrchestrator:
                     audit_ref=claim.audit_ref,
                 )
                 return self.journal.finalize(receipt)
+            approval.validate(intent)
             self.journal.mark_dispatched(intent)
+        except PermissionError:
+            logger.warning("writeback_approval_expired_before_dispatch")
+            return self._rejected_receipt(
+                record_ref,
+                CRMWriteState.REJECTED,
+                "trusted_approval_expired",
+                operation_id,
+                correlation_id,
+                skipped,
+                audit_ref=claim.audit_ref,
+            )
         except Exception as exc:  # noqa: BLE001 - no mutation when dispatch state is not durable
             logger.warning("writeback_dispatch_precondition_failed", error_type=type(exc).__name__)
             return self._rejected_receipt(
@@ -342,6 +363,19 @@ class WriteBackOrchestrator:
                 audit_ref=claim.audit_ref,
             )
 
+        try:
+            approval.validate(intent)
+        except PermissionError:
+            logger.warning("writeback_approval_expired_before_dispatch")
+            return self._rejected_receipt(
+                record_ref,
+                CRMWriteState.REJECTED,
+                "trusted_approval_expired",
+                operation_id,
+                correlation_id,
+                skipped,
+                audit_ref=claim.audit_ref,
+            )
         permit = _issue_write_permit(operation_id, record_ref, payload_hash, payload)
         try:
             result = client.update_record(crm_object, normalized_record_id, payload, permit=permit)
