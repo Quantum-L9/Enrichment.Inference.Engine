@@ -7,17 +7,7 @@ Run: pytest tests/ -v
 from __future__ import annotations
 
 import os
-
-os.environ.update(
-    {
-        "PERPLEXITY_API_KEY": "test-key",
-        "API_SECRET_KEY": "test-secret-key-32-chars-long!!",
-        "API_KEY_HASH": "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1",
-        "KB_DIR": "./kb",
-        "REDIS_URL": "redis://localhost:6379/0",
-    }
-)
-
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -33,6 +23,33 @@ from app.services.validation_engine import ValidationError, validate_response
 
 client = TestClient(app)
 AUTH = {"X-API-Key": "pass"}
+
+_MODULE_ENV = {
+    "PERPLEXITY_API_KEY": "test-key",
+    "API_SECRET_KEY": "test-secret-key-32-chars-long!!",
+    "API_KEY_HASH": "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1",
+    "KB_DIR": "./kb",
+    "REDIS_URL": "redis://localhost:6379/0",
+}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _module_env() -> Iterator[None]:
+    """Scope this module's environment to this module's tests.
+
+    This was a module-level ``os.environ.update``, which pytest runs during
+    collection and therefore for the whole session: every other module saw
+    these values, REDIS_URL included. ``patch.dict`` restores the caller's
+    environment on teardown, and the settings cache is cleared on both sides so
+    neither this module nor the next reads a ``Settings`` built from the
+    other's environment.
+    """
+    with patch.dict(os.environ, _MODULE_ENV):
+        get_settings.cache_clear()
+        try:
+            yield
+        finally:
+            get_settings.cache_clear()
 
 
 class TestHealth:

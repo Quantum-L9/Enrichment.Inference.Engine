@@ -10,6 +10,7 @@ Also proves the router is mounted (not orphaned) and respects tenant_id isolatio
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -26,9 +27,26 @@ _TEST_API_KEY = "pass"
 # py/weak-sensitive-data-hashing (SHA-256 is not a computationally expensive
 # password hash), and usedforsecurity=False does not suppress that query.
 # app/core/auth.py still does the real comparison via hmac.compare_digest.
-os.environ["API_KEY_HASH"] = "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1"
-get_settings.cache_clear()
+_TEST_API_KEY_HASH = "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1"
 AUTH = {"X-API-Key": _TEST_API_KEY}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _module_env() -> Iterator[None]:
+    """Scope API_KEY_HASH to this module's tests.
+
+    This was a module-level ``os.environ[...] =`` plus ``cache_clear()``, which
+    pytest runs during collection and therefore for the whole session.
+    ``patch.dict`` restores the caller's environment on teardown, and the
+    settings cache is cleared on both sides so neither this module nor the next
+    reads a ``Settings`` built from the other's environment.
+    """
+    with patch.dict(os.environ, {"API_KEY_HASH": _TEST_API_KEY_HASH}):
+        get_settings.cache_clear()
+        try:
+            yield
+        finally:
+            get_settings.cache_clear()
 
 
 def _make_mock_result(entity_id: str = "ent-001", tenant_id: str = "test-tenant"):

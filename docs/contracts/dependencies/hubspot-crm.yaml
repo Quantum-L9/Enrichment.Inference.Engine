@@ -1,18 +1,75 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: HubSpot CRM Dependency
 # Source:   app/services/crm/hubspot_client.py,
+#           app/services/crm/observed_relationship_producer.py,
 #           config/crm/hubspot_mapping.yaml
-# Version:  1.0.0
-# Updated:  2026-04-05
+# Version:  1.3.0
+# Updated:  2026-10-29 (auth_env_vars declares HUBSPOT_ACCESS_TOKEN so the
+#           runtime attestation stops counting HubSpot ready with no token)
+#           2026-10-29 (producer outcome TRANSPORT_UNAVAILABLE split from
+#           NOT_ACKNOWLEDGED on transport signals only, GAR A5)
+#           2026-10-25 (QM.POC0.EIE.OBSERVED_RELATIONSHIP_PRODUCER.003: read-only
+#           association lookup for one explicitly invoked observed-relationship producer)
+#           2026-04-05
 # ═══════════════════════════════════════════════════════════════
 
 service_name: HubSpotCRM
 type: external
 protocol: http
 auth_method: Bearer token (HUBSPOT_ACCESS_TOKEN)
+auth_env_vars:
+  - HUBSPOT_ACCESS_TOKEN
 
-role: CRM consumer #3. HubSpot private app integration for enrichment writeback.
+role: >-
+  CRM consumer #3. HubSpot private app integration for enrichment writeback, and
+  (since 1.1.0) the read-only source of one observed record association for graph
+  relationship evidence.
 
 field_mapping: config/crm/hubspot_mapping.yaml
 source_file: app/services/crm/hubspot_client.py
 
+association_read:
+  method: HubSpotClient.read_associations
+  endpoint: "GET /crm/objects/2026-09/{fromObjectType}/{objectId}/associations/{toObjectType}"
+  api_version: >-
+    2026-09 (date-versioned). HubSpot retires the semantic v4 associations API in
+    March 2027; no undocumented query parameter is sent.
+  access: read-only; no association, record or property is ever written by this path
+  scopes: the read scope of both object types (e.g. crm.objects.companies.read, crm.objects.deals.read)
+  returns: every association type HubSpot reports (toObjectId, category, typeId, label)
+  invariants:
+    - Fail closed. Any non-200 answer (401/403 scope, 404 unknown record, 429 rate limit,
+      5xx), a transport failure, malformed rate-limit headers, a malformed body, or any
+      paging object that is not a dict or carries a next key raises
+      HubSpotAssociationReadError. An empty list means HubSpot answered 200 with one
+      complete page holding no associations, never that the read failed.
+    - Record ids must be canonical (ASCII digits, no leading zero, as HubSpot renders
+      them) and object types plain names or type ids, so neither can reshape the request
+      path or yield two identities for one record.
+  consumer: >-
+    app/services/crm/observed_relationship_producer.py. Explicitly invoked only (not
+    wired into enrichment). It proposes the matching association through
+    PacketRouter.notify_relationship_sync as observed / positive / confidence 1.0
+    (certainty of membership, never commercial relevance), source_revision unset.
+    Since QM.POC0.TENANT_ASSOCIATION_MAPPING.004 the operator supplies only an
+    ObservedAssociationKey (object types, association
+    category and typeId) and the two record ids. The tenant spec's
+    sync.endpoints[].observedfrom decides which relationship that association is, and
+    the node endpoints' refnamespace turn record ids into graph refs
+    <refnamespace>:<record id> (the shape CEG scores). The mapping is resolved before
+    the HubSpot read, so an undeclared mapping costs no provider call. EIE aliases
+    (company, deal, contact, opportunity) are normalised to HubSpot-native names first;
+    the spec declares native names.
+  producer_outcomes:
+    - SYNCED -- CEG's relationship endpoint acknowledged the edge (the only success).
+    - INVALID_INPUT -- key, record ids or tenant are malformed; nothing is read or sent.
+    - PROVIDER_UNAVAILABLE -- the HubSpot read failed closed (HubSpotAssociationReadError).
+    - SOURCE_NOT_AVAILABLE -- HubSpot reports no association of the bound category/typeId.
+    - CONTRACT_NOT_DECLARED -- the tenant spec declares no single valid observedfrom mapping
+      (with refnamespace on both nodes) for the key; nothing is read or sent.
+    - TRANSPORT_UNAVAILABLE -- Gate unreachable, timed out or 5xx after the router's
+      retries (RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE); repeating the invocation
+      reuses the evidence ref and Gate idempotency key.
+    - NOT_ACKNOWLEDGED -- Gate carried the row and the answer is not a confirmation (a
+      worker failure packet, a Gate 4xx, an unconfirming ack, or nothing proposed by the
+      router). Decided on transport signals only; CEG exception names are never read.
