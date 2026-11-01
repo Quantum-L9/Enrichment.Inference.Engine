@@ -463,8 +463,11 @@ jobs:
             git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
           # Pinned wheels only — satisfy Sonar githubactions S8541/S8544 on this gate.
+          # defusedxml: app/services/crm/odoo_client.py imports it at module load,
+          # and tests/contracts/test_crm_identity_failure_contract.py imports that.
           python -m pip install --only-binary=:all: \
             "aiofiles==25.1.0" \
+            "defusedxml==0.7.1" \
             "fastapi==0.141.1" \
             "httpx==0.28.1" \
             "pydantic==2.13.4" \
