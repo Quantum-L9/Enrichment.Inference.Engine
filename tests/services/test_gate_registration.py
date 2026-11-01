@@ -13,18 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import AsyncMock
-
-os.environ.update(
-    {
-        "PERPLEXITY_API_KEY": "test-key",
-        "API_SECRET_KEY": "test-secret-key-32-chars-long!!",
-        "API_KEY_HASH": "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1",
-        "KB_DIR": "./kb",
-        "REDIS_URL": "redis://localhost:6379/0",
-    }
-)
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -45,6 +36,34 @@ from app.services.request_deadline import CANONICAL_CONVERGE_BUDGET_SECONDS
 
 GATE_URL = "http://gate.test"
 REGISTER_URL = f"{GATE_URL}/v1/admin/register"
+
+_MODULE_ENV = {
+    "PERPLEXITY_API_KEY": "test-key",
+    "API_SECRET_KEY": "test-secret-key-32-chars-long!!",
+    "API_KEY_HASH": "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1",
+    "KB_DIR": "./kb",
+    "REDIS_URL": "redis://localhost:6379/0",
+}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _module_env() -> Iterator[None]:
+    """Scope this module's environment to this module's tests.
+
+    This was a module-level ``os.environ.update``. pytest imports every test
+    module during collection, so those values were set for the whole session
+    and every other module ran against them -- REDIS_URL included, which hid the
+    phase5 readiness test's own missing-environment defect (PR #261).
+    ``patch.dict`` restores the caller's environment on teardown, and the
+    settings cache is cleared on both sides so neither this module nor the next
+    reads a ``Settings`` built from the other's environment.
+    """
+    with patch.dict(os.environ, _MODULE_ENV):
+        get_settings.cache_clear()
+        try:
+            yield
+        finally:
+            get_settings.cache_clear()
 
 
 def _settings(**overrides) -> Settings:
