@@ -51,17 +51,22 @@ association_read:
     wired into enrichment). It proposes the matching association through
     PacketRouter.notify_relationship_sync as observed / positive / confidence 1.0
     (certainty of membership, never commercial relevance), source_revision unset.
-    Endpoint node ids are <ref namespace>:<record id>, the namespaced ref shape CEG
-    scores. The provider association to tenant edge binding (including the two ref
-    namespaces) is supplied per invocation and must match an edge the tenant spec
-    declares; moving it into tenant configuration is a pending cross-repository
-    contract.
+    Since QM.POC0.TENANT_ASSOCIATION_MAPPING.004 the operator supplies only an
+    ObservedAssociationKey (object types, association
+    category and typeId) and the two record ids. The tenant spec's
+    sync.endpoints[].observedfrom decides which relationship that association is, and
+    the node endpoints' refnamespace turn record ids into graph refs
+    <refnamespace>:<record id> (the shape CEG scores). The mapping is resolved before
+    the HubSpot read, so an undeclared mapping costs no provider call. EIE aliases
+    (company, deal, contact, opportunity) are normalised to HubSpot-native names first;
+    the spec declares native names.
   producer_outcomes:
     - SYNCED -- CEG's relationship endpoint acknowledged the edge (the only success).
-    - INVALID_INPUT -- binding, record ids or tenant are malformed; nothing is read or sent.
+    - INVALID_INPUT -- key, record ids or tenant are malformed; nothing is read or sent.
     - PROVIDER_UNAVAILABLE -- the HubSpot read failed closed (HubSpotAssociationReadError).
     - SOURCE_NOT_AVAILABLE -- HubSpot reports no association of the bound category/typeId.
-    - CONTRACT_NOT_DECLARED -- the tenant spec declares no matching DIRECTED sync edge.
+    - CONTRACT_NOT_DECLARED -- the tenant spec declares no single valid observedfrom mapping
+      (with refnamespace on both nodes) for the key; nothing is read or sent.
     - TRANSPORT_UNAVAILABLE -- Gate unreachable, timed out or 5xx after the router's
       retries (RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE); repeating the invocation
       reuses the evidence ref and Gate idempotency key.

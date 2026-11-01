@@ -7,28 +7,33 @@ HubSpot actually reports between two records, turns it into a
 ``PacketRouter.notify_relationship_sync`` (Gate ``sync`` -> CEG). It is not
 wired into enrichment, schedules nothing and writes nothing to the CRM.
 
-Domain neutrality. The producer holds no relationship vocabulary. The operator
-supplies an ``ObservedAssociationBinding`` per invocation naming which provider
-association (object-type pair + association category/typeId) stands for which
-tenant edge (subject label, relation type, object label). That edge must be
-declared by the tenant's own spec (DIRECTED, sync-managed, one ``targetedge``
-endpoint) -- the same declaration CEG validates -- or nothing is sent.
+Tenant-declared mapping (QM.POC0.TENANT_ASSOCIATION_MAPPING.004). The operator
+names only WHICH provider association to read (``ObservedAssociationKey``:
+object-type pair, association category and typeId) and the two record ids. The
+tenant's spec decides what that association means: the one relationship
+endpoint whose ``observedfrom`` declares it gives the relation type, direction
+and endpoint labels, and the node endpoints' ``refnamespace`` turn each record
+id into the node's graph ref. The producer holds no relationship vocabulary and
+the caller cannot supply one. The mapping is resolved BEFORE the provider is
+read: an undeclared, ambiguous, malformed or reversed mapping costs no HubSpot
+call and sends nothing.
+
+Mirror, not approval. EIE resolves the mapping from its lockstep mirror of the
+tenant spec. CEG does not yet cross-check an observed row against its own copy
+(D-9, Cognitive.Engine.Graphs#386), so every result after resolution carries
+``mapping_verification`` (``MAPPING_UNVERIFIED_MIRROR``) and the mirror's
+``mapping_fingerprint``; ``mirror_drift`` compares the mirror with CEG's spec.
 
 What "observed" means here. The association exists in the authenticated
 source at read time: ``assertion_status="observed"``, ``polarity="positive"``
 and ``confidence=1.0`` state certainty of that membership only. They are not
-purchase intent or commercial relevance; relevance is CEG's server-side map.
-HubSpot reports no revision for an association, so ``source_revision`` is None.
+purchase intent or commercial relevance; relevance is CEG's tenant-approved
+``evidencerelevance``. HubSpot reports no revision for an association, so
+``source_revision`` is None.
 
-Endpoint identity. A graph node's stable id is a namespaced ref
-``<namespace>:<record id>`` -- CEG scores only refs of that shape
-(``engine/scoring/evidence_priority.py``: ``[a-z0-9_.-]+``, a colon, a non-blank id) -- so the binding
-names the ref namespace of each endpoint and the producer emits
-``<subject_ref_namespace>:<from record id>`` and
-``<object_ref_namespace>:<to record id>``. Nothing defaults it. The producer
-cannot read the graph; CEG refuses a row whose endpoints do not already exist
-under the tenant with exactly that id, and that refusal is reported as
-``NOT_ACKNOWLEDGED``. No node is created here.
+Endpoint identity. The producer cannot read the graph; CEG refuses a row whose
+endpoints do not already exist under the tenant with exactly those graph refs,
+and that refusal is reported as ``NOT_ACKNOWLEDGED``. No node is created here.
 
 Every outcome is a typed ``ObservedRelationshipResult``; only ``SYNCED`` means
 CEG acknowledged the edge. The router's typed answer decides the rest on
@@ -43,13 +48,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 import structlog
 
+from app.engines.observed_association_contract import ObservedRelationshipContract
 from app.engines.packet_router import (
     PacketRouter,
     RelationshipAssertion,
@@ -62,6 +67,7 @@ from .hubspot_client import (
     HubSpotAssociationReadError,
     HubSpotClient,
     is_canonical_record_id,
+    native_object_type,
 )
 
 logger = structlog.get_logger("observed_relationship_producer")
@@ -69,8 +75,6 @@ logger = structlog.get_logger("observed_relationship_producer")
 PROVIDER = "hubspot"
 # Certainty that the association is present in the source -- never relevance.
 OBSERVED_MEMBERSHIP_CONFIDENCE = 1.0
-# The namespace half of CEG's entity ref grammar (``<namespace>:<id>``).
-_REF_NAMESPACE = re.compile(r"[a-z0-9_.-]{1,64}")
 
 
 class ProducerStatus(StrEnum):
@@ -84,24 +88,18 @@ class ProducerStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class ObservedAssociationBinding:
-    """Which provider association stands for which tenant-declared edge.
+class ObservedAssociationKey:
+    """The provider association the operator asks about. It names no tenant edge.
 
-    Supplied explicitly by the operator for one invocation; there is no default.
-    ``from_object_type`` records are the edge's subject, ``to_object_type``
-    records its object; ``*_ref_namespace`` turns each record id into the
-    endpoint node's stable id.
+    ``from_object_type`` records are read; ``to_object_type`` records are their
+    associated targets. Object types may be provider-native names or EIE aliases
+    (``company``); the tenant spec declares the provider-native form.
     """
 
     from_object_type: str
     to_object_type: str
     association_category: str
     association_type_id: int
-    subject_label: str
-    relation_type: str
-    object_label: str
-    subject_ref_namespace: str
-    object_ref_namespace: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,10 +109,14 @@ class ObservedRelationshipResult:
     evidence_ref: str | None = None
     source_ref: str | None = None
     ceg_ack: dict[str, Any] | None = None
+    # Set once a mapping was resolved: which spec mirror decided it, and that CEG
+    # has not cross-checked it (D-9).
+    mapping_fingerprint: str | None = None
+    mapping_verification: str | None = None
 
 
 def observed_evidence_ref(
-    tenant_id: str, binding: ObservedAssociationBinding, association: HubSpotAssociation
+    tenant_id: str, contract: ObservedRelationshipContract, association: HubSpotAssociation
 ) -> str:
     """Deterministic identity of one observed association for one tenant.
 
@@ -128,9 +130,9 @@ def observed_evidence_ref(
         "provider": PROVIDER,
         "from": [association.from_object_type, association.from_record_id],
         "to": [association.to_object_type, association.to_record_id],
-        "category": binding.association_category,
-        "type_id": binding.association_type_id,
-        "ref_namespaces": [binding.subject_ref_namespace, binding.object_ref_namespace],
+        "category": contract.association_category,
+        "type_id": contract.association_type_id,
+        "ref_namespaces": [contract.subject_ref_namespace, contract.object_ref_namespace],
     }
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
     return f"evidence:{PROVIDER}:association:{digest[:24]}"
@@ -146,39 +148,48 @@ def observed_source_ref(association: HubSpotAssociation) -> str:
     )
 
 
-def _binding_defects(binding: ObservedAssociationBinding) -> list[str]:
+def _resolved(
+    contract: ObservedRelationshipContract,
+    status: ProducerStatus,
+    detail: str,
+    evidence_ref: str | None = None,
+    source_ref: str | None = None,
+    ceg_ack: dict[str, Any] | None = None,
+) -> ObservedRelationshipResult:
+    """A result after resolution: it always names the mirror mapping that decided it."""
+    return ObservedRelationshipResult(
+        status,
+        detail,
+        evidence_ref,
+        source_ref,
+        ceg_ack,
+        mapping_fingerprint=contract.mapping_fingerprint,
+        mapping_verification=contract.mapping_verification,
+    )
+
+
+def _key_defects(key: ObservedAssociationKey) -> list[str]:
     defects = [
         f"{name} missing"
-        for name in (
-            "from_object_type",
-            "to_object_type",
-            "association_category",
-            "subject_label",
-            "relation_type",
-            "object_label",
-        )
-        if not isinstance(getattr(binding, name), str) or not getattr(binding, name).strip()
+        for name in ("from_object_type", "to_object_type", "association_category")
+        if not isinstance(getattr(key, name), str) or not getattr(key, name).strip()
     ]
-    type_id = binding.association_type_id
-    if isinstance(type_id, bool) or not isinstance(type_id, int):
-        defects.append("association_type_id must be an integer")
-    for name in ("subject_ref_namespace", "object_ref_namespace"):
-        value = getattr(binding, name)
-        if not isinstance(value, str) or not _REF_NAMESPACE.fullmatch(value):
-            defects.append(f"{name} must match [a-z0-9_.-]{{1,64}}")
+    type_id = key.association_type_id
+    if isinstance(type_id, bool) or not isinstance(type_id, int) or type_id < 1:
+        defects.append("association_type_id must be a positive integer")
     return defects
 
 
 def _matching_association(
     associations: list[HubSpotAssociation],
-    binding: ObservedAssociationBinding,
+    contract: ObservedRelationshipContract,
     to_record_id: str,
 ) -> HubSpotAssociation | None:
     for association in associations:
         if (
             association.to_record_id == to_record_id
-            and association.category == binding.association_category
-            and association.type_id == binding.association_type_id
+            and association.category == contract.association_category
+            and association.type_id == contract.association_type_id
         ):
             return association
     return None
@@ -187,7 +198,7 @@ def _matching_association(
 async def produce_observed_relationship(
     *,
     tenant_id: str,
-    binding: ObservedAssociationBinding,
+    key: ObservedAssociationKey,
     from_record_id: str,
     to_record_id: str,
     hubspot: HubSpotClient,
@@ -195,7 +206,7 @@ async def produce_observed_relationship(
     correlation_id: str | None = None,
 ) -> ObservedRelationshipResult:
     """Read one observed association and propose it as graph evidence. Never raises for a refusal."""
-    defects = _binding_defects(binding)
+    defects = _key_defects(key)
     for name, value in (("from_record_id", from_record_id), ("to_record_id", to_record_id)):
         if not is_canonical_record_id(value):
             defects.append(f"{name} must be a canonical numeric HubSpot record id")
@@ -204,12 +215,35 @@ async def produce_observed_relationship(
     if defects:
         return ObservedRelationshipResult(ProducerStatus.INVALID_INPUT, "; ".join(defects))
 
+    from_type = native_object_type(key.from_object_type)
+    to_type = native_object_type(key.to_object_type)
+    contract = router.observed_association_contract(
+        tenant_id,
+        provider=PROVIDER,
+        from_object_type=from_type,
+        to_object_type=to_type,
+        association_category=key.association_category,
+        association_type_id=key.association_type_id,
+    )
+    if contract is None:
+        return ObservedRelationshipResult(
+            ProducerStatus.CONTRACT_NOT_DECLARED,
+            f"tenant {tenant_id!r} declares no relationship for the {PROVIDER} association "
+            f"{from_type}->{to_type} {key.association_category}:{key.association_type_id} "
+            "(one observedfrom entry on a valid relationship endpoint, refnamespace on both nodes)",
+        )
+    logger.info(
+        "observed_association_mapping_resolved",
+        tenant_id=tenant_id,
+        relation_type=contract.sync.relation_type,
+        entity_type=contract.sync.entity_type,
+        mapping_fingerprint=contract.mapping_fingerprint,
+        mapping_verification=contract.mapping_verification,
+    )
+
     try:
         associations = await asyncio.to_thread(
-            hubspot.read_associations,
-            binding.from_object_type,
-            from_record_id,
-            binding.to_object_type,
+            hubspot.read_associations, from_type, from_record_id, to_type
         )
     except HubSpotAssociationReadError as exc:
         logger.warning(
@@ -218,25 +252,25 @@ async def produce_observed_relationship(
             status_code=exc.status_code,
             reason=exc.reason,
         )
-        return ObservedRelationshipResult(ProducerStatus.PROVIDER_UNAVAILABLE, exc.reason)
+        return _resolved(contract, ProducerStatus.PROVIDER_UNAVAILABLE, exc.reason)
 
-    association = _matching_association(associations, binding, to_record_id)
+    association = _matching_association(associations, contract, to_record_id)
     if association is None:
-        return ObservedRelationshipResult(
+        return _resolved(
+            contract,
             ProducerStatus.SOURCE_NOT_AVAILABLE,
-            f"HubSpot reports no {binding.association_category}:{binding.association_type_id} "
-            f"association from {binding.from_object_type}/{from_record_id} "
-            f"to {binding.to_object_type}/{to_record_id}",
+            f"HubSpot reports no {contract.association_category}:{contract.association_type_id} "
+            f"association from {from_type}/{from_record_id} to {to_type}/{to_record_id}",
         )
 
-    evidence_ref = observed_evidence_ref(tenant_id, binding, association)
+    evidence_ref = observed_evidence_ref(tenant_id, contract, association)
     source_ref = observed_source_ref(association)
     assertion = RelationshipAssertion(
-        subject_label=binding.subject_label,
-        subject_id=f"{binding.subject_ref_namespace}:{association.from_record_id}",
-        relation_type=binding.relation_type,
-        object_label=binding.object_label,
-        object_id=f"{binding.object_ref_namespace}:{association.to_record_id}",
+        subject_label=contract.sync.from_label,
+        subject_id=f"{contract.subject_ref_namespace}:{association.from_record_id}",
+        relation_type=contract.sync.relation_type,
+        object_label=contract.sync.to_label,
+        object_id=f"{contract.object_ref_namespace}:{association.to_record_id}",
         evidence_ref=evidence_ref,
         source_ref=source_ref,
         confidence=OBSERVED_MEMBERSHIP_CONFIDENCE,
@@ -245,32 +279,36 @@ async def produce_observed_relationship(
     )
     assertion_defects = relationship_assertion_defects(assertion)
     if assertion_defects:
-        return ObservedRelationshipResult(
-            ProducerStatus.INVALID_INPUT, "; ".join(assertion_defects), evidence_ref, source_ref
-        )
-    if router.relationship_sync_contract(tenant_id, assertion) is None:
-        return ObservedRelationshipResult(
-            ProducerStatus.CONTRACT_NOT_DECLARED,
-            f"tenant {tenant_id!r} declares no DIRECTED sync-managed "
-            f"({binding.subject_label})-[:{binding.relation_type}]->({binding.object_label}) "
-            "edge with one targetedge sync endpoint",
+        return _resolved(
+            contract,
+            ProducerStatus.INVALID_INPUT,
+            "; ".join(assertion_defects),
             evidence_ref,
             source_ref,
         )
 
+    # notify_relationship_sync re-resolves the endpoint by labels from the same
+    # spec; that second resolution must agree (defence in depth).
     sync = await router.notify_relationship_sync(tenant_id, assertion, correlation_id)
     if sync.outcome is RelationshipSyncOutcome.ACKNOWLEDGED and sync.ack is not None:
-        return ObservedRelationshipResult(
-            ProducerStatus.SYNCED, "acknowledged by CEG", evidence_ref, source_ref, sync.ack
+        return _resolved(
+            contract,
+            ProducerStatus.SYNCED,
+            "acknowledged by CEG",
+            evidence_ref,
+            source_ref,
+            sync.ack,
         )
     if sync.outcome is RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE:
-        return ObservedRelationshipResult(
+        return _resolved(
+            contract,
             ProducerStatus.TRANSPORT_UNAVAILABLE,
             f"Gate could not carry the relationship after retries: {sync.detail}",
             evidence_ref,
             source_ref,
         )
-    return ObservedRelationshipResult(
+    return _resolved(
+        contract,
         ProducerStatus.NOT_ACKNOWLEDGED,
         f"CEG did not acknowledge the relationship: {sync.detail}",
         evidence_ref,
