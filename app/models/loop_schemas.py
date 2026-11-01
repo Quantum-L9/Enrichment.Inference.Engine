@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
@@ -181,10 +181,10 @@ class ConvergeRequest(BaseModel):
     def parse_schema_string(cls, v: Any) -> dict[str, Any] | None:
         if isinstance(v, str):
             try:
-                return json.loads(v)
+                return cast("dict[str, Any] | None", json.loads(v))
             except json.JSONDecodeError:
                 return None
-        return v
+        return cast("dict[str, Any] | None", v)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

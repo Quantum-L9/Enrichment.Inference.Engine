@@ -13,6 +13,7 @@ derived-field output per Sonar token spent.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import structlog
@@ -23,6 +24,20 @@ from ..models.loop_schemas import PassContext
 from ..services.domain_yaml_reader import DomainSpec
 
 logger = structlog.get_logger("meta_prompt_planner")
+
+
+def _named_property(properties: Any, field_name: str) -> Mapping[str, Any] | None:
+    """Return one property spec from a mapping or the canonical YAML list."""
+    if isinstance(properties, Mapping):
+        property_spec = properties.get(field_name)
+        if isinstance(property_spec, Mapping):
+            return property_spec
+        return None
+    if isinstance(properties, list):
+        for item in properties:
+            if isinstance(item, Mapping) and item.get("name") == field_name:
+                return item
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -40,7 +55,7 @@ class MetaPromptPlanner:
 
     def __init__(
         self,
-        domain_spec: DomainSpec | None = None,
+        domain_spec: Mapping[str, Any] | DomainSpec | None = None,
         rule_registry: Any = None,  # RuleRegistry from inference.rule_loader
         unlock_index: dict[str, list[str]] | None = None,
         confidence_threshold: float = 0.7,
@@ -49,7 +64,8 @@ class MetaPromptPlanner:
     ):
         """
         Args:
-            domain_spec: Domain YAML specification (optional)
+            domain_spec: Raw Domain YAML mapping (canonical), or a legacy
+                ``DomainSpec`` object without ontology metadata (optional)
             rule_registry: Optional rule registry for unlock-aware targeting
             unlock_index: Optional pre-built unlock index (output of build_unlock_index)
             confidence_threshold: A field below this confidence is a gap to
@@ -289,39 +305,57 @@ class MetaPromptPlanner:
 
     def _is_gate_critical(self, field_name: str) -> bool:
         """Check if field is gate-critical in domain spec."""
-        spec = self.domain_spec
-        if spec is None or not hasattr(spec, "ontology"):
+        metadata = self._property_metadata(field_name)
+        if metadata is None:
             return False
-
-        for node in spec.ontology.nodes:
-            if not hasattr(node, "properties"):
-                continue
-            for prop in node.properties:
-                if (
-                    prop.name == field_name
-                    and hasattr(prop, "metadata")
-                    and isinstance(prop.metadata, dict)
-                ):
-                    return bool(prop.metadata.get("gate_critical", False))
-        return False
+        return bool(metadata.get("gate_critical", False))
 
     def _get_scoring_weight(self, field_name: str) -> float:
         """Get scoring weight for field from domain spec."""
-        spec = self.domain_spec
-        if spec is None or not hasattr(spec, "ontology"):
+        metadata = self._property_metadata(field_name)
+        if metadata is None:
             return 0.0
+        return safe_float(metadata.get("scoring_weight", 0.0))
 
-        for node in spec.ontology.nodes:
-            if not hasattr(node, "properties"):
+    def _property_metadata(self, field_name: str) -> Mapping[str, Any] | None:
+        """Return a field's metadata from a raw ontology mapping or YAML list.
+
+        Domain YAML reaches the convergence loop as an unvalidated mapping. A
+        malformed or incomplete spec cannot prevent enrichment, so each level
+        is checked before it is traversed.
+        """
+        if not isinstance(self.domain_spec, Mapping):
+            return None
+
+        ontology = self.domain_spec.get("ontology")
+        if not isinstance(ontology, Mapping):
+            return None
+
+        nodes = ontology.get("nodes")
+        if isinstance(nodes, Mapping):
+            node_values = list(nodes.values())
+        elif isinstance(nodes, list):
+            node_values = nodes
+        else:
+            return None
+
+        for node in node_values:
+            if not isinstance(node, Mapping):
                 continue
-            for prop in node.properties:
-                if (
-                    prop.name == field_name
-                    and hasattr(prop, "metadata")
-                    and isinstance(prop.metadata, dict)
-                ):
-                    return safe_float(prop.metadata.get("scoring_weight", 0.0))
-        return 0.0
+            property_spec = _named_property(node.get("properties"), field_name)
+            if property_spec is None:
+                continue
+            metadata = property_spec.get("metadata")
+            if isinstance(metadata, Mapping):
+                return metadata
+            direct = {
+                key: property_spec[key]
+                for key in ("gate_critical", "scoring_weight")
+                if key in property_spec
+            }
+            if direct:
+                return direct
+        return None
 
     def _generate_reasoning(
         self, mode: str, priority_fields: list[str], uncertainty_score: float
