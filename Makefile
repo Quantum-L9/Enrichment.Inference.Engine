@@ -4,7 +4,6 @@ IMAGE_NAME ?= enrichment-api
 SERVICE_NAME ?= enrichment-api
 COMPOSE_FILE ?= docker-compose.prod.yml
 COVERAGE_MIN ?= 71
-PR_MYPY_STRICT ?= 0
 
 PYTHON := $(shell if [ -x "$(CURDIR)/.venv/bin/python" ]; then printf '%s' "$(CURDIR)/.venv/bin/python"; else command -v python3; fi)
 PYTEST := $(PYTHON) -m pytest
@@ -58,28 +57,9 @@ lint-fix:  ## Auto-fix lint and format issues
 	$(PYTHON) -m ruff check . --fix
 	$(PYTHON) -m ruff format .
 
-type-check:  ## Run ratcheted MyPy (WAIVER-001 advisory; PR_MYPY_STRICT=1 blocks findings)
-	@set +e; \
-	$(PYTHON) -m mypy app --show-error-codes; \
-	rc=$$?; \
-	if [ "$$rc" -ge 2 ]; then \
-		echo "MyPy failed with exit code $$rc; failing."; \
-		exit "$$rc"; \
-	fi; \
-	$(PYTHON) tools/mypy_ratchet.py; \
-	ratchetrc=$$?; \
-	if [ "$$ratchetrc" -ne 0 ]; then \
-		echo "MyPy ratchet found unrecorded rollout debt; failing."; \
-		exit "$$ratchetrc"; \
-	elif [ "$$rc" -eq 0 ]; then \
-		exit 0; \
-	elif [ "$(PR_MYPY_STRICT)" != "1" ]; then \
-		echo "MyPy findings are advisory under WAIVER-001; set PR_MYPY_STRICT=1 to make them blocking."; \
-		exit 0; \
-	else \
-		echo "MyPy findings are blocking because PR_MYPY_STRICT=1."; \
-		exit "$$rc"; \
-	fi
+type-check:  ## Run strict MyPy; any finding blocks.
+	$(PYTHON) -m mypy app --show-error-codes
+	$(PYTHON) tools/mypy_ratchet.py
 
 # ============================================================
 # AUDIT — 27-RULE ENGINE
@@ -109,7 +89,7 @@ agent-check:  ## THE universal gate. Agents run this before every commit.
 	@echo ""
 	@echo "=== [1/8] LINT ===" && $(PYTHON) -m ruff check .
 	@echo "=== [2/8] FORMAT ===" && $(PYTHON) -m ruff format --check .
-	@echo "=== [3/8] TYPES (ratchet + WAIVER-001) ===" && $(MAKE) type-check
+	@echo "=== [3/8] TYPES (strict MyPy) ===" && $(MAKE) type-check
 	@echo "=== [4/8] UNIT TESTS ===" && $(PYTEST) tests/unit/ tests/compliance/ -v --tb=short -x
 	@echo "=== [5/8] CI TESTS ===" && $(PYTEST) tests/ci/ -v --tb=short -x
 	@echo "=== [6/8] AUDIT ===" && $(PYTHON) tools/audit_engine.py --strict

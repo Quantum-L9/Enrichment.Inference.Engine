@@ -135,7 +135,7 @@ All 8 gates must pass before any commit.
 | -------------- | ------------------------------------- | ----------------------------------------- |
 | 1/7 LINT       | ruff check .                          | Any lint error                            |
 | 2/7 FORMAT     | ruff format --check .                 | Formatting inconsistency                  |
-| 3/7 TYPES      | mypy app                              | Type errors (non-blocking per WAIVER-001) |
+| 3/7 TYPES      | mypy app                              | Any MyPy finding                          |
 | 4/7 UNIT TESTS | pytest tests/unit/ tests/compliance/  | Test failure or coverage < 71%            |
 | 5/7 CI TESTS   | pytest tests/ci/                      | Contract call enforcement failure         |
 | 6/7 AUDIT      | python tools/audit_engine.py --strict | CRITICAL/HIGH rule violations             |
@@ -350,6 +350,6 @@ Durable, non-obvious notes for running this service in the Cursor Cloud VM. The 
 - A live enrich call returns HTTP 200 with a structured `EnrichResponse`, but `state` will be `"failed"` (`no_valid_responses ... APIConnectionError`) unless a valid `PERPLEXITY_API_KEY` is set — the LLM call is the only piece that needs an external secret. The successful-enrichment path (mocked LLM) is covered by the unit tests.
 
 ### Lint / test gotchas
-- Lint is `ruff` only in practice; `mypy` is non-blocking per `WAIVER-001`. `ruff format --check .` currently flags two pre-existing files on `main` (`app/agents/deal_risk.py`, `app/score/score_models.py`) — not introduced by env setup; do not "fix" `score_models.py` (T5-protected).
+- MyPy is a strict gate: `make type-check` and both GitHub MyPy steps fail on every finding. Do not record, suppress, or hide a finding to make the gate pass. `ruff format --check .` currently flags two pre-existing files on `main` (`app/agents/deal_risk.py`, `app/score/score_models.py`) — not introduced by env setup; do not "fix" `score_models.py` (T5-protected).
 - Do not run the whole suite blindly: `tests/services/test_outcome_delegator.py` fails at **collection** on `main` (references `OutcomeVerdict.GRAPH_REJECTED`, which does not exist). The canonical gate suites (`tests/unit`, `tests/compliance`, `tests/ci`) pass — run those.
 - `pytest.ini` hard-codes `--cov-fail-under=71`, computed against all of `app`. Running a narrow subset will report low coverage and exit non-zero even when every test passes; that is a coverage-gate artifact, not a test failure. Running tests regenerates the gitignored `coverage.xml`/`htmlcov` — discard those.
