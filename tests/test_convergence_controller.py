@@ -119,6 +119,63 @@ class TestConvergenceController:
         assert response.state == "completed"
 
     @pytest.mark.asyncio
+    async def test_convergence_flow_accepts_raw_domain_spec(
+        self, mock_settings, mock_kb_resolver
+    ) -> None:
+        seen_requests: list[EnrichRequest] = []
+
+        async def enricher(request, settings, kb_resolver, idem_store, sonar_config=None):
+            seen_requests.append(request)
+            return EnrichResponse(
+                fields={"facility_type": "MRF"},
+                confidence=0.95,
+                variation_count=1,
+                pass_count=1,
+                inference_version="test",
+                processing_time_ms=10,
+                tokens_used=100,
+                state="completed",
+                feature_vector={"per_field_confidence": {"facility_type": 0.95}},
+            )
+
+        request = EnrichRequest.model_validate(
+            {
+                "entity": {"name": "Acme Recycling"},
+                "object_type": "Facility",
+                "schema": {"facility_type": "string"},
+                "objective": "Find the facility type.",
+                "max_variations": 1,
+            }
+        )
+        raw_domain_spec = {
+            "domain": "test_domain",
+            "ontology": {
+                "nodes": {
+                    "Facility": {
+                        "properties": {
+                            "facility_type": {
+                                "metadata": {"gate_critical": True, "scoring_weight": 0.75}
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+        response = await run_convergence_loop(
+            request=request,
+            settings=mock_settings,
+            kb_resolver=mock_kb_resolver,
+            enricher=enricher,
+            inference_rules=[],
+            domain_spec=raw_domain_spec,
+        )
+
+        assert response.fields == {"facility_type": "MRF"}
+        assert len(seen_requests) == 1
+        assert seen_requests[0].schema_ == {"facility_type": "string"}
+
+    @pytest.mark.asyncio
     async def test_convergence_stops_when_delta_below_threshold(
         self, enrich_request, mock_settings, mock_kb_resolver, mock_enricher_converging
     ):
@@ -652,12 +709,14 @@ def test_caller_schema_is_the_pass_target() -> None:
         variation_count=2,
         pass_number=1,
     )
-    request = EnrichRequest(
-        entity={"name": "Scrap Management Inc", "city": "Charlotte"},
-        object_type="plasticos",
-        schema={"street": "string"},
-        objective="Return only the street address line.",
-        max_variations=1,
+    request = EnrichRequest.model_validate(
+        {
+            "entity": {"name": "Scrap Management Inc", "city": "Charlotte"},
+            "object_type": "plasticos",
+            "schema": {"street": "string"},
+            "objective": "Return only the street address line.",
+            "max_variations": 1,
+        }
     )
     built = _build_pass_request(request, plan, ConvergenceState(), pass_num=1)
     assert built.schema_ == {"street": "string"}

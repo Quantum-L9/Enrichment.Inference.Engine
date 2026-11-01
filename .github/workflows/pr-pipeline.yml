@@ -50,10 +50,6 @@ on:
         description: 'Minimal L9 checks only (PR_L9_MINIMAL)'
         type: boolean
         default: false
-      mypy_strict:
-        description: 'Fail on mypy errors (PR_MYPY_STRICT)'
-        type: boolean
-        default: false
       security_strict:
         description: 'Fail on security warnings (PR_SECURITY_STRICT)'
         type: boolean
@@ -180,16 +176,9 @@ jobs:
           echo "✅ Code formatting is consistent"
 
       - name: Run Mypy type checker
-        env:
-          PR_MYPY_STRICT: ${{ inputs.mypy_strict && '1' || '' }}
         run: |
           echo "Running type checks..."
-          MYPY_CMD="mypy app --show-error-codes --pretty --ignore-missing-imports"
-          if [ -n "$PR_MYPY_STRICT" ]; then
-            $MYPY_CMD
-          else
-            $MYPY_CMD || echo "⚠️ Type check warnings (non-blocking)"
-          fi
+          mypy app --show-error-codes --pretty --ignore-missing-imports
 
   # ────────────────────────────────────────────────────────────────────────
   # PHASE 3: SEMGREP

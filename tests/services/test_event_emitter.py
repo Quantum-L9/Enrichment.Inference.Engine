@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -62,6 +62,25 @@ class TestEnrichmentEvent:
     def test_event_type_serializes(self, sample_event: EnrichmentEvent) -> None:
         d = sample_event.to_stream_dict()
         assert d["event_type"] == "enrichment_completed"
+
+
+class TestRedisStreamsBackend:
+    @pytest.mark.asyncio
+    async def test_publish_preserves_xadd_stream_arguments(
+        self, sample_event: EnrichmentEvent
+    ) -> None:
+        redis_client = AsyncMock()
+        with patch("redis.asyncio.from_url", return_value=redis_client):
+            backend = RedisStreamsBackend("redis://localhost:6379")
+
+        await backend.publish(sample_event)
+
+        redis_client.xadd.assert_awaited_once_with(
+            "enrich:events:tenant-abc",
+            sample_event.to_stream_dict(),
+            maxlen=10_000,
+            approximate=True,
+        )
 
 
 class TestEventEmitter:

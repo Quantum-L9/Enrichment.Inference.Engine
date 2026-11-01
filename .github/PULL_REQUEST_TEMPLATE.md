@@ -15,7 +15,7 @@
 
 - [ ] `ruff check` passes
 - [ ] `ruff format` applied
-- [ ] `mypy` passes (or new errors documented)
+- [ ] `mypy` passes
 - [ ] Tests added / updated for changed behaviour
 - [ ] `pytest` passes locally
 - [ ] `.env.example` updated if new env vars added
