@@ -3,9 +3,25 @@
 # Source:   app/services/gate_client.py, app/engines/packet_router.py,
 #           app/engines/graph_sync_client.py, app/main.py,
 #           app/services/graph_return_channel.py,
-#           app/engines/convergence_controller.py
-# Version:  1.4.0
-# Updated:  2026-10-23 (PR #248 audit: resolved per TENANT, the spec CEG validates
+#           app/engines/convergence_controller.py,
+#           app/engines/observed_association_contract.py
+# Version:  1.8.0
+# Updated:  2026-10-29 (QM.POC0.TENANT_ASSOCIATION_MAPPING.004: an observed provider
+#           association resolves to its relationship and node refs only from the tenant
+#           spec's sync.endpoints[].observedfrom / refnamespace, before any provider I/O,
+#           and every resolution is labelled an unverified EIE mirror until CEG's D-9
+#           cross-check, Cognitive.Engine.Graphs#386)
+#           2026-10-29 (GAR A1/A5: CEG's relationship evidence identity is (tenant,
+#           relationship type, evidence_ref) -- the same evidence_ref under another type
+#           is a separate assertion; notify_relationship_sync answers a typed
+#           RelationshipSyncResult that tells TRANSPORT_UNAVAILABLE from NOT_ACKNOWLEDGED
+#           on Gate-client transport signals only)
+#           2026-10-25 (QM.POC0 closure: the relationship idempotency key hashes the tenant
+#           and the resolved contract's entity_type / relation_type / from_label /
+#           to_label with the row, not the row alone)
+#           2026-10-25 (QM.POC0.EIE.GRAPH_EVIDENCE.002B: relationship evidence sync over
+#           the same Gate `sync` action, to a spec-declared targetedge endpoint)
+#           2026-10-23 (PR #248 audit: resolved per TENANT, the spec CEG validates
 #           against; illegal ids refused by the reader's tenant grammar; an unmatched
 #           explicit label is ambiguous; the settings fallback is empty by default)
 #           2026-10-22 (GRAPH-IDENT-02: the CEG sync endpoint is resolved per domain
@@ -24,6 +40,10 @@ usages:
   - purpose: Gate-only egress — post-enrichment graph sync (CEG action `sync`)
     source_file: app/engines/packet_router.py
     pattern: GateClient.execute(action="sync", payload={entity_type, batch})
+
+  - purpose: Gate-only egress — relationship evidence sync (CEG action `sync`, targetedge endpoint)
+    source_file: app/engines/packet_router.py
+    pattern: GateClient.execute(action="sync", payload={entity_type, batch:[{from_id, to_id, evidence_ref, source_ref, confidence, assertion_status, polarity, source_revision?, expires_at?}]})
 
   - purpose: Gate-only egress — graph match / outcomes (CEG actions `match`, `outcomes`)
     source_file: app/engines/graph_sync_client.py
@@ -98,5 +118,70 @@ invariants:
     `object_type`) through `SideEffectCoordinator.commit_after_enrich(node_label=)` to
     `notify_graph_sync(node_label=)`; a graph-leg retry re-sends the label of the
     first attempt together with the fields and domain it pins.
+  - Relationship evidence (`PacketRouter.notify_relationship_sync`) travels on the same
+    `sync` action — no new action, no second client. Its endpoint is resolved PER TENANT
+    from the tenant's own spec — exactly one `sync.endpoints[]` entry with this
+    `targetedge` / `fromnode` / `tonode` and no `targetnode`, AND exactly one matching
+    `ontology.edges` entry declared DIRECTED and managed by sync — the
+    declaration CEG validates the row against. A reversed direction, an undeclared type
+    or two candidate endpoints send nothing (`relationship_sync_skipped_no_contract`);
+    there is no settings fallback for relationships.
+  - EIE proposes, CEG admits. The row carries only the endpoints' declared stable ids and
+    the producer's evidence — `evidence_ref`, `source_ref`, explicit `confidence` in
+    [0, 1], `assertion_status` (observed / reported / inferred), `polarity` (positive /
+    negative), optional `source_revision` / `expires_at` — never a label, relationship
+    type, tenant, database, relevance or score. An assertion missing any of them is
+    skipped with its defects (`relationship_sync_skipped_incomplete_assertion`); nothing
+    is defaulted.
+  - A relationship is synchronized only on CEG's relationship acknowledgment —
+    `relationship_sync_acknowledged` requires `graph_sync_acknowledged` for the resolved endpoint
+    AND integer `created_count` + `replayed_count` equal to the rows sent. A node-shaped
+    acknowledgment never marks a relationship synced. The idempotency key
+    (`eie:relsync:<tenant>:<evidence_ref>:<digest>`) is pinned to the exact assertion; the
+    digest covers the tenant, the resolved contract's `entity_type`, `relation_type`,
+    `from_label` and `to_label`, and the complete row. A retry resends the same assertion
+    and Gate answers a completed one from its keyed cache; a changed row, or the same
+    `evidence_ref` proposed for a different relationship or endpoint, gets a new key.
+  - CEG owns relationship evidence identity, and it is `(tenant, relationship type,
+    evidence_ref)` (Cognitive.Engine.Graphs `engine/sync/generator.py` -- one edge per
+    `MERGE (a)-[r:<type> {evidence_ref}]->(b)` under the tenant, enforced by a per-type
+    `REQUIRE (r._tenant, r.evidence_ref) IS UNIQUE` constraint). The same `evidence_ref`
+    proposed under a DIFFERENT relationship type is a separate assertion, not a conflict.
+    Within the SAME type, an exact replay is a no-op and a reuse with different endpoints
+    or evidence is a conflict CEG refuses (`ON CREATE SET` only; stored provenance is never
+    overwritten) -- EIE sees that refusal as `NOT_ACKNOWLEDGED`.
+  - The relationship send always answers a typed `RelationshipSyncResult` from
+    `notify_relationship_sync` (`outcome`, `detail`, `ack`); only `ACKNOWLEDGED`
+    carries CEG's ack and means synced. `NOT_PROPOSED` -- nothing was sent (incomplete assertion, or no declared endpoint).
+    `TRANSPORT_UNAVAILABLE` -- Gate could not carry the row -- `GateConnectionError`,
+    `GateTimeoutError`, or a Gate 5xx (`GateHTTPError.is_server_error`) -- after the
+    retries the pinned idempotency key allows are spent; the graph may or may not hold
+    the row and a later retry of the same assertion reuses the key. `NOT_ACKNOWLEDGED` --
+    Gate carried it and the answer is not a confirmation -- a `failure` packet
+    (`NodeOperationFailedError`), a Gate 4xx, an ack that does not confirm this row on
+    this endpoint, or any other Gate-client failure. The classification
+    (`relationship_failure_outcome`) reads only Gate_SDK client error types and the
+    transport-level `failure` signal; it never reads the worker's error name inside a
+    failure packet, so no CEG exception class name couples the two nodes (GAR A5).
+  - Observed provider associations (`PacketRouter.observed_association_contract`,
+    `app/engines/observed_association_contract.py`) resolve PER TENANT from the tenant's
+    own spec, before the provider is read -- exactly one `sync.endpoints[].observedfrom`
+    entry (`provider`, `fromobjecttype`, `toobjecttype`, `associationcategory`,
+    `associationtypeid`; CEG's grammars, unknown keys and non-integer ids refused) on a
+    relationship endpoint that `resolve_relationship_sync_contract` accepts, and a
+    `refnamespace` on the node endpoints of both its labels. The relation type, direction
+    and labels come from that endpoint, the graph refs `<refnamespace>:<record id>` from
+    the node endpoints. Nothing comes from the caller and there is no fallback. Any
+    malformed or conflicting declaration anywhere in the spec, a duplicate key, a reversed
+    object-type pair, or a missing namespace resolves nothing
+    (`observed_association_skipped_<reason>`), and nothing is read or sent.
+  - EIE's spec is a lockstep MIRROR of CEG's tenant spec, not CEG's approval. CEG does not
+    yet cross-check an observed row against its own `observedfrom` (D-9,
+    Cognitive.Engine.Graphs#386, required before live acceptance), so every producer
+    result after resolution carries `mapping_verification =
+    eie_mirror_unverified_by_ceg` and the mirror's `mapping_fingerprint`;
+    `mirror_drift(mirror, ceg_spec)` lists every divergence of the mapping declarations.
+  - No live EIE producer of typed relationships exists as of 1.8.0; nothing on the
+    enrichment path calls `notify_relationship_sync` (SOURCE_NOT_AVAILABLE).
 
 health_check: "GET {GATE_URL}/v1/health"

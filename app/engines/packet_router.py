@@ -37,7 +37,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 import yaml
@@ -49,6 +49,9 @@ from constellation_node_sdk.gate import (
 )
 
 from app.engines.domain_yaml_reader import DomainYamlReader
+
+if TYPE_CHECKING:
+    from app.engines.observed_association_contract import ObservedRelationshipContract
 from app.services.gate_client import EIE_NODE_NAME, build_gate_client
 
 logger = structlog.get_logger("packet_router")
@@ -303,6 +306,271 @@ def _sync_idempotency_key(tenant_id: str, entity_id: str, row: dict[str, Any]) -
         json.dumps(row, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()[:16]
     return f"eie:sync:{tenant_id}:{entity_id}:{digest}"
+
+
+# ── Relationship evidence sync (QM.POC0.EIE.GRAPH_EVIDENCE.002B) ───────────────
+#
+# EIE proposes one sourced, typed relationship; CEG validates and materialises
+# it through the same Gate ``sync`` action, at an endpoint the tenant's spec
+# declares with ``targetedge`` / ``fromnode`` / ``tonode`` (CEG
+# QM.POC0.CEG.GRAPH_EVIDENCE.002A). Nothing here infers a relationship: the
+# caller hands over an explicit assertion, and an incomplete one is skipped
+# with its reasons, never repaired. Relevance and admission are CEG's.
+
+RELATIONSHIP_ASSERTION_STATUSES = frozenset({"observed", "reported", "inferred"})
+RELATIONSHIP_POLARITIES = frozenset({"positive", "negative"})
+
+
+@dataclass(frozen=True, slots=True)
+class RelationshipAssertion:
+    """One directed, typed relationship and the evidence for it.
+
+    ``subject_*`` is the relationship's source node, ``object_*`` its target;
+    the ids are the nodes' declared stable ids in the tenant graph. Every
+    evidence field is supplied by the producer -- confidence, status and
+    polarity are never defaulted.
+    """
+
+    subject_label: str
+    subject_id: str | int
+    relation_type: str
+    object_label: str
+    object_id: str | int
+    evidence_ref: str
+    source_ref: str
+    confidence: float
+    assertion_status: str
+    polarity: str
+    source_revision: str | None = None
+    expires_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RelationshipSyncContract:
+    """The CEG ``sync`` endpoint that materialises one declared relationship."""
+
+    entity_type: str
+    relation_type: str
+    from_label: str
+    to_label: str
+
+
+def _non_empty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def relationship_assertion_defects(assertion: RelationshipAssertion) -> list[str]:
+    """Why ``assertion`` cannot be proposed as evidence; empty when it can."""
+    defects: list[str] = []
+    for name in ("subject_label", "relation_type", "object_label", "evidence_ref", "source_ref"):
+        if not _non_empty_text(getattr(assertion, name)):
+            defects.append(f"{name} missing")
+    for name in ("subject_id", "object_id"):
+        value = getattr(assertion, name)
+        if isinstance(value, bool) or not (isinstance(value, int) or _non_empty_text(value)):
+            defects.append(f"{name} missing")
+    confidence = assertion.confidence
+    if (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, int | float)
+        or not 0.0 <= confidence <= 1.0
+    ):
+        defects.append("confidence must be an explicit number in [0, 1]")
+    if assertion.assertion_status not in RELATIONSHIP_ASSERTION_STATUSES:
+        defects.append(f"assertion_status must be one of {sorted(RELATIONSHIP_ASSERTION_STATUSES)}")
+    if assertion.polarity not in RELATIONSHIP_POLARITIES:
+        defects.append(f"polarity must be one of {sorted(RELATIONSHIP_POLARITIES)}")
+    for name in ("source_revision", "expires_at"):
+        value = getattr(assertion, name)
+        if value is not None and not _non_empty_text(value):
+            defects.append(f"{name} must be a non-empty string when present")
+    return defects
+
+
+def _declares_sync_edge(domain_spec: dict[str, Any], contract: RelationshipSyncContract) -> bool:
+    """Whether the ontology declares exactly this DIRECTED, sync-managed edge."""
+    ontology = domain_spec.get("ontology")
+    edges = ontology.get("edges") if isinstance(ontology, dict) else None
+    if not isinstance(edges, list):
+        return False
+    matches = [
+        edge
+        for edge in edges
+        if isinstance(edge, dict)
+        and edge.get("type") == contract.relation_type
+        and edge.get("from") == contract.from_label
+        and edge.get("to") == contract.to_label
+    ]
+    return (
+        len(matches) == 1
+        and matches[0].get("direction") == "DIRECTED"
+        and matches[0].get("managedby") == "sync"
+    )
+
+
+def resolve_relationship_sync_contract(
+    domain_spec: dict[str, Any],
+    *,
+    relation_type: str,
+    from_label: str,
+    to_label: str,
+) -> RelationshipSyncContract | None:
+    """The tenant's declared endpoint for exactly this directed relationship, else None.
+
+    Requires one ``sync.endpoints[]`` entry with this ``targetedge`` /
+    ``fromnode`` / ``tonode`` and no ``targetnode``, and the matching
+    DIRECTED, sync-managed edge in ``ontology.edges`` -- the same declaration
+    CEG validates the row against. A reversed direction, an undeclared type,
+    or two candidate endpoints resolve to None; nothing is guessed.
+    """
+    sync = domain_spec.get("sync")
+    endpoints = sync.get("endpoints") if isinstance(sync, dict) else None
+    if not isinstance(endpoints, list):
+        return None
+    candidates = [
+        endpoint
+        for endpoint in endpoints
+        if isinstance(endpoint, dict)
+        and endpoint.get("targetedge") == relation_type
+        and endpoint.get("fromnode") == from_label
+        and endpoint.get("tonode") == to_label
+        and not endpoint.get("targetnode")
+        and isinstance(endpoint.get("path"), str)
+    ]
+    if len(candidates) != 1:
+        return None
+    entity_type = candidates[0]["path"].rstrip("/").rsplit("/", 1)[-1]
+    if not entity_type:
+        return None
+    contract = RelationshipSyncContract(
+        entity_type=entity_type,
+        relation_type=relation_type,
+        from_label=from_label,
+        to_label=to_label,
+    )
+    return contract if _declares_sync_edge(domain_spec, contract) else None
+
+
+def _relationship_sync_row(assertion: RelationshipAssertion) -> dict[str, Any]:
+    """CEG's relationship sync row: endpoint ids and evidence, nothing structural."""
+    row: dict[str, Any] = {
+        "from_id": assertion.subject_id,
+        "to_id": assertion.object_id,
+        "evidence_ref": assertion.evidence_ref,
+        "source_ref": assertion.source_ref,
+        "confidence": assertion.confidence,
+        "assertion_status": assertion.assertion_status,
+        "polarity": assertion.polarity,
+    }
+    if assertion.source_revision is not None:
+        row["source_revision"] = assertion.source_revision
+    if assertion.expires_at is not None:
+        row["expires_at"] = assertion.expires_at
+    return row
+
+
+def _relationship_idempotency_key(
+    tenant_id: str, contract: RelationshipSyncContract, row: dict[str, Any]
+) -> str:
+    """Pinned to the exact assertion: a retry resends this assertion, never another.
+
+    The row carries only endpoint ids and evidence; the structural identity
+    (endpoint, relationship type, endpoint labels) comes from the resolved
+    contract. All of it is hashed with the tenant, so one ``evidence_ref``
+    proposed for a different relationship or endpoint is a different request
+    and can never be answered from Gate's keyed cache for the first one.
+    """
+    identity = {
+        "tenant": tenant_id,
+        "entity_type": contract.entity_type,
+        "relation_type": contract.relation_type,
+        "from_label": contract.from_label,
+        "to_label": contract.to_label,
+        "row": row,
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"eie:relsync:{tenant_id}:{row['evidence_ref']}:{digest}"
+
+
+def relationship_sync_acknowledged(
+    ack: Any,
+    *,
+    entity_type: str,
+    expected_count: int,
+) -> bool:
+    """Whether ``ack`` is CEG's relationship endpoint confirming this batch.
+
+    A node ``sync`` acknowledgment is not enough: CEG's relationship path also
+    answers ``created_count`` + ``replayed_count`` == the rows it recorded, so an
+    answer from a node endpoint can never mark a relationship synced.
+    """
+    if not graph_sync_acknowledged(ack, entity_type=entity_type, expected_count=expected_count):
+        return False
+    created = ack.get("created_count")
+    replayed = ack.get("replayed_count")
+    counts = (created, replayed)
+    if any(isinstance(c, bool) or not isinstance(c, int) or c < 0 for c in counts):
+        return False
+    return bool(created + replayed == expected_count)
+
+
+class RelationshipSyncOutcome(StrEnum):
+    """What became of one proposed relationship, read from transport signals only.
+
+    * ``ACKNOWLEDGED`` -- CEG's relationship endpoint confirmed this row.
+    * ``NOT_PROPOSED`` -- nothing was sent: the assertion is incomplete or the
+      tenant declares no endpoint for it.
+    * ``TRANSPORT_UNAVAILABLE`` -- Gate could not carry the row: unreachable, a
+      timeout, or a Gate 5xx, after the retries the pinned idempotency key
+      allows were spent. The graph may or may not hold the row; a later retry of
+      the same assertion reuses the same key.
+    * ``NOT_ACKNOWLEDGED`` -- Gate carried it and the answer is not a
+      confirmation: a ``failure`` packet, a Gate 4xx, an answer that does not
+      confirm this row on this endpoint, or any other client failure.
+
+    The worker's own error vocabulary (its exception name inside a ``failure``
+    packet) is never read: telling a refusal apart from an outage by a peer's
+    class names would couple EIE to that peer (GAR A5).
+    """
+
+    ACKNOWLEDGED = "acknowledged"
+    NOT_PROPOSED = "not_proposed"
+    TRANSPORT_UNAVAILABLE = "transport_unavailable"
+    NOT_ACKNOWLEDGED = "not_acknowledged"
+
+
+@dataclass(frozen=True, slots=True)
+class RelationshipSyncResult:
+    """Typed answer of ``PacketRouter.notify_relationship_sync``; ``ack`` only when acknowledged."""
+
+    outcome: RelationshipSyncOutcome
+    detail: str
+    ack: dict[str, Any] | None = None
+
+    @property
+    def acknowledged(self) -> bool:
+        return self.outcome is RelationshipSyncOutcome.ACKNOWLEDGED
+
+
+def relationship_failure_outcome(exc: NodeUnreachableError) -> RelationshipSyncOutcome:
+    """Classify a failed relationship route on Gate-client transport signals only.
+
+    ``route`` raises ``NodeOperationFailedError`` for a ``failure`` packet and
+    ``NodeUnreachableError`` chained (``from``) to the last ``GateClientError``
+    once its retries are spent. Unreachable, timed out and Gate 5xx mean the
+    transport was unavailable; everything else -- a failure packet, a 4xx, any
+    other client error -- is a refusal or an unconfirmed answer.
+    """
+    if isinstance(exc, NodeOperationFailedError):
+        return RelationshipSyncOutcome.NOT_ACKNOWLEDGED
+    cause = exc.__cause__
+    if isinstance(cause, GateConnectionError | GateTimeoutError):
+        return RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE
+    if isinstance(cause, GateHTTPError) and cause.is_server_error:
+        return RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE
+    return RelationshipSyncOutcome.NOT_ACKNOWLEDGED
 
 
 class PacketRouter:
@@ -638,6 +906,163 @@ class PacketRouter:
             )
             return None
         return ack
+
+    def relationship_sync_contract(
+        self,
+        tenant_id: str,
+        assertion: RelationshipAssertion,
+    ) -> RelationshipSyncContract | None:
+        """Resolve the tenant's declared endpoint for ``assertion``'s relationship."""
+        spec = self._load_domain_spec(tenant_id)
+        if spec is None:
+            return None
+        return resolve_relationship_sync_contract(
+            spec,
+            relation_type=assertion.relation_type,
+            from_label=assertion.subject_label,
+            to_label=assertion.object_label,
+        )
+
+    def observed_association_contract(
+        self,
+        tenant_id: str,
+        *,
+        provider: str,
+        from_object_type: str,
+        to_object_type: str,
+        association_category: str,
+        association_type_id: int,
+    ) -> ObservedRelationshipContract | None:
+        """The tenant relationship one provider association is declared for, else None.
+
+        Read from the tenant's spec (``sync.endpoints[].observedfrom`` and the
+        node endpoints' ``refnamespace``); nothing is defaulted and there is no
+        settings fallback. Every refusal is logged with its reason and a fix.
+        """
+        # Imported here: the resolver reuses this module's relationship contract.
+        from app.engines.observed_association_contract import (
+            resolve_observed_association_contract,
+        )
+
+        spec = self._load_domain_spec(tenant_id)
+        if spec is None:
+            logger.warning(
+                "observed_association_skipped_no_spec",
+                tenant_id=tenant_id,
+                fix="provide domains/<tenant_id>/spec.yaml mirroring CEG's tenant spec",
+            )
+            return None
+        resolution = resolve_observed_association_contract(
+            spec,
+            provider=provider,
+            from_object_type=from_object_type,
+            to_object_type=to_object_type,
+            association_category=association_category,
+            association_type_id=association_type_id,
+        )
+        if resolution.contract is None:
+            failure = resolution.failure.value if resolution.failure else "unknown"
+            logger.warning(
+                f"observed_association_skipped_{failure}",
+                tenant_id=tenant_id,
+                provider=provider,
+                detail=resolution.detail,
+                fix="declare exactly one sync.endpoints[].observedfrom entry for this association "
+                "on a valid relationship endpoint, and refnamespace on both node endpoints",
+            )
+        return resolution.contract
+
+    async def notify_relationship_sync(
+        self,
+        tenant_id: str,
+        assertion: RelationshipAssertion,
+        correlation_id: str | None = None,
+    ) -> RelationshipSyncResult:
+        """Propose one evidenced relationship to the graph through Gate ``sync``.
+
+        The endpoint comes from the TENANT's spec (tenant id == domain spec id),
+        exactly as for node sync; there is no settings fallback for a
+        relationship. Always answers a typed ``RelationshipSyncResult``; only
+        ``ACKNOWLEDGED`` (CEG's relationship endpoint confirmed this row,
+        ``relationship_sync_acknowledged``) carries the ack and means synced.
+        An incomplete assertion or an undeclared or mismatched relationship is
+        ``NOT_PROPOSED``; a Gate outage after retries is ``TRANSPORT_UNAVAILABLE``;
+        a worker failure, a 4xx or any unconfirming answer is ``NOT_ACKNOWLEDGED``.
+        A retry with the same assertion reuses the same idempotency key.
+        """
+        defects = relationship_assertion_defects(assertion)
+        if defects:
+            logger.warning(
+                "relationship_sync_skipped_incomplete_assertion",
+                tenant_id=tenant_id,
+                evidence_ref=assertion.evidence_ref,
+                defects=defects,
+            )
+            return RelationshipSyncResult(
+                RelationshipSyncOutcome.NOT_PROPOSED, "incomplete assertion: " + "; ".join(defects)
+            )
+        contract = self.relationship_sync_contract(tenant_id, assertion)
+        if contract is None:
+            logger.warning(
+                "relationship_sync_skipped_no_contract",
+                tenant_id=tenant_id,
+                relation_type=assertion.relation_type,
+                from_label=assertion.subject_label,
+                to_label=assertion.object_label,
+                fix="declare a sync endpoint with this targetedge/fromnode/tonode and the "
+                "matching DIRECTED, managedby: sync edge in ontology.edges",
+            )
+            return RelationshipSyncResult(
+                RelationshipSyncOutcome.NOT_PROPOSED,
+                "tenant declares no sync endpoint for this relationship",
+            )
+        return await self._send_relationship(tenant_id, assertion, contract, correlation_id)
+
+    async def _send_relationship(
+        self,
+        tenant_id: str,
+        assertion: RelationshipAssertion,
+        contract: RelationshipSyncContract,
+        correlation_id: str | None,
+    ) -> RelationshipSyncResult:
+        """Route one relationship row through Gate and classify the answer."""
+        row = _relationship_sync_row(assertion)
+        try:
+            ack = await self.route(
+                NodeTarget.GRAPH,
+                "sync",
+                tenant_id,
+                {"entity_type": contract.entity_type, "batch": [row]},
+                correlation_id,
+                idempotency_key=_relationship_idempotency_key(tenant_id, contract, row),
+            )
+        except NodeUnreachableError as exc:
+            outcome = relationship_failure_outcome(exc)
+            logger.warning(
+                "relationship_sync_failed",
+                evidence_ref=assertion.evidence_ref,
+                outcome=outcome.value,
+                error=str(exc),
+            )
+            return RelationshipSyncResult(outcome, str(exc))
+        if not relationship_sync_acknowledged(
+            ack, entity_type=contract.entity_type, expected_count=1
+        ):
+            logger.warning(
+                "relationship_sync_unacknowledged",
+                evidence_ref=assertion.evidence_ref,
+                status=ack.get("status"),
+                entity_type=ack.get("entity_type"),
+                expected_entity_type=contract.entity_type,
+            )
+            return RelationshipSyncResult(
+                RelationshipSyncOutcome.NOT_ACKNOWLEDGED,
+                f"answer does not confirm the row on endpoint {contract.entity_type!r} "
+                f"(status {ack.get('status')!r})",
+            )
+        return RelationshipSyncResult(
+            RelationshipSyncOutcome.ACKNOWLEDGED, "acknowledged by CEG", ack
+        )
 
     async def notify_score_invalidate(
         self,

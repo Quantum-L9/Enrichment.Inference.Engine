@@ -12,7 +12,9 @@ L9 Architecture Note:
 from __future__ import annotations
 
 import logging
+import re
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -27,6 +29,93 @@ _OBJECT_TYPE_MAP = {
     "deal": "deals",
     "opportunity": "deals",
 }
+
+# Date-versioned CRM API (HubSpot retires the semantic v4 associations API in
+# March 2027). One page is read; a record with more is refused, never truncated.
+_ASSOCIATIONS_API_VERSION = "2026-09"
+# Standard names (``companies``) and object type ids (``0-3``, ``2-1234``).
+_OBJECT_TYPE_SEGMENT = re.compile(r"[a-z][a-z0-9_]{0,63}|[0-9]+-[0-9]+")
+# A canonical HubSpot record id: ASCII digits, no leading zero.
+_RECORD_ID = re.compile(r"[1-9][0-9]{0,30}")
+
+
+def native_object_type(object_type: str) -> str:
+    """The provider-native object type for an EIE alias (``company`` -> ``companies``); else unchanged."""
+    return _OBJECT_TYPE_MAP.get(object_type, object_type)
+
+
+def is_canonical_record_id(value: object) -> bool:
+    """Whether ``value`` is a record id exactly as HubSpot renders it (``str(int)``)."""
+    return isinstance(value, str) and _RECORD_ID.fullmatch(value) is not None
+
+
+class HubSpotAssociationReadError(RuntimeError):
+    """An association read could not prove what the source holds.
+
+    Raised for any non-200 answer (403 missing scope, 404 unknown record, 429
+    rate limit, 5xx outage), a transport failure, a malformed body or a result
+    that does not fit one page. Unlike the writeback methods, the association
+    read never answers "no associations" for a failure.
+    """
+
+    def __init__(self, reason: str, *, status_code: int | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.status_code = status_code
+
+
+@dataclass(frozen=True, slots=True)
+class HubSpotAssociation:
+    """One association type between two records, exactly as HubSpot returned it."""
+
+    from_object_type: str
+    from_record_id: str
+    to_object_type: str
+    to_record_id: str
+    category: str
+    type_id: int
+    label: str | None
+
+
+def _parse_association_types(
+    from_object_type: str,
+    from_record_id: str,
+    to_object_type: str,
+    entry: Any,
+) -> list[HubSpotAssociation]:
+    if not isinstance(entry, dict):
+        raise HubSpotAssociationReadError("malformed association entry")
+    to_id = entry.get("toObjectId")
+    types = entry.get("associationTypes")
+    if isinstance(to_id, bool) or not isinstance(to_id, int | str) or not str(to_id).strip():
+        raise HubSpotAssociationReadError("association entry has no toObjectId")
+    if not isinstance(types, list) or not types:
+        raise HubSpotAssociationReadError("association entry has no associationTypes")
+    parsed = []
+    for association_type in types:
+        if not isinstance(association_type, dict):
+            raise HubSpotAssociationReadError("malformed association type")
+        category = association_type.get("category")
+        type_id = association_type.get("typeId")
+        label = association_type.get("label")
+        if not isinstance(category, str) or not category:
+            raise HubSpotAssociationReadError("association type has no category")
+        if isinstance(type_id, bool) or not isinstance(type_id, int):
+            raise HubSpotAssociationReadError("association type has no integer typeId")
+        if label is not None and not isinstance(label, str):
+            raise HubSpotAssociationReadError("association type label is not a string")
+        parsed.append(
+            HubSpotAssociation(
+                from_object_type=from_object_type,
+                from_record_id=from_record_id,
+                to_object_type=to_object_type,
+                to_record_id=str(to_id),
+                category=category,
+                type_id=type_id,
+                label=label,
+            )
+        )
+    return parsed
 
 
 class HubSpotClient(CRMClientBase):
@@ -79,7 +168,8 @@ class HubSpotClient(CRMClientBase):
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
-            return resp.json().get("properties", {})
+            properties: dict[str, Any] = resp.json().get("properties", {})
+            return properties
         except Exception as exc:
             logger.exception("HS get_record error: %s", exc)
             return None
@@ -233,6 +323,83 @@ class HubSpotClient(CRMClientBase):
             ]
         except Exception as exc:
             return [WriteResult(success=False, error=str(exc))] * len(records)
+
+    def read_associations(
+        self,
+        from_object_type: str,
+        from_record_id: str,
+        to_object_type: str,
+    ) -> list[HubSpotAssociation]:
+        """Read one record's associations to one object type. Read-only.
+
+        ``GET /crm/objects/2026-09/{from}/{id}/associations/{to}`` (the
+        date-versioned successor of the v4 associations read; same response
+        shape). Every association type HubSpot reports is returned with its
+        category, numeric ``typeId`` and label. Any failure raises
+        ``HubSpotAssociationReadError``; an empty list means HubSpot answered
+        200 with one complete page holding no associations.
+        """
+        from_type = native_object_type(from_object_type)
+        to_type = native_object_type(to_object_type)
+        # Path segments: an object type name or id must never reshape the URL.
+        if not (
+            _OBJECT_TYPE_SEGMENT.fullmatch(from_type) and _OBJECT_TYPE_SEGMENT.fullmatch(to_type)
+        ):
+            raise HubSpotAssociationReadError(
+                "object type must be a plain HubSpot object type name"
+            )
+        if not is_canonical_record_id(from_record_id):
+            raise HubSpotAssociationReadError("record id must be a canonical numeric HubSpot id")
+        url = (
+            f"{self._base_url}/crm/objects/{_ASSOCIATIONS_API_VERSION}/"
+            f"{from_type}/{from_record_id}/associations/{to_type}"
+        )
+
+        self._respect_rate_limit()
+        try:
+            resp = httpx.get(url, headers=self._headers(), timeout=15)
+        except httpx.HTTPError as exc:
+            raise HubSpotAssociationReadError(f"transport failure: {type(exc).__name__}") from exc
+        # Association evidence refuses a read whose rate-limit headers cannot be
+        # parsed. CRM advisory tracking may swallow the same headers; this check
+        # stays in front of that helper so a bad header cannot look complete.
+        try:
+            for header_name in (
+                "X-HubSpot-RateLimit-Remaining",
+                "X-HubSpot-RateLimit-Interval-Milliseconds",
+            ):
+                header_value = resp.headers.get(header_name)
+                if header_value is not None:
+                    int(header_value)
+        except ValueError as exc:
+            raise HubSpotAssociationReadError("malformed rate-limit headers") from exc
+        self._update_rate_limit(resp)
+        if resp.status_code != 200:
+            raise HubSpotAssociationReadError(
+                f"HubSpot answered {resp.status_code}", status_code=resp.status_code
+            )
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise HubSpotAssociationReadError("response body is not JSON") from exc
+        results = body.get("results") if isinstance(body, dict) else None
+        if not isinstance(results, list):
+            raise HubSpotAssociationReadError("response has no results list")
+        # Completeness must be proven: any paging object that is not a dict, or
+        # that carries a ``next`` key at all, means the page may not be the last.
+        if "paging" in body:
+            paging = body["paging"]
+            if not isinstance(paging, dict) or "next" in paging:
+                raise HubSpotAssociationReadError(
+                    "associations span more than one page or paging is malformed; "
+                    "refusing an unproven-complete read"
+                )
+        associations: list[HubSpotAssociation] = []
+        for entry in results:
+            associations.extend(
+                _parse_association_types(from_type, str(from_record_id), to_type, entry)
+            )
+        return associations
 
     def get_field_metadata(self, object_type: str) -> dict[str, Any]:
         """Return field schema metadata for a HubSpot object."""
