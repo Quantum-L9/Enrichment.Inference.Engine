@@ -106,3 +106,19 @@ def test_route_returns_runtime_attestation_payload(
     payload = get_runtime_attestation()
     for field in constitution["runtime_attestation"]["required_fields"]:
         assert field in payload
+
+
+def test_hubspot_readiness_requires_access_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    # HubSpotClient authenticates with Settings.hubspot_access_token
+    # (HUBSPOT_ACCESS_TOKEN). A contract that declares no env var is counted ready
+    # unconditionally, so HubSpot must declare its token to be attested honestly.
+    monkeypatch.delenv("HUBSPOT_ACCESS_TOKEN", raising=False)
+    unset = build_runtime_attestation()["dependency_readiness"]["HubSpotCRM"]
+    assert unset["env_vars"] == ["HUBSPOT_ACCESS_TOKEN"]
+    assert unset["missing_env"] == ["HUBSPOT_ACCESS_TOKEN"]
+    assert unset["ready"] is False
+
+    monkeypatch.setenv("HUBSPOT_ACCESS_TOKEN", "attestation-fixture")
+    set_ = build_runtime_attestation()["dependency_readiness"]["HubSpotCRM"]
+    assert set_["missing_env"] == []
+    assert set_["ready"] is True

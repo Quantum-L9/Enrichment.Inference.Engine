@@ -3,9 +3,15 @@
 # Source:   app/services/gate_client.py, app/engines/packet_router.py,
 #           app/engines/graph_sync_client.py, app/main.py,
 #           app/services/graph_return_channel.py,
-#           app/engines/convergence_controller.py
-# Version:  1.7.0
-# Updated:  2026-10-29 (GAR A1/A5: CEG's relationship evidence identity is (tenant,
+#           app/engines/convergence_controller.py,
+#           app/engines/observed_association_contract.py
+# Version:  1.8.0
+# Updated:  2026-10-29 (QM.POC0.TENANT_ASSOCIATION_MAPPING.004: an observed provider
+#           association resolves to its relationship and node refs only from the tenant
+#           spec's sync.endpoints[].observedfrom / refnamespace, before any provider I/O,
+#           and every resolution is labelled an unverified EIE mirror until CEG's D-9
+#           cross-check, Cognitive.Engine.Graphs#386)
+#           2026-10-29 (GAR A1/A5: CEG's relationship evidence identity is (tenant,
 #           relationship type, evidence_ref) -- the same evidence_ref under another type
 #           is a separate assertion; notify_relationship_sync answers a typed
 #           RelationshipSyncResult that tells TRANSPORT_UNAVAILABLE from NOT_ACKNOWLEDGED
@@ -157,7 +163,25 @@ invariants:
     (`relationship_failure_outcome`) reads only Gate_SDK client error types and the
     transport-level `failure` signal; it never reads the worker's error name inside a
     failure packet, so no CEG exception class name couples the two nodes (GAR A5).
-  - No live EIE producer of typed relationships exists as of 1.7.0; nothing on the
+  - Observed provider associations (`PacketRouter.observed_association_contract`,
+    `app/engines/observed_association_contract.py`) resolve PER TENANT from the tenant's
+    own spec, before the provider is read -- exactly one `sync.endpoints[].observedfrom`
+    entry (`provider`, `fromobjecttype`, `toobjecttype`, `associationcategory`,
+    `associationtypeid`; CEG's grammars, unknown keys and non-integer ids refused) on a
+    relationship endpoint that `resolve_relationship_sync_contract` accepts, and a
+    `refnamespace` on the node endpoints of both its labels. The relation type, direction
+    and labels come from that endpoint, the graph refs `<refnamespace>:<record id>` from
+    the node endpoints. Nothing comes from the caller and there is no fallback. Any
+    malformed or conflicting declaration anywhere in the spec, a duplicate key, a reversed
+    object-type pair, or a missing namespace resolves nothing
+    (`observed_association_skipped_<reason>`), and nothing is read or sent.
+  - EIE's spec is a lockstep MIRROR of CEG's tenant spec, not CEG's approval. CEG does not
+    yet cross-check an observed row against its own `observedfrom` (D-9,
+    Cognitive.Engine.Graphs#386, required before live acceptance), so every producer
+    result after resolution carries `mapping_verification =
+    eie_mirror_unverified_by_ceg` and the mirror's `mapping_fingerprint`;
+    `mirror_drift(mirror, ceg_spec)` lists every divergence of the mapping declarations.
+  - No live EIE producer of typed relationships exists as of 1.8.0; nothing on the
     enrichment path calls `notify_relationship_sync` (SOURCE_NOT_AVAILABLE).
 
 health_check: "GET {GATE_URL}/v1/health"
