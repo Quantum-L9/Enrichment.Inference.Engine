@@ -1,23 +1,40 @@
-"""
-CRM integration package.
+"""CRM integration package with a single provider registry owner."""
 
-Provides CRM client abstraction, field mapping, and write-back
-orchestration for the enrichment engine.
-
-Available clients:
-- OdooClient: Odoo XML-RPC integration (first consumer)
-- SalesforceClient: Salesforce REST API integration
-- HubSpotClient: HubSpot CRM v3 API integration
-"""
-
-from .base import CRMClientBase, CRMCredentials, CRMType, WriteResult
+from .base import (
+    CRMClientBase,
+    CRMCredentials,
+    CRMErrorCode,
+    CRMJournalError,
+    CRMLookupResult,
+    CRMLookupStatus,
+    CRMOperation,
+    CRMOperationConflictError,
+    CRMReadError,
+    CRMRecord,
+    CRMRecordRef,
+    CRMType,
+    CRMUniqueKey,
+    CRMWriteIntent,
+    CRMWritePermit,
+    CRMWriteReceipt,
+    CRMWriteState,
+    WriteResult,
+)
 from .field_mapper import FieldMapper
 from .hubspot_client import HubSpotClient
 from .odoo_client import OdooClient
 from .salesforce_client import SalesforceClient
-from .writeback import WriteBackOrchestrator
+from .writeback import (
+    CRMActivationLevel,
+    CRMJournalClaim,
+    CRMOperationJournal,
+    TrustedCRMConnector,
+    TrustedWritebackApproval,
+    WriteBackOrchestrator,
+)
 
-# Client registry — maps CRMType to implementation
+# This package is the sole owner of provider selection. The orchestrator obtains
+# this mapping lazily after package initialization to avoid a circular import.
 CLIENT_REGISTRY: dict[CRMType, type[CRMClientBase]] = {
     CRMType.ODOO: OdooClient,
     CRMType.SALESFORCE: SalesforceClient,
@@ -26,13 +43,32 @@ CLIENT_REGISTRY: dict[CRMType, type[CRMClientBase]] = {
 
 __all__ = [
     "CLIENT_REGISTRY",
+    "CRMActivationLevel",
     "CRMClientBase",
     "CRMCredentials",
+    "CRMErrorCode",
+    "CRMJournalClaim",
+    "CRMJournalError",
+    "CRMLookupResult",
+    "CRMLookupStatus",
+    "CRMOperation",
+    "CRMOperationConflictError",
+    "CRMOperationJournal",
+    "CRMReadError",
+    "CRMRecord",
+    "CRMRecordRef",
     "CRMType",
+    "CRMUniqueKey",
+    "CRMWriteIntent",
+    "CRMWritePermit",
+    "CRMWriteReceipt",
+    "CRMWriteState",
     "FieldMapper",
     "HubSpotClient",
     "OdooClient",
     "SalesforceClient",
+    "TrustedCRMConnector",
+    "TrustedWritebackApproval",
     "WriteBackOrchestrator",
     "WriteResult",
 ]
