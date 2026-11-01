@@ -14,19 +14,40 @@ from __future__ import annotations
 
 import inspect
 import os
+from collections.abc import Iterator
+from unittest.mock import patch
 
-os.environ.update(
-    {
-        "PERPLEXITY_API_KEY": "test-key",
-        "API_SECRET_KEY": "test-secret-key-32-chars-long!!",
-        "KB_DIR": "./kb",
-    }
-)
-
+import pytest
 from sqlalchemy import UniqueConstraint
 
+from app.core.config import get_settings
 from app.services import pg_store
 from app.services.pg_models import EnrichmentResult
+
+_MODULE_ENV = {
+    "PERPLEXITY_API_KEY": "test-key",
+    "API_SECRET_KEY": "test-secret-key-32-chars-long!!",
+    "KB_DIR": "./kb",
+}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _module_env() -> Iterator[None]:
+    """Scope this module's environment to this module's tests.
+
+    This was a module-level ``os.environ.update``, which pytest runs during
+    collection and therefore for the whole session. ``patch.dict`` restores the
+    caller's environment on teardown, and the settings cache is cleared on both
+    sides so neither this module nor the next reads a ``Settings`` built from
+    the other's environment.
+    """
+    with patch.dict(os.environ, _MODULE_ENV):
+        get_settings.cache_clear()
+        try:
+            yield
+        finally:
+            get_settings.cache_clear()
+
 
 _KEY = "idempotency_key"
 _TENANT = "tenant_id"
