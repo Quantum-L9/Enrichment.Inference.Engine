@@ -18,7 +18,7 @@ L9 Architecture Note:
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import structlog
 
@@ -123,7 +123,7 @@ class LLMSource(BaseSource):
 
     async def complete_json(self, prompt: str) -> dict[str, Any]:
         """Call the provider and return parsed JSON."""
-        return await self._resolve_client().complete_json(prompt)
+        return cast("dict[str, Any]", await self._resolve_client().complete_json(prompt))
 
     async def enrich(self, domain: str, payload: dict[str, Any]) -> EnrichmentResult:
         start = self._now_ms()

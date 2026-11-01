@@ -117,9 +117,6 @@ jobs:
               'fastapi import', 'chassis', 'transport', 'ingress',
               'contract', 'runtime',
           )
-          ADVISORY_TOKENS = (
-              'flatcase', 'naming', 'style', 'low confidence',
-          )
 
           def normalize_path(value: object) -> str:
               text = str(value or '').replace('\\', '/').strip()
@@ -187,9 +184,10 @@ jobs:
               return '|'.join((normalize_path(finding.get('file')), finding_rule(finding), normalize_text(finding.get('message'))))
 
           def is_advisory_category(finding: dict) -> bool:
-              rule = finding_rule(finding)
-              message = normalize_text(finding.get('message'))
-              return rule in ADVISORY_RULES or any(token in message for token in ADVISORY_TOKENS)
+              # Classify by resolved rule only (F-034), as is_dangerous_category
+              # already does: message substrings matched identifiers, so a
+              # CRITICAL "camelCase field 'fontStyle'" read as advisory 'style'.
+              return finding_rule(finding) in ADVISORY_RULES
 
           def is_dangerous_category(finding: dict) -> bool:
               # Classify by resolved rule only. The previous implementation also

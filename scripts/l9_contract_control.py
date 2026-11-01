@@ -126,15 +126,18 @@ def verify_constitution() -> tuple[bool, list[str]]:
 
 def verify_attestation() -> tuple[bool, list[str]]:
     errors: list[str] = []
+    # Run as `python scripts/l9_contract_control.py`, sys.path[0] is scripts/,
+    # not the repository root, so `app` was unimportable in any job that does
+    # not pip-install the package — and that failure used to read as a SKIP.
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
     try:
         from app.services.runtime_attestation import build_runtime_attestation
-    except ModuleNotFoundError as exc:
-        # App module not installed — skip attestation verification gracefully
-        # This happens in minimal CI environments without full app install
-        print(f"[l9-control] SKIP: {exc} — attestation verification requires app module")
-        return True, []
     except Exception as exc:
-        return False, [f"unable to import runtime attestation builder: {exc}"]
+        # F-029: an attestation that could not be built was not verified. A
+        # missing app module (or any transitive dependency) is a FAIL, never a
+        # silent PASS; install the app before running this gate.
+        return False, [f"unable to import runtime attestation builder: {exc!r}"]
 
     constitution = _read_constitution()
     schema = _load_json(ATTESTATION_SCHEMA_PATH)

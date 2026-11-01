@@ -77,6 +77,40 @@ REVIEWED_MARKER_RE = re.compile(
 #: A reason shorter than this is not a justification.
 REVIEWED_MIN_REASON = 30
 
+#: Rule 2: dictionary words longer than 12 letters that are not flatcase
+#: concatenations. Mirrors `allowed_words` in
+#: tests/compliance/test_field_names.py::test_no_flatcase_pydantic_fields.
+FLATCASE_ALLOWED_WORDS: frozenset[str] = frozenset(
+    {"recommendation", "recommendations", "configuration", "documentation"}
+)
+
+#: Rule 11 (owner decision D-6): the chassis adapters that may import FastAPI.
+#: An exemption needs BOTH the path listed here AND the module's own
+#: `# L9-layer: chassis` header, so neither adding a header to an engine module
+#: nor dropping the header from a listed adapter silently changes the verdict.
+CHASSIS_ADAPTER_MODULES: frozenset[str] = frozenset(
+    {
+        "app/bootstrap/l9_contract_runtime.py",
+        "app/bootstrap/telemetry.py",
+        "app/core/auth.py",
+        "app/middleware/rate_limiter.py",
+        "app/score/score_api.py",
+    }
+)
+_CHASSIS_LAYER_RE = re.compile(r"^#\s*L9-layer:\s*chassis(?:/[\w-]+)?\s*$", re.MULTILINE)
+
+
+def is_chassis_adapter(rel: Path, source: str) -> bool:
+    return rel.as_posix() in CHASSIS_ADAPTER_MODULES and bool(_CHASSIS_LAYER_RE.search(source))
+
+
+def _imports_fastapi(node: ast.AST) -> bool:
+    if isinstance(node, ast.ImportFrom) and node.module:
+        return node.module == "fastapi" or node.module.startswith("fastapi.")
+    if isinstance(node, ast.Import):
+        return any(a.name == "fastapi" or a.name.startswith("fastapi.") for a in node.names)
+    return False
+
 
 def reviewed_reason(lines: list[str], index: int, rule: int) -> str | None:
     """Return the justification acknowledging `rule` at `lines[index]`, if any.
@@ -195,7 +229,12 @@ def check_naming(files: list[Path], result: AuditResult):
                                 fix_hint="Rename to " + re.sub(r"([A-Z])", r"_\1", name).lower(),
                             )
                         # Rule 2: flatcase detection (long single-word fields)
-                        elif len(name) > 12 and "_" not in name and name.islower():
+                        elif (
+                            len(name) > 12
+                            and "_" not in name
+                            and name.islower()
+                            and name not in FLATCASE_ALLOWED_WORDS
+                        ):
                             counter += 1
                             result.add(
                                 severity="CRITICAL",
@@ -434,21 +473,20 @@ def check_imports(files: list[Path], result: AuditResult):
 
         # Rule 11: FastAPI imports outside api/ and main.py (chassis isolation)
         is_api = "api/" in str(rel) or str(rel).endswith("main.py") or "handlers.py" in str(rel)
-        if not is_api:
+        if not is_api and not is_chassis_adapter(rel, source):
             for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and node.module:
-                    if node.module.startswith("fastapi"):
-                        counter += 1
-                        result.add(
-                            severity="CRITICAL",
-                            code=f"C-{counter:03d}",
-                            rule=11,
-                            group="imports",
-                            message="FastAPI import in engine module -- chassis isolation violation",
-                            file=str(rel),
-                            line=node.lineno,
-                            fix_hint="Engine modules must be framework-agnostic. Move to api/ or handlers.",
-                        )
+                if _imports_fastapi(node):
+                    counter += 1
+                    result.add(
+                        severity="CRITICAL",
+                        code=f"C-{counter:03d}",
+                        rule=11,
+                        group="imports",
+                        message="FastAPI import in engine module -- chassis isolation violation",
+                        file=str(rel),
+                        line=node.lineno,
+                        fix_hint="Engine modules must be framework-agnostic. Move to api/ or handlers.",
+                    )
 
         # Rule 12: Phantom imports (internal modules that don't resolve)
         for node in ast.walk(tree):

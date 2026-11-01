@@ -230,6 +230,33 @@ class MCPServer:
                 }
             }
 
+        if not isinstance(arguments, dict):
+            return {
+                "error": {
+                    "code": -32602,
+                    "message": "Tool arguments must be an object",
+                }
+            }
+
+        # U00 found no runtime binding by which this compatibility MCP server can
+        # establish a signed tenant, trusted connector, record/field-bound human
+        # approval, or durable CRM write journal. A caller-provided `tenant` (or
+        # any other mutation field) is not authority, so writeback must stop here
+        # before arbitrary chassis dispatch and provider construction.
+        if tool_name == "writeback":
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Error: writeback is disabled outside a signed Gate runtime "
+                            "with trusted connector, approval, and durable journal context"
+                        ),
+                    }
+                ],
+                "isError": True,
+            }
+
         if not self._dispatch:
             return {
                 "error": {
@@ -248,10 +275,11 @@ class MCPServer:
         }
 
         action = action_map.get(tool_name, "enrich")
-        tenant = arguments.pop("tenant", "default")
+        call_arguments = dict(arguments)
+        tenant = call_arguments.pop("tenant", "default")
 
         try:
-            result = self._dispatch(action, tenant, arguments)
+            result = self._dispatch(action, tenant, call_arguments)
             return {
                 "content": [
                     {

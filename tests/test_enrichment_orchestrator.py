@@ -166,3 +166,44 @@ class TestEnrichmentOrchestrator:
             scope, key, fingerprint = idem_store.get.await_args.args
             assert (scope, key) == ("tenant:acme", "test-key-123")
             assert len(fingerprint) == 64
+
+
+class TestEmptyConsensusIsNotCompleted:
+    """WU-07 / F-025: replies carrying only empty values do not complete an enrich."""
+
+    @pytest.mark.asyncio
+    async def test_all_none_replies_do_not_report_completed(self) -> None:
+        request = EnrichRequest(
+            entity={"Name": "Acme Recycling"},
+            object_type="Account",
+            objective="Enrich",
+        )
+        settings = MagicMock()
+        settings.perplexity_api_key = "test-key"
+        settings.perplexity_model = "sonar"
+        settings.max_concurrent_variations = 2
+        settings.default_timeout_seconds = 30
+        resolver = MagicMock()
+        resolver.resolve = MagicMock(
+            return_value={
+                "context_text": "",
+                "content_hash": "h",
+                "fragment_ids": [],
+                "kb_files": [],
+            }
+        )
+        empty = SonarResponse(
+            data={"confidence": 0.9, "x": None},
+            tokens_used=10,
+            citations=[],
+            model="sonar",
+        )
+        with patch(
+            "app.engines.enrichment_orchestrator.query_perplexity",
+            new_callable=AsyncMock,
+            return_value=empty,
+        ):
+            response = await enrich_entity(request, settings, resolver)
+        assert response.fields == {}
+        assert response.state != "completed"
+        assert response.failure_reason

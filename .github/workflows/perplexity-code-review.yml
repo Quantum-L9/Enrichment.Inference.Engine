@@ -127,6 +127,7 @@ jobs:
       - name: Run AI Review
         id: review
         if: steps.diff.outputs.empty != 'true'
+        shell: bash
         env:
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
         run: |
@@ -147,7 +148,8 @@ jobs:
             --diff-path pr_diff.txt \
             $CONTEXT_FLAG \
             $BLOCK_FLAG 2>&1 | tee review_output.txt
-          EXIT_CODE=$?
+          # ai_review's status, not tee's (F-030).
+          EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
@@ -175,6 +177,12 @@ jobs:
 
           echo "**Context:** ${{ github.event.inputs.include_context == 'true' && 'L9 contracts included' || 'Generic review' }}" >> review_comment.md
           echo "**Blocking:** ${{ github.event.inputs.blocking }}" >> review_comment.md
+          # The verdict goes in the header, before the (truncated) review body,
+          # so truncation cannot drop it and nothing in the model's output can
+          # precede it; scripts/pr_review_gate.py reads the FIRST verdict line.
+          # No verdict in the output (a crash) is a blocking verdict.
+          VERDICT="$(grep -oE 'L9-AI-REVIEW-VERDICT: (block|pass)' review_output.txt | tail -1 || true)"
+          echo "${VERDICT:-L9-AI-REVIEW-VERDICT: block}" >> review_comment.md
           echo "" >> review_comment.md
           echo "---" >> review_comment.md
           echo "" >> review_comment.md

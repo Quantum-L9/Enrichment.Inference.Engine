@@ -1,25 +1,28 @@
-"""
-HubSpot CRM client.
-
-Production-ready HubSpot integration with rate limiting,
-batch operations, and property group management.
-
-L9 Architecture Note:
-    Chassis-agnostic. Implements CRMClientBase contract.
-    Never imports FastAPI. Used by WriteBackOrchestrator.
-"""
+"""HubSpot CRM v3 adapter with explicit lookup and mutation acknowledgement semantics."""
 
 from __future__ import annotations
 
-import logging
+import re
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
+import structlog
 
-from .base import CRMClientBase, CRMCredentials, WriteResult
+from .base import (
+    CRMClientBase,
+    CRMCredentials,
+    CRMErrorCode,
+    CRMReadError,
+    CRMRecord,
+    CRMRecordRef,
+    CRMWritePermit,
+    CRMWriteState,
+    WriteResult,
+)
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger("hubspot_client")
 
 _OBJECT_TYPE_MAP = {
     "company": "companies",
@@ -28,9 +31,96 @@ _OBJECT_TYPE_MAP = {
     "opportunity": "deals",
 }
 
+# Date-versioned CRM API (HubSpot retires the semantic v4 associations API in
+# March 2027). One page is read; a record with more is refused, never truncated.
+_ASSOCIATIONS_API_VERSION = "2026-09"
+# Standard names (``companies``) and object type ids (``0-3``, ``2-1234``).
+_OBJECT_TYPE_SEGMENT = re.compile(r"[a-z][a-z0-9_]{0,63}|[0-9]+-[0-9]+")
+# A canonical HubSpot record id: ASCII digits, no leading zero.
+_RECORD_ID = re.compile(r"[1-9][0-9]{0,30}")
+
+
+def native_object_type(object_type: str) -> str:
+    """The provider-native object type for an EIE alias (``company`` -> ``companies``); else unchanged."""
+    return _OBJECT_TYPE_MAP.get(object_type, object_type)
+
+
+def is_canonical_record_id(value: object) -> bool:
+    """Whether ``value`` is a record id exactly as HubSpot renders it (``str(int)``)."""
+    return isinstance(value, str) and _RECORD_ID.fullmatch(value) is not None
+
+
+class HubSpotAssociationReadError(RuntimeError):
+    """An association read could not prove what the source holds.
+
+    Raised for any non-200 answer (403 missing scope, 404 unknown record, 429
+    rate limit, 5xx outage), a transport failure, a malformed body or a result
+    that does not fit one page. Unlike the writeback methods, the association
+    read never answers "no associations" for a failure.
+    """
+
+    def __init__(self, reason: str, *, status_code: int | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.status_code = status_code
+
+
+@dataclass(frozen=True, slots=True)
+class HubSpotAssociation:
+    """One association type between two records, exactly as HubSpot returned it."""
+
+    from_object_type: str
+    from_record_id: str
+    to_object_type: str
+    to_record_id: str
+    category: str
+    type_id: int
+    label: str | None
+
+
+def _parse_association_types(
+    from_object_type: str,
+    from_record_id: str,
+    to_object_type: str,
+    entry: Any,
+) -> list[HubSpotAssociation]:
+    if not isinstance(entry, dict):
+        raise HubSpotAssociationReadError("malformed association entry")
+    to_id = entry.get("toObjectId")
+    types = entry.get("associationTypes")
+    if isinstance(to_id, bool) or not isinstance(to_id, int | str) or not str(to_id).strip():
+        raise HubSpotAssociationReadError("association entry has no toObjectId")
+    if not isinstance(types, list) or not types:
+        raise HubSpotAssociationReadError("association entry has no associationTypes")
+    parsed = []
+    for association_type in types:
+        if not isinstance(association_type, dict):
+            raise HubSpotAssociationReadError("malformed association type")
+        category = association_type.get("category")
+        type_id = association_type.get("typeId")
+        label = association_type.get("label")
+        if not isinstance(category, str) or not category:
+            raise HubSpotAssociationReadError("association type has no category")
+        if isinstance(type_id, bool) or not isinstance(type_id, int):
+            raise HubSpotAssociationReadError("association type has no integer typeId")
+        if label is not None and not isinstance(label, str):
+            raise HubSpotAssociationReadError("association type label is not a string")
+        parsed.append(
+            HubSpotAssociation(
+                from_object_type=from_object_type,
+                from_record_id=from_record_id,
+                to_object_type=to_object_type,
+                to_record_id=str(to_id),
+                category=category,
+                type_id=type_id,
+                label=label,
+            )
+        )
+    return parsed
+
 
 class HubSpotClient(CRMClientBase):
-    """HubSpot CRM client with REST API v3 integration."""
+    """HubSpot client; R1 permits only journaled, permit-bound update-by-id."""
 
     def __init__(self, credentials: CRMCredentials) -> None:
         super().__init__(credentials)
@@ -40,50 +130,103 @@ class HubSpotClient(CRMClientBase):
         self._rate_limit_reset: float = 0.0
 
     def connect(self) -> bool:
-        """Validate the access token by fetching account info."""
+        """Validate the access token without emitting its value to logs."""
         try:
-            resp = httpx.get(
+            response = httpx.get(
                 f"{self._base_url}/account-info/v3/details",
                 headers=self._headers(),
                 timeout=10,
             )
-            resp.raise_for_status()
-            info = resp.json()
-            logger.info("HubSpot connected: portal %s", info.get("portalId"))
+            if response.status_code != 200:
+                logger.warning("hubspot_connect_failed", status_code=response.status_code)
+                return False
+            body = response.json()
+            if not isinstance(body, dict):
+                logger.warning("hubspot_connect_failed", reason="malformed_response")
+                return False
+            portal_id = str(body.get("portalId", "")).strip()
+            expected_portal_id = self.credentials.provider_account_id.strip()
+            if expected_portal_id and portal_id != expected_portal_id:
+                logger.warning("hubspot_connect_failed", reason="provider_account_mismatch")
+                return False
+            logger.info("hubspot_connected", portal_id=portal_id)
             return True
-        except Exception as exc:
-            logger.exception("HubSpot connect failed: %s", exc)
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("hubspot_connect_failed", error_type=type(exc).__name__)
             return False
 
     def test_connection(self) -> bool:
-        """Verify the connection is still alive."""
+        """Verify the configured HubSpot credentials remain usable."""
         try:
-            resp = httpx.get(
+            response = httpx.get(
                 f"{self._base_url}/account-info/v3/details",
                 headers=self._headers(),
                 timeout=10,
             )
-            return resp.status_code == 200
-        except Exception:
+            if response.status_code != 200:
+                return False
+            if not self.credentials.provider_account_id:
+                return True
+            body = response.json()
+            return isinstance(body, dict) and str(body.get("portalId", "")).strip() == (
+                self.credentials.provider_account_id.strip()
+            )
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("hubspot_connection_test_failed", error_type=type(exc).__name__)
             return False
 
-    def get_record(self, object_type: str, record_id: str) -> dict[str, Any] | None:
-        """Fetch a single HubSpot record by ID."""
-        api_type = _OBJECT_TYPE_MAP.get(object_type, object_type)
-        url = f"{self._base_url}/crm/v3/objects/{api_type}/{record_id}"
+    def normalize_record(
+        self,
+        tenant_id: str,
+        connector_id: str,
+        object_type: str,
+        record: dict[str, Any],
+    ) -> CRMRecord:
+        """Normalize the documented top-level HubSpot record ID and properties."""
+        record_id = self.normalize_record_id(record.get("id"))
+        properties = record.get("properties", {})
+        if not isinstance(properties, dict):
+            raise CRMReadError(
+                CRMErrorCode.MALFORMED_RESPONSE, "HubSpot properties are not an object"
+            )
+        normalized_properties = dict(properties)
+        normalized_properties["id"] = record_id
+        return CRMRecord(
+            record_ref=CRMRecordRef(
+                tenant_id=tenant_id,
+                connector_id=connector_id,
+                crm_type=self.credentials.crm_type,
+                object_type=object_type,
+                record_id=record_id,
+                provider_account_id=self.credentials.provider_account_id,
+            ),
+            properties=normalized_properties,
+            version_or_etag=None,
+        )
 
+    def get_record(self, object_type: str, record_id: str) -> dict[str, Any] | None:
+        """Fetch one HubSpot record; only documented HTTP 404 means not found."""
+        normalized_id = self.normalize_record_id(record_id)
+        api_type = _OBJECT_TYPE_MAP.get(object_type, object_type)
+        url = f"{self._base_url}/crm/v3/objects/{api_type}/{normalized_id}"
         self._respect_rate_limit()
         try:
-            resp = httpx.get(url, headers=self._headers(), timeout=15)
-            self._update_rate_limit(resp)
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-            properties: dict[str, Any] = resp.json().get("properties", {})
-            return properties
-        except Exception as exc:
-            logger.exception("HS get_record error: %s", exc)
+            response = httpx.get(url, headers=self._headers(), timeout=15)
+        except httpx.TimeoutException as exc:
+            raise CRMReadError(
+                CRMErrorCode.TIMEOUT, "HubSpot record read timed out", retriable=True
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise CRMReadError(
+                CRMErrorCode.TRANSPORT, "HubSpot record read failed", retriable=True
+            ) from exc
+        self._update_rate_limit(response)
+        if response.status_code == 404:
             return None
+        self._raise_for_read_response(response, "HubSpot record read failed")
+        body = self._json_object(response, "HubSpot record response is malformed")
+        normalized = self.normalize_record("read", "read", object_type, body)
+        return normalized.properties
 
     def query_records(
         self,
@@ -91,83 +234,160 @@ class HubSpotClient(CRMClientBase):
         filters: dict[str, Any],
         fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Search HubSpot records using filter groups."""
+        """Return a complete HubSpot search result with top-level IDs preserved."""
         api_type = _OBJECT_TYPE_MAP.get(object_type, object_type)
         url = f"{self._base_url}/crm/v3/objects/{api_type}/search"
-
         filter_groups = [
             {
                 "filters": [
-                    {
-                        "propertyName": k,
-                        "operator": "EQ",
-                        "value": str(v),
-                    }
-                    for k, v in filters.items()
+                    {"propertyName": key, "operator": "EQ", "value": str(value)}
+                    for key, value in filters.items()
                 ]
             }
         ]
+        records: list[dict[str, Any]] = []
+        after: str | None = None
+        seen_after: set[str] = set()
+        while True:
+            body: dict[str, Any] = {"filterGroups": filter_groups, "limit": 100}
+            if fields:
+                body["properties"] = list(fields)
+            if after is not None:
+                body["after"] = after
+            self._respect_rate_limit()
+            try:
+                response = httpx.post(url, json=body, headers=self._headers(), timeout=30)
+            except httpx.TimeoutException as exc:
+                raise CRMReadError(
+                    CRMErrorCode.TIMEOUT,
+                    "HubSpot record query timed out",
+                    retriable=True,
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise CRMReadError(
+                    CRMErrorCode.TRANSPORT,
+                    "HubSpot record query failed",
+                    retriable=True,
+                ) from exc
+            self._update_rate_limit(response)
+            self._raise_for_read_response(response, "HubSpot record query failed")
+            page = self._json_object(response, "HubSpot query response is malformed")
+            results = page.get("results")
+            if not isinstance(results, list):
+                raise CRMReadError(
+                    CRMErrorCode.MALFORMED_RESPONSE, "HubSpot query results are not a list"
+                )
+            for result in results:
+                if not isinstance(result, dict):
+                    raise CRMReadError(
+                        CRMErrorCode.MALFORMED_RESPONSE,
+                        "HubSpot query contains a non-object record",
+                    )
+                normalized = self.normalize_record("query", "query", object_type, result)
+                records.append(normalized.properties)
 
-        body: dict[str, Any] = {"filterGroups": filter_groups, "limit": 100}
-        if fields:
-            body["properties"] = fields
-
-        self._respect_rate_limit()
-        try:
-            resp = httpx.post(url, json=body, headers=self._headers(), timeout=30)
-            self._update_rate_limit(resp)
-            resp.raise_for_status()
-            return [r.get("properties", {}) for r in resp.json().get("results", [])]
-        except Exception as exc:
-            logger.exception("HS query error: %s", exc)
-            return []
+            paging = page.get("paging")
+            if paging is None:
+                return records
+            if not isinstance(paging, dict):
+                raise CRMReadError(
+                    CRMErrorCode.PAGINATION_INCOMPLETE,
+                    "HubSpot query paging metadata is malformed",
+                )
+            next_page = paging.get("next")
+            if not isinstance(next_page, dict):
+                raise CRMReadError(
+                    CRMErrorCode.PAGINATION_INCOMPLETE,
+                    "HubSpot query has incomplete paging metadata",
+                )
+            next_after = next_page.get("after")
+            if next_after is None or not str(next_after).strip():
+                raise CRMReadError(
+                    CRMErrorCode.PAGINATION_INCOMPLETE,
+                    "HubSpot query next-page cursor is missing",
+                )
+            after = str(next_after).strip()
+            if after in seen_after:
+                raise CRMReadError(
+                    CRMErrorCode.PAGINATION_INCOMPLETE,
+                    "HubSpot query repeated a paging cursor",
+                )
+            seen_after.add(after)
 
     def create_record(self, object_type: str, data: dict[str, Any]) -> WriteResult:
-        """Create a new HubSpot record."""
-        api_type = _OBJECT_TYPE_MAP.get(object_type, object_type)
-        url = f"{self._base_url}/crm/v3/objects/{api_type}"
+        """Refuse direct create; it is outside the initial safe writeback release."""
+        return self._unsafe_operation_result("create")
 
+    def update_record(
+        self,
+        object_type: str,
+        record_id: str,
+        data: dict[str, Any],
+        *,
+        permit: CRMWritePermit | None = None,
+    ) -> WriteResult:
+        """Update an existing record after permit validation and documented acknowledgement."""
+        normalized_id = self.normalize_record_id(record_id)
+        denied = self.validate_update_permit(object_type, normalized_id, data, permit)
+        if denied is not None:
+            return denied
+        if not data:
+            return WriteResult(
+                success=False,
+                record_id=normalized_id,
+                error="empty_payload",
+                status=CRMWriteState.REJECTED,
+            )
+        api_type = _OBJECT_TYPE_MAP.get(object_type, object_type)
+        url = f"{self._base_url}/crm/v3/objects/{api_type}/{normalized_id}"
         self._respect_rate_limit()
         try:
-            resp = httpx.post(
+            response = httpx.patch(
                 url,
-                json={"properties": data},
+                json={"properties": dict(data)},
                 headers=self._headers(),
                 timeout=15,
             )
-            self._update_rate_limit(resp)
-            resp.raise_for_status()
-            result = resp.json()
+        except httpx.TimeoutException as exc:
+            logger.warning("hubspot_update_indeterminate", error_type=type(exc).__name__)
+            return self._indeterminate_result(normalized_id, CRMErrorCode.TIMEOUT)
+        except httpx.HTTPError as exc:
+            logger.warning("hubspot_update_indeterminate", error_type=type(exc).__name__)
+            return self._indeterminate_result(normalized_id, CRMErrorCode.TRANSPORT)
+        self._update_rate_limit(response)
+        if response.status_code >= 500:
+            return self._indeterminate_result(normalized_id, CRMErrorCode.REMOTE)
+        if response.status_code < 200 or response.status_code >= 300:
             return WriteResult(
-                success=True,
-                record_id=result.get("id", ""),
-                fields_written=list(data.keys()),
+                success=False,
+                record_id=normalized_id,
+                error=self._write_error_code(response.status_code).value,
+                status=CRMWriteState.REJECTED,
+                provider_ack=f"http:{response.status_code}",
             )
-        except Exception as exc:
-            return WriteResult(success=False, error=str(exc))
-
-    def update_record(self, object_type: str, record_id: str, data: dict[str, Any]) -> WriteResult:
-        """Update an existing HubSpot record."""
-        api_type = _OBJECT_TYPE_MAP.get(object_type, object_type)
-        url = f"{self._base_url}/crm/v3/objects/{api_type}/{record_id}"
-
-        self._respect_rate_limit()
         try:
-            resp = httpx.patch(
-                url,
-                json={"properties": data},
-                headers=self._headers(),
-                timeout=15,
+            body = self._json_object(response, "HubSpot update acknowledgement is malformed")
+            acknowledged_id = self.normalize_record_id(body.get("id"))
+        except CRMReadError as exc:
+            return self._indeterminate_result(
+                normalized_id,
+                exc.code,
+                provider_ack=f"http:{response.status_code}",
             )
-            self._update_rate_limit(resp)
-            resp.raise_for_status()
-            return WriteResult(
-                success=True,
-                record_id=record_id,
-                fields_written=list(data.keys()),
+        if acknowledged_id != normalized_id:
+            return self._indeterminate_result(
+                normalized_id,
+                CRMErrorCode.CONFLICT,
+                provider_ack=f"http:{response.status_code}",
             )
-        except Exception as exc:
-            return WriteResult(success=False, error=str(exc))
+        return WriteResult(
+            success=True,
+            record_id=normalized_id,
+            fields_written=list(data.keys()),
+            status=CRMWriteState.CONFIRMED,
+            provider_ack=f"http:{response.status_code}",
+            reconciliation_state="not_verified",
+        )
 
     def upsert_record(
         self,
@@ -176,107 +396,194 @@ class HubSpotClient(CRMClientBase):
         external_id_value: str,
         data: dict[str, Any],
     ) -> WriteResult:
-        """Upsert: search by external ID, then create or update."""
-        existing = self.query_records(
-            object_type,
-            {external_id_field: external_id_value},
-        )
-        if existing:
-            record_id = existing[0].get("hs_object_id", "")
-            if record_id:
-                return self.update_record(object_type, record_id, data)
-        return self.create_record(object_type, data)
+        """Refuse lookup-then-create upsert until uniqueness and replay rules are proven."""
+        return self._unsafe_operation_result("upsert")
 
     def bulk_create(self, object_type: str, records: list[dict[str, Any]]) -> list[WriteResult]:
-        """Create multiple records using HubSpot batch API."""
-        api_type = _OBJECT_TYPE_MAP.get(object_type, object_type)
-        url = f"{self._base_url}/crm/v3/objects/{api_type}/batch/create"
-
-        inputs = [{"properties": rec} for rec in records]
-
-        self._respect_rate_limit()
-        try:
-            resp = httpx.post(url, json={"inputs": inputs}, headers=self._headers(), timeout=60)
-            self._update_rate_limit(resp)
-            resp.raise_for_status()
-            results = resp.json().get("results", [])
-            return [
-                WriteResult(
-                    success=True,
-                    record_id=r.get("id", ""),
-                    fields_written=list(records[i].keys()) if i < len(records) else [],
-                )
-                for i, r in enumerate(results)
-            ]
-        except Exception as exc:
-            return [WriteResult(success=False, error=str(exc))] * len(records)
+        """Refuse bulk create because it cannot carry one durable record-level receipt per item."""
+        return super().bulk_create(object_type, records)
 
     def bulk_update(self, object_type: str, records: list[dict[str, Any]]) -> list[WriteResult]:
-        """Update multiple records using HubSpot batch API."""
-        api_type = _OBJECT_TYPE_MAP.get(object_type, object_type)
-        url = f"{self._base_url}/crm/v3/objects/{api_type}/batch/update"
+        """Refuse bulk update, preserving caller-owned inputs without mutation."""
+        return super().bulk_update(object_type, records)
 
-        inputs = [{"id": rec.pop("id", ""), "properties": rec} for rec in records]
+    def read_associations(
+        self,
+        from_object_type: str,
+        from_record_id: str,
+        to_object_type: str,
+    ) -> list[HubSpotAssociation]:
+        """Read one record's associations to one object type. Read-only.
+
+        ``GET /crm/objects/2026-09/{from}/{id}/associations/{to}`` (the
+        date-versioned successor of the v4 associations read; same response
+        shape). Every association type HubSpot reports is returned with its
+        category, numeric ``typeId`` and label. Any failure raises
+        ``HubSpotAssociationReadError``; an empty list means HubSpot answered
+        200 with one complete page holding no associations.
+        """
+        from_type = native_object_type(from_object_type)
+        to_type = native_object_type(to_object_type)
+        # Path segments: an object type name or id must never reshape the URL.
+        if not (
+            _OBJECT_TYPE_SEGMENT.fullmatch(from_type) and _OBJECT_TYPE_SEGMENT.fullmatch(to_type)
+        ):
+            raise HubSpotAssociationReadError(
+                "object type must be a plain HubSpot object type name"
+            )
+        if not is_canonical_record_id(from_record_id):
+            raise HubSpotAssociationReadError("record id must be a canonical numeric HubSpot id")
+        url = (
+            f"{self._base_url}/crm/objects/{_ASSOCIATIONS_API_VERSION}/"
+            f"{from_type}/{from_record_id}/associations/{to_type}"
+        )
 
         self._respect_rate_limit()
         try:
-            resp = httpx.post(url, json={"inputs": inputs}, headers=self._headers(), timeout=60)
-            self._update_rate_limit(resp)
-            resp.raise_for_status()
-            results = resp.json().get("results", [])
-            return [
-                WriteResult(
-                    success=True,
-                    record_id=r.get("id", ""),
-                    fields_written=list(r.get("properties", {}).keys()),
+            resp = httpx.get(url, headers=self._headers(), timeout=15)
+        except httpx.HTTPError as exc:
+            raise HubSpotAssociationReadError(f"transport failure: {type(exc).__name__}") from exc
+        # Association evidence refuses a read whose rate-limit headers cannot be
+        # parsed. CRM advisory tracking may swallow the same headers; this check
+        # stays in front of that helper so a bad header cannot look complete.
+        try:
+            for header_name in (
+                "X-HubSpot-RateLimit-Remaining",
+                "X-HubSpot-RateLimit-Interval-Milliseconds",
+            ):
+                header_value = resp.headers.get(header_name)
+                if header_value is not None:
+                    int(header_value)
+        except ValueError as exc:
+            raise HubSpotAssociationReadError("malformed rate-limit headers") from exc
+        self._update_rate_limit(resp)
+        if resp.status_code != 200:
+            raise HubSpotAssociationReadError(
+                f"HubSpot answered {resp.status_code}", status_code=resp.status_code
+            )
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise HubSpotAssociationReadError("response body is not JSON") from exc
+        results = body.get("results") if isinstance(body, dict) else None
+        if not isinstance(results, list):
+            raise HubSpotAssociationReadError("response has no results list")
+        # Completeness must be proven: any paging object that is not a dict, or
+        # that carries a ``next`` key at all, means the page may not be the last.
+        if "paging" in body:
+            paging = body["paging"]
+            if not isinstance(paging, dict) or "next" in paging:
+                raise HubSpotAssociationReadError(
+                    "associations span more than one page or paging is malformed; "
+                    "refusing an unproven-complete read"
                 )
-                for r in results
-            ]
-        except Exception as exc:
-            return [WriteResult(success=False, error=str(exc))] * len(records)
+        associations: list[HubSpotAssociation] = []
+        for entry in results:
+            associations.extend(
+                _parse_association_types(from_type, str(from_record_id), to_type, entry)
+            )
+        return associations
 
     def get_field_metadata(self, object_type: str) -> dict[str, Any]:
-        """Return field schema metadata for a HubSpot object."""
+        """Return HubSpot metadata when a complete valid metadata response is available."""
         api_type = _OBJECT_TYPE_MAP.get(object_type, object_type)
         url = f"{self._base_url}/crm/v3/properties/{api_type}"
-
         try:
-            resp = httpx.get(url, headers=self._headers(), timeout=15)
-            resp.raise_for_status()
-            return {
-                p["name"]: {
-                    "type": p["type"],
-                    "label": p["label"],
-                    "field_type": p.get("fieldType"),
-                    "group_name": p.get("groupName"),
-                    "has_unique_value": p.get("hasUniqueValue", False),
+            response = httpx.get(url, headers=self._headers(), timeout=15)
+            if response.status_code < 200 or response.status_code >= 300:
+                return {}
+            body = self._json_object(response, "HubSpot metadata response is malformed")
+            results = body.get("results")
+            if not isinstance(results, list):
+                return {}
+            metadata: dict[str, Any] = {}
+            for field in results:
+                if not isinstance(field, dict) or not isinstance(field.get("name"), str):
+                    return {}
+                metadata[field["name"]] = {
+                    "type": field.get("type"),
+                    "label": field.get("label"),
+                    "field_type": field.get("fieldType"),
+                    "group_name": field.get("groupName"),
+                    "has_unique_value": bool(field.get("hasUniqueValue", False)),
                 }
-                for p in resp.json().get("results", [])
-            }
-        except Exception as exc:
-            logger.exception("HS metadata error: %s", exc)
+            return metadata
+        except (httpx.HTTPError, CRMReadError):
             return {}
 
     def _headers(self) -> dict[str, str]:
-        """Build authorization headers."""
-        return {
-            "Authorization": f"Bearer {self._access_token}",
-            "Content-Type": "application/json",
-        }
+        """Build authorization headers without exposing the token outside the request."""
+        return {"Authorization": f"Bearer {self._access_token}", "Content-Type": "application/json"}
 
     def _respect_rate_limit(self) -> None:
-        """Wait if we are near the rate limit."""
+        """Wait only for a provider-supplied remaining/reset limit."""
         if self._rate_limit_remaining < 5:
-            wait = max(0, self._rate_limit_reset - time.time())
+            wait = max(0.0, self._rate_limit_reset - time.time())
             if wait > 0:
-                logger.info("HubSpot rate limit: waiting %.1fs", wait)
+                logger.info("hubspot_rate_limit_wait", wait_seconds=round(wait, 3))
                 time.sleep(wait)
 
-    def _update_rate_limit(self, resp: httpx.Response) -> None:
-        """Update rate limit tracking from response headers."""
-        remaining = resp.headers.get("X-HubSpot-RateLimit-Remaining")
+    def _update_rate_limit(self, response: httpx.Response) -> None:
+        """Update local advisory rate-limit tracking without making header parse failures fatal."""
+        remaining = response.headers.get("X-HubSpot-RateLimit-Remaining")
         if remaining is not None:
-            self._rate_limit_remaining = int(remaining)
-        interval = resp.headers.get("X-HubSpot-RateLimit-Interval-Milliseconds")
+            try:
+                self._rate_limit_remaining = int(remaining)
+            except ValueError:
+                logger.warning("hubspot_rate_limit_header_invalid", header="remaining")
+        interval = response.headers.get("X-HubSpot-RateLimit-Interval-Milliseconds")
         if interval is not None:
-            self._rate_limit_reset = time.time() + int(interval) / 1000.0
+            try:
+                self._rate_limit_reset = time.time() + int(interval) / 1000.0
+            except ValueError:
+                logger.warning("hubspot_rate_limit_header_invalid", header="interval")
+
+    def _raise_for_read_response(self, response: httpx.Response, message: str) -> None:
+        """Translate HTTP read failures to a non-absence CRMReadError."""
+        if 200 <= response.status_code < 300:
+            return
+        code = self._write_error_code(response.status_code)
+        raise CRMReadError(
+            code,
+            message,
+            retriable=code in {CRMErrorCode.RATE_LIMIT, CRMErrorCode.REMOTE},
+        )
+
+    def _json_object(self, response: httpx.Response, message: str) -> dict[str, Any]:
+        """Return a JSON object or a typed malformed-response error."""
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise CRMReadError(CRMErrorCode.MALFORMED_RESPONSE, message) from exc
+        if not isinstance(body, dict):
+            raise CRMReadError(CRMErrorCode.MALFORMED_RESPONSE, message)
+        return body
+
+    def _write_error_code(self, status_code: int) -> CRMErrorCode:
+        """Map documented HTTP classes without treating an error as an empty result."""
+        if status_code == 401:
+            return CRMErrorCode.AUTHENTICATION
+        if status_code == 403:
+            return CRMErrorCode.AUTHORIZATION
+        if status_code == 409:
+            return CRMErrorCode.CONFLICT
+        if status_code == 429:
+            return CRMErrorCode.RATE_LIMIT
+        return CRMErrorCode.REMOTE
+
+    def _indeterminate_result(
+        self,
+        record_id: str,
+        code: CRMErrorCode,
+        *,
+        provider_ack: str | None = None,
+    ) -> WriteResult:
+        """Build the no-retry result for a mutation whose remote commit may be unknown."""
+        return WriteResult(
+            success=False,
+            record_id=record_id,
+            error=code.value,
+            status=CRMWriteState.INDETERMINATE,
+            provider_ack=provider_ack,
+            reconciliation_state="required",
+        )

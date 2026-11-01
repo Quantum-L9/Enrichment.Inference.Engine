@@ -142,6 +142,11 @@ def test_elevated_max_variations():
     assert req.max_variations == _ELEVATED_MAX_VARIATIONS
 
 
+def test_schema_validation_alias_preserves_target_fields():
+    req = build_corrective_request(_event())
+    assert req.schema_ == {"material_grade": "string"}
+
+
 def test_pass_label_set():
     req = build_corrective_request(_event())
     assert req.entity["_pass_label"] == _CORRECTIVE_PASS_LABEL

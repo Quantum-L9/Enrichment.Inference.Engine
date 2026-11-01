@@ -27,7 +27,7 @@ from ..models.schemas import EnrichRequest, EnrichResponse
 from ..services.graph_return_channel import EnrichmentTarget, GraphReturnChannel
 from ..services.idempotency import IdempotencyStore
 from ..services.request_deadline import current_deadline
-from .convergence.confidence_tracker import ConfidenceTracker  # NEW
+from .convergence.confidence_tracker import UNCERTAINTY_SCALE, ConfidenceTracker
 from .convergence.convergence_config import ConvergenceConfig  # NEW
 from .convergence.cost_tracker import CostTracker
 from .field_classifier import DomainClassification, auto_classify_domain
@@ -109,6 +109,13 @@ class PassResult:
     per_field_confidence: dict[str, float] = field(default_factory=dict)  # NEW
     graph_seeded_fields: dict[str, Any] = field(default_factory=dict)
     inference_provenance: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # The enrichment pass's own outcome (F-003): a failed pass must not be
+    # folded into a "completed" converge as though it had merely found nothing.
+    state: str = "completed"
+    failure_reason: str | None = None
+    # Uncertainty U after this pass (WU-02); None when the pass failed and U
+    # was carried forward unchanged.
+    uncertainty: float | None = None
 
 
 @dataclass
@@ -123,7 +130,10 @@ class ConvergenceState:
     converged: bool = False
     convergence_reason: str = ""
     unlock_map: dict[str, float] = field(default_factory=dict)
-    uncertainty_score: float = 1.0
+    # Pass 1 plans with this seed before any pass has measured U. Nothing is
+    # known yet, which D-9 defines as maximal uncertainty — so the discovery
+    # pass gets the largest variation budget, not the smallest.
+    uncertainty_score: float = UNCERTAINTY_SCALE
 
 
 async def run_convergence_loop(
@@ -171,7 +181,6 @@ async def run_convergence_loop(
     """
     start = time.monotonic()
     state = ConvergenceState()
-    planner = MetaPromptPlanner(domain_spec=domain_spec)
     bridge = InferenceBridge(
         rules=inference_rules or [],
         domain_spec=domain_spec,
@@ -179,6 +188,15 @@ async def run_convergence_loop(
 
     # ── Convergence config ─────────────────────────────────
     config = convergence_config or ConvergenceConfig()
+    # F-017: gaps are fields below the loop's own threshold, not a fixed 0.7.
+    # F-019: the domain's priority fields (config first, else the handlers'
+    # enrichment_hints) are targeted first.
+    planner = MetaPromptPlanner(
+        domain_spec=domain_spec,
+        confidence_threshold=config.confidence_threshold,
+        priority_fields=config.priority_fields or (domain_hints or {}).get("priority_fields"),
+        uncertainty_threshold=config.uncertainty_threshold,
+    )
     confidence_tracker = ConfidenceTracker(
         confidence_threshold=config.confidence_threshold,
         exclude_sources=frozenset({INFERENCE_SOURCE}),
@@ -197,12 +215,16 @@ async def run_convergence_loop(
 
     # ── Cost tracker ───────────────────────────────────────
     max_budget = getattr(settings, "max_budget_tokens", 30000)
+    if config.max_budget_tokens is not None:
+        # A per-run cap can only lower the deployment's budget (F-007).
+        max_budget = min(max_budget, config.max_budget_tokens)
     cost_tracker = CostTracker(max_budget_tokens=max_budget)
 
     # Seed known_fields from the entity's existing data
     state.known_fields = {k: v for k, v in request.entity.items() if v is not None}
 
     for pass_num in range(1, config.max_passes + 1):
+        confidence_tracker.begin_pass(pass_num)
         logger.info(
             "pass_started",
             pass_number=pass_num,
@@ -249,7 +271,9 @@ async def run_convergence_loop(
             previous_uncertainty=state.uncertainty_score,
         )
         search_plan: PromptPlan = planner.plan_pass(
-            entity_state=state.known_fields,
+            # The request's null fields stay visible as gaps (F-016); known_fields
+            # drops None values on seeding.
+            entity_state={**request.entity, **state.known_fields},
             pass_context=pass_context,
             field_confidences=confidence_tracker.get_all_confidences(),
             uncertainty_score=state.uncertainty_score,
@@ -341,6 +365,8 @@ async def run_convergence_loop(
             search_plan=search_plan,
             sonar_config=sonar_config,
             graph_seeded_fields=graph_seeded,
+            state=pass_response.state,
+            failure_reason=pass_response.failure_reason,
         )
 
         # NEW: Extract per-field confidence from consensus engine
@@ -409,6 +435,14 @@ async def run_convergence_loop(
         if hasattr(inference_result, "unlock_map"):
             state.unlock_map = inference_result.unlock_map
 
+        # --- UNCERTAINTY (WU-02 / F-002) ---
+        # Recomputed from required-field confidence after every successful pass;
+        # it drives the next pass's mode (targeted while U > 2.0) and variation
+        # budget. A failed pass learned nothing, so U carries forward.
+        if pass_result.state != "failed":
+            state.uncertainty_score = confidence_tracker.uncertainty(_required_fields(request))
+            pass_result.uncertainty = state.uncertainty_score
+
         state.pass_results.append(pass_result)
 
         # --- CONVERGENCE CHECK ---
@@ -443,6 +477,9 @@ async def run_convergence_loop(
             state.converged = True
             state.convergence_reason = "verification_pass_complete"
             break
+    else:
+        # The for-loop ran out of passes without any stop condition firing.
+        state.convergence_reason = "max_passes_reached"
 
     elapsed = int((time.monotonic() - start) * 1000)
     return _assemble_convergence_response(
@@ -454,6 +491,12 @@ async def run_convergence_loop(
         confidence_tracker,
         inference_context=bridge.describe(),
     )
+
+
+def _required_fields(request: EnrichRequest) -> list[str] | None:
+    """The fields whose confidence decides U: the caller's schema, when named."""
+    names = [name for name in (request.schema_ or {}) if name != "confidence"]
+    return names or None
 
 
 def _convergence_reason(request: EnrichRequest, config: ConvergenceConfig) -> str:
@@ -604,6 +647,7 @@ def _assemble_convergence_response(
             "rules_fired": pr.inference_fired,
             "inference_provenance": pr.inference_provenance,
             "per_field_confidence": pr.per_field_confidence,  # NEW
+            "uncertainty": pr.uncertainty,
         }
         if pr.sonar_config:
             entry["sonar_model"] = pr.sonar_config.model.value
@@ -613,6 +657,9 @@ def _assemble_convergence_response(
 
     # Build feature_vector with classification + cost + confidence metadata
     feature_vector: dict[str, Any] = {}
+    if request.schema_:
+        # The denominator the fields API needs for real coverage (F-042).
+        feature_vector["requested_fields"] = sorted(request.schema_)
     if domain_classification:
         feature_vector["domain_classification"] = domain_classification.to_dict()
     if cost_tracker:
@@ -635,6 +682,13 @@ def _assemble_convergence_response(
     if state.convergence_reason == DEADLINE_EXHAUSTED_REASON:
         response_state = "failed"
         failure_reason: str | None = DEADLINE_EXHAUSTED_REASON
+    elif state.pass_results and all(pr.state == "failed" for pr in state.pass_results):
+        # Every enrichment pass failed: the loop stopped on a bounded failure,
+        # not on convergence (F-003). Name the last pass's own reason so the
+        # consumer sees why, and so no caller persists or writes this back.
+        response_state = "failed"
+        last_reason = state.pass_results[-1].failure_reason or "unknown"
+        failure_reason = f"all_passes_failed: {last_reason}"
     else:
         response_state = "completed"
         failure_reason = None
@@ -657,6 +711,7 @@ def _assemble_convergence_response(
         tokens_used=state.total_tokens,
         state=response_state,
         failure_reason=failure_reason,
+        convergence_reason=state.convergence_reason or None,
         inferences=pass_inferences,
         feature_vector=feature_vector if feature_vector else None,
     )
@@ -682,17 +737,19 @@ def _build_pass_request(
     else:
         pass_schema = None
 
-    return EnrichRequest(
-        entity=enriched_entity,
-        object_type=original.object_type,
-        schema=pass_schema,
-        objective=pass_objective,
-        kb_context=original.kb_context,
-        consensus_threshold=original.consensus_threshold,
-        field_thresholds=original.field_thresholds,
-        max_variations=min(
-            plan.variation_count or original.max_variations,
-            original.max_variations,
-        ),
-        idempotency_key=None,
+    return EnrichRequest.model_validate(
+        {
+            "entity": enriched_entity,
+            "object_type": original.object_type,
+            "schema": pass_schema,
+            "objective": pass_objective,
+            "kb_context": original.kb_context,
+            "consensus_threshold": original.consensus_threshold,
+            "field_thresholds": original.field_thresholds,
+            "max_variations": min(
+                plan.variation_count or original.max_variations,
+                original.max_variations,
+            ),
+            "idempotency_key": None,
+        }
     )

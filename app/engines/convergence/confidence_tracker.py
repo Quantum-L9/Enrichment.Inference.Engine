@@ -12,12 +12,36 @@ Consumed by: convergence_controller.py for pass targeting
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
 
+from app.utils.safe_convert import safe_float
+
 logger = structlog.get_logger("confidence_tracker")
+
+#: Scale of the uncertainty score U. The planner reads U > 2.0 as "targeted"
+#: and U > 5.0 as the 5-variation budget.
+UNCERTAINTY_SCALE = 10.0
+
+
+def uncertainty_from_confidences(confidences: Iterable[float | None]) -> float:
+    """Uncertainty U of a set of required fields (WU-02 / F-002, owner decision D-9).
+
+    ``U = UNCERTAINTY_SCALE * (1 - mean confidence)``, where a required field
+    with no confidence yet (``None``) counts as unknown, i.e. confidence 0.
+    Per-pass confidence 0.3 / 0.5 / 0.7 / 0.9 gives U 7 / 5 / 3 / 1. U depends
+    only on confidence — never on how many provider variations a pass ran.
+
+    D-9 status: accepted by the owner as the default (2026-10-29). This is
+    deliberately the only place U is computed so it can be replaced whole.
+    """
+    values = [min(max(safe_float(c), 0.0), 1.0) for c in confidences]
+    if not values:
+        return UNCERTAINTY_SCALE
+    return UNCERTAINTY_SCALE * (1.0 - sum(values) / len(values))
 
 
 @dataclass
@@ -48,6 +72,16 @@ class ConfidenceTracker:
         # Sources whose fields never decide convergence (see has_converged).
         self.exclude_sources = exclude_sources
         self.current_pass = 0
+
+    def begin_pass(self, pass_num: int) -> None:
+        """Open pass ``pass_num`` before any field of it is recorded.
+
+        ``current_pass`` must advance even when the pass records nothing (it
+        failed, or returned no fields): otherwise had_meaningful_improvement()
+        credits the previous pass's gains to it and the loop keeps paying for
+        passes that change nothing.
+        """
+        self.current_pass = max(self.current_pass, pass_num)
 
     def update_field(
         self,
@@ -96,29 +130,48 @@ class ConfidenceTracker:
         return all(state.confidence >= self.threshold for state in states)
 
     def had_meaningful_improvement(self, min_delta: float) -> bool:
-        """Check if last pass improved confidence meaningfully."""
+        """Check whether the latest pass improved confidence meaningfully (F-058).
+
+        Only fields updated on ``current_pass`` count, so a gain made on an
+        earlier pass is not credited again. A field first resolved on this pass
+        improves from unknown (confidence 0). Sources in ``exclude_sources`` do
+        not count, as in :meth:`has_converged`.
+        """
         improvements = []
-        for state in self.fields.values():
-            if state.prior_attempts:
-                prior_confidence = state.prior_attempts[-1]["confidence"]
-                delta = state.confidence - prior_confidence
-                improvements.append(delta)
+        for state in self._deciding_states():
+            if state.pass_number != self.current_pass:
+                continue
+            prior_confidence = (
+                state.prior_attempts[-1]["confidence"] if state.prior_attempts else 0.0
+            )
+            improvements.append(state.confidence - prior_confidence)
 
         return bool(improvements) and max(improvements) >= min_delta
 
+    def uncertainty(self, required: Iterable[str] | None = None) -> float:
+        """U over the required fields (or every deciding field when none are named)."""
+        if required is not None:
+            names = list(required)
+            return uncertainty_from_confidences(
+                self.fields[n].confidence if n in self.fields else None for n in names
+            )
+        return uncertainty_from_confidences(s.confidence for s in self._deciding_states())
+
+    def _deciding_states(self) -> list[FieldConfidenceState]:
+        return [s for s in self.fields.values() if s.source_variation not in self.exclude_sources]
+
     def get_pass_summary(self) -> dict[str, Any]:
         """Return summary dict for API response."""
+        # Counted over the same fields has_converged() decides on, so the summary
+        # cannot report converged=True beside a below-threshold count (F-058).
+        states = self._deciding_states()
         return {
             "total_passes": self.current_pass,
             "converged": self.has_converged(),
-            "fields_above_threshold": sum(
-                1 for s in self.fields.values() if s.confidence >= self.threshold
-            ),
-            "fields_below_threshold": len(self.get_low_confidence_fields()),
+            "fields_above_threshold": sum(1 for s in states if s.confidence >= self.threshold),
+            "fields_below_threshold": sum(1 for s in states if s.confidence < self.threshold),
             "average_confidence": (
-                sum(s.confidence for s in self.fields.values()) / len(self.fields)
-                if self.fields
-                else 0.0
+                sum(s.confidence for s in states) / len(states) if states else 0.0
             ),
         }
 

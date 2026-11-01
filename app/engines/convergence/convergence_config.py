@@ -29,6 +29,10 @@ class ConvergenceConfig:
     min_improvement_delta: float = 0.05
     priority_fields: list[str] = field(default_factory=list)
     domain_constraints: dict[str, Any] = field(default_factory=dict)
+    # Per-run token cap (F-007). It only lowers settings.max_budget_tokens.
+    max_budget_tokens: int | None = None
+    # Uncertainty above which pass 2+ runs "targeted" rather than "verification".
+    uncertainty_threshold: float = 2.0
     # Optional advanced convergence features (default off — no behavior change)
     synthesize_composites: bool = False
     corrective_retrieval_enabled: bool = False

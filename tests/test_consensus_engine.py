@@ -139,3 +139,57 @@ class TestResponseMetadataIsNotAField:
         assert "confidence" not in result["per_field_confidence"]
         assert result["fields"]["polymer_type"] == "HDPE"
         assert isinstance(result["confidence"], float)
+
+
+class TestTypePreservingConsensus:
+    """WU-07 / F-004: median only for genuine numbers; strings and bools keep type."""
+
+    def test_zip_string_stays_a_string(self):
+        result = synthesize([{"zip": "02139"}, {"zip": "02139"}], threshold=0.0, total_attempted=2)
+        assert result["fields"]["zip"] == "02139"
+        assert isinstance(result["fields"]["zip"], str)
+
+    def test_bool_stays_a_bool(self):
+        result = synthesize([{"flag": True}, {"flag": True}], threshold=0.0, total_attempted=2)
+        assert result["fields"]["flag"] is True
+
+    def test_int_stays_an_int(self):
+        result = synthesize([{"n": 150}, {"n": 150}], threshold=0.0, total_attempted=2)
+        assert result["fields"]["n"] == 150
+        assert isinstance(result["fields"]["n"], int)
+
+    def test_float_values_still_use_median(self):
+        result = synthesize([{"v": 1.0}, {"v": 2.0}, {"v": 9.0}], threshold=0.0, total_attempted=3)
+        assert result["fields"]["v"] == 2.0
+
+    def test_int_median_between_two_values_is_not_truncated(self):
+        result = synthesize([{"n": 1}, {"n": 2}], threshold=0.0, total_attempted=2)
+        assert result["fields"]["n"] == 1.5
+
+    def test_numeric_strings_use_mode_not_median(self):
+        result = synthesize(
+            [{"code": "007"}, {"code": "007"}, {"code": "7"}],
+            threshold=0.0,
+            total_attempted=3,
+        )
+        assert result["fields"]["code"] == "007"
+
+
+class TestEmptyValuesAreNotEnriched:
+    """WU-07 / F-025: None and '' never become enriched fields."""
+
+    def test_all_none_synthesizes_no_fields(self):
+        result = synthesize([{"x": None}, {"x": None}], threshold=0.0, total_attempted=2)
+        assert result["fields"] == {}
+        assert result["per_field_confidence"] == {}
+        assert result["confidence"] == 0.0
+
+    def test_empty_string_is_not_a_field(self):
+        result = synthesize([{"x": ""}, {"x": ""}], threshold=0.0, total_attempted=2)
+        assert result["fields"] == {}
+
+    def test_empties_do_not_count_toward_agreement(self):
+        result = synthesize(
+            [{"x": "HDPE"}, {"x": None}, {"x": None}], threshold=0.6, total_attempted=3
+        )
+        assert "x" not in result["fields"]

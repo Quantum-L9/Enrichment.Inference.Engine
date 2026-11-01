@@ -10,6 +10,7 @@ Proves GAP-3 and GAP-4:
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -24,9 +25,26 @@ _TEST_API_KEY = "pass"
 # py/weak-sensitive-data-hashing (SHA-256 is not a computationally expensive
 # password hash), and usedforsecurity=False does not suppress that query.
 # app/core/auth.py still does the real comparison via hmac.compare_digest.
-os.environ["API_KEY_HASH"] = "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1"
-get_settings.cache_clear()
+_TEST_API_KEY_HASH = "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1"
 AUTH = {"X-API-Key": _TEST_API_KEY}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _module_env() -> Iterator[None]:
+    """Scope API_KEY_HASH to this module's tests.
+
+    This was a module-level ``os.environ[...] =`` plus ``cache_clear()``, which
+    pytest runs during collection and therefore for the whole session.
+    ``patch.dict`` restores the caller's environment on teardown, and the
+    settings cache is cleared on both sides so neither this module nor the next
+    reads a ``Settings`` built from the other's environment.
+    """
+    with patch.dict(os.environ, {"API_KEY_HASH": _TEST_API_KEY_HASH}):
+        get_settings.cache_clear()
+        try:
+            yield
+        finally:
+            get_settings.cache_clear()
 
 
 def _make_conv_response(
@@ -220,3 +238,203 @@ async def test_converge_batch_processes_inline_entities():
     assert body["total_tokens"] == 800
     assert len(body["run_ids"]) == 2
     assert sorted(processed) == ["e1", "e2"]
+
+
+# ── Route harness for WU-05 / WU-06 ───────────────────────────────────────
+
+
+async def _post_converge(body: dict, run_loop, patches: dict | None = None):
+    """POST /v1/converge with run_convergence_loop replaced; restores module wiring."""
+    from contextlib import ExitStack
+
+    from httpx import ASGITransport, AsyncClient
+
+    import app.api.v1.converge as cm
+    from app.engines.convergence.loop_state import LoopStateStore
+    from app.main import app
+    from app.services.enrichment_profile import ProfileRegistry
+
+    class _Store(LoopStateStore):
+        def __init__(self) -> None:
+            self._states: dict = {}
+
+        async def save(self, state):
+            self._states[state.run_id] = state
+
+        async def load(self, run_id):
+            return self._states.get(run_id)
+
+        async def list_active(self, domain=None):
+            return []
+
+    names = ("_state_store", "_profile_registry", "_domain_specs", "_kb_resolver", "_idem_store")
+    original = {n: getattr(cm, n) for n in names}
+    cm.configure(
+        state_store=_Store(),
+        profile_registry=ProfileRegistry(),
+        domain_specs={},
+        kb_resolver=None,
+        idem_store=None,
+    )
+    try:
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    "app.engines.convergence_controller.run_convergence_loop", side_effect=run_loop
+                )
+            )
+            for target, value in (patches or {}).items():
+                stack.enter_context(patch(target, value))
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as c:
+                return await c.post("/v1/converge", json=body, headers=_auth_headers())
+    finally:
+        for n, v in original.items():
+            setattr(cm, n, v)
+
+
+@pytest.mark.asyncio
+async def test_converge_reports_the_loops_stop_reason():
+    """WU-05 / F-018: convergence_reason is the loop's reason, not a constant."""
+
+    async def run_loop(**kw):
+        response = _make_conv_response()
+        response.convergence_reason = "budget_exhausted"
+        return response
+
+    resp = await _post_converge({"entity": {"id": "e1"}, "max_passes": 3}, run_loop)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["convergence_reason"] == "budget_exhausted"
+
+
+# ── WU-06 / F-007 / D-10: faithful request mapping ────────────────────────
+
+
+def _capturing_loop(calls: list, response=None):
+    async def run_loop(**kw):
+        calls.append(kw)
+        return response or _make_conv_response()
+
+    return run_loop
+
+
+@pytest.mark.asyncio
+async def test_request_budget_and_deltas_map_faithfully():
+    calls: list = []
+    resp = await _post_converge(
+        {"entity": {"id": "e1"}, "max_passes": 5, "max_budget_tokens": 2000},
+        _capturing_loop(calls),
+    )
+    assert resp.status_code == 200, resp.text
+    cfg = calls[0]["convergence_config"]
+    assert cfg.max_passes == 5
+    assert cfg.max_budget_tokens == 2000
+    # min_improvement_delta / confidence_threshold keep their own defaults;
+    # convergence_threshold (2.0) is the uncertainty boundary only.
+    assert cfg.min_improvement_delta == 0.05
+    assert cfg.confidence_threshold == 0.85
+    assert cfg.uncertainty_threshold == 2.0
+
+
+@pytest.mark.asyncio
+async def test_improving_confidence_runs_more_than_two_passes_through_the_route():
+    from app.engines.convergence_controller import run_convergence_loop as real_loop
+    from app.models.schemas import EnrichResponse
+
+    script = [0.3, 0.5, 0.7, 0.9]
+    calls = {"n": 0}
+
+    async def enricher(*args, **kwargs):
+        conf = script[min(calls["n"], len(script) - 1)]
+        calls["n"] += 1
+        return EnrichResponse(
+            fields={"industry": f"v{conf}"},
+            confidence=conf,
+            tokens_used=10,
+            feature_vector={"per_field_confidence": {"industry": conf}},
+        )
+
+    async def run_loop(**kw):
+        return await real_loop(**kw, enricher=enricher)
+
+    resp = await _post_converge({"entity": {"id": "e1"}, "max_passes": 5}, run_loop)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["passes_completed"] > 2
+
+
+@pytest.mark.asyncio
+async def test_domain_loads_only_rules_and_hints_through_the_sdk_loader():
+    from unittest.mock import AsyncMock
+
+    loader = AsyncMock(return_value=({"priority_fields": ["website"]}, [{"rule": "r1"}]))
+    calls: list = []
+    resp = await _post_converge(
+        {"entity": {"id": "e1"}, "domain": "plasticos"},
+        _capturing_loop(calls),
+        patches={"app.engines.handlers._load_domain_convergence_context": loader},
+    )
+    assert resp.status_code == 200, resp.text
+    loader.assert_awaited_once_with(domain_id="plasticos", node_label=None)
+    assert calls[0]["inference_rules"] == [{"rule": "r1"}]
+    assert calls[0]["domain_hints"] == {"priority_fields": ["website"]}
+    # D-10: no full domain_spec on the direct HTTP path. The route reached the
+    # patched handlers._load_domain_convergence_context — the same loader the
+    # SDK canonical converge calls — keyed by the same tenant/domain id.
+    assert "domain_spec" not in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_illegal_tenant_domain_is_rejected_before_any_read():
+    from unittest.mock import AsyncMock
+
+    loader = AsyncMock(return_value=({}, []))
+    calls: list = []
+    resp = await _post_converge(
+        {"entity": {"id": "e1"}, "domain": "Not A Tenant"},
+        _capturing_loop(calls),
+        patches={"app.engines.handlers._load_domain_convergence_context": loader},
+    )
+    assert resp.status_code == 400
+    assert loader.await_count == 0
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_domain_read_takes_the_direct_tenant_posture():
+    from fastapi import HTTPException
+
+    def refuse():
+        raise HTTPException(status_code=403, detail="gate ingress required")
+
+    calls: list = []
+    resp = await _post_converge(
+        {"entity": {"id": "e1"}, "domain": "plasticos"},
+        _capturing_loop(calls),
+        patches={"app.api.v1.converge.ensure_direct_tenant_read_allowed": refuse},
+    )
+    assert resp.status_code == 403
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_human_approval_mode_holds_the_run_for_approval():
+    resp = await _post_converge(
+        {"entity": {"id": "e1"}, "approval_mode": "human"}, _capturing_loop([])
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "human_hold"
+
+
+@pytest.mark.asyncio
+async def test_auto_approval_mode_converges():
+    resp = await _post_converge({"entity": {"id": "e1"}}, _capturing_loop([]))
+    assert resp.json()["status"] == "converged"
+
+
+@pytest.mark.asyncio
+async def test_unknown_approval_mode_is_rejected():
+    calls: list = []
+    resp = await _post_converge(
+        {"entity": {"id": "e1"}, "approval_mode": "yolo"}, _capturing_loop(calls)
+    )
+    assert resp.status_code == 422
+    assert calls == []

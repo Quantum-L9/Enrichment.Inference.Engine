@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from app.engines.field_classifier import DomainClassification
 from app.engines.search_optimizer import (
     EntitySignals,
@@ -103,6 +105,21 @@ class TestResolveBasic:
             force_model=SonarModel.SONAR_REASONING,
         )
         assert config.model == SonarModel.SONAR_REASONING
+
+    def test_logs_resolution_reason_as_extra_field(self):
+        """The stdlib logger retains the reason as structured record metadata."""
+        with patch("app.engines.search_optimizer.logger.info") as mock_info:
+            config = resolve(
+                search_plan_mode="targeted",
+                target_fields=["revenue"],
+                signals=EntitySignals(known_count=5, pass_number=2),
+                field_map=SAMPLE_FIELD_MAP,
+            )
+
+        mock_info.assert_called_once_with(
+            "search_optimizer.resolve",
+            extra={"reason": config.resolution_reason},
+        )
 
 
 class TestResolveFromClassification:

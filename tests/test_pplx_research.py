@@ -130,6 +130,21 @@ class TestPerplexityClient:
         for call in client.with_options.call_args_list:
             assert call.kwargs["max_retries"] == 0
 
+    def test_generic_provider_failure_is_re_raised_after_retries(self) -> None:
+        error = RuntimeError("provider transport failed")
+        client = MagicMock()
+        client.with_options.return_value = client
+        client.chat.completions.create.side_effect = error
+
+        with (
+            patch("app.services.perplexity_client._get_client", return_value=client),
+            patch("app.services.perplexity_client.time.sleep"),
+            pytest.raises(RuntimeError, match="provider transport failed"),
+        ):
+            _sync_call({"model": "sonar"}, "test-key", 60)
+
+        assert client.chat.completions.create.call_count == 3
+
     def test_capture_directory_failure_does_not_retry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

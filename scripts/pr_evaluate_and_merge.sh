@@ -242,15 +242,18 @@ wait_for_new_commit() {
 evaluate_once() {
   local pr="$1"
   local branch sha run_id
-  branch="$(branch_name "$pr")"
-  sha="$(head_sha "$pr")"
+  branch="$(branch_name "$pr")" || return 1
+  sha="$(head_sha "$pr")" || return 1
 
+  # Every step must pass for CLEAN (F-006). evaluate_once is called as
+  # `if ! evaluate_once`, and bash disables `set -e` for the whole body in that
+  # context, so without the explicit returns only the LAST check decided.
   section "CI: $PR_WORKFLOW @ ${sha:0:7}"
-  run_id="$(run_id_for_head "$branch" "$sha")"
-  wait_for_workflow_run "$branch" "$sha" "$run_id"
-  verify_pr_pipeline_checks "$pr"
-  verify_required_checks "$pr"
-  verify_review_gate "$pr"
+  run_id="$(run_id_for_head "$branch" "$sha")" || return 1
+  wait_for_workflow_run "$branch" "$sha" "$run_id" || return 1
+  verify_pr_pipeline_checks "$pr" || return 1
+  verify_required_checks "$pr" || return 1
+  verify_review_gate "$pr" || return 1
 }
 
 do_merge() {
@@ -318,4 +321,7 @@ main() {
   done
 }
 
-main "$@"
+# Run only when executed, so the functions can be sourced by tests.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
