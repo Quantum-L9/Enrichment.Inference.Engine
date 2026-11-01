@@ -1,0 +1,114 @@
+{
+  "schema": "eie.crm.u00-evidence/v1",
+  "campaign": "EIE-CRM-001",
+  "campaign_version": "1.1.0",
+  "collected_at": "2026-10-31T04:10:18Z",
+  "eie": {
+    "repository": "Quantum-L9/Enrichment.Inference.Engine",
+    "base_sha": "3f96eda98240789963b0e6534aa2151aed12658e",
+    "base_branch": "main"
+  },
+  "gate": {
+    "repository": "Quantum-L9/Constellation.Gate",
+    "main_sha": "cfeb81fa4d11eb8c106314fa27310f660a1dfad7",
+    "disposition": "NO_CHANGE_GATE_OWNED",
+    "reason": "The campaign declares Gate writeback ownership, caller-policy enforcement, capability advertisement, and signed route tests as a separate protected repository work unit."
+  },
+  "open_overlap": {
+    "eie_pr_259": {
+      "url": "https://github.com/Quantum-L9/Enrichment.Inference.Engine/pull/259",
+      "status": "OPEN",
+      "overlap": ["app/engines/handlers.py"],
+      "disposition": "This branch is based on the pinned main SHA and must be rebased or reconciled with PR 259 before a protected-handler merge."
+    },
+    "other_relevant_eie_prs": [
+      {
+        "number": 262,
+        "url": "https://github.com/Quantum-L9/Enrichment.Inference.Engine/pull/262",
+        "disposition": "HubSpot get-record typing overlap; reconcile before merge if it lands first."
+      },
+      {
+        "number": 264,
+        "url": "https://github.com/Quantum-L9/Enrichment.Inference.Engine/pull/264",
+        "disposition": "HubSpot dependency environment contract; no source overlap in this work unit."
+      },
+      {
+        "number": 265,
+        "url": "https://github.com/Quantum-L9/Enrichment.Inference.Engine/pull/265",
+        "disposition": "Tenant mapping work; review for the authoritative connector owner before activation."
+      }
+    ]
+  },
+  "consumer_census": [
+    {
+      "surface": "CRMClientBase, query_records, get_record, update_record, upsert_record, bulk methods",
+      "source_ref": "app/services/crm/*.py; tests/test_crm_*.py",
+      "status": "ACTIVE_INTERNAL",
+      "disposition": "Implement shared typed semantics and prevent direct create/upsert/bulk bypass."
+    },
+    {
+      "surface": "WriteBackOrchestrator",
+      "source_ref": "app/services/crm/writeback.py; app/engines/handlers.py",
+      "status": "ACTIVE_INTERNAL",
+      "disposition": "Replace Odoo-only lookup-then-create path with injected trusted update-by-id flow."
+    },
+    {
+      "surface": "MCP writeback tool",
+      "source_ref": "app/agents/mcp_server.py; docs/contracts/agents/tool-schemas/writeback.schema.json",
+      "status": "UNKNOWN_EXTERNAL",
+      "disposition": "Fail closed before dispatch. Preserve the published schema unchanged until real caller compatibility is owned and proven."
+    },
+    {
+      "surface": "SDK writeback action",
+      "source_ref": "app/engines/handlers.py; app/engines/orchestration_layer.py; app/main.py",
+      "status": "ACTIVE_INTERNAL_NOT_GATE_ADVERTISED",
+      "disposition": "Retain registration contract but return a no-I/O disabled response until trusted context and durable journal owners are wired."
+    },
+    {
+      "surface": "Existing Redis IdempotencyStore",
+      "source_ref": "app/services/idempotency.py",
+      "status": "NOT_SUITABLE_AS_DURABLE_CRM_JOURNAL",
+      "disposition": "Do not reuse: it is TTL-backed and stores post-result responses, not pre-dispatch operation state."
+    },
+    {
+      "surface": "Existing SideEffectCoordinator",
+      "source_ref": "app/services/side_effect_coordinator.py",
+      "status": "NOT_SUITABLE_AS_DURABLE_CRM_JOURNAL",
+      "disposition": "Do not reuse: it is process-local and enrichment-specific."
+    },
+    {
+      "surface": "PostgreSQL state store",
+      "source_ref": "app/services/pg_store.py; app/services/pg_models.py",
+      "status": "CANDIDATE_OWNER_REQUIRES_REVIEW",
+      "disposition": "The existing transaction/session owner is the candidate for a minimal CRM operation journal migration; no physical journal is introduced in this work unit."
+    }
+  ],
+  "identity_disposition": {
+    "existing_entity_ref": "INSPECTED_NOT_REUSED",
+    "source_ref": "app/models/common.py:41-49",
+    "reason": "EntityRef lacks connector and provider-account identity required to distinguish identical record IDs across CRM portals. CRMRecordRef remains an internal CRM-owned type."
+  },
+  "activation_blockers": [
+    "No authoritative tenant-to-connector binding, provider account identity, field allowlist, credential reference, or per-request kill switch source was found.",
+    "No authoritative approval source binds actor, tenant, connector, record, exact field hash, expiry, and revocation state.",
+    "No durable CRM operation journal or two-worker/restart recovery proof exists; Redis and the process-local side-effect coordinator are unsuitable.",
+    "The active external caller contract is unknown and the published MCP native-field schema conflicts with the legacy handler canonical-field input.",
+    "Gate action ownership and deny-by-default signed caller policy are separate Gate-owned work, and no provider sandbox test record/credential receipt is available.",
+    "The public confidence default discrepancy (schema 0.65 versus evaluator 0.70) remains an owner decision; this change does not select or alter either default."
+  ],
+  "implementation_boundary": {
+    "implemented_here": [
+      "Internal provider-neutral CRM identity, lookup, receipt, permit, mapping, adapter, and injected-journal contracts.",
+      "No-I/O handler and MCP refusal while authoritative activation dependencies are unresolved.",
+      "Deterministic unit and contract coverage for lookup, acknowledgement, timeout, field filtering, replay, conflict, and bypass denial."
+    ],
+    "not_implemented_here": [
+      "A credential or tenant configuration service.",
+      "An approval authority or synthetic policy_cleared claim.",
+      "A database migration or claimed durable CRM journal implementation.",
+      "Gate ownership, caller policy, capability advertisement, deployment, or provider sandbox activation.",
+      "A public-schema semantic change or compatibility translator without verified external consumers."
+    ],
+    "activation_state": "DISABLED"
+  }
+}
