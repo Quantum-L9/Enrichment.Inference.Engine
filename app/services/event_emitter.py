@@ -23,6 +23,7 @@ from typing import Any
 
 import structlog
 from pydantic import BaseModel, Field
+from redis.typing import EncodableT, FieldT
 
 logger = structlog.get_logger("event_emitter")
 
@@ -69,9 +70,12 @@ class RedisStreamsBackend:
 
     async def publish(self, event: EnrichmentEvent) -> None:
         stream_key = f"enrich:events:{event.tenant_id}"
+        stream_fields: dict[FieldT, EncodableT] = {}
+        for field, value in event.to_stream_dict().items():
+            stream_fields[field] = value
         await self._client.xadd(
             stream_key,
-            event.to_stream_dict(),
+            stream_fields,
             maxlen=_REDIS_STREAM_MAXLEN,
             approximate=True,
         )

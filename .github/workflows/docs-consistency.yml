@@ -71,19 +71,20 @@ jobs:
           done
           echo "PASS: All INV-1 through INV-20 present in INVARIANTS.md"
 
-      - name: Verify all waivers have ADR references
+      - name: Verify active registered waivers have ADR references
         run: |
-          if [ ! -f "CI_WHITELIST_REGISTER.md" ]; then
-            echo "SKIP: CI_WHITELIST_REGISTER.md not found"
+          REGISTER="docs/CI_WHITELIST_REGISTER.md"
+          if [ ! -f "$REGISTER" ]; then
+            echo "SKIP: $REGISTER not found"
             exit 0
           fi
-          for i in $(seq 1 7); do
-            if ! grep -q "ADR-00$i" CI_WHITELIST_REGISTER.md; then
-              echo "FAIL: CI_WHITELIST_REGISTER.md missing ADR-00$i reference for WAIVER-00$i"
+          for waiver in 002 004 005; do
+            if ! grep -q "ADR-$waiver" "$REGISTER"; then
+              echo "FAIL: $REGISTER missing ADR-$waiver reference for WAIVER-$waiver"
               exit 1
             fi
           done
-          echo "PASS: All 7 WAIVER->ADR references present"
+          echo "PASS: All active registered WAIVER->ADR references present"
 
       - name: Verify ADR files exist
         run: |

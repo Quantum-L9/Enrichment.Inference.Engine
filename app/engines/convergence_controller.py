@@ -737,17 +737,19 @@ def _build_pass_request(
     else:
         pass_schema = None
 
-    return EnrichRequest(
-        entity=enriched_entity,
-        object_type=original.object_type,
-        schema=pass_schema,
-        objective=pass_objective,
-        kb_context=original.kb_context,
-        consensus_threshold=original.consensus_threshold,
-        field_thresholds=original.field_thresholds,
-        max_variations=min(
-            plan.variation_count or original.max_variations,
-            original.max_variations,
-        ),
-        idempotency_key=None,
+    return EnrichRequest.model_validate(
+        {
+            "entity": enriched_entity,
+            "object_type": original.object_type,
+            "schema": pass_schema,
+            "objective": pass_objective,
+            "kb_context": original.kb_context,
+            "consensus_threshold": original.consensus_threshold,
+            "field_thresholds": original.field_thresholds,
+            "max_variations": min(
+                plan.variation_count or original.max_variations,
+                original.max_variations,
+            ),
+            "idempotency_key": None,
+        }
     )
