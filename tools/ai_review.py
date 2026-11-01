@@ -195,28 +195,60 @@ def call_review(code: str, api_key: str, model: str, system_prompt: str) -> dict
         )
         resp.raise_for_status()
 
-    content = resp.json()["choices"][0]["message"]["content"]
+    return parse_review(resp.json()["choices"][0]["message"]["content"])
 
-    # Strip markdown fences if present
+
+#: Severities that block regardless of the model's own ``block`` flag (F-033).
+BLOCKING_SEVERITIES = frozenset({"critical", "high"})
+
+#: Machine-readable verdict line; scripts/pr_review_gate.py parses it from the
+#: posted review comment.
+VERDICT_PREFIX = "L9-AI-REVIEW-VERDICT:"
+
+
+def parse_review(content: str) -> dict:
+    """Parse a model reply into the review dict.
+
+    F-031: a reply that is not the requested JSON object was not reviewed, so it
+    fails closed (``block=True``) instead of reading as "no issues found".
+    """
+    import re
+
     content = content.strip()
     if content.startswith("```"):
         lines = content.split("\n")
         content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
 
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        # Try to extract JSON from the response
-        import re
+    candidates = [content]
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if match:
+        candidates.append(match.group())
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("issues", []), list):
+            return parsed
 
-        match = re.search(r"\{.*\}", content, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        return {
-            "issues": [],
-            "summary": f"Failed to parse response: {content[:200]}",
-            "block": False,
-        }
+    return {
+        "issues": [],
+        "summary": f"Unparseable review reply (fail-closed): {content[:200]}",
+        "block": True,
+        "parse_error": True,
+    }
+
+
+def review_verdict(result: dict) -> str:
+    """``block`` when the model asked to block, the reply was unparseable, or
+    any issue is critical/high — whatever ``--no-block`` or the workflow's
+    ``blocking`` input say about exit codes (F-033)."""
+    if result.get("block") or result.get("parse_error"):
+        return "block"
+    for issue in result.get("issues") or []:
+        if str(issue.get("severity", "")).lower() in BLOCKING_SEVERITIES:
+            return "block"
+    return "pass"
 
 
 def get_staged_diff() -> str:
@@ -244,12 +276,17 @@ def print_results(result: dict) -> bool:
     """Print findings, return True if should block."""
     issues = result.get("issues", [])
     summary = result.get("summary", "")
-    block = result.get("block", False)
+    block = review_verdict(result) == "block"
 
     if not issues:
-        print("\n✅ AI Review: No issues found.")
-        print(f"   {summary}")
-        return False
+        if block:
+            print("\n❌ AI Review: no usable review — blocking (fail-closed).")
+            print(f"   {summary}")
+        else:
+            print("\n✅ AI Review: No issues found.")
+            print(f"   {summary}")
+        print(f"{VERDICT_PREFIX} {'block' if block else 'pass'}")
+        return block
 
     print(f"\n⚠️  AI Review: {len(issues)} issue(s) found")
     print(f"   {summary}\n")
@@ -277,6 +314,7 @@ def print_results(result: dict) -> bool:
 
     if block:
         print("❌ BLOCKING — critical/high severity issues must be fixed.\n")
+    print(f"{VERDICT_PREFIX} {'block' if block else 'pass'}")
     return block
 
 

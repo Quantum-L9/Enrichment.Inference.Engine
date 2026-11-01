@@ -9,12 +9,13 @@ All blocking gates must pass to merge.
 | 1 | `validate` | Python syntax, YAML validation |
 | 2 | `lint-ruff` | `ruff check .` |
 | 3 | `lint-format` | `ruff format --check .` |
-| 4 | `test` | pytest (coverage >= 71%) |
-| 5 | `compliance-architecture` | Runtime/API/engine structure and SDK transport ownership |
-| 6 | `compliance-field-names` | Snake_case, no aliases, no naming drift |
-| 7 | `compliance-imports` | Import resolution and no deprecated dispatch reliance |
-| 8 | `compliance-banned-patterns` | No eval/exec/compile, no engine FastAPI drift, no deprecated chassis dispatch in production path |
-| 9 | `contracts` | `verify_contracts.py` — active contract manifest integrity |
+| 4 | `lint-mypy` | `mypy app` — any MyPy finding |
+| 5 | `test` | pytest (coverage >= 71%) |
+| 6 | `compliance-architecture` | Runtime/API/engine structure and SDK transport ownership |
+| 7 | `compliance-field-names` | Snake_case, no aliases, no naming drift |
+| 8 | `compliance-imports` | Import resolution and no deprecated dispatch reliance |
+| 9 | `compliance-banned-patterns` | No eval/exec/compile, no engine FastAPI drift, no deprecated chassis dispatch in production path |
+| 10 | `contracts` | `verify_contracts.py` — active contract manifest integrity |
 
 ---
 
@@ -24,10 +25,9 @@ These jobs run but failures do not block merge unless a waiver is removed.
 
 | Job | Waiver ID | Reason |
 |-----|-----------|--------|
-| `lint-mypy` | WAIVER-001 | Progressive type annotation rollout |
-| `security-pip-audit` | WAIVER-002 | Requires human triage |
-| `security-bandit` | WAIVER-004 | Human triage required |
-| `coverage-codecov-upload` | WAIVER-005 | Network/token issue, not code quality |
+| `security-pip-audit` | WAIVER-002 (`ADR-002`) | Requires human triage |
+| `security-bandit` | WAIVER-004 (`ADR-004`) | Human triage required |
+| `coverage-codecov-upload` | WAIVER-005 (`ADR-005`) | Network/token issue, not code quality |
 
 WAIVER-003 (`security-safety-check`) is retired: the `safety` scanner was removed on 2026-10-23 (ADR-003). pip-audit is the only dependency-vulnerability scan.
 
@@ -40,7 +40,7 @@ WAIVER-003 (`security-safety-check`) is retired: the `safety` scanner was remove
 | `validate` | Fix syntax or YAML first |
 | `lint-ruff` | Run `make agent-fix`, re-run |
 | `lint-format` | Run `make agent-fix`, re-run |
-| `lint-mypy` | Log warning only if WAIVER-001 still applies |
+| `lint-mypy` | Fix MyPy findings; no recorded-debt exception exists |
 | `test` | Fix failing tests and restore coverage |
 | `compliance-architecture` | Restore SDK-owned transport/runtime structure |
 | `compliance-field-names` | Replace banned naming patterns |

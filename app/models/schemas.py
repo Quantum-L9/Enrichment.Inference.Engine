@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -184,7 +184,7 @@ class EnrichRequest(BaseModel):
                 return parsed if isinstance(parsed, dict) else None
             except json.JSONDecodeError:
                 return None
-        return v
+        return cast("dict[str, str] | None", v)
 
     @field_validator("field_thresholds")
     @classmethod
@@ -269,6 +269,10 @@ class EnrichResponse(BaseModel):
     # ── Error / state ────────────────────────────────
     failure_reason: str | None = None
     state: str = "completed"
+    # Why a convergence loop stopped (F-018), e.g. "budget_exhausted",
+    # "insufficient_improvement_delta_0.05", "max_passes_reached". None for a
+    # single-pass enrich, which has no loop.
+    convergence_reason: str | None = None
 
 
 class BatchEnrichResponse(BaseModel):

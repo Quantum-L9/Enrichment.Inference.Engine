@@ -1,0 +1,2 @@
+# Zero-debt sentinel for strict MyPy.
+# Do not add entries: direct MyPy findings fail both local and GitHub gates.

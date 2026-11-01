@@ -12,7 +12,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.services.crm.base import CRMCredentials, CRMType, WriteResult
+from app.services.crm import odoo_client
+from app.services.crm.base import (
+    CRMCredentials,
+    CRMRecordRef,
+    CRMType,
+    CRMWriteState,
+    WriteResult,
+    _issue_write_permit,
+)
 from app.services.crm.field_mapper import FieldMapper
 from app.services.crm.odoo_client import OdooClient
 
@@ -71,6 +79,12 @@ class TestOdooClient:
             },
         )
 
+    def test_xmlrpc_parser_is_hardened_before_remote_proxy_creation(self):
+        """Remote Odoo XML responses use defusedxml protections rather than Expat defaults."""
+        from defusedxml.xmlrpc import DefusedExpatParser
+
+        assert odoo_client.xmlrpc_client.FastParser is DefusedExpatParser
+
     @patch("xmlrpc.client.ServerProxy")
     def test_connect_success(self, mock_proxy, odoo_creds):
         mock_common = MagicMock()
@@ -93,7 +107,7 @@ class TestOdooClient:
         assert client.connect() is False
 
     @patch("xmlrpc.client.ServerProxy")
-    def test_create_record(self, mock_proxy, odoo_creds):
+    def test_create_record_is_disabled_for_r1(self, mock_proxy, odoo_creds):
         mock_common = MagicMock()
         mock_models = MagicMock()
         mock_proxy.side_effect = [mock_common, mock_models]
@@ -104,9 +118,9 @@ class TestOdooClient:
         client.connect()
         result = client.create_record("res.partner", {"name": "Test Co"})
 
-        assert result.success is True
-        assert result.record_id == "42"
-        assert "name" in result.fields_written
+        assert result.success is False
+        assert result.status == CRMWriteState.DISABLED
+        mock_models.execute_kw.assert_not_called()
 
     @patch("xmlrpc.client.ServerProxy")
     def test_update_record(self, mock_proxy, odoo_creds):
@@ -118,7 +132,24 @@ class TestOdooClient:
 
         client = OdooClient(odoo_creds)
         client.connect()
-        result = client.update_record("res.partner", "42", {"name": "Updated Co"})
+        permit = _issue_write_permit(
+            "operation-1",
+            CRMRecordRef(
+                tenant_id="tenant-a",
+                connector_id="connector-a",
+                crm_type=CRMType.ODOO,
+                object_type="res.partner",
+                record_id="42",
+            ),
+            "a" * 64,
+            {"name": "Updated Co"},
+        )
+        result = client.update_record(
+            "res.partner",
+            "42",
+            {"name": "Updated Co"},
+            permit=permit,
+        )
 
         assert result.success is True
         assert result.record_id == "42"

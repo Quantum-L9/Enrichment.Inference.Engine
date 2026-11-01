@@ -45,7 +45,7 @@
 | pytest-asyncio | ^0.24 | Async test support |
 | pytest-cov | ^6.0 | Coverage |
 | ruff | 0.8.6 | Pinned exactly — do not upgrade without ADR |
-| mypy | ^1.13 | Type checker (non-blocking per WAIVER-001) |
+| mypy | ^1.13 | Type checker (blocking: every finding fails the gate) |
 | pre-commit | ^4.0 | Hook runner |
 
 ---

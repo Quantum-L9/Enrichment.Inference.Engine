@@ -76,10 +76,22 @@ async def test_commit_once_per_key() -> None:
     assert emitter.emit_enrichment_completed.await_count == 1
 
 
-def test_semantic_key_prefers_packet_id() -> None:
-    assert semantic_side_effect_key(
+def test_semantic_key_prefers_the_callers_idempotency_key_over_the_packet_id() -> None:
+    """A caller retry is a new packet carrying the same idempotency key.
+
+    This test used to pin the opposite order (packet first). That was harmless
+    while packet_id came from the payload and was rarely set; since WU-01 the
+    signed header id is present on every SDK call, and packet-first re-ran every
+    effect of a retried operation. The idempotency key is the caller's own name
+    for the logical operation, so it wins; the packet id keys calls without one.
+    """
+    key = semantic_side_effect_key(
         tenant="t", entity_id="e", packet_id="p-1", idempotency_key="i-1"
-    ).startswith("pkt:p-1")
+    )
+    assert key == "idem:t:i-1:enrich"
+    assert semantic_side_effect_key(tenant="t", entity_id="e", packet_id="p-1").startswith(
+        "pkt:p-1"
+    )
 
 
 @pytest.mark.asyncio
@@ -247,10 +259,16 @@ async def test_permitted_retry_completes_only_the_failed_graph_leg() -> None:
 async def test_graph_retry_syncs_the_fields_that_were_persisted_not_the_retrying_calls() -> None:
     """The graph must agree with the store and the event, not with a later answer.
 
-    Under the tenant/entity fallback key (no packet id, no idempotency key) a
-    later enrichment of the same entity keys identically; its fields must not be
-    what the pending graph leg syncs, because PostgreSQL and the completion
-    event hold the first result.
+    A retry of the same operation (same idempotency key) can carry a different
+    answer — the provider re-ran. Its fields must not be what the pending graph
+    leg syncs, because PostgreSQL and the completion event hold the first result.
+
+    WU-01 / F-001: this used to rely on the tenant/entity fallback key, under
+    which ANY later enrichment of the entity keyed identically — that collapse
+    is the defect (a different result is a different operation and persists on
+    its own; see test_distinct_results_without_keys_persist_separately). The
+    retry now shares the operation's idempotency key, which is what makes it a
+    retry; the assertions are unchanged.
     """
     coord = SideEffectCoordinator()
     router, emitter = _collaborators(graph_ack=None)
@@ -271,6 +289,7 @@ async def test_graph_retry_syncs_the_fields_that_were_persisted_not_the_retrying
             domain="plasticos",
             response_dict={"state": "completed", "fields": first_fields, "confidence": 0.9},
             settings=SimpleNamespace(gate_url="https://gate.example"),
+            idempotency_key="op-1",
         )
         assert first.graph_synced is False
 
@@ -286,6 +305,7 @@ async def test_graph_retry_syncs_the_fields_that_were_persisted_not_the_retrying
                 "confidence": 0.5,
             },
             settings=SimpleNamespace(gate_url="https://gate.example"),
+            idempotency_key="op-1",
         )
 
     assert second.graph_retry is True
@@ -460,3 +480,232 @@ async def test_graph_retry_resends_the_first_attempts_node_label() -> None:
     assert second.graph_retry is True
     assert second.graph_synced is True
     assert router.notify_graph_sync.await_args.kwargs["node_label"] == "Facility"
+
+
+# ── WU-01: operation-scoped identity and atomic reservation ───────────────
+
+
+def _result(fields: dict) -> dict:
+    return {"state": "completed", "fields": fields, "confidence": 0.9, "tokens_used": 3}
+
+
+def _effects(persist):
+    """Patch the coordinator's collaborators once (patch contexts must not overlap)."""
+    from contextlib import ExitStack
+
+    router, emitter = _collaborators()
+    stack = ExitStack()
+    stack.enter_context(
+        patch("app.models.schemas.EnrichResponse.model_validate", side_effect=lambda d: d)
+    )
+    result_store_cls = stack.enter_context(patch("app.services.result_store.ResultStore"))
+    result_store_cls.return_value.persist_enrich_response = persist
+    stack.enter_context(patch("app.engines.packet_router.get_router", return_value=router))
+    stack.enter_context(patch("app.services.event_emitter.get_emitter", return_value=emitter))
+    return stack
+
+
+def _raw_commit(coord, response_dict, **kwargs):
+    return coord.commit_after_enrich(
+        tenant="t1",
+        entity_id="e1",
+        object_type="Account",
+        domain="plasticos",
+        response_dict=response_dict,
+        settings=SimpleNamespace(gate_url="https://gate.example"),
+        graph_sync=False,
+        **kwargs,
+    )
+
+
+async def _commit_result(coord, persist, response_dict, **kwargs):
+    with _effects(persist):
+        return await _raw_commit(coord, response_dict, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_distinct_results_without_keys_persist_separately() -> None:
+    """F-001: two converges of one entity, different results, no keys -> two persists."""
+    coord = SideEffectCoordinator()
+    persist = AsyncMock()
+
+    first = await _commit_result(coord, persist, _result({"industry": "Recycling"}))
+    second = await _commit_result(coord, persist, _result({"industry": "Plastics"}))
+
+    assert first.persisted is True
+    assert second.persisted is True
+    assert second.skipped is False
+    persisted_fields = [c.kwargs["response"]["fields"] for c in persist.await_args_list]
+    assert persisted_fields == [{"industry": "Recycling"}, {"industry": "Plastics"}]
+
+
+@pytest.mark.asyncio
+async def test_replayed_packet_is_skipped_and_persists_once() -> None:
+    """F-001: the identical packet (same header packet_id) replayed is a duplicate."""
+    coord = SideEffectCoordinator()
+    persist = AsyncMock()
+
+    await _commit_result(coord, persist, _result({"industry": "Recycling"}), packet_id="p-1")
+    replay = await _commit_result(
+        coord, persist, _result({"industry": "Recycling"}), packet_id="p-1"
+    )
+
+    assert replay.skipped is True
+    assert persist.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_gather_of_identical_commits_persists_once() -> None:
+    """F-024: the key is reserved before the first await."""
+    import asyncio
+
+    coord = SideEffectCoordinator()
+
+    async def slow_persist(**kwargs):
+        await asyncio.sleep(0.01)
+
+    persist = AsyncMock(side_effect=slow_persist)
+    with _effects(persist):
+        reports = await asyncio.gather(
+            _raw_commit(coord, _result({"x": 1}), idempotency_key="k"),
+            _raw_commit(coord, _result({"x": 1}), idempotency_key="k"),
+        )
+
+    assert persist.await_count == 1
+    assert sorted(r.skipped for r in reports) == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_of_a_failed_required_persist_never_reads_completed() -> None:
+    """F-001: a waiter whose holder failed re-evaluates; it does not skip as done."""
+    import asyncio
+
+    from app.services.side_effect_coordinator import PersistenceRequiredError
+
+    coord = SideEffectCoordinator()
+
+    async def failing_persist(**kwargs):
+        await asyncio.sleep(0.01)
+        raise ConnectionError("store down")
+
+    persist = AsyncMock(side_effect=failing_persist)
+    with _effects(persist):
+        results = await asyncio.gather(
+            _raw_commit(coord, _result({"x": 1}), idempotency_key="k", require_persistence=True),
+            _raw_commit(coord, _result({"x": 1}), idempotency_key="k", require_persistence=True),
+            return_exceptions=True,
+        )
+
+    assert all(isinstance(r, PersistenceRequiredError) for r in results)
+    # The waiter re-attempted under its own reservation instead of skipping.
+    assert persist.await_count == 2
+    assert "idem:t1:k:enrich" not in coord._completed
+
+
+@pytest.mark.asyncio
+async def test_required_persistence_refuses_a_key_completed_without_a_durable_result() -> None:
+    """F-001: no path answers 'completed' for a skipped, never-persisted result."""
+    from app.services.side_effect_coordinator import PersistenceRequiredError
+
+    coord = SideEffectCoordinator()
+    failing = AsyncMock(side_effect=ConnectionError("store down"))
+
+    # Fire-and-forward attempt: persistence not required, it fails, key completes.
+    first = await _commit_result(coord, failing, _result({"x": 1}), idempotency_key="k")
+    assert first.persisted is False
+
+    with pytest.raises(PersistenceRequiredError):
+        await _commit_result(
+            coord, AsyncMock(), _result({"x": 1}), idempotency_key="k", require_persistence=True
+        )
+
+
+def test_result_digest_separates_results_but_not_identical_ones() -> None:
+    from app.services.side_effect_coordinator import result_digest
+
+    a = semantic_side_effect_key(
+        tenant="t", entity_id="e", result_digest=result_digest(_result({"x": 1}))
+    )
+    b = semantic_side_effect_key(
+        tenant="t", entity_id="e", result_digest=result_digest(_result({"x": 2}))
+    )
+    a2 = semantic_side_effect_key(
+        tenant="t", entity_id="e", result_digest=result_digest(_result({"x": 1}))
+    )
+    assert a != b
+    assert a == a2
+
+
+# ── WU-01 review fixes ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_retry_with_a_new_packet_and_the_same_idempotency_key_is_a_duplicate() -> None:
+    coord = SideEffectCoordinator()
+    persist = AsyncMock()
+
+    await _commit_result(coord, persist, _result({"x": 1}), packet_id="p-1", idempotency_key="k")
+    retry = await _commit_result(
+        coord, persist, _result({"x": 1}), packet_id="p-2", idempotency_key="k"
+    )
+
+    assert retry.skipped is True
+    assert persist.await_count == 1
+
+
+def test_packet_keys_are_tenant_scoped() -> None:
+    a = semantic_side_effect_key(tenant="t1", entity_id="e", packet_id="p-1")
+    b = semantic_side_effect_key(tenant="t2", entity_id="e", packet_id="p-1")
+    assert a != b
+
+
+@pytest.mark.asyncio
+async def test_remembered_keys_are_bounded() -> None:
+    coord = SideEffectCoordinator(max_keys=2)
+    persist = AsyncMock()
+    for n in range(3):
+        await _commit_result(coord, persist, _result({"x": n}), idempotency_key=f"k{n}")
+
+    assert len(coord._completed) == 2
+    assert len(coord._persisted) == 2
+    assert "idem:t1:k0:enrich" not in coord._completed
+    assert "idem:t1:k2:enrich" in coord._completed
+
+
+@pytest.mark.asyncio
+async def test_graph_retry_without_a_durable_result_is_refused_under_required_persistence() -> None:
+    from app.services.side_effect_coordinator import PersistenceRequiredError
+
+    coord = SideEffectCoordinator()
+    router, emitter = _collaborators(graph_ack=None)
+    failing = AsyncMock(side_effect=ConnectionError("store down"))
+    with (
+        patch("app.models.schemas.EnrichResponse.model_validate", side_effect=lambda d: d),
+        patch("app.services.result_store.ResultStore") as result_store_cls,
+        patch("app.engines.packet_router.get_router", return_value=router),
+        patch("app.services.event_emitter.get_emitter", return_value=emitter),
+    ):
+        result_store_cls.return_value.persist_enrich_response = failing
+        first = await coord.commit_after_enrich(
+            tenant="t1",
+            entity_id="e1",
+            object_type="Account",
+            domain="plasticos",
+            response_dict=_result({"x": 1}),
+            settings=SimpleNamespace(gate_url="https://gate.example"),
+            idempotency_key="k",
+        )
+        assert first.persisted is False
+        assert "idem:t1:k:enrich" in coord._graph_pending
+
+        with pytest.raises(PersistenceRequiredError):
+            await coord.commit_after_enrich(
+                tenant="t1",
+                entity_id="e1",
+                object_type="Account",
+                domain="plasticos",
+                response_dict=_result({"x": 1}),
+                settings=SimpleNamespace(gate_url="https://gate.example"),
+                idempotency_key="k",
+                require_persistence=True,
+            )

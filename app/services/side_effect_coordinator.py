@@ -20,8 +20,11 @@ All egress is Gate-only via PacketRouter / event emitter.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,14 +40,95 @@ def semantic_side_effect_key(
     action: str = "enrich",
     packet_id: str | None = None,
     idempotency_key: str | None = None,
+    result_digest: str | None = None,
 ) -> str:
-    """Build a stable semantic key (packet id preferred, else idempotency, else hash)."""
-    if packet_id:
-        return f"pkt:{packet_id}:{action}"
+    """Key one operation's side effects (WU-01 / F-001).
+
+    Preference:
+
+    1. the caller's idempotency key — the caller's own declaration of the
+       logical operation. A caller retrying after a timeout sends a NEW packet
+       with the SAME key; keying on the packet first re-ran every effect;
+    2. the transport packet id (``packet.header.packet_id``, immutable and
+       signed — never a payload field, D-7), scoped by tenant;
+    3. the result itself. Two runs for one entity that produced different
+       results are different operations and persist twice; a byte-identical
+       result is the same effect and persists once. The legacy
+       tenant|entity|action hash (no digest) collapsed every run of an entity
+       into one key, so the second run was skipped and never persisted.
+    """
     if idempotency_key:
         return f"idem:{tenant}:{idempotency_key}:{action}"
-    digest = hashlib.sha256(f"{tenant}|{entity_id}|{action}".encode()).hexdigest()[:24]
+    if packet_id:
+        return f"pkt:{packet_id}:{tenant}:{action}"
+    material = f"{tenant}|{entity_id}|{action}"
+    if result_digest:
+        digest = hashlib.sha256(f"{material}|{result_digest}".encode()).hexdigest()[:24]
+        return f"res:{digest}"
+    digest = hashlib.sha256(material.encode()).hexdigest()[:24]
     return f"hash:{digest}"
+
+
+#: Upper bound on remembered keys per marker. Every SDK packet and every distinct
+#: result adds a key, so the markers must not grow for the life of the process.
+#: The oldest key is forgotten first; a replay older than this many operations
+#: is no longer recognised as a duplicate (the store's own idempotency key
+#: still dedupes the row).
+MAX_TRACKED_KEYS = 100_000
+
+
+class _BoundedKeys:
+    """Insertion-ordered key set that forgets its oldest entries past a bound."""
+
+    def __init__(self, maxsize: int = MAX_TRACKED_KEYS) -> None:
+        self._keys: OrderedDict[str, None] = OrderedDict()
+        self._maxsize = maxsize
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._keys
+
+    def __len__(self) -> int:
+        return len(self._keys)
+
+    def add(self, key: str) -> None:
+        self._keys[key] = None
+        self._keys.move_to_end(key)
+        while len(self._keys) > self._maxsize:
+            self._keys.popitem(last=False)
+
+    def discard(self, key: str) -> None:
+        self._keys.pop(key, None)
+
+    def clear(self) -> None:
+        self._keys.clear()
+
+
+class _BoundedPending(OrderedDict[str, dict[str, Any]]):
+    """Graph-pending entries, bounded like the key markers."""
+
+    def __init__(self, maxsize: int = MAX_TRACKED_KEYS) -> None:
+        super().__init__()
+        self._maxsize = maxsize
+
+    def __setitem__(self, key: str, value: dict[str, Any]) -> None:
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self._maxsize:
+            self.popitem(last=False)
+
+
+def result_digest(response_dict: dict[str, Any]) -> str:
+    """Stable digest of what a result would persist and emit."""
+    material = json.dumps(
+        {
+            "fields": response_dict.get("fields") or {},
+            "confidence": response_dict.get("confidence"),
+            "state": response_dict.get("state"),
+        },
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(material.encode()).hexdigest()[:24]
 
 
 class PersistenceRequiredError(RuntimeError):
@@ -91,13 +175,21 @@ class SideEffectCoordinator:
     A key is never in both. Both are process-local, like the guard always was.
     """
 
-    def __init__(self) -> None:
-        self._completed: set[str] = set()
-        self._graph_pending: dict[str, dict[str, Any]] = {}
+    def __init__(self, max_keys: int = MAX_TRACKED_KEYS) -> None:
+        self._completed = _BoundedKeys(max_keys)
+        # Keys whose result a store accepted. A key can be completed without
+        # it when persistence was not required and failed (F-001).
+        self._persisted = _BoundedKeys(max_keys)
+        self._graph_pending: dict[str, dict[str, Any]] = _BoundedPending(max_keys)
+        # Reserved before the first await (F-024): a concurrent call for the
+        # same key waits for the holder and then re-evaluates.
+        self._in_flight: dict[str, asyncio.Event] = {}
 
     def reset_for_tests(self) -> None:
         self._completed.clear()
+        self._persisted.clear()
         self._graph_pending.clear()
+        self._in_flight.clear()
 
     async def commit_after_enrich(
         self,
@@ -159,12 +251,72 @@ class SideEffectCoordinator:
             action="enrich",
             packet_id=packet_id,
             idempotency_key=idempotency_key,
+            result_digest=result_digest(response_dict),
         )
-        report = SideEffectReport(key=key)
+        # Reservation (F-024). Everything from here to `_in_flight[key] = …`
+        # runs without an await, so on one event loop the check and the
+        # reservation are atomic: of N concurrent calls for a key, one holds it
+        # and the rest wait for it, then see its outcome.
+        while key in self._in_flight:
+            await self._in_flight[key].wait()
         if key in self._completed:
-            report.skipped = True
+            if require_persistence and key not in self._persisted:
+                # The earlier attempt completed without a durable result (its
+                # persistence was not required and failed). Skipping now would
+                # answer `completed` for a result no store holds.
+                raise PersistenceRequiredError(
+                    f"operation {key} completed earlier without a durable result"
+                )
+            report = SideEffectReport(key=key, skipped=True)
             logger.info("side_effects_skipped_duplicate", key=key, entity_id=entity_id)
             return report
+
+        reservation = asyncio.Event()
+        self._in_flight[key] = reservation
+        try:
+            return await self._commit_reserved(
+                key=key,
+                tenant=tenant,
+                entity_id=entity_id,
+                object_type=object_type,
+                domain=domain,
+                response_dict=response_dict,
+                settings=settings,
+                idempotency_key=idempotency_key,
+                emit_event=emit_event,
+                graph_sync=graph_sync,
+                require_persistence=require_persistence,
+                node_label=node_label,
+            )
+        finally:
+            del self._in_flight[key]
+            reservation.set()
+
+    async def _commit_reserved(
+        self,
+        *,
+        key: str,
+        tenant: str,
+        entity_id: str,
+        object_type: str,
+        domain: str,
+        response_dict: dict[str, Any],
+        settings: Any,
+        idempotency_key: str | None,
+        emit_event: bool,
+        graph_sync: bool,
+        require_persistence: bool,
+        node_label: str | None,
+    ) -> SideEffectReport:
+        """Run the effects for a key this call holds the reservation for."""
+        report = SideEffectReport(key=key)
+
+        if require_persistence and key in self._graph_pending and key not in self._persisted:
+            # A graph-leg retry skips persistence. When the first attempt did not
+            # persist, that would answer `completed` for a result no store holds.
+            raise PersistenceRequiredError(
+                f"operation {key} is pending its graph leg without a durable result"
+            )
 
         # A key left pending by an unacknowledged graph sync re-runs the graph
         # leg only: persistence, score invalidation and the completion event
@@ -201,6 +353,7 @@ class SideEffectCoordinator:
                     idempotency_key=idempotency_key,
                 )
                 report.persisted = True
+                self._persisted.add(key)
             except Exception as exc:  # noqa: BLE001 — fire-and-forward unless required
                 report.errors.append(f"persist:{exc}")
                 logger.warning("side_effect_persist_failed", entity_id=entity_id, error=str(exc))

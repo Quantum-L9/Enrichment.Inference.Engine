@@ -90,14 +90,14 @@ repos:
     hooks:
       - id: l9-contract-audit
         name: L9 Contract Audit
-        entry: bash -c 'if [ -f tools/audit_engine.py ]; then python tools/audit_engine.py; fi'
+        entry: python tools/audit_engine.py --strict
         language: python
         pass_filenames: false
         always_run: true
         additional_dependencies: [pyyaml, structlog]
       - id: l9-contract-verify
         name: L9 Contract Verification
-        entry: bash -c 'if [ -f tools/verify_contracts.py ]; then python tools/verify_contracts.py; fi'
+        entry: python tools/verify_contracts.py
         language: python
         pass_filenames: false
         always_run: true

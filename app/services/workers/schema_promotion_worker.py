@@ -18,10 +18,11 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import redis.asyncio as aioredis
 import yaml
+from redis.typing import EncodableT, FieldT
 
 if TYPE_CHECKING:
     from app.core.config import Settings
@@ -35,6 +36,10 @@ CONSUMER_NAME = "schema-promotion-worker-1"
 
 DEFAULT_MIN_CONFIDENCE: float = 0.75
 DEFAULT_MIN_COVERAGE: int = 10
+
+RedisStreamFields = dict[str, str]
+RedisStreamEntries = list[tuple[str, RedisStreamFields]]
+RedisStreamMessages = list[tuple[str, RedisStreamEntries]]
 
 
 class SchemaPromotionWorker:
@@ -92,13 +97,14 @@ class SchemaPromotionWorker:
             raise RuntimeError(msg)
         while self._running:
             try:
-                messages = await self._redis.xreadgroup(
+                raw_messages = await self._redis.xreadgroup(
                     groupname=CONSUMER_GROUP,
                     consumername=CONSUMER_NAME,
                     streams={DISCOVERED_STREAM: ">"},
                     count=20,
                     block=3000,
                 )
+                messages = cast("RedisStreamMessages", raw_messages)
                 if not messages:
                     continue
                 for _stream, entries in messages:
@@ -150,7 +156,7 @@ class SchemaPromotionWorker:
             )
 
             if promoted:
-                event = {
+                event: dict[FieldT, EncodableT] = {
                     "payload": json.dumps(
                         {
                             "field_name": field_name,

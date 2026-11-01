@@ -70,3 +70,143 @@ def test_report_carries_graph_retry_marker() -> None:
     assert report.graph_retry is False
     assert report.graph_synced is False
     assert SideEffectCoordinator()._graph_pending == {}
+
+
+# ── WU-01 / D-7: operation identity comes from the transport header ───────
+
+
+def _sdk_packet(payload: dict, packet_id: str):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        tenant=SimpleNamespace(org_id="acme"),
+        payload=payload,
+        header=SimpleNamespace(packet_id=packet_id),
+    )
+
+
+async def test_enrich_keys_side_effects_on_the_header_packet_id_not_the_payload() -> None:
+    """D-7: the SDK three-argument call hands the handler the immutable header;
+    a payload `packet_id` cannot name (or spoof) the operation. (No idempotency
+    key here: a caller-declared key would name the operation first.)"""
+    from unittest.mock import AsyncMock, patch
+
+    from constellation_node_sdk.runtime.execution import _invoke_handler
+
+    from app.engines import handlers
+    from app.models.schemas import EnrichResponse
+
+    payload = {
+        "entity_id": "res.partner:1",
+        "entity": {"id": "res.partner:1", "name": "Acme"},
+        "object_type": "Account",
+        "objective": "x",
+        "packet_id": "spoofed-by-the-caller",
+    }
+    commit = AsyncMock()
+    with (
+        patch.object(
+            handlers,
+            "enrich_entity",
+            AsyncMock(return_value=EnrichResponse(state="completed", fields={"a": 1})),
+        ),
+        patch(
+            "app.services.side_effect_coordinator.SideEffectCoordinator.commit_after_enrich",
+            commit,
+        ),
+    ):
+        await _invoke_handler(handlers.handle_enrich, _sdk_packet(payload, "hdr-123"))
+
+    assert commit.await_args.kwargs["packet_id"] == "hdr-123"
+
+
+async def test_direct_in_process_enrich_ignores_a_payload_packet_id() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from app.engines import handlers
+    from app.models.schemas import EnrichResponse
+
+    commit = AsyncMock()
+    with (
+        patch.object(
+            handlers,
+            "enrich_entity",
+            AsyncMock(return_value=EnrichResponse(state="completed", fields={"a": 1})),
+        ),
+        patch(
+            "app.services.side_effect_coordinator.SideEffectCoordinator.commit_after_enrich",
+            commit,
+        ),
+    ):
+        await handlers.handle_enrich(
+            "acme",
+            {
+                "entity_id": "res.partner:1",
+                "entity": {"id": "res.partner:1"},
+                "object_type": "Account",
+                "objective": "x",
+                "packet_id": "spoofed-by-the-caller",
+            },
+        )
+
+    assert commit.await_args.kwargs["packet_id"] is None
+
+
+# ── WU-01 / F-037 F-048: the Odoo compatibility path ──────────────────────
+
+
+def test_compat_runs_with_different_correlation_ids_key_differently() -> None:
+    from app.services.odoo_gate_converge import _idempotency_key
+
+    a = _idempotency_key({"entity_id": "res.partner:7", "odoo": {"correlation_id": "run:1"}})
+    b = _idempotency_key({"entity_id": "res.partner:7", "odoo": {"correlation_id": "run:2"}})
+    assert a != b
+
+
+def test_compat_run_without_correlation_id_does_not_collapse_onto_the_entity() -> None:
+    from app.services.odoo_gate_converge import _idempotency_key
+
+    assert _idempotency_key({"entity_id": "res.partner:7", "odoo": {}}) is None
+    assert _idempotency_key({"entity_id": "res.partner:7", "odoo": {"correlation_id": 7}}) is None
+
+
+async def test_compat_persist_failure_is_a_failed_converge() -> None:
+    """F-048: same launch invariant as canonical — no durable result, no 'completed'."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import pytest
+
+    from app.engines import handlers
+    from app.models.schemas import EnrichResponse
+    from app.services.odoo_gate_converge import parse_odoo_converge_request
+    from app.services.side_effect_coordinator import PersistenceRequiredError
+
+    # The compat dialect, as tests/unit/test_odoo_gate_converge.py::_odoo_payload.
+    payload = {
+        "entity_id": "res.partner:55",
+        "domain": "plasticos",
+        "entity_snapshot": {"name": "Acme Recycling", "city": "Charlotte"},
+        "odoo": {
+            "model": "plasticos.enrichment.run",
+            "record_id": 7,
+            "correlation_id": "plasticos.enrichment.run:7",
+        },
+    }
+    parsed = parse_odoo_converge_request(payload)
+
+    persist = AsyncMock(side_effect=PersistenceRequiredError("store down"))
+    with (
+        patch.object(
+            handlers,
+            "run_convergence_loop",
+            AsyncMock(
+                return_value=EnrichResponse(state="completed", fields={"website": "https://a.x"})
+            ),
+        ),
+        patch.object(handlers, "_persist_and_sync", persist),
+        patch.object(handlers, "get_settings", return_value=MagicMock()),
+        pytest.raises(RuntimeError, match="not durable"),
+    ):
+        await handlers._run_odoo_compat_converge("plasticos", payload, parsed, "run-1")
+
+    assert persist.await_args.kwargs["require_persistence"] is True

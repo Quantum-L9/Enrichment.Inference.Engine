@@ -131,8 +131,7 @@ jobs:
             --pretty \
             --install-types \
             --non-interactive \
-            --ignore-missing-imports \
-            || echo "Type check warnings are non-blocking"
+            --ignore-missing-imports
 
   semgrep:
     name: Semgrep Policy Check

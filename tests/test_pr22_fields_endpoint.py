@@ -80,7 +80,14 @@ class _FakeResultStore:
     async def get_latest_for_entity(self, entity_id: str):
         return _FakeResultStore.latest
 
-    async def get_field_confidence_history(self, entity_id: str, field_name: str = ""):
+    history_calls: list[dict] = []
+
+    async def get_field_confidence_history(
+        self, entity_id: str, field_name: str = "", enrichment_result_id=None
+    ):
+        _FakeResultStore.history_calls.append(
+            {"field_name": field_name, "enrichment_result_id": enrichment_result_id}
+        )
         return list(_FakeResultStore.history)
 
 
@@ -88,6 +95,7 @@ def _reset_fake_store(latest=None, history: list | None = None) -> None:
     _FakeResultStore.latest = latest
     _FakeResultStore.history = history or []
     _FakeResultStore.captured_tenants = []
+    _FakeResultStore.history_calls = []
 
 
 @pytest.mark.asyncio
@@ -181,3 +189,63 @@ async def test_fields_endpoint_tenant_isolation():
             )
 
     assert "specific-tenant" in _FakeResultStore.captured_tenants
+
+
+async def _get_fields(latest, history=None):
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import app
+
+    _reset_fake_store(latest=latest, history=history)
+    with patch("app.api.v1.fields.ResultStore", _FakeResultStore):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+            return await client.get(
+                "/api/v1/fields/ent-001",
+                params={"tenant_id": "test-tenant"},
+                headers=AUTH,
+            )
+
+
+@pytest.mark.asyncio
+async def test_fields_endpoint_reads_the_newest_runs_provenance():
+    """WU-19 / F-042: field history is read for the latest result only."""
+    latest = _make_mock_result()
+    history = [{"confidence": 0.93, "source": "consensus", "pass_number": 1}]
+    resp = await _get_fields(latest, history)
+
+    assert resp.status_code == 200
+    assert _FakeResultStore.history_calls
+    assert all(c["enrichment_result_id"] == latest.id for c in _FakeResultStore.history_calls)
+    assert resp.json()["fields"]["material_type"]["confidence"] == 0.93
+
+
+@pytest.mark.asyncio
+async def test_fields_endpoint_coverage_uses_the_requested_schema():
+    """WU-19 / F-042: 2 of 4 requested fields filled -> coverage 0.5, not 1.0."""
+    latest = _make_mock_result()
+    latest.feature_vector = {
+        "requested_fields": ["material_type", "facility_tier", "employees", "website"]
+    }
+    resp = await _get_fields(latest)
+
+    assert resp.status_code == 200
+    assert resp.json()["coverage_ratio"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_fields_endpoint_coverage_counts_attempted_but_unfilled_fields():
+    """Without a recorded schema, tracked-but-unfilled fields still count against coverage."""
+    latest = _make_mock_result()
+    latest.feature_vector = {
+        "confidence_tracking": {
+            "fields": {
+                "material_type": {"confidence": 0.9},
+                "facility_tier": {"confidence": 0.9},
+                "employees": {"confidence": 0.1},
+                "website": {"confidence": 0.1},
+            }
+        }
+    }
+    resp = await _get_fields(latest)
+
+    assert resp.json()["coverage_ratio"] == 0.5

@@ -11,7 +11,9 @@ Validates that each source adapter:
 
 from __future__ import annotations
 
+import httpx
 import pytest
+import respx
 
 from app.services.enrichment.sources import SOURCE_REGISTRY, llm_base
 from app.services.enrichment.sources.anthropic_adapter import AnthropicSource
@@ -155,6 +157,36 @@ class TestApolloMissingIdentifier:
         src = ApolloSource(config=config)
         result = await src.enrich("company", {"company_name": "Test"})
         assert result.error == "missing_company_domain"
+
+
+class TestApolloRequestHeaders:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_company_request_sends_api_key_header(self) -> None:
+        route = respx.post("https://api.example.com/organizations/enrich").mock(
+            return_value=httpx.Response(200, json={"organization": {"name": "Acme"}})
+        )
+        result = await ApolloSource(config=_make_config("apollo")).enrich(
+            "company", {"company_domain": "acme.example"}
+        )
+
+        assert result.data == {"company_name": "Acme"}
+        assert route.calls.last.request.headers["X-Api-Key"] == "test-key"
+        assert route.calls.last.request.headers["Content-Type"] == "application/json"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_contact_request_sends_api_key_header(self) -> None:
+        route = respx.post("https://api.example.com/people/match").mock(
+            return_value=httpx.Response(200, json={"person": {"email": "a@acme.example"}})
+        )
+        result = await ApolloSource(config=_make_config("apollo")).enrich(
+            "contact", {"contact_email": "a@acme.example"}
+        )
+
+        assert result.data == {"contact_email": "a@acme.example"}
+        assert route.calls.last.request.headers["X-Api-Key"] == "test-key"
+        assert route.calls.last.request.headers["Content-Type"] == "application/json"
 
 
 # ---------------------------------------------------------------------------

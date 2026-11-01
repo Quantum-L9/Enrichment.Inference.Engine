@@ -20,6 +20,8 @@ from typing import Any
 
 import structlog
 
+from app.utils.safe_convert import safe_float
+
 logger = structlog.get_logger("consensus")
 
 
@@ -88,7 +90,9 @@ def synthesize(
     per_field_confidence: dict[str, float] = {}
 
     for field in all_fields:
-        values = [v.get(field) for v in variations if field in v]
+        # An empty value is the absence of an answer, not an answer: it neither
+        # becomes an enriched field nor counts toward agreement.
+        values = [v.get(field) for v in variations if field in v and not _is_empty(v.get(field))]
 
         if not values:
             continue
@@ -181,25 +185,33 @@ def _get_all_fields(variations: list[dict[str, Any]]) -> set[str]:
     return fields
 
 
+def _is_empty(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _is_number(value: Any) -> bool:
+    # bool subclasses int; a boolean is a categorical answer, not a quantity.
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _select_value(values: list[Any]) -> Any:
     """
     Select winning value from variations.
 
     Strategy:
-      - Strings: mode (most common)
-      - Numbers: median
+      - Numbers (genuine int/float only): median; an int median stays an int
+      - Strings: mode (most common) — "02139" is a string, never a number
       - Booleans: mode
       - Mixed: mode
     """
     if not values:
         return None
 
-    # Try numeric median
-    try:
-        numeric_values = [float(v) for v in values]
-        return _median(numeric_values)
-    except (ValueError, TypeError):
-        pass
+    if all(_is_number(v) for v in values):
+        median = _median([safe_float(v) for v in values])
+        if all(isinstance(v, int) for v in values) and median.is_integer():
+            return int(median)
+        return median
 
     # Fall back to mode (most common)
     counter = Counter(str(v) for v in values)

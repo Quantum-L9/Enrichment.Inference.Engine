@@ -119,6 +119,63 @@ class TestConvergenceController:
         assert response.state == "completed"
 
     @pytest.mark.asyncio
+    async def test_convergence_flow_accepts_raw_domain_spec(
+        self, mock_settings, mock_kb_resolver
+    ) -> None:
+        seen_requests: list[EnrichRequest] = []
+
+        async def enricher(request, settings, kb_resolver, idem_store, sonar_config=None):
+            seen_requests.append(request)
+            return EnrichResponse(
+                fields={"facility_type": "MRF"},
+                confidence=0.95,
+                variation_count=1,
+                pass_count=1,
+                inference_version="test",
+                processing_time_ms=10,
+                tokens_used=100,
+                state="completed",
+                feature_vector={"per_field_confidence": {"facility_type": 0.95}},
+            )
+
+        request = EnrichRequest.model_validate(
+            {
+                "entity": {"name": "Acme Recycling"},
+                "object_type": "Facility",
+                "schema": {"facility_type": "string"},
+                "objective": "Find the facility type.",
+                "max_variations": 1,
+            }
+        )
+        raw_domain_spec = {
+            "domain": "test_domain",
+            "ontology": {
+                "nodes": {
+                    "Facility": {
+                        "properties": {
+                            "facility_type": {
+                                "metadata": {"gate_critical": True, "scoring_weight": 0.75}
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+        response = await run_convergence_loop(
+            request=request,
+            settings=mock_settings,
+            kb_resolver=mock_kb_resolver,
+            enricher=enricher,
+            inference_rules=[],
+            domain_spec=raw_domain_spec,
+        )
+
+        assert response.fields == {"facility_type": "MRF"}
+        assert len(seen_requests) == 1
+        assert seen_requests[0].schema_ == {"facility_type": "string"}
+
+    @pytest.mark.asyncio
     async def test_convergence_stops_when_delta_below_threshold(
         self, enrich_request, mock_settings, mock_kb_resolver, mock_enricher_converging
     ):
@@ -652,12 +709,14 @@ def test_caller_schema_is_the_pass_target() -> None:
         variation_count=2,
         pass_number=1,
     )
-    request = EnrichRequest(
-        entity={"name": "Scrap Management Inc", "city": "Charlotte"},
-        object_type="plasticos",
-        schema={"street": "string"},
-        objective="Return only the street address line.",
-        max_variations=1,
+    request = EnrichRequest.model_validate(
+        {
+            "entity": {"name": "Scrap Management Inc", "city": "Charlotte"},
+            "object_type": "plasticos",
+            "schema": {"street": "string"},
+            "objective": "Return only the street address line.",
+            "max_variations": 1,
+        }
     )
     built = _build_pass_request(request, plan, ConvergenceState(), pass_num=1)
     assert built.schema_ == {"street": "string"}
@@ -813,3 +872,406 @@ def test_field_thresholds_reject_non_finite() -> None:
             schema={"street": "string"},
             field_thresholds={"street": "NaN"},
         )
+
+
+# ── WU-03 / F-003: a converge whose passes all failed reports failed ──────
+
+
+def _settings(max_budget_tokens: int = 30000) -> MagicMock:
+    settings = MagicMock()
+    settings.perplexity_api_key = "test-key"
+    settings.perplexity_model = "sonar"
+    settings.max_concurrent_variations = 3
+    settings.default_timeout_seconds = 30
+    settings.max_budget_tokens = max_budget_tokens
+    return settings
+
+
+def _scripted_enricher(responses: list[EnrichResponse], seen: list | None = None):
+    """An enricher that returns the scripted responses in order (last one repeats)."""
+    calls = {"n": 0}
+
+    async def enricher(pass_request, *args, **kwargs):
+        if seen is not None:
+            seen.append(pass_request)
+        i = min(calls["n"], len(responses) - 1)
+        calls["n"] += 1
+        return responses[i]
+
+    return enricher
+
+
+def _failed_pass(reason: str = "no_valid_responses") -> EnrichResponse:
+    return EnrichResponse(state="failed", failure_reason=reason, fields={}, tokens_used=50)
+
+
+def _pass(confidence: float, fields: dict | None = None, tokens: int = 100) -> EnrichResponse:
+    fields = fields if fields is not None else {"industry": f"v{confidence}"}
+    return EnrichResponse(
+        state="completed",
+        fields=fields,
+        confidence=confidence,
+        tokens_used=tokens,
+        feature_vector={"per_field_confidence": dict.fromkeys(fields, confidence)},
+    )
+
+
+class TestPassFailurePropagation:
+    @pytest.mark.asyncio
+    async def test_all_passes_failed_reports_failed_with_reason(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_failed_pass("no_valid_responses: timeout")]),
+            convergence_config=ConvergenceConfig(max_passes=3),
+        )
+        assert response.state == "failed"
+        assert response.failure_reason
+        assert "no_valid_responses: timeout" in response.failure_reason
+        assert response.pass_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_a_later_successful_pass_still_completes(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"industry": "string"},
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_failed_pass(), _pass(0.95)]),
+            convergence_config=ConvergenceConfig(max_passes=3),
+        )
+        assert response.state == "completed"
+        assert response.failure_reason is None
+
+
+# ── WU-02 / F-002 / F-058 / D-9: per-pass uncertainty ─────────────────────
+
+
+class TestPerPassUncertainty:
+    @pytest.mark.asyncio
+    async def test_rising_confidence_runs_four_passes_and_stops_on_threshold(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5), _pass(0.7), _pass(0.9)]),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+
+        assert response.state == "completed"
+        assert response.pass_count == 4
+        modes = [entry["mode"] for entry in response.inferences]
+        assert modes == ["discovery", "targeted", "targeted", "targeted"]
+        uncertainties = [entry["uncertainty"] for entry in response.inferences]
+        assert uncertainties == pytest.approx([7.0, 5.0, 3.0, 1.0])
+        assert response.uncertainty_score == pytest.approx(1.0)
+
+    @pytest.mark.asyncio
+    async def test_reported_uncertainty_tracks_the_last_pass_not_a_constant(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5)]),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        assert response.uncertainty_score == pytest.approx(5.0)
+
+    @pytest.mark.asyncio
+    async def test_variation_budget_follows_uncertainty_not_max_variations(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen: list = []
+        await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"}, object_type="Account", objective="x", max_variations=5
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5), _pass(0.7), _pass(0.9)], seen),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+        # Pass 2 follows U=7 (> 5.0 -> 5 variations); pass 3 follows U=5 (3).
+        assert [r.max_variations for r in seen[1:3]] == [5, 3]
+
+    @pytest.mark.asyncio
+    async def test_discovery_pass_plans_with_maximal_uncertainty(self) -> None:
+        """D-9: nothing known yet is maximal uncertainty, so pass 1 gets the largest budget.
+
+        Pass 1 used to plan with a stale seed of U=1.0 and ran the *smallest*
+        budget (observed [2, 5, 3, 3]) on the pass that knows the least.
+        """
+        from app.engines.convergence.confidence_tracker import UNCERTAINTY_SCALE
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+        from app.engines.convergence_controller import ConvergenceState
+        from app.engines.meta_prompt_planner import MetaPromptPlanner
+
+        assert ConvergenceState().uncertainty_score == UNCERTAINTY_SCALE
+
+        seen: list = []
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"}, object_type="Account", objective="x", max_variations=5
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5), _pass(0.7), _pass(0.9)], seen),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+
+        maximal_budget = MetaPromptPlanner()._compute_variation_budget(
+            UNCERTAINTY_SCALE, budget_remaining=30000
+        )
+        assert maximal_budget == 5
+        assert seen[0].max_variations == maximal_budget
+        assert [r.max_variations for r in seen] == [5, 5, 3, 3]
+        assert response.inferences[0]["mode"] == "discovery"
+
+
+class TestUncertaintyFormulaD9:
+    """D-9 formula (owner-accepted 2026-10-29): U = 10 * (1 - mean confidence)."""
+
+    def test_confidence_ladder_maps_to_seven_five_three_one(self) -> None:
+        from app.engines.convergence.confidence_tracker import uncertainty_from_confidences
+
+        assert [uncertainty_from_confidences([c]) for c in (0.3, 0.5, 0.7, 0.9)] == pytest.approx(
+            [7.0, 5.0, 3.0, 1.0]
+        )
+
+    def test_distinct_confidence_states_give_distinct_u(self) -> None:
+        from app.engines.convergence.confidence_tracker import uncertainty_from_confidences
+
+        assert uncertainty_from_confidences([0.4, 0.6]) != uncertainty_from_confidences([0.9, 0.9])
+
+    def test_missing_requested_field_counts_as_unknown(self) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker()
+        tracker.update_field("a", "x", 0.8, 1, "consensus")
+        assert tracker.uncertainty(["a", "b"]) == pytest.approx(6.0)
+        assert tracker.uncertainty(["a"]) == pytest.approx(2.0)
+
+    def test_nothing_known_is_maximal_uncertainty(self) -> None:
+        from app.engines.convergence.confidence_tracker import (
+            UNCERTAINTY_SCALE,
+            ConfidenceTracker,
+        )
+
+        assert ConfidenceTracker().uncertainty() == UNCERTAINTY_SCALE
+
+
+class TestTrackerStopSignals:
+    """F-058: summary agrees with converged; improvement is measured on this pass."""
+
+    def test_summary_agrees_with_converged(self) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker(exclude_sources=frozenset({"inference"}))
+        tracker.update_field("a", "x", 0.9, 1, "consensus")
+        tracker.update_field("derived", "y", 0.5, 1, "inference")
+        summary = tracker.get_pass_summary()
+        assert summary["converged"] is True
+        assert summary["fields_below_threshold"] == 0
+        assert summary["fields_above_threshold"] == 1
+
+    def test_an_earlier_pass_gain_is_not_credited_again(self) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker()
+        tracker.update_field("a", "x", 0.3, 1, "consensus")
+        tracker.update_field("a", "x", 0.6, 2, "consensus")
+        tracker.update_field("b", "y", 0.5, 2, "consensus")
+        tracker.update_field("b", "y", 0.51, 3, "consensus")
+        # Pass 3 moved only b, by 0.01; a's +0.3 belongs to pass 2.
+        assert tracker.had_meaningful_improvement(0.05) is False
+
+    def test_a_field_first_resolved_this_pass_is_an_improvement(self) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker()
+        tracker.update_field("a", "x", 0.6, 1, "consensus")
+        tracker.update_field("b", "y", 0.5, 2, "consensus")
+        assert tracker.had_meaningful_improvement(0.05) is True
+
+
+# ── WU-04 / F-016 F-017 F-019: pass schemas built by the loop ─────────────
+
+
+class TestPassTargeting:
+    @pytest.mark.asyncio
+    async def test_pass_one_schema_targets_null_entity_fields(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen: list = []
+        await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme", "industry": None, "employees": None},
+                object_type="Account",
+                objective="x",
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.95, {"industry": "x", "employees": 10})], seen),
+            convergence_config=ConvergenceConfig(max_passes=1),
+        )
+        assert {"industry", "employees"} <= set(seen[0].schema_ or {})
+
+    @pytest.mark.asyncio
+    async def test_field_at_point_eight_is_in_the_pass_two_schema(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen: list = []
+        await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.8), _pass(0.9)], seen),
+            convergence_config=ConvergenceConfig(max_passes=3, confidence_threshold=0.85),
+        )
+        assert len(seen) >= 2
+        assert "industry" in (seen[1].schema_ or {})
+
+    @pytest.mark.asyncio
+    async def test_domain_priority_fields_lead_the_pass_one_schema(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen: list = []
+        await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme", "industry": None}, object_type="Account", objective="x"
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.95, {"annual_tonnage": 5})], seen),
+            domain_hints={"priority_fields": ["annual_tonnage", "website"]},
+            convergence_config=ConvergenceConfig(max_passes=1),
+        )
+        assert list(seen[0].schema_ or {})[:2] == ["annual_tonnage", "website"]
+
+
+# ── WU-05 / F-018: the response names why the loop stopped ────────────────
+
+
+class TestConvergenceReason:
+    @pytest.mark.asyncio
+    async def test_budget_exhaustion_is_reported(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(max_budget_tokens=150),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3, tokens=200), _pass(0.5, tokens=200)]),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+        assert "budget" in (response.convergence_reason or "")
+
+    @pytest.mark.asyncio
+    async def test_insufficient_improvement_is_reported(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.31)]),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+        assert response.convergence_reason == "insufficient_improvement_delta_0.05"
+
+    @pytest.mark.asyncio
+    async def test_running_out_of_passes_is_reported(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5)]),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        assert response.convergence_reason == "max_passes_reached"
+
+    @pytest.mark.asyncio
+    async def test_threshold_stop_is_reported(self) -> None:
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.95)]),
+        )
+        assert response.convergence_reason == "all_fields_above_threshold_0.85"
+
+
+# ── WU-06 / F-007: a per-run budget below settings caps spend ─────────────
+
+
+@pytest.mark.asyncio
+async def test_request_budget_below_settings_caps_spend() -> None:
+    from app.engines.convergence.convergence_config import ConvergenceConfig
+
+    seen: list = []
+    response = await run_convergence_loop(
+        request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+        settings=_settings(max_budget_tokens=30000),
+        kb_resolver=MagicMock(),
+        enricher=_scripted_enricher([_pass(0.3, tokens=200), _pass(0.5, tokens=200)], seen),
+        convergence_config=ConvergenceConfig(max_passes=5, max_budget_tokens=150),
+    )
+    assert len(seen) == 1
+    assert response.convergence_reason == "budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_request_budget_never_raises_the_settings_budget() -> None:
+    from app.engines.convergence.convergence_config import ConvergenceConfig
+
+    seen: list = []
+    await run_convergence_loop(
+        request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+        settings=_settings(max_budget_tokens=150),
+        kb_resolver=MagicMock(),
+        enricher=_scripted_enricher([_pass(0.3, tokens=200), _pass(0.5, tokens=200)], seen),
+        convergence_config=ConvergenceConfig(max_passes=5, max_budget_tokens=1_000_000),
+    )
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_passes_do_not_reuse_an_earlier_passes_gain() -> None:
+    """A pass that records nothing must not be credited with the previous
+    pass's improvement; the loop stops instead of paying for every remaining pass."""
+    from app.engines.convergence.convergence_config import ConvergenceConfig
+
+    seen: list = []
+    response = await run_convergence_loop(
+        request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+        settings=_settings(),
+        kb_resolver=MagicMock(),
+        enricher=_scripted_enricher([_pass(0.5, {"a": 1, "b": 2}), _failed_pass()], seen),
+        convergence_config=ConvergenceConfig(max_passes=6),
+    )
+    assert len(seen) == 2
+    assert response.convergence_reason == "insufficient_improvement_delta_0.05"
+
+
+def test_begin_pass_advances_current_pass_without_fields() -> None:
+    from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+    tracker = ConfidenceTracker()
+    tracker.update_field("a", "x", 0.5, 1, "consensus")
+    tracker.begin_pass(2)
+    assert tracker.had_meaningful_improvement(0.05) is False
