@@ -16,10 +16,9 @@ Integration fix applied (PR#22 merge pass):
 Domain identity (EIE-IDENT-02 / EIE-IDENT-03, 2026-10-22):
     domain_specs is built from `domains/` by converge.build_domain_spec_registry
     — one spec per tenant, keyed by tenant id == domain spec id == Neo4j
-    database name — then the approved rows of `schema_proposals` are replayed
-    onto it. The same DomainYamlReader feeds the converge handlers, which read
-    the file-backed revision: approvals revise the API-side registry only (the
-    approved properties and version), never the handlers' rules or hints.
+    database name. Native-v3 uses immutable approved YAML as the sole effective
+    authority. The same reader supplies scans, handlers, and sync endpoints;
+    PostgreSQL stores approval decisions, not a separately replayed live spec.
 """
 
 from __future__ import annotations
@@ -106,10 +105,13 @@ class EnrichmentLifecycle(LifecycleHook):
         clear_handlers()
         # One reader over `domains/` serves both the converge handlers (rules,
         # hints, version) and the API-side spec registry below, so both start
-        # from one spec file per tenant. Without it every converge ran with no
-        # domain at all. Approved revisions are replayed onto the registry
-        # only; the handlers keep reading the file-backed revision.
-        domain_reader = DomainYamlReader(settings.domains_dir)
+        # from one effective revision per tenant. Tenant-serving environments
+        # require explicit native publication; only unsigned development may
+        # read the checked-in legacy templates without an approval receipt.
+        domain_reader = DomainYamlReader(
+            settings.domains_dir,
+            require_published=settings.l9_environment not in {"local", "dev", "test"},
+        )
         register_orchestration(
             kb=_kb,
             idem_store=_idem,
@@ -533,10 +535,21 @@ async def readiness_check(
     `ReadinessResponse` carries no registry field (T5 schema); the state is in
     the status code and the startup log (`converge_module_configured`).
     """
+    from .api.v1 import converge as converge_module
+    from .services.effective_domain_registry import EffectiveDomainRegistry
+
+    effective_ok = True
+    if isinstance(converge_module._domain_specs, EffectiveDomainRegistry):
+        try:
+            converge_module._domain_specs.verify_all()
+        except (ValueError, OSError) as exc:
+            logger.error("domain_readiness_integrity_failed", error=str(exc))
+            effective_ok = False
     registration = _gate_registration_state(settings)
     ready = (
         registration not in GATE_REGISTRATION_DEGRADED
         and _domain_registry_state not in DOMAIN_REGISTRY_DEGRADED
+        and effective_ok
     )
     response.status_code = 200 if ready else 503
     return ReadinessResponse(

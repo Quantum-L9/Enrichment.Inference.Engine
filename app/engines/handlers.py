@@ -27,8 +27,13 @@ import yaml
 from ..core.config import get_settings
 from ..engines.convergence.convergence_config import ConvergenceConfig
 from ..engines.convergence_controller import run_convergence_loop
-from ..engines.domain_yaml_reader import DomainYamlReader
+from ..engines.domain_yaml_reader import (
+    DomainPublicationError,
+    DomainYamlReader,
+    enrichment_hints_for,
+)
 from ..engines.enrichment_orchestrator import enrich_batch, enrich_entity
+from ..engines.native_yaml import parse_native_yaml
 from ..engines.schema_discovery import SchemaDiscoveryEngine
 from ..models.schemas import (
     ENTITY_IDENTITY_ORDER,
@@ -566,26 +571,29 @@ async def _load_domain_convergence_context(
         return domain_hints, inference_rules
 
     label = node_label or "Partner"
-    # yaml.YAMLError is not a ValueError: a malformed spec file used to escape
-    # these guards and fail the converge instead of converging without a domain.
-    try:
-        domain_hints = _domain_reader.get_enrichment_hints(domain_id, label)
-    except (FileNotFoundError, ValueError, OSError, KeyError, yaml.YAMLError) as exc:
-        logger.warning(
-            "handlers.converge_domain_hints_failed",
-            domain_id=domain_id,
-            error=str(exc),
-        )
-
+    # Resolve once: pointer publication between two reads must never pair old
+    # enrichment hints with a different revision's rules.
     try:
         config = _domain_reader.load(domain_id)
+    except DomainPublicationError:
+        raise
     except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:
+        if _domain_reader.require_published:
+            raise
         logger.warning(
             "handlers.converge_domain_load_failed",
             domain_id=domain_id,
             error=str(exc),
         )
         return domain_hints, inference_rules
+    domain_hints = enrichment_hints_for(config, label)
+    logger.info(
+        "handlers.converge_effective_revision",
+        domain_id=domain_id,
+        version=config.version,
+        source_sha256=config.source_sha256,
+        approval_ref=config.approval_ref,
+    )
 
     if config.inference_rules_path:
         from pathlib import Path
@@ -594,7 +602,7 @@ async def _load_domain_convergence_context(
         try:
             async with aiofiles.open(rules_path) as f:
                 content = await f.read()
-            inference_rules = _rules_section(yaml.safe_load(content))
+            inference_rules = _rules_section(parse_native_yaml(content))
         except (OSError, yaml.YAMLError) as exc:
             logger.warning(
                 "handlers.converge_inference_rules_unreadable",

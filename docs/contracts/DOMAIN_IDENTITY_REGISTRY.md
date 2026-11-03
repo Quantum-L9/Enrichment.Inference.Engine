@@ -1,7 +1,7 @@
 # Domain identity registry contract
 
 > **Source:** `app/engines/domain_yaml_reader.py` (grammar, spec identity, reader), `app/api/v1/converge.py` (registry, direct-access posture, approvals, scan), `app/api/v1/discover.py` (scan parity), `app/services/pg_store.py` (`persist_schema_proposal_batch`, `get_approved_schema_proposals`), `app/main.py` (startup, readiness).
-> **Version:** 1.0.0 · **Effective:** 2026-10-22 (operator decision, plan dac62dc3)
+> **Version:** 2.0.0 candidate · **Local execution decision:** 2026-11-03 (native-v3; no deployment admission claimed)
 > **Pinned by:** `tests/contracts/test_domain_registry_contract.py`
 
 ---
@@ -39,7 +39,7 @@ Vertical templates are provenance only (`metadata.template.id` / `metadata.templ
 
 ## 2. Registry
 
-`converge._domain_specs` is the one in-process registry, keyed by tenant id. `build_domain_spec_registry(reader)` fills it at startup from the domains root (`Settings.domains_dir`, default `./domains`):
+`converge._domain_specs` is the one in-process registry, keyed by tenant id. `build_domain_spec_registry(reader)` returns a read-only `EffectiveDomainRegistry` backed by the same reader injected into handlers and packet routing. Every spec read resolves the reader's effective snapshot; no API-side copy can override published YAML. Unsigned local/dev/test may still use directory examples under `Settings.domains_dir` (default `./domains`). Tenant-serving staging/prod requires immutable native publication and never implicitly activates those examples.
 
 Only the directory layout `domains/<tenant>/spec.yaml` names a tenant.
 
@@ -75,17 +75,27 @@ A routable node with no domain spec can serve no tenant's converge or scan, so i
 - **Unknown domain.** An unregistered domain answers **HTTP 404** on both scan routes, with the same detail (`Domain '<id>' not found. Available: [...]`). 404 is the status `docs/contracts/api/openapi.yaml` documents for `/api/v1/scan` and `/v1/scan`.
 - **Scan identity.** The scan's `domain_id` is the registry key and its `domain_version` the declared version, so two tenants sharing one ontology scan to distinct ids and `scan_hash` values.
 
-## 4. Approved spec revisions
+## 4. Approved spec revisions: one effective authority
 
-`POST /v1/converge/{run_id}/approve` is the write side; the `schema_proposals` table is the durable record of a domain's revisions.
+Immutable published EIE YAML is the effective runtime authority. `schema_proposals` remains the durable human-decision audit ledger, not a competing spec assembled at startup. The operator workflow reuses the scanner, partial seed generator, proposer and ledger. Seeds are never automatically live; complete native validation and explicitly supplied review coordinates are required for publication.
 
-1. **Serialised per domain.** An `asyncio.Lock` per tenant id is held across propose → apply → persist → publish, so a second approval for the same domain proposes against the revision the first one published, never against the snapshot both started from. Two concurrent approvals keep both field sets.
-2. **Durable before published; no revision without an applied field.** Every decided field (approved and rejected — rejections are the audit trail) is written through `pg_store.persist_schema_proposal_batch` in **one transaction**: one session, one `begin()`, upsert on `(tenant_id, domain, batch_run_id, field_name)` with `approval_status`, `reviewed_by`, `reviewed_at` stamped in the same transaction. A failure on any row rolls the whole batch back and the endpoint answers **503** without touching the registry. `tenant_id == domain`; `batch_run_id` is the run id. A batch that applies no field — every decision rejected, every approval naming a field the run did not propose, or only non-canonical names — publishes no revision and bumps no version (`schema_proposer.apply`, `applied_field_names`), because startup replays approved rows only and could never reproduce that bump. The response reports applied fields (`approved`), rejecting decisions (`rejected`), approvals that applied nothing (`unapplied`), rows written (`persisted`) and the registry's version after the approval (`new_version`).
-3. **Replayed at startup.** After the registry is built, `hydrate_approved_revisions` reads `get_approved_schema_proposals(tenant_id=domain, domain=domain)` for every registered tenant and re-applies the rows batch by batch (`apply_approved_records`); each `batch_run_id` that applies a field is one revision and one version bump, exactly as it was live. A store that is unreachable at startup stops the walk (`schema_revision_hydrate_unavailable`), leaves that tenant at its file-backed revision and raises `SchemaRevisionHydrateError`; `app.main` records the registry as `hydrate_failed` and readiness answers 503 (§2), so a node serving a rolled-back revision is never Ready.
-4. **Both spec shapes.** `schema_proposer.apply` writes the list-shaped ontology the live specs carry (`nodes: [{label, properties: [{name, type}]}]`) and the dict shape, each in its own shape.
-5. **The API registry only.** An approval revises the registry entry (`converge._domain_specs`): its properties, gates, scoring and version. The converge handlers read the file-backed revision through `DomainYamlReader` (rules, hints, version); approvals do not revise them.
+The node's HTTP approval route retains the local/dev/test-only authorization posture. Every decided proposal is persisted through `pg_store.persist_schema_proposal_batch` in one transaction before reporting an approval. On a reader-backed runtime registry the route returns `publication_status: awaiting_operator_publication`; it cannot mutate a read-only operator mount. `new_version` remains the actual effective version until an operator publishes reviewed complete bytes. Rejected or unapproved fields do not enter the materialized YAML. `schema_proposer` writes enrichment fields only; CEG owns gates and scoring.
+
+An effective revision uses `<root>/<tenant>/current.json` to select `<root>/<tenant>/revisions/<sha256>/spec.yaml`, alongside `receipt.json`. The native approval receipt binds tenant, version, exact artifact hash, exact reviewed-input hash, explicit reviewer, approval reference, timestamp and previous revision. The content-addressed file and receipt remain immutable; publication atomically replaces the current pointer after validation. A hash proves byte equality, not human authenticity; trusted operator controls and read-only permissions remain independent requirements.
+
+`DomainYamlReader` validates the complete EIE-native structure, the pointer, approval receipt and bytes. It exposes source hash and approval reference and detects pointer changes, stale/tampered receipts and artifact tamper even after a warm read. Registry, hints/rules and graph-sync selection use this owner. Invalid approved artifacts raise visibly rather than reverting to legacy files or graph settings fallback. Readiness rechecks the registry's effective revisions. Restart consumes the same published YAML without replaying ledger rows, whether the approval DB is reachable or not.
+
+Discovery records the explicit ontology `node_label` and original artifact SHA-256 before provider work. The run state retains that owner, digest, actual confidence and complete observed source sets. Proposals and decisions use `(node_label, field_name)` identities; approval cannot supply a missing historical owner or retarget a recorded owner. The durable unique identity is `(tenant_id, domain, batch_run_id, node_label, field_name)`. Same-field discoveries on different nodes remain independent; conflicting retry evidence or reviewer decisions cannot overwrite an existing audit row.
+
+Legacy unbound runs/rows remain readable diagnostics but cannot be approved, materialized or replayed, even for a sole-node spec. The retained explicit replay helper requires original discovery bytes, complete owner binding and original review evidence. Normal startup never invokes this compatibility authority: it verifies the reader-backed registry only. Offline audited materialization verifies original discovery bytes and owner membership before intentional rebase onto a newer complete base; that new candidate still requires separate exact-byte review and publication. See `SCHEMA_PROPOSAL_NODE_OWNERSHIP.md` and `SCHEMA_PROPOSAL_AUDIT_OWNERSHIP.md`. Migration `003_schema_proposal_node_ownership` is an unexecuted artifact: it preserves historical NULL binding, performs no ownership backfill or review restamp, and refuses lossy downgrade before schema DDL.
+
+## 4.1 Cross-engine release barrier
+
+EIE and CEG retain independent purpose-specific schemas, versions and hashes. EIE's operator `scripts/check_domain_compatibility.py` invokes both native validation owners and checks only tenant identity and the EIE-referenced CEG sync method/path/target/idproperty plus declared shared field types and explicitly supplied field-meaning assertions. It writes two hashes and their approval references into a compatible-pair proof; one independently rolled-back hash invalidates the old pair. An absent approval is **Unknown**, not release-ready. The checker does not rename rows, merge YAML, compile schemas, or alter CEG ranking. Actual cross-store cutover and platform mount proof remain separately authorized operator work.
 
 ## 5. Out of scope
 
 - The CEG `sync` endpoint a tenant's rows are addressed to: `docs/contracts/dependencies/constellation-gate.yaml` (GRAPH-IDENT-02).
 - Neo4j database provisioning: owned by Cognitive.Engine.Graphs; EIE holds no graph driver.
+- Docker/Compose isolation and production mount changes: deliberately untouched in this local candidate.
+- Live deployment, production migration execution, approval fabrication, Gate spec-delivery action, Semantic Compiler prerequisite, PR merge or issue mutation. Review-PR publication is independently authorized campaign work, not runtime activation.

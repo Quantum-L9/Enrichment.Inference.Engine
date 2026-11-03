@@ -33,6 +33,12 @@ class LoopState(BaseModel):
     run_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     entity_id: str = ""
     domain: str = ""
+    # Nulls decode historical runs for diagnosis, never authorize approval.
+    node_label: str | None = None
+    discovery_spec_sha256: str | None = None
+    ownership_contract_version: int | None = None
+    discovery_field_confidences: dict[str, Any] = Field(default_factory=dict)
+    observed_field_sources: dict[str, list[str]] = Field(default_factory=dict)
     status: LoopStatus = LoopStatus.RUNNING
     current_pass: int = 0
     passes_completed: list[PassResult] = Field(default_factory=list)
@@ -110,7 +116,7 @@ class RedisLoopStateStore(LoopStateStore):
             if raw is None:
                 continue
             state = LoopState.model_validate_json(raw)
-            if state.status != LoopStatus.RUNNING:
+            if state.status not in {LoopStatus.RUNNING, LoopStatus.HUMAN_HOLD}:
                 continue
             if domain and state.domain != domain:
                 continue
@@ -156,7 +162,7 @@ class PostgresLoopStateStore(LoopStateStore):
         return LoopState.model_validate_json(row["payload"])
 
     async def list_active(self, domain: str | None = None) -> list[LoopState]:
-        query = "SELECT payload FROM convergence_runs WHERE status = 'running'"
+        query = "SELECT payload FROM convergence_runs WHERE status IN ('running', 'human_hold')"
         args: list[Any] = []
         if domain:
             query += " AND domain = $1"

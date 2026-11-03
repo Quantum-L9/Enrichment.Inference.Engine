@@ -5,11 +5,16 @@ Uses mocked LLM calls to avoid external API costs in CI.
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import yaml
 
 from app.core.config import get_settings
 
@@ -240,6 +245,71 @@ def _list_shaped_spec(name: str = "plasticos") -> dict:
     }
 
 
+def _discovery_bytes(spec: dict) -> bytes:
+    """Exact NEW fixture subject, matching API mapping serialization; never historical inference."""
+    return yaml.safe_dump(spec, sort_keys=False, allow_unicode=True).encode("utf-8")
+
+
+def _native_discovery_spec() -> dict:
+    """Complete NEW discovery input with the test additions not yet declared."""
+    spec = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "domains/plasticos/spec.yaml").read_bytes()
+    )
+    node = spec["ontology"]["nodes"][0]
+    discovered = {"annual_capacity_mt", "facility_tier", "certifications"}
+    node["properties"] = [prop for prop in node["properties"] if prop["name"] not in discovered]
+    node["enrichment_hints"]["priority_fields"] = [
+        name for name in node["enrichment_hints"]["priority_fields"] if name not in discovered
+    ]
+    spec["inference_rules"] = [
+        rule
+        for rule in spec["inference_rules"]
+        if all(
+            member["field"] not in discovered
+            for key in ("conditions", "outputs")
+            for member in rule[key]
+        )
+    ]
+    return spec
+
+
+def _published_fixture_registry(root: Path, spec: dict):
+    """Isolated reviewed-byte test input, not an operator approval/promotion."""
+    import json
+
+    import app.api.v1.converge as converge_module
+    from app.engines.domain_yaml_reader import DomainYamlReader
+
+    discovery = _discovery_bytes(spec)
+    digest = hashlib.sha256(discovery).hexdigest()
+    revision = root / "plasticos/revisions" / digest
+    revision.mkdir(parents=True)
+    (revision / "spec.yaml").write_bytes(discovery)
+    (revision / "receipt.json").write_text(
+        json.dumps(
+            {
+                "schema": "eie.domain-approval/v1",
+                "tenant_id": "plasticos",
+                "version": spec["version"],
+                "sha256": digest,
+                "reviewed_input_sha256": digest,
+                "reviewed_by": "test-fixture-only",
+                "approval_ref": "test-fixture-only",
+                "reviewed_at": "2026-11-03T21:00:00+00:00",
+                "previous_sha256": None,
+                "approval_batches": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "plasticos/current.json").write_text(
+        json.dumps({"schema": "eie.domain-current/v1", "sha256": digest}), encoding="utf-8"
+    )
+    return converge_module.build_domain_spec_registry(
+        DomainYamlReader(root, require_published=True)
+    ), digest
+
+
 def test_domain_spec_registry_keys_specs_by_legal_tenant_id(tmp_path):
     """Directory name == tenant id == spec id == Neo4j database name, or refused."""
     import app.api.v1.converge as converge_module
@@ -349,7 +419,7 @@ class _RegistryStateStore:
         return list(self._states.values())
 
 
-def _held_state(domain: str = "plasticos"):
+def _held_state(domain: str = "plasticos", *, spec: dict | None = None, bound: bool = True):
     from app.engines.convergence.loop_state import LoopState, LoopStatus
     from app.models.field_confidence import FieldConfidence, FieldConfidenceMap, FieldSource
 
@@ -375,9 +445,20 @@ def _held_state(domain: str = "plasticos"):
     return LoopState(
         entity_id="ent-001",
         domain=domain,
+        node_label="Facility" if bound else None,
+        discovery_spec_sha256=hashlib.sha256(
+            _discovery_bytes(spec or _list_shaped_spec(domain))
+        ).hexdigest()
+        if bound
+        else None,
+        ownership_contract_version=1 if bound else None,
         status=LoopStatus.HUMAN_HOLD,
         accumulated_fields={"annual_capacity_mt": 5000.0, "facility_tier": "tier_1"},
         accumulated_confidences=fcm,
+        observed_field_sources={
+            "annual_capacity_mt": ["enrichment"],
+            "facility_tier": ["inference"],
+        },
     )
 
 
@@ -424,8 +505,16 @@ async def test_approve_persists_the_revision_before_the_registry_takes_it(api_cl
                 f"/v1/converge/{state.run_id}/approve",
                 json={
                     "decisions": [
-                        {"field_name": "annual_capacity_mt", "approved": True},
-                        {"field_name": "facility_tier", "approved": False},
+                        {
+                            "node_label": "Facility",
+                            "field_name": "annual_capacity_mt",
+                            "approved": True,
+                        },
+                        {
+                            "node_label": "Facility",
+                            "field_name": "facility_tier",
+                            "approved": False,
+                        },
                     ],
                     "reviewed_by": "ib@example.test",
                 },
@@ -453,11 +542,53 @@ async def test_approve_persists_the_revision_before_the_registry_takes_it(api_cl
         ("annual_capacity_mt", True),
         ("facility_tier", False),
     }
+    assert all(
+        d["node_label"] == "Facility" and d["ownership_contract_version"] == 1
+        for d in sent["decisions"]
+    )
+    assert all(d["discovery_spec_sha256"] == state.discovery_spec_sha256 for d in sent["decisions"])
 
 
 @pytest.mark.asyncio
-async def test_concurrent_approvals_for_one_domain_keep_both_field_sets(api_client):
-    """The per-domain lock serialises approvals: the second lands on the first's revision."""
+async def test_historical_unbound_run_refuses_without_restamping_or_writes(api_client):
+    import app.api.v1.converge as converge_module
+
+    state = _held_state(bound=False)
+    before = state.model_dump()
+    spec = _list_shaped_spec()
+    original = _configure_for_approval(converge_module, state, spec)
+    try:
+        with patch.object(
+            converge_module.pg_store, "persist_schema_proposal_batch", new_callable=AsyncMock
+        ) as ledger:
+            response = await api_client.post(
+                f"/v1/converge/{state.run_id}/approve",
+                json={
+                    "decisions": [
+                        {
+                            "node_label": "Facility",
+                            "field_name": "annual_capacity_mt",
+                            "approved": True,
+                        }
+                    ],
+                    "reviewed_by": "test-fixture-only",
+                },
+                headers=AUTH,
+            )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "Legacy unbound discovery run cannot be approved"
+        ledger.assert_not_awaited()
+        assert state.model_dump() == before
+        assert converge_module._domain_specs["plasticos"] is spec
+        assert spec == _list_shaped_spec()
+    finally:
+        for name, value in original.items():
+            setattr(converge_module, name, value)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_approvals_for_one_domain_keep_both_field_sets(api_client, monkeypatch):
+    """The lock serialises writes; the second old discovery refuses after the base changes."""
     import asyncio
     import uuid
     from types import SimpleNamespace
@@ -466,6 +597,9 @@ async def test_concurrent_approvals_for_one_domain_keep_both_field_sets(api_clie
     from app.engines.convergence.loop_state import LoopState, LoopStatus
     from app.models.field_confidence import FieldConfidence, FieldConfidenceMap, FieldSource
     from app.services.enrichment_profile import ProfileRegistry
+
+    # Contended asyncio locks belong to this test's event loop, not a prior test's.
+    monkeypatch.setattr(converge_module, "_domain_locks", {})
 
     def _held(field: str, value) -> LoopState:
         fcm = FieldConfidenceMap()
@@ -477,9 +611,13 @@ async def test_concurrent_approvals_for_one_domain_keep_both_field_sets(api_clie
         return LoopState(
             entity_id=f"ent-{field}",
             domain="plasticos",
+            node_label="Facility",
+            discovery_spec_sha256=hashlib.sha256(_discovery_bytes(_list_shaped_spec())).hexdigest(),
+            ownership_contract_version=1,
             status=LoopStatus.HUMAN_HOLD,
             accumulated_fields={field: value},
             accumulated_confidences=fcm,
+            observed_field_sources={field: ["enrichment"]},
         )
 
     first, second = _held("annual_capacity_mt", 5000.0), _held("certifications", "ISO")
@@ -500,23 +638,189 @@ async def test_concurrent_approvals_for_one_domain_keep_both_field_sets(api_clie
     try:
         with patch.object(
             converge_module.pg_store, "persist_schema_proposal_batch", side_effect=slow_batch
-        ):
+        ) as ledger:
             responses = await asyncio.gather(
                 api_client.post(
                     f"/v1/converge/{first.run_id}/approve",
-                    json={"decisions": [{"field_name": "annual_capacity_mt", "approved": True}]},
+                    json={
+                        "decisions": [
+                            {
+                                "node_label": "Facility",
+                                "field_name": "annual_capacity_mt",
+                                "approved": True,
+                            }
+                        ],
+                        "reviewed_by": "test-fixture-only",
+                    },
                     headers=AUTH,
                 ),
                 api_client.post(
                     f"/v1/converge/{second.run_id}/approve",
-                    json={"decisions": [{"field_name": "certifications", "approved": True}]},
+                    json={
+                        "decisions": [
+                            {
+                                "node_label": "Facility",
+                                "field_name": "certifications",
+                                "approved": True,
+                            }
+                        ],
+                        "reviewed_by": "test-fixture-only",
+                    },
                     headers=AUTH,
                 ),
             )
-        assert [r.status_code for r in responses] == [200, 200], [r.text for r in responses]
+        assert [r.status_code for r in responses] == [200, 409], [r.text for r in responses]
+        assert (
+            responses[1].json()["detail"]
+            == "Discovery artifact changed; fresh owner-bound discovery required"
+        )
+        revised = converge_module._domain_specs["plasticos"]
+        assert _property_names(revised) == {"id", "annual_capacity_mt"}
+        assert revised["version"] == "0.4.0-discovered", "only the nonstale approval applies"
+        assert second.status == LoopStatus.HUMAN_HOLD
+        assert second.discovery_spec_sha256 == first.discovery_spec_sha256
+        ledger.assert_awaited_once(), "stale second discovery cannot write an audit decision"
+    finally:
+        for name, value in original.items():
+            setattr(converge_module, name, value)
+
+
+@pytest.mark.asyncio
+async def test_serialized_fresh_discoveries_keep_both_field_sets(api_client):
+    """Both fields survive when the second NEW discovery explicitly sees the first revision."""
+    import app.api.v1.converge as converge_module
+
+    first = _held_for("annual_capacity_mt", 5000.0)
+    original = _configure_for_approval(converge_module, first, _list_shaped_spec())
+    table = _ProposalTable()
+    try:
+        with patch.object(
+            converge_module.pg_store, "persist_schema_proposal_batch", side_effect=table.persist
+        ):
+            response1 = await api_client.post(
+                f"/v1/converge/{first.run_id}/approve",
+                json={
+                    "decisions": [
+                        {
+                            "node_label": "Facility",
+                            "field_name": "annual_capacity_mt",
+                            "approved": True,
+                        }
+                    ],
+                    "reviewed_by": "test-fixture-only",
+                },
+                headers=AUTH,
+            )
+            # This is a new synthetic discovery INPUT, never a restamp of the old run.
+            fresh_spec = copy.deepcopy(converge_module._domain_specs["plasticos"])
+            second = _held_for("certifications", "ISO", spec=fresh_spec)
+            await converge_module._state_store.save(second)
+            response2 = await api_client.post(
+                f"/v1/converge/{second.run_id}/approve",
+                json={
+                    "decisions": [
+                        {"node_label": "Facility", "field_name": "certifications", "approved": True}
+                    ],
+                    "reviewed_by": "test-fixture-only",
+                },
+                headers=AUTH,
+            )
+        assert [response1.status_code, response2.status_code] == [200, 200], [
+            response1.text,
+            response2.text,
+        ]
         revised = converge_module._domain_specs["plasticos"]
         assert _property_names(revised) == {"id", "annual_capacity_mt", "certifications"}
-        assert revised["version"] == "0.5.0-discovered", "two approvals, two version bumps"
+        assert revised["version"] == "0.5.0-discovered", "two fresh approvals, two version bumps"
+        assert second.discovery_spec_sha256 != first.discovery_spec_sha256
+        assert [row.discovery_spec_sha256 for row in table.rows] == [
+            first.discovery_spec_sha256,
+            second.discovery_spec_sha256,
+        ]
+    finally:
+        for name, value in original.items():
+            setattr(converge_module, name, value)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_native_approvals_preserve_both_audits_without_activation(
+    api_client, tmp_path, monkeypatch
+):
+    """Native concurrent decisions retain both audits; published original bytes stay authoritative."""
+    import asyncio
+
+    import app.api.v1.converge as converge_module
+    from app.services.enrichment_profile import ProfileRegistry
+
+    monkeypatch.setattr(converge_module, "_domain_locks", {})
+    spec = _native_discovery_spec()
+    registry, digest = _published_fixture_registry(tmp_path, spec)
+    first = _held_for("annual_capacity_mt", 5000.0, spec=spec)
+    second = _held_for("certifications", "ISO", spec=spec)
+    names = ("_state_store", "_profile_registry", "_domain_specs", "_kb_resolver", "_idem_store")
+    original = {name: getattr(converge_module, name) for name in names}
+    converge_module.configure(
+        state_store=_RegistryStateStore(first, second),
+        profile_registry=ProfileRegistry(),
+        domain_specs=registry,
+    )
+    table = _ProposalTable()
+    pointer_path = tmp_path / "plasticos/current.json"
+    spec_path = tmp_path / "plasticos/revisions" / digest / "spec.yaml"
+    receipt_path = spec_path.with_name("receipt.json")
+    before = [path.read_bytes() for path in (pointer_path, spec_path, receipt_path)]
+
+    async def slow_audit(**kwargs):
+        await asyncio.sleep(0.05)
+        return await table.persist(**kwargs)
+
+    try:
+        with patch.object(
+            converge_module.pg_store, "persist_schema_proposal_batch", side_effect=slow_audit
+        ) as ledger:
+            responses = await asyncio.gather(
+                *[
+                    api_client.post(
+                        f"/v1/converge/{state.run_id}/approve",
+                        json={
+                            "decisions": [
+                                {"node_label": "Facility", "field_name": field, "approved": True}
+                            ],
+                            "reviewed_by": "test-fixture-only",
+                        },
+                        headers=AUTH,
+                    )
+                    for state, field in ((first, "annual_capacity_mt"), (second, "certifications"))
+                ]
+            )
+        assert [r.status_code for r in responses] == [200, 200], [r.text for r in responses]
+        assert ledger.await_count == 2
+        assert {(r.node_label, r.field_name) for r in table.rows} == {
+            ("Facility", "annual_capacity_mt"),
+            ("Facility", "certifications"),
+        }
+        assert all(
+            r.discovery_spec_sha256 == digest and r.ownership_contract_version == 1
+            for r in table.rows
+        )
+        assert all(r.reviewed_by == "test-fixture-only" for r in table.rows)
+        assert all(
+            r.json()["publication_status"] == "awaiting_operator_publication"
+            and r.json()["new_version"] == "0.3.0"
+            for r in responses
+        )
+        assert converge_module._domain_specs is registry
+        assert registry["plasticos"] == spec
+        assert _property_names(registry["plasticos"]) == _property_names(spec)
+        assert [path.read_bytes() for path in (pointer_path, spec_path, receipt_path)] == before
+        audit_before = copy.deepcopy([vars(row) for row in table.rows])
+        with patch.object(
+            converge_module.pg_store, "get_approved_schema_proposals", new_callable=AsyncMock
+        ) as history:
+            assert await converge_module.hydrate_approved_revisions() == {}
+            history.assert_not_awaited()
+        assert registry["plasticos"] == spec
+        assert [vars(row) for row in table.rows] == audit_before
     finally:
         for name, value in original.items():
             setattr(converge_module, name, value)
@@ -534,7 +838,12 @@ async def test_approve_fails_closed_when_the_store_is_unavailable(api_client):
         # pg_store has no engine in this process: get_session raises RuntimeError.
         resp = await api_client.post(
             f"/v1/converge/{state.run_id}/approve",
-            json={"decisions": [{"field_name": "annual_capacity_mt", "approved": True}]},
+            json={
+                "decisions": [
+                    {"node_label": "Facility", "field_name": "annual_capacity_mt", "approved": True}
+                ],
+                "reviewed_by": "test-fixture-only",
+            },
             headers=AUTH,
         )
         assert resp.status_code == 503, resp.text
@@ -564,12 +873,17 @@ def _approved_row(field_name: str, field_type: str, batch: str, **extra):
         proposed_gate=extra.get("proposed_gate"),
         proposed_scoring_dimension=extra.get("proposed_scoring_dimension"),
         approval_status="approved",
+        node_label=extra.get("node_label"),
+        discovery_spec_sha256=extra.get("discovery_spec_sha256"),
+        ownership_contract_version=extra.get("ownership_contract_version"),
+        reviewed_by="test-fixture-only",
+        reviewed_at=datetime(2026, 11, 3, 21, 0, tzinfo=UTC),
     )
 
 
 @pytest.mark.asyncio
 async def test_hydrate_replays_approved_rows_onto_the_registry():
-    """Startup reads the approved revision back; each batch is one version bump."""
+    """Historical unbound startup evidence refuses safely and retains its audit payload."""
     import app.api.v1.converge as converge_module
     from app.services.enrichment_profile import ProfileRegistry
 
@@ -579,26 +893,29 @@ async def test_hydrate_replays_approved_rows_onto_the_registry():
         _approved_row("annual_capacity_mt", "float", "batch-1"),
         _approved_row("facility_tier", "string", "batch-2", proposed_gate="categorical"),
     ]
+    before = copy.deepcopy([vars(row) for row in rows])
     converge_module.configure(
         state_store=_RegistryStateStore(),
         profile_registry=ProfileRegistry(),
         domain_specs={"plasticos": _list_shaped_spec()},
     )
     try:
-        with patch.object(
-            converge_module.pg_store,
-            "get_approved_schema_proposals",
-            new=AsyncMock(return_value=rows),
-        ) as mock_get:
-            applied = await converge_module.hydrate_approved_revisions()
-        assert applied == {"plasticos": 2}
+        with (
+            patch.object(
+                converge_module.pg_store,
+                "get_approved_schema_proposals",
+                new=AsyncMock(return_value=rows),
+            ) as mock_get,
+            pytest.raises(ValueError, match="^Schema proposal is legacy-unbound$"),
+        ):
+            await converge_module.hydrate_approved_revisions()
         mock_get.assert_awaited_once_with(tenant_id="plasticos", domain="plasticos")
         revised = converge_module._domain_specs["plasticos"]
-        assert _property_names(revised) == {"id", "annual_capacity_mt", "facility_tier"}
-        assert revised["version"] == "0.5.0-discovered"  # two batches, two bumps
-        assert {"field": "facility_tier", "type": "categorical", "auto_proposed": True} in revised[
-            "gates"
-        ]
+        assert revised == _list_shaped_spec()
+        assert [vars(row) for row in rows] == before
+        assert rows[1].proposed_gate == "categorical", (
+            "historical ranking payload retained, never applied"
+        )
 
         # An unreachable store leaves the file-backed revision in place and is
         # raised, not swallowed: main records `hydrate_failed` (not Ready).
@@ -622,6 +939,59 @@ async def test_hydrate_replays_approved_rows_onto_the_registry():
             setattr(converge_module, name, value)
 
 
+def test_explicit_bound_replay_keeps_batch_fields_associations_and_historical_payload():
+    """Two retained exact discovery artifacts replay with two bumps, never ranking controls."""
+    import app.api.v1.converge as converge_module
+
+    base = _native_discovery_spec()
+    first_bytes = _discovery_bytes(base)
+    first_digest = hashlib.sha256(first_bytes).hexdigest()
+    second_discovery = copy.deepcopy(base)
+    second_discovery["ontology"]["nodes"][0]["properties"].append(
+        {"name": "annual_capacity_mt", "type": "float", "source": "enrichment"}
+    )
+    second_discovery["version"] = "0.4.0-discovered"
+    second_bytes = _discovery_bytes(second_discovery)
+    second_digest = hashlib.sha256(second_bytes).hexdigest()
+    rows = [
+        _approved_row(
+            "annual_capacity_mt",
+            "float",
+            "batch-1",
+            node_label="Facility",
+            discovery_spec_sha256=first_digest,
+            ownership_contract_version=1,
+        ),
+        _approved_row(
+            "facility_tier",
+            "string",
+            "batch-2",
+            node_label="Facility",
+            discovery_spec_sha256=second_digest,
+            ownership_contract_version=1,
+            proposed_gate="categorical",
+            proposed_scoring_dimension="numeric_distance",
+        ),
+    ]
+    before = copy.deepcopy([vars(row) for row in rows])
+    replayed = converge_module.apply_approved_records(
+        base, rows, discovery_specs={first_digest: first_bytes, second_digest: second_bytes}
+    )
+    assert _property_names(replayed) == _property_names(base) | {
+        "annual_capacity_mt",
+        "facility_tier",
+    }
+    assert replayed["version"] == "0.5.0-discovered"
+    assert replayed["sync"] == base["sync"]
+    assert replayed["semantic_registry"] == base["semantic_registry"]
+    assert replayed["inference_rules"] == base["inference_rules"]
+    assert replayed["gates"] == [] and replayed["scoring"]["dimensions"] == []
+    assert [vars(row) for row in rows] == before
+    assert "annual_capacity_mt" not in _property_names(
+        base
+    ) and "facility_tier" not in _property_names(base)
+
+
 def test_apply_serves_list_shaped_and_dict_shaped_ontologies():
     """schema_proposer.apply writes into whichever shape the spec declares."""
     from app.engines.convergence.schema_proposer import (
@@ -637,7 +1007,30 @@ def test_apply_serves_list_shaped_and_dict_shaped_ontologies():
     )
     decisions = [ApprovalDecision(field_name="annual_capacity_mt", approved=True)]
 
-    listed = apply(_list_shaped_spec(), decisions, proposal)
+    listed_spec = _list_shaped_spec()
+    digest = hashlib.sha256(_discovery_bytes(listed_spec)).hexdigest()
+    native_proposal = SchemaProposalSet(
+        domain="plasticos",
+        tenant_id="plasticos",
+        discovery_spec_sha256=digest,
+        ownership_contract_version=1,
+        proposed_fields=[
+            FieldProposal(
+                field_name="annual_capacity_mt",
+                field_type="float",
+                node_label="Facility",
+                discovery_spec_sha256=digest,
+                ownership_contract_version=1,
+            )
+        ],
+        version_bump="0.4.0-discovered",
+    )
+    listed = apply(
+        listed_spec,
+        [ApprovalDecision(node_label="Facility", field_name="annual_capacity_mt", approved=True)],
+        native_proposal,
+        source_sha256=digest,
+    )
     assert {"name": "annual_capacity_mt", "type": "float", "source": "enrichment"} in listed[
         "ontology"
     ]["nodes"][0]["properties"]
@@ -653,7 +1046,7 @@ def test_apply_serves_list_shaped_and_dict_shaped_ontologies():
 # ── F-247-2: a batch that applies nothing publishes no revision ──────────────
 
 
-def _held_for(field: str, value):
+def _held_for(field: str, value, *, spec: dict | None = None):
     from app.engines.convergence.loop_state import LoopState, LoopStatus
     from app.models.field_confidence import FieldConfidence, FieldConfidenceMap, FieldSource
 
@@ -666,9 +1059,15 @@ def _held_for(field: str, value):
     return LoopState(
         entity_id=f"ent-{field}",
         domain="plasticos",
+        node_label="Facility",
+        discovery_spec_sha256=hashlib.sha256(
+            _discovery_bytes(spec or _list_shaped_spec())
+        ).hexdigest(),
+        ownership_contract_version=1,
         status=LoopStatus.HUMAN_HOLD,
         accumulated_fields={field: value},
         accumulated_confidences=fcm,
+        observed_field_sources={field: ["enrichment"]},
     )
 
 
@@ -689,6 +1088,8 @@ class _ProposalTable:
                 domain=kwargs["domain"],
                 batch_run_id=kwargs["batch_run_id"],
                 approval_status="approved" if row["approved"] else "rejected",
+                reviewed_by=kwargs["reviewed_by"],
+                reviewed_at=datetime(2026, 11, 3, 21, 0, tzinfo=UTC),
                 **fields,
             )
             self.rows.append(record)
@@ -705,27 +1106,36 @@ class _ProposalTable:
 
 @pytest.mark.asyncio
 async def test_unapplied_approvals_publish_no_revision_so_replay_matches_live(api_client):
-    """All-rejected and unproposed-field approvals bump nothing; a restart lands on live."""
+    """All-rejected/unknown pairs bump nothing; explicit bound replay matches applied live."""
     import copy
 
     import app.api.v1.converge as converge_module
     from app.services.enrichment_profile import ProfileRegistry
 
-    rejected = _held_for("annual_capacity_mt", 5000.0)
-    unproposed = _held_for("certifications", "ISO")
-    applied = _held_for("facility_tier", "tier_1")
+    base = _native_discovery_spec()
+    discovery = _discovery_bytes(base)
+    digest = hashlib.sha256(discovery).hexdigest()
+    rejected = _held_for("annual_capacity_mt", 5000.0, spec=base)
+    unproposed = _held_for("certifications", "ISO", spec=base)
+    applied = _held_for("facility_tier", "tier_1", spec=base)
     table = _ProposalTable()
     names = ("_state_store", "_profile_registry", "_domain_specs", "_kb_resolver", "_idem_store")
     original = {name: getattr(converge_module, name) for name in names}
     converge_module.configure(
         state_store=_RegistryStateStore(rejected, unproposed, applied),
         profile_registry=ProfileRegistry(),
-        domain_specs={"plasticos": _list_shaped_spec()},
+        domain_specs={"plasticos": base},
     )
     sequence = [
-        (rejected, [{"field_name": "annual_capacity_mt", "approved": False}]),
-        (unproposed, [{"field_name": "not_a_proposed_field", "approved": True}]),
-        (applied, [{"field_name": "facility_tier", "approved": True}]),
+        (
+            rejected,
+            [{"node_label": "Facility", "field_name": "annual_capacity_mt", "approved": False}],
+        ),
+        (
+            unproposed,
+            [{"node_label": "Facility", "field_name": "not_a_proposed_field", "approved": True}],
+        ),
+        (applied, [{"node_label": "Facility", "field_name": "facility_tier", "approved": True}]),
     ]
     try:
         with (
@@ -741,7 +1151,7 @@ async def test_unapplied_approvals_publish_no_revision_so_replay_matches_live(ap
             responses = [
                 await api_client.post(
                     f"/v1/converge/{state.run_id}/approve",
-                    json={"decisions": decisions},
+                    json={"decisions": decisions, "reviewed_by": "test-fixture-only"},
                     headers=AUTH,
                 )
                 for state, decisions in sequence
@@ -751,19 +1161,34 @@ async def test_unapplied_approvals_publish_no_revision_so_replay_matches_live(ap
             converge_module.configure(
                 state_store=_RegistryStateStore(),
                 profile_registry=ProfileRegistry(),
-                domain_specs={"plasticos": _list_shaped_spec()},
+                domain_specs={"plasticos": copy.deepcopy(base)},
             )
-            await converge_module.hydrate_approved_revisions()
-            replayed = converge_module._domain_specs["plasticos"]
+            # Automatic legacy replay has no retained-byte inputs and must refuse.
+            with pytest.raises(
+                ValueError, match="Retained replay requires the recorded discovery artifact"
+            ):
+                await converge_module.hydrate_approved_revisions()
+            assert converge_module._domain_specs["plasticos"] == base
+            audit_before = copy.deepcopy([vars(row) for row in table.rows])
+            replayed = converge_module.apply_approved_records(
+                base,
+                await table.approved(tenant_id="plasticos", domain="plasticos"),
+                discovery_specs={digest: discovery},
+            )
+            assert [vars(row) for row in table.rows] == audit_before
     finally:
         for name, value in original.items():
             setattr(converge_module, name, value)
 
-    assert [r.status_code for r in responses] == [200, 200, 200], [r.text for r in responses]
-    bodies = [r.json() for r in responses]
-    assert [b["approved"] for b in bodies] == [0, 0, 1], "applied counts, not decided counts"
-    assert [b["new_version"] for b in bodies] == ["0.3.0", "0.3.0", "0.4.0-discovered"]
-    assert bodies[1]["unapplied"] == ["not_a_proposed_field"]
+    assert [r.status_code for r in responses] == [200, 422, 200], [r.text for r in responses]
+    assert responses[1].json()["detail"] == "Approval decision names an unproposed owner/field pair"
+    bodies = [responses[0].json(), responses[2].json()]
+    assert [b["approved"] for b in bodies] == [0, 1], "applied counts, not decided counts"
+    assert [b["new_version"] for b in bodies] == ["0.3.0", "0.4.0-discovered"]
+    assert all(b["unapplied"] == [] for b in bodies)
+    assert len(table.rows) == 2 and all(
+        row.field_name != "not_a_proposed_field" for row in table.rows
+    )
     assert replayed["version"] == live["version"]
     assert replayed == live
 

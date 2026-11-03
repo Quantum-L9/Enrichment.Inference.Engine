@@ -342,7 +342,10 @@ def test_schema_proposal_apply_never_adds_or_changes_sync() -> None:
         yaml_diff="+ dock_count: int",
     )
     updated = apply_proposals(
-        current, [ApprovalDecision(field_name="dock_count", approved=True)], proposals
+        current,
+        [ApprovalDecision(field_name="dock_count", approved=True)],
+        proposals,
+        node_label="OrbitalDepot",
     )
     assert updated["sync"] == current["sync"]
     assert mapping_fingerprint(updated) == mapping_fingerprint(current)

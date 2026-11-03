@@ -9,14 +9,18 @@ Callers acquire a session via get_session() context manager.
 
 from __future__ import annotations
 
+import json
+import re
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -24,6 +28,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import selectinload
+
+from app.engines.convergence.schema_proposer import _is_canonical_field_name
+from app.engines.domain_yaml_reader import is_legal_tenant_id
 
 from .pg_models import (
     Base,
@@ -342,6 +349,212 @@ async def list_active_convergence_runs(
 # ── SchemaProposal CRUD ────────────────────────────────────────────────────
 
 
+_NODE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_DISCOVERY_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_PROPOSAL_IDENTITY = ("tenant_id", "domain", "batch_run_id", "node_label", "field_name")
+_PROPOSAL_PAYLOAD = (
+    *_PROPOSAL_IDENTITY,
+    "discovery_spec_sha256",
+    "ownership_contract_version",
+    "field_type",
+    "source",
+    "fill_rate",
+    "avg_confidence",
+    "sample_values",
+    "value_distribution",
+    "proposed_gate",
+    "proposed_scoring_dimension",
+    "yaml_diff",
+)
+
+
+def validate_schema_proposal_binding(record: Any) -> tuple[str, str]:
+    """Return recorded (node, discovery digest); never infer legacy ownership.
+
+    Accept ORM/attribute records and mapping DTOs. All absent/NULL binding
+    fields produce the stable ``ValueError('Schema proposal is legacy-unbound')``.
+    Partial or malformed binding also fails closed. This checks provenance
+    shape, not retained discovery bytes or membership in the ontology.
+    """
+
+    def value(name: str) -> Any:
+        return record.get(name) if isinstance(record, Mapping) else getattr(record, name, None)
+
+    node = value("node_label")
+    digest = value("discovery_spec_sha256")
+    version = value("ownership_contract_version")
+    if node is None and digest is None and version is None:
+        raise ValueError("Schema proposal is legacy-unbound")
+    if type(version) is not int or version != 1:
+        raise ValueError("Schema proposal ownership_contract_version must be 1")
+    if not isinstance(node, str) or len(node) > 128 or not _NODE_IDENTIFIER.fullmatch(node):
+        raise ValueError(
+            "Schema proposal node_label must be an identifier of at most 128 characters"
+        )
+    if not isinstance(digest, str) or not _DISCOVERY_DIGEST.fullmatch(digest):
+        raise ValueError(
+            "Schema proposal discovery_spec_sha256 must be 64 lowercase hex characters"
+        )
+    return node, digest
+
+
+def _proposal_text(value: Any, name: str, limit: int) -> str:
+    if not isinstance(value, str) or not value or value != value.strip() or len(value) > limit:
+        raise ValueError(
+            f"Schema proposal {name} must be nonblank, unpadded text of at most {limit} characters"
+        )
+    return value
+
+
+def _validate_proposal_scope(tenant_id: str, domain: str, batch_run_id: str) -> None:
+    if not is_legal_tenant_id(tenant_id) or tenant_id != domain:
+        raise ValueError("Schema proposal tenant_id must equal a valid domain")
+    _proposal_text(batch_run_id, "batch_run_id", 256)
+
+
+def _proposal_rate(value: Any, name: str) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        raise ValueError(f"Schema proposal {name} must be a finite number between 0 and 1")
+    try:
+        number = Decimal(str(value))
+        if not number.is_finite() or number < 0 or number > 1:
+            raise ValueError(f"Schema proposal {name} must be a finite number between 0 and 1")
+        # Match Numeric(5, 4) before writing/comparing a durable retry.
+        return number.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    except InvalidOperation as error:
+        raise ValueError(f"Schema proposal {name} is not representable") from error
+
+
+def _proposal_json(value: Any, name: str, expected_type: type) -> Any:
+    if not isinstance(value, expected_type):
+        raise ValueError(f"Schema proposal {name} has an invalid JSON container")
+    try:
+        # JSON round-trip validates finite JSON data and snapshots caller-owned
+        # nested containers before the first await or transaction is opened.
+        return json.loads(json.dumps(value, sort_keys=True, allow_nan=False))
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Schema proposal {name} must contain finite JSON data") from error
+
+
+def _validated_proposal_values(
+    tenant_id: str, domain: str, batch_run_id: str, proposal: Mapping[str, Any]
+) -> dict[str, Any]:
+    node, digest = validate_schema_proposal_binding(proposal)
+    for name, expected in (
+        ("tenant_id", tenant_id),
+        ("domain", domain),
+        ("batch_run_id", batch_run_id),
+    ):
+        if name in proposal and proposal[name] != expected:
+            raise ValueError(f"Schema proposal {name} conflicts with batch scope")
+    field_name = proposal.get("field_name")
+    if (
+        not isinstance(field_name, str)
+        or len(field_name) > 256
+        or not _is_canonical_field_name(field_name)
+    ):
+        raise ValueError("Schema proposal field_name must be canonical and at most 256 characters")
+    values = {
+        "tenant_id": tenant_id,
+        "domain": domain,
+        "batch_run_id": batch_run_id,
+        "node_label": node,
+        "discovery_spec_sha256": digest,
+        "ownership_contract_version": 1,
+        "field_name": field_name,
+        "field_type": _proposal_text(proposal.get("field_type"), "field_type", 64),
+        "source": _proposal_text(proposal.get("source"), "source", 32),
+        "fill_rate": _proposal_rate(proposal.get("fill_rate"), "fill_rate"),
+        "avg_confidence": _proposal_rate(proposal.get("avg_confidence"), "avg_confidence"),
+        "sample_values": _proposal_json(
+            proposal.get("sample_values") if proposal.get("sample_values") is not None else [],
+            "sample_values",
+            list,
+        ),
+        "value_distribution": _proposal_json(
+            proposal.get("value_distribution")
+            if proposal.get("value_distribution") is not None
+            else {},
+            "value_distribution",
+            dict,
+        ),
+    }
+    for name in ("proposed_gate", "proposed_scoring_dimension", "yaml_diff"):
+        value = proposal.get(name)
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"Schema proposal {name} must be text or None")
+        values[name] = value
+    return values
+
+
+def _compare_proposal_payload(record: SchemaProposalRecord, values: dict[str, Any]) -> None:
+    validate_schema_proposal_binding(record)
+    for name in _PROPOSAL_PAYLOAD:
+        actual = getattr(record, name)
+        expected = values[name]
+        if name in {"fill_rate", "avg_confidence"}:
+            matches = _proposal_rate(actual, name) == expected
+        elif name in {"sample_values", "value_distribution"}:
+            matches = json.dumps(actual, sort_keys=True, allow_nan=False) == json.dumps(
+                expected, sort_keys=True, allow_nan=False
+            )
+        else:
+            matches = actual == expected
+        if not matches:
+            raise ValueError(f"Conflicting schema proposal retry: immutable {name} differs")
+
+
+def _review_proposal(
+    record: SchemaProposalRecord, reviewed_by: str, approved: bool, reviewed_at: datetime
+) -> None:
+    status = "approved" if approved else "rejected"
+    if (
+        record.approval_status == "pending"
+        and record.reviewed_by is None
+        and record.reviewed_at is None
+    ):
+        record.approval_status = status
+        record.reviewed_by = reviewed_by
+        record.reviewed_at = reviewed_at
+    elif (
+        record.approval_status != status
+        or record.reviewed_by != reviewed_by
+        or record.reviewed_at is None
+    ):
+        raise ValueError("Conflicting schema proposal retry: decision or reviewer differs")
+
+
+async def _insert_bound_proposal(
+    session: AsyncSession, values: dict[str, Any]
+) -> SchemaProposalRecord:
+    # Unique index arbitrates concurrent writers. DO NOTHING cannot overwrite
+    # the winning payload; the following locked reload must compare it.
+    insert_statement = (
+        insert(SchemaProposalRecord)
+        .values(**values)
+        .on_conflict_do_nothing(
+            index_elements=[getattr(SchemaProposalRecord, name) for name in _PROPOSAL_IDENTITY],
+            index_where=text("ownership_contract_version = 1"),
+        )
+    )
+    await session.execute(insert_statement)
+    reload_statement = (
+        select(SchemaProposalRecord)
+        .where(
+            *(getattr(SchemaProposalRecord, name) == values[name] for name in _PROPOSAL_IDENTITY),
+            SchemaProposalRecord.ownership_contract_version == 1,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    result = await session.execute(reload_statement)
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise RuntimeError("Schema proposal conflict reload did not find the bound record")
+    _compare_proposal_payload(record, values)
+    return record
+
+
 async def save_schema_proposal(
     tenant_id: str,
     domain: str,
@@ -356,36 +569,49 @@ async def save_schema_proposal(
     proposed_gate: str | None = None,
     proposed_scoring_dimension: str | None = None,
     yaml_diff: str | None = None,
+    *,
+    node_label: str | None = None,
+    discovery_spec_sha256: str | None = None,
+    ownership_contract_version: int | None = None,
 ) -> SchemaProposalRecord:
-    """Persist a schema proposal. Upserts on (tenant, domain, batch, field)."""
+    """Save immutable bound pending evidence; missing binding is refused.
+
+    Keyword-only binding defaults support explicit legacy refusal, NOT writes.
+    Identical pending retries return original records; reviewed records cannot
+    be reset by a pending save. Only explicit approval methods may review them.
+    """
+    _validate_proposal_scope(tenant_id, domain, batch_run_id)
+    values = _validated_proposal_values(
+        tenant_id,
+        domain,
+        batch_run_id,
+        {
+            "node_label": node_label,
+            "discovery_spec_sha256": discovery_spec_sha256,
+            "ownership_contract_version": ownership_contract_version,
+            "field_name": field_name,
+            "field_type": field_type,
+            "source": source,
+            "fill_rate": fill_rate,
+            "avg_confidence": avg_confidence,
+            "sample_values": sample_values,
+            "value_distribution": value_distribution,
+            "proposed_gate": proposed_gate,
+            "proposed_scoring_dimension": proposed_scoring_dimension,
+            "yaml_diff": yaml_diff,
+        },
+    )
+    values.update(approval_status="pending", reviewed_by=None, reviewed_at=None)
     async with get_session() as session:
-        stmt = select(SchemaProposalRecord).where(
-            SchemaProposalRecord.tenant_id == tenant_id,
-            SchemaProposalRecord.domain == domain,
-            SchemaProposalRecord.batch_run_id == batch_run_id,
-            SchemaProposalRecord.field_name == field_name,
-        )
-        result = await session.execute(stmt)
-        record = result.scalar_one_or_none()
-
-        if record is None:
-            record = SchemaProposalRecord(
-                tenant_id=tenant_id,
-                domain=domain,
-                batch_run_id=batch_run_id,
-                field_name=field_name,
+        record = await _insert_bound_proposal(session, values)
+        if (
+            record.approval_status != "pending"
+            or record.reviewed_by is not None
+            or record.reviewed_at is not None
+        ):
+            raise ValueError(
+                "Conflicting schema proposal retry: pending save cannot change a reviewed decision"
             )
-            session.add(record)
-
-        record.field_type = field_type
-        record.source = source
-        record.fill_rate = fill_rate
-        record.avg_confidence = avg_confidence
-        record.sample_values = sample_values or []
-        record.value_distribution = value_distribution or {}
-        record.proposed_gate = proposed_gate
-        record.proposed_scoring_dimension = proposed_scoring_dimension
-        record.yaml_diff = yaml_diff
         await session.flush()
         return record
 
@@ -398,68 +624,68 @@ async def persist_schema_proposal_batch(
     reviewed_by: str,
     decisions: list[dict[str, Any]],
 ) -> list[SchemaProposalRecord]:
-    """Write and review every proposal of one approval in ONE transaction.
+    """Validate the entire owner-bound decision batch, then review atomically.
 
-    EIE-IDENT-03. `save_schema_proposal` and `approve_schema_proposal` each
-    open and commit their own session, so a failure midway through an approval
-    left the earlier rows approved while the API answered 503 and kept the
-    registry unchanged -- and the next startup replayed that partial batch as a
-    revision the API had said was not applied. Here one session and one
-    `begin()` cover the whole batch: a failure on any row rolls every row of
-    the batch back, so the store and the registry agree either way.
-
-    Each decision carries the `save_schema_proposal` columns plus `approved`.
-    Upsert key is (tenant, domain, batch, field), as for `save_schema_proposal`;
-    `approval_status`, `reviewed_by` and `reviewed_at` are stamped in the same
-    transaction.
+    Decisions carry all proposal columns, node_label, discovery_spec_sha256,
+    ownership_contract_version=1, and a strict bool approved. The durable key
+    is (tenant, domain, batch, node, field). Pending immutable evidence can be
+    reviewed here. Exact retries retain their original review/creation times;
+    conflicting payload, digest, decision or reviewer refuses the transaction.
     """
+    _validate_proposal_scope(tenant_id, domain, batch_run_id)
+    _proposal_text(reviewed_by, "reviewed_by", 256)
+    if not isinstance(decisions, list):
+        raise ValueError("Schema proposal decisions must be a list")
+    validated: list[tuple[dict[str, Any], bool]] = []
+    seen: set[tuple[str, str]] = set()
+    for decision in decisions:
+        if not isinstance(decision, Mapping):
+            raise ValueError("Schema proposal decision must be a mapping")
+        values = _validated_proposal_values(tenant_id, domain, batch_run_id, decision)
+        approved = decision.get("approved")
+        if type(approved) is not bool:
+            raise ValueError("Schema proposal approved must be a bool")
+        if "reviewed_by" in decision and decision["reviewed_by"] != reviewed_by:
+            raise ValueError("Schema proposal reviewed_by conflicts with batch reviewer")
+        key = (values["node_label"], values["field_name"])
+        if key in seen:
+            raise ValueError("Duplicate schema proposal identity in batch")
+        seen.add(key)
+        validated.append((values, approved))
+    if not validated:
+        return []
     reviewed_at = datetime.now(UTC)
-    records: list[SchemaProposalRecord] = []
+    records: dict[tuple[str, str], SchemaProposalRecord] = {}
     async with get_session() as session:
-        for decision in decisions:
-            stmt = select(SchemaProposalRecord).where(
-                SchemaProposalRecord.tenant_id == tenant_id,
-                SchemaProposalRecord.domain == domain,
-                SchemaProposalRecord.batch_run_id == batch_run_id,
-                SchemaProposalRecord.field_name == decision["field_name"],
-            )
-            result = await session.execute(stmt)
-            record = result.scalar_one_or_none()
-            if record is None:
-                record = SchemaProposalRecord(
-                    tenant_id=tenant_id,
-                    domain=domain,
-                    batch_run_id=batch_run_id,
-                    field_name=decision["field_name"],
-                )
-                session.add(record)
-            record.field_type = decision["field_type"]
-            record.source = decision["source"]
-            record.fill_rate = decision["fill_rate"]
-            record.avg_confidence = decision["avg_confidence"]
-            record.sample_values = list(decision.get("sample_values") or [])
-            record.value_distribution = dict(decision.get("value_distribution") or {})
-            record.proposed_gate = decision.get("proposed_gate")
-            record.proposed_scoring_dimension = decision.get("proposed_scoring_dimension")
-            record.yaml_diff = decision.get("yaml_diff")
-            record.approval_status = "approved" if decision["approved"] else "rejected"
-            record.reviewed_by = reviewed_by
-            record.reviewed_at = reviewed_at
-            records.append(record)
+        # Deterministic lock order avoids opposite-order mixed-owner retries
+        # deadlocking, while the return list retains caller decision order.
+        for values, approved in sorted(
+            validated, key=lambda item: (item[0]["node_label"], item[0]["field_name"])
+        ):
+            incoming = {
+                **values,
+                "approval_status": "approved" if approved else "rejected",
+                "reviewed_by": reviewed_by,
+                "reviewed_at": reviewed_at,
+            }
+            record = await _insert_bound_proposal(session, incoming)
+            _review_proposal(record, reviewed_by, approved, reviewed_at)
+            records[(values["node_label"], values["field_name"])] = record
         await session.flush()
+    ordered = [records[(values["node_label"], values["field_name"])] for values, _ in validated]
     logger.info(
         "schema_proposal_batch_persisted",
         tenant_id=tenant_id,
         domain=domain,
         batch_run_id=batch_run_id,
-        rows=len(records),
-        approved=sum(1 for r in records if r.approval_status == "approved"),
+        rows=len(ordered),
+        approved=sum(1 for r in ordered if r.approval_status == "approved"),
     )
-    return records
+    return ordered
 
 
 async def get_pending_schema_proposals(tenant_id: str, domain: str) -> list[SchemaProposalRecord]:
-    """Return all pending proposals for a domain, ranked by confidence."""
+    """Return pending records including legacy NULL binding, ranked by confidence."""
     async with get_session() as session:
         stmt = (
             select(SchemaProposalRecord)
@@ -477,12 +703,10 @@ async def get_pending_schema_proposals(tenant_id: str, domain: str) -> list[Sche
 async def get_approved_schema_proposals(tenant_id: str, domain: str) -> list[SchemaProposalRecord]:
     """Return every approved proposal for a domain, oldest batch first.
 
-    EIE-IDENT-03 read side: the approved rows of ``schema_proposals`` are the
-    durable record of a domain spec's revisions. Ordered by creation so a
-    replay onto the file-backed spec lands the batches in the order they were
-    approved. Under the identity contract ``tenant_id == domain``; both are
-    still bound so the index on (tenant, domain) is used and a cross-tenant
-    read is impossible.
+    Includes unbound historical rows: consumers must validate every selected
+    binding and refuse incomplete history rather than silently filter it.
+    This audit ledger is not effective runtime YAML authority. Both tenant
+    and domain remain query filters; caller authentication is unchanged.
     """
     async with get_session() as session:
         stmt = (
@@ -492,21 +716,42 @@ async def get_approved_schema_proposals(tenant_id: str, domain: str) -> list[Sch
                 SchemaProposalRecord.domain == domain,
                 SchemaProposalRecord.approval_status == "approved",
             )
-            .order_by(SchemaProposalRecord.created_at.asc(), SchemaProposalRecord.field_name.asc())
+            .order_by(
+                SchemaProposalRecord.created_at.asc(),
+                SchemaProposalRecord.node_label.asc(),
+                SchemaProposalRecord.field_name.asc(),
+            )
         )
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
 
-async def approve_schema_proposal(proposal_id: uuid.UUID, reviewed_by: str, approved: bool) -> None:
-    """Record a human approval or rejection decision on a schema proposal."""
+async def approve_schema_proposal(
+    proposal_id: uuid.UUID, reviewed_by: str, approved: bool
+) -> SchemaProposalRecord:
+    """Review bound pending evidence by UUID, or return an identical reviewed retry.
+
+    Missing and legacy-unbound records fail before update. No ownership is
+    supplied here, no reviewer/timestamp is replaced on retry, and existing
+    route authentication/authorization remains the caller's responsibility.
+    """
+    if not isinstance(proposal_id, uuid.UUID):
+        raise ValueError("Schema proposal proposal_id must be a UUID")
+    _proposal_text(reviewed_by, "reviewed_by", 256)
+    if type(approved) is not bool:
+        raise ValueError("Schema proposal approved must be a bool")
     async with get_session() as session:
-        await session.execute(
-            update(SchemaProposalRecord)
+        result = await session.execute(
+            select(SchemaProposalRecord)
             .where(SchemaProposalRecord.id == proposal_id)
-            .values(
-                approval_status="approved" if approved else "rejected",
-                reviewed_by=reviewed_by,
-                reviewed_at=datetime.now(UTC),
-            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
+        record = result.scalar_one_or_none()
+        if record is None:
+            raise ValueError("Schema proposal not found")
+        validate_schema_proposal_binding(record)
+        _validate_proposal_scope(record.tenant_id, record.domain, record.batch_run_id)
+        _review_proposal(record, reviewed_by, approved, datetime.now(UTC))
+        await session.flush()
+        return record

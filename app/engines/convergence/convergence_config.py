@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from app.engines.native_yaml import parse_native_yaml
 
 
 @dataclass
@@ -49,8 +49,7 @@ class ConvergenceConfig:
         if not domain_path.exists():
             return cls()
 
-        with open(domain_path) as f:
-            domain_spec = yaml.safe_load(f)
+        domain_spec = parse_native_yaml(domain_path.read_bytes())
 
         convergence_settings = domain_spec.get("convergence_settings", {})
 

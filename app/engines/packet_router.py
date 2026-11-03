@@ -48,7 +48,7 @@ from constellation_node_sdk.gate import (
     GateTimeoutError,
 )
 
-from app.engines.domain_yaml_reader import DomainYamlReader
+from app.engines.domain_yaml_reader import DomainPublicationError, DomainYamlReader
 
 if TYPE_CHECKING:
     from app.engines.observed_association_contract import ObservedRelationshipContract
@@ -661,6 +661,11 @@ class PacketRouter:
                 )
                 return None
         if contract is None:
+            if (
+                self._domain_reader is not None
+                and getattr(self._domain_reader, "require_published", False) is True
+            ):
+                return None
             contract = self._fallback_contract
         if contract is None:
             return None
@@ -685,7 +690,8 @@ class PacketRouter:
         if self._domain_reader is None:
             return None
         try:
-            spec = self._domain_reader.load(domain).raw_spec
+            config = self._domain_reader.load(domain)
+            spec = config.raw_spec
         except (
             ValueError,
             OSError,
@@ -694,12 +700,23 @@ class PacketRouter:
             TypeError,
             KeyError,
         ) as exc:
+            if getattr(self._domain_reader, "require_published", False) is True or isinstance(
+                exc, DomainPublicationError
+            ):
+                raise
             logger.warning(
                 "graph_sync_domain_spec_unavailable",
                 domain=domain,
                 error=f"{type(exc).__name__}: {exc}",
             )
             return None
+        logger.info(
+            "graph_sync_effective_revision",
+            domain=domain,
+            version=config.version,
+            source_sha256=config.source_sha256,
+            approval_ref=config.approval_ref,
+        )
         return spec if isinstance(spec, dict) else {}
 
     async def route(
