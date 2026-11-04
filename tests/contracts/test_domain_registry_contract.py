@@ -348,7 +348,10 @@ def test_tenant_scoped_converge_routes_are_refused_outside_unsigned_runtimes(
         client = _direct_client(monkeypatch, environment)
         approve = client.post(
             "/v1/converge/00000000-0000-0000-0000-000000000000/approve",
-            json={"decisions": [{"field_name": "annual_capacity_mt", "approved": True}]},
+            json={
+                "decisions": [{"field_name": "annual_capacity_mt", "approved": True}],
+                "reviewed_by": "test-fixture-only",
+            },
         )
         proposals = client.get("/v1/converge/proposals/plasticos")
     finally:

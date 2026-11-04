@@ -37,7 +37,7 @@ from typing import Any
 import structlog
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.utils.safe_convert import safe_float
 
@@ -604,7 +604,15 @@ class ScanRequestBody(BaseModel):
 class ApproveRequestBody(BaseModel):
     decisions: list[ApprovalDecision]
     # Recorded on every persisted decision (schema_proposals.reviewed_by).
-    reviewed_by: str = "converge-api"
+    reviewed_by: str = Field(min_length=1, max_length=256)
+
+    @field_validator("reviewed_by")
+    @classmethod
+    def validate_reviewed_by(cls, value: str) -> str:
+        """Require a named, unpadded reviewer, matching the durable ledger contract."""
+        if not value.strip() or value != value.strip():
+            raise ValueError("An explicit named, unpadded reviewer is required")
+        return value
 
 
 class ConvergeSingleResponse(BaseModel):
@@ -945,8 +953,6 @@ async def _persist_or_503(
 @router.post("/converge/{run_id}/approve", responses={403: _DIRECT_DOMAIN_ACCESS_RESPONSE})
 async def approve_proposals(run_id: str, body: ApproveRequestBody) -> dict[str, Any]:
     require_direct_domain_access()
-    if not body.reviewed_by.strip() or "reviewed_by" not in body.model_fields_set:
-        raise HTTPException(status_code=422, detail="An explicit named reviewer is required")
     store = _get_state_store()
     state = await store.load(run_id)
     if state is None:

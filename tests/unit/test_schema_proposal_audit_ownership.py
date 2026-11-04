@@ -334,7 +334,7 @@ async def test_approval_by_uuid_checks_binding_before_mutation(ledger: _Session)
         await pg_store.approve_schema_proposal(legacy.id, "reviewer", True)
     assert legacy.approval_status == "pending" and legacy.reviewed_at is None
     assert all(not str(s).lstrip().startswith("UPDATE") for s in ledger.statements)
-    with pytest.raises(ValueError, match="Schema proposal not found"):
+    with pytest.raises(LookupError, match="Schema proposal not found"):
         await pg_store.approve_schema_proposal(uuid.uuid4(), "reviewer", True)
 
 
