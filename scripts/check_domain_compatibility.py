@@ -61,6 +61,7 @@ def _write_report(path: Path, content: bytes) -> None:
             finally:
                 os.close(descriptor)
         staging = f".pair-report-{uuid.uuid4().hex}"
+        installed = False
         try:
             workflow._write_file(parent_fd, staging, content, mode=0o600)
             if previous is None:
@@ -82,12 +83,20 @@ def _write_report(path: Path, content: bytes) -> None:
                     raise ValueError("Report output changed during write")
                 # replace never follows the destination, even if changed after stat.
                 os.replace(staging, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            installed = True
         finally:
             try:
                 os.unlink(staging, dir_fd=parent_fd)
             except FileNotFoundError:
-                staging = ""
+                pass
+        if installed:
+            # The report is already installed. A failed directory sync must not
+            # look like a refusal or invite main() to describe a successful file
+            # as rejected.
+            try:
+                os.fsync(parent_fd)
+            except OSError:
+                return
 
 
 def _receipt(data: bytes | None, engine: str, tenant: str, version: str, digest: str) -> dict:

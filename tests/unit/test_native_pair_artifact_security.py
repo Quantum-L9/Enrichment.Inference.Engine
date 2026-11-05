@@ -230,13 +230,17 @@ def test_installed_revision_has_no_write_permissions(tmp_path: Path) -> None:
         os.close(root_fd)
     revision = tmp_path / "test-only-revision"
     assert stat.S_IMODE(revision.stat().st_mode) == 0o555
-    for child in (revision, revision / "spec.yaml", revision / "receipt.json"):
+    children = (revision, revision / "spec.yaml", revision / "receipt.json")
+    for child in children:
         assert child.stat().st_mode & 0o222 == 0
-        assert not os.access(child, os.W_OK)
-    with pytest.raises(PermissionError):
-        (revision / "new-child").write_bytes(b"forbidden")
-    with pytest.raises(PermissionError):
-        (revision / "spec.yaml").write_bytes(b"forbidden")
+    # Root ignores mode bits, so capability checks are meaningful only for other uids.
+    if os.geteuid() != 0:
+        for child in children:
+            assert not os.access(child, os.W_OK)
+        with pytest.raises(PermissionError):
+            (revision / "new-child").write_bytes(b"forbidden")
+        with pytest.raises(PermissionError):
+            (revision / "spec.yaml").write_bytes(b"forbidden")
     assert (revision / "spec.yaml").read_bytes() == b"exact fixture bytes"
 
 
