@@ -726,6 +726,14 @@ async def get_approved_schema_proposals(tenant_id: str, domain: str) -> list[Sch
         return list(result.scalars().all())
 
 
+class SchemaProposalNotFoundError(LookupError, ValueError):
+    """Missing proposal UUID.
+
+    LookupError keeps the HTTP route on 404. ValueError keeps the documented
+    service contract for non-HTTP callers.
+    """
+
+
 async def approve_schema_proposal(
     proposal_id: uuid.UUID, reviewed_by: str, approved: bool
 ) -> SchemaProposalRecord:
@@ -749,7 +757,7 @@ async def approve_schema_proposal(
         )
         record = result.scalar_one_or_none()
         if record is None:
-            raise LookupError("Schema proposal not found")
+            raise SchemaProposalNotFoundError("Schema proposal not found")
         validate_schema_proposal_binding(record)
         _validate_proposal_scope(record.tenant_id, record.domain, record.batch_run_id)
         _review_proposal(record, reviewed_by, approved, datetime.now(UTC))
