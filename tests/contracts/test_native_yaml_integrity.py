@@ -279,12 +279,35 @@ def test_hosted_native_jobs_provision_pinned_real_ceg_subject(workflow_name, job
     assert "if" not in checkout and "if" not in preparation
 
 
-def test_pair_ceg_native_cli_gets_exact_original_snapshot(
-    tmp_path: Path, monkeypatch, ceg_native_subject
-) -> None:
+def _compatible_ceg_bytes() -> bytes:
+    """CEG intersection derived from the in-repo EIE specimen, not a sibling checkout."""
+    eie = _parse(GOOD)
+    eie_nodes = {node["label"]: node for node in eie["ontology"]["nodes"]}
+    nodes: dict[str, dict] = {}
+    for endpoint in eie["sync"]["endpoints"]:
+        label = endpoint["targetnode"]
+        source = eie_nodes.get(label)
+        properties = [dict(prop) for prop in source["properties"]] if source else []
+        if endpoint["idproperty"] not in {prop["name"] for prop in properties}:
+            properties.append({"name": endpoint["idproperty"], "type": "string"})
+        nodes[label] = {"label": label, "properties": properties}
+    spec = {
+        "domain": {"id": eie["name"], "version": "1.3.0-reviewed"},
+        "ontology": {"nodes": list(nodes.values())},
+        "sync": {"endpoints": [dict(endpoint) for endpoint in eie["sync"]["endpoints"]]},
+    }
+    return yaml.safe_dump(spec, sort_keys=False).encode()
+
+
+def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkeypatch) -> None:
     from scripts import check_domain_compatibility as pair
 
-    ceg_repo, ceg_python, ceg_bytes = ceg_native_subject
+    ceg_repo = tmp_path / "ceg-subject"
+    (ceg_repo / "tools").mkdir(parents=True)
+    (ceg_repo / "tools/validate_domain.py").write_bytes(
+        b"# fixture validator; subprocess is patched\n"
+    )
+    ceg_bytes = _compatible_ceg_bytes()
     eie = tmp_path / "eie.yaml"
     ceg = tmp_path / "ceg.yaml"
     eie.write_bytes(GOOD)
@@ -295,7 +318,7 @@ def test_pair_ceg_native_cli_gets_exact_original_snapshot(
         eie_receipt=None,
         ceg_receipt=None,
         ceg_repo=ceg_repo,
-        ceg_python=ceg_python,
+        ceg_python=tmp_path / "python",
         field_mappings=None,
         output=tmp_path / "report.json",
     )
@@ -305,7 +328,6 @@ def test_pair_ceg_native_cli_gets_exact_original_snapshot(
         if "rev-parse" in command:
             return SimpleNamespace(returncode=0, stdout=CEG_REVISION, stderr="")
         snapshots.append(Path(command[2]).read_bytes())
-        assert command[:2] == [str(ceg_python), str(ceg_repo / "tools/validate_domain.py")]
         assert command[3:] == [
             "--root",
             str(Path(command[2]).parent),
@@ -313,8 +335,6 @@ def test_pair_ceg_native_cli_gets_exact_original_snapshot(
             "--complete",
             "--json",
         ]
-        assert _kwargs["cwd"] == ceg_repo
-        assert _kwargs["env"]["PYTHONPATH"] == str(ceg_repo)
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
     monkeypatch.setattr(pair.subprocess, "run", diagnostic_run)

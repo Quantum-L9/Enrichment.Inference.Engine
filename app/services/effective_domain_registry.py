@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, Never
+from typing import Any
 
 from app.engines.domain_yaml_reader import DomainYamlReader
 
@@ -51,11 +51,11 @@ class EffectiveDomainRegistry(dict[str, dict[str, Any]]):
     def setdefault(self, *args: Any) -> Any:
         raise TypeError("Effective registry membership is bound at startup")
 
-    def __or__(self, other: Any) -> Never:
-        raise TypeError("Use effective snapshots explicitly; registry union is forbidden")
+    def __or__(self, other: Any) -> Any:
+        return NotImplemented
 
-    def __ior__(self, other: Any) -> Never:
-        raise TypeError("Effective specs are published YAML; registry mutation is forbidden")
+    def __ior__(self, other: Any) -> Any:
+        return NotImplemented
 
     def values(self):
         return [self[tenant] for tenant in self]

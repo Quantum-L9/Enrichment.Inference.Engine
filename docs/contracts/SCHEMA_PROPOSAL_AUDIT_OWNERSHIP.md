@@ -34,7 +34,7 @@ These defaults exist for a stable explicit refusal of legacy callers, **not** fo
 
 The batch method returns `list[SchemaProposalRecord]` in incoming decision order. One transaction covers all rows. It can explicitly review a bound pending record only if its immutable evidence matches. A bad later row or database exception rolls back the whole batch. Neither method changes existing evidence when a retry conflicts.
 
-`approve_schema_proposal(proposal_id: UUID, reviewed_by: str, approved: bool) -> SchemaProposalRecord` locks and loads the existing UUID row before any update. Missing records raise `ValueError("Schema proposal not found")`; historical-unbound records raise the binding refusal below. Only bound pending evidence can transition to approved/rejected. An exact reviewed retry returns the original record. A conflicting status or reviewer is refused; the endpoint's existing authorization posture is unchanged.
+`approve_schema_proposal(proposal_id: UUID, reviewed_by: str, approved: bool) -> SchemaProposalRecord` locks and loads the existing UUID row before any update. Missing records raise `SchemaProposalNotFoundError("Schema proposal not found")`, which is both a `ValueError` and a `LookupError` so existing callers and the HTTP 404 mapping both match; historical-unbound records raise the binding refusal below. Only bound pending evidence can transition to approved/rejected. An exact reviewed retry returns the original record. A conflicting status or reviewer is refused; the endpoint's existing authorization posture is unchanged.
 
 ## Shared consumer validator and read DTOs
 

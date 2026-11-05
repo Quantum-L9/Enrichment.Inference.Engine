@@ -133,6 +133,16 @@ def _json_bytes(value: dict[str, Any]) -> bytes:
     return content
 
 
+def _track_descriptor(tracked: list[int], descriptor: int) -> int:
+    """Register a descriptor for cleanup before any later call can skip it."""
+    try:
+        tracked.append(descriptor)
+    except Exception:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
 def _open_directory(parent_fd: int, name: str, *, create: bool) -> int:
     if create:
         try:
@@ -140,7 +150,7 @@ def _open_directory(parent_fd: int, name: str, *, create: bool) -> int:
             os.fsync(parent_fd)
         except FileExistsError:
             # The following no-follow directory open checks the existing entry.
-            create = False
+            pass
     return os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
 
 
@@ -154,22 +164,22 @@ def _store(root: str | Path, tenant_id: str, *, create: bool) -> Iterator[tuple[
     root_path = root_path.absolute()
     descriptors: list[int] = []
     try:
-        current_fd = os.open(root_path.anchor, _DIRECTORY_FLAGS)
-        descriptors.append(current_fd)
+        opened = os.open(root_path.anchor, _DIRECTORY_FLAGS)
+        current_fd = _track_descriptor(descriptors, opened)
         for component in root_path.parts[1:]:
-            current_fd = _open_directory(current_fd, component, create=create)
-            descriptors.append(current_fd)
-        tenant_fd = _open_directory(current_fd, tenant, create=create)
-        descriptors.append(tenant_fd)
-        revisions_fd = _open_directory(tenant_fd, "revisions", create=create)
-        descriptors.append(revisions_fd)
-        lock_fd = os.open(
+            opened = _open_directory(current_fd, component, create=create)
+            current_fd = _track_descriptor(descriptors, opened)
+        opened = _open_directory(current_fd, tenant, create=create)
+        tenant_fd = _track_descriptor(descriptors, opened)
+        opened = _open_directory(tenant_fd, "revisions", create=create)
+        revisions_fd = _track_descriptor(descriptors, opened)
+        opened = os.open(
             ".publication.lock",
             os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
             0o600,
             dir_fd=tenant_fd,
         )
-        descriptors.append(lock_fd)
+        lock_fd = _track_descriptor(descriptors, opened)
         if not stat.S_ISREG(os.fstat(lock_fd).st_mode) or os.fstat(lock_fd).st_nlink != 1:
             raise DomainPublicationError("Publication lock must be a private regular file")
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
@@ -349,7 +359,8 @@ def _replace_pointer(tenant_fd: int, sha256: str) -> None:
         try:
             os.unlink(temp_name, dir_fd=tenant_fd)
         except FileNotFoundError:
-            temp_name = ""
+            # Renamed into current.json, or never created. Nothing left to unlink.
+            pass
 
 
 def publish_effective_spec(
