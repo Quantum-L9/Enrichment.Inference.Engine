@@ -39,7 +39,7 @@ ruff==0.17.3
 mypy==2.4.1
 
 # ── Type stubs ───────────────────────────────────────────────────────────────
-types-PyYAML>=6.0.12.20260906
+types-PyYAML>=6.0.12.20261030
 # No types-redis: redis>=5 ships its own inline types (py.typed). The
 # typeshed stubs stop at redis 4 and shadow them (e.g. no Redis.aclose).
 
