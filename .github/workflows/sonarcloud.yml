@@ -7,14 +7,12 @@
 # owner: platform
 # status: active
 # --- /L9_META ---
-# SonarQube Cloud — requires paid SonarCloud project + GitHub binding.
-#
-# Configure:
-#   1. sonarcloud.io → import this GitHub repo (or create project manually).
-#   2. Repository secret: SONAR_TOKEN (User → My Account → Security → Generate token).
-#   3. Repository variables: SONAR_ORG_KEY, SONAR_PROJECT_KEY (Project → Information).
-#
-# Until all three are set, this workflow skips with a notice (does not fail CI).
+# SonarQube Cloud — existing native project, public-API verified coordinates:
+# organization quantum-l9 / project Quantum-L9_Enrichment.Inference.Engine.
+# SONAR_TOKEN must authorize analysis of this project; hosted access is a native
+# owner prerequisite, not established by the public component's visibility.
+# Fork pull requests skip this entire secret-bearing job. A skipped job is
+# not a quality-gate PASS and provides no analysis proof.
 
 name: SonarCloud
 
@@ -31,6 +29,7 @@ permissions:
 jobs:
   sonarqube:
     name: SonarCloud Scan
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -40,28 +39,23 @@ jobs:
       COVERAGE_THRESHOLD: ${{ vars.COVERAGE_THRESHOLD || '71' }}
 
     steps:
-      - name: Decide whether to run SonarCloud
-        id: gate
+      - name: Require SonarCloud analysis token
+        shell: bash
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_ORG_KEY: ${{ vars.SONAR_ORG_KEY }}
-          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
         run: |
-          if [ -n "$SONAR_TOKEN" ] && [ -n "$SONAR_ORG_KEY" ] && [ -n "$SONAR_PROJECT_KEY" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::SonarCloud skipped — add Actions secret SONAR_TOKEN and variables SONAR_ORG_KEY, SONAR_PROJECT_KEY."
+          if [[ ! "${SONAR_TOKEN:-}" =~ [^[:space:]] ]]; then
+            echo "::error::SONAR_TOKEN is required for native SonarCloud analysis; no analysis or quality-gate proof was produced."
+            exit 1
           fi
 
       - name: Checkout
-        if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
-        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -69,7 +63,6 @@ jobs:
           cache-dependency-path: requirements-ci.txt
 
       - name: Install dependencies
-        if: steps.gate.outputs.run == 'true'
         env:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
@@ -78,7 +71,6 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Tests with coverage (Cobertura XML)
-        if: steps.gate.outputs.run == 'true'
         env:
           PYTHONPATH: .
           DATABASE_URL: postgresql://${{ vars.POSTGRES_USER || 'test_user' }}:test_password@localhost:5432/${{ vars.POSTGRES_DB || 'test_db' }}
@@ -99,11 +91,12 @@ jobs:
             -q
 
       - name: SonarCloud Scan
-        if: steps.gate.outputs.run == 'true'
         uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.organization=${{ vars.SONAR_ORG_KEY }}
-            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=quantum-l9
+            -Dsonar.projectKey=Quantum-L9_Enrichment.Inference.Engine
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300

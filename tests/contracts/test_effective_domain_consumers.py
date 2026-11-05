@@ -21,6 +21,42 @@ from app.engines.domain_yaml_reader import DomainYamlReader
 from app.services.effective_domain_registry import EffectiveDomainRegistry
 
 
+@pytest.mark.unit
+def test_lightweight_contract_job_installs_declared_sqlalchemy_dependency() -> None:
+    root = Path(__file__).resolve().parents[2]
+    declared = [
+        line.strip()
+        for line in (root / "requirements-ci.txt").read_text().splitlines()
+        if line.strip().startswith("sqlalchemy[")
+    ]
+    assert declared == ["sqlalchemy[asyncio]"]
+    workflow = yaml.safe_load((root / ".github/workflows/pr-pipeline.yml").read_text())
+    install = next(
+        step
+        for step in workflow["jobs"]["l9"]["steps"]
+        if step.get("name") == "Install L9 dependencies"
+    )
+    assert "requirements-ci.txt" in install["run"]
+    assert "sqlalchemy[" in install["run"]
+    assert "--only-binary=:all:" in install["run"]
+    assert not install.get("continue-on-error", False)
+
+
+@pytest.mark.unit
+def test_lightweight_contract_job_installs_declared_provider_import_dependency() -> None:
+    root = Path(__file__).resolve().parents[2]
+    requirements = (root / "requirements-ci.txt").read_text()
+    assert "perplexityai>=0.2.0" in requirements
+    workflow = yaml.safe_load((root / ".github/workflows/pr-pipeline.yml").read_text())
+    install = next(
+        step
+        for step in workflow["jobs"]["l9"]["steps"]
+        if step.get("name") == "Install L9 dependencies"
+    )
+    assert "perplexityai" in install["run"]
+    assert "requirements-ci.txt" in install["run"]
+
+
 def _publish_fixture(root: Path, version: str = "0.3.0") -> str:
     """Isolated test receipt, never an operator approval or promotion."""
     fixture = Path(__file__).resolve().parents[2] / "domains/plasticos/spec.yaml"
