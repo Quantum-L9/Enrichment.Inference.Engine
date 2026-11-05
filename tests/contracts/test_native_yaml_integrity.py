@@ -11,6 +11,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +26,7 @@ from app.engines.domain_yaml_reader import DomainPublicationError, DomainYamlRea
 
 pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[2]
+CEG_REVISION = "93cf1a83bdb88656a627b442a6d114c3a3502cde"
 GOOD = (ROOT / "domains/plasticos/spec.yaml").read_bytes()
 DUPLICATES = {
     "name": GOOD.replace(b"name: plasticos", b"name: other\nname: plasticos", 1),
@@ -214,11 +218,73 @@ def test_pair_duplicate_refused_before_ceg_subprocess(tmp_path: Path, monkeypatc
         pair.check_pair(args)
 
 
-def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkeypatch) -> None:
+@pytest.fixture
+def ceg_native_subject() -> tuple[Path, Path, bytes]:
+    """Require the real pinned subject explicitly; never find or skip a sibling."""
+    repo = Path(os.environ.get("L9_CEG_NATIVE_REPO", ROOT / ".ci-subjects/ceg")).resolve()
+    python = Path(os.environ.get("L9_CEG_NATIVE_PYTHON", sys.executable)).absolute()
+    if not repo.is_dir():
+        pytest.skip("Pinned CEG subject is provisioned by the hosted native jobs")
+    revision = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    assert revision.stdout.strip() == CEG_REVISION
+    for relative in ("domains/plasticos/spec.yaml", "tools/validate_domain.py"):
+        original = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{CEG_REVISION}:{relative}"],
+            capture_output=True,
+            check=True,
+            timeout=10,
+        ).stdout
+        assert (repo / relative).read_bytes() == original
+    return repo, python, (repo / "domains/plasticos/spec.yaml").read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("workflow_name", "job_name"),
+    [
+        ("ci.yml", "test"),
+        ("pr-pipeline.yml", "test"),
+        ("pr-pipeline.yml", "l9"),
+        ("l9-contract-control.yml", "select-and-run-gates"),
+    ],
+)
+def test_hosted_native_jobs_provision_pinned_real_ceg_subject(workflow_name, job_name) -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows" / workflow_name).read_text())
+    steps = workflow["jobs"][job_name]["steps"]
+    checkouts = [
+        step
+        for step in steps
+        if step.get("with", {}).get("repository") == "Quantum-L9/Cognitive.Engine.Graphs"
+    ]
+    assert len(checkouts) == 1
+    checkout = checkouts[0]
+    assert checkout["uses"] == "actions/checkout@v7"
+    assert checkout["with"]["ref"] == CEG_REVISION
+    assert checkout["with"]["path"] == ".ci-subjects/ceg"
+    assert checkout["with"]["persist-credentials"] is False
+    preparation = next(step for step in steps if step.get("name") == "Prepare native CEG validator")
+    assert steps.index(checkout) < steps.index(preparation)
+    run = preparation["run"]
+    assert "requirements-runtime.lock" in run
+    assert "--require-hashes" in run
+    assert "L9_CEG_NATIVE_REPO=" in run and "L9_CEG_NATIVE_PYTHON=" in run
+    assert "GITHUB_ENV" in run
+    assert "validate_domain.py" in run
+    assert not preparation.get("continue-on-error", False)
+    assert "if" not in checkout and "if" not in preparation
+
+
+def test_pair_ceg_native_cli_gets_exact_original_snapshot(
+    tmp_path: Path, monkeypatch, ceg_native_subject
+) -> None:
     from scripts import check_domain_compatibility as pair
 
-    ceg_repo = ROOT.parent / "Cognitive.Engine.Graphs"
-    ceg_bytes = (ceg_repo / "domains/plasticos/spec.yaml").read_bytes()
+    ceg_repo, ceg_python, ceg_bytes = ceg_native_subject
     eie = tmp_path / "eie.yaml"
     ceg = tmp_path / "ceg.yaml"
     eie.write_bytes(GOOD)
@@ -229,7 +295,7 @@ def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkey
         eie_receipt=None,
         ceg_receipt=None,
         ceg_repo=ceg_repo,
-        ceg_python=ceg_repo / ".venv/bin/python",
+        ceg_python=ceg_python,
         field_mappings=None,
         output=tmp_path / "report.json",
     )
@@ -237,9 +303,18 @@ def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkey
 
     def diagnostic_run(command, **_kwargs):
         if "rev-parse" in command:
-            return SimpleNamespace(returncode=0, stdout="test-only-revision", stderr="")
+            return SimpleNamespace(returncode=0, stdout=CEG_REVISION, stderr="")
         snapshots.append(Path(command[2]).read_bytes())
-        assert command[3:6] == ["--strict", "--complete", "--json"]
+        assert command[:2] == [str(ceg_python), str(ceg_repo / "tools/validate_domain.py")]
+        assert command[3:] == [
+            "--root",
+            str(Path(command[2]).parent),
+            "--strict",
+            "--complete",
+            "--json",
+        ]
+        assert _kwargs["cwd"] == ceg_repo
+        assert _kwargs["env"]["PYTHONPATH"] == str(ceg_repo)
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
     monkeypatch.setattr(pair.subprocess, "run", diagnostic_run)
@@ -248,6 +323,42 @@ def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkey
     assert report["ceg_sha256"] == hashlib.sha256(ceg_bytes).hexdigest()
     assert code == 2  # Diagnostic fixture only; no real native CLI approval witness.
     assert report["release_ready"] is False
+
+
+def test_pair_real_pinned_ceg_native_cli_and_compatibility(
+    tmp_path: Path, ceg_native_subject
+) -> None:
+    """Run CEG's real CLI offline, retaining both native schemas and compatibility."""
+    from scripts import check_domain_compatibility as pair
+
+    ceg_repo, ceg_python, ceg_bytes = ceg_native_subject
+    eie, ceg = tmp_path / "eie.yaml", tmp_path / "ceg.yaml"
+    eie.write_bytes(GOOD)
+    ceg.write_bytes(ceg_bytes)
+    report, code = pair.check_pair(
+        argparse.Namespace(
+            eie_spec=eie,
+            ceg_spec=ceg,
+            eie_receipt=None,
+            ceg_receipt=None,
+            ceg_repo=ceg_repo,
+            ceg_python=ceg_python,
+            field_mappings=None,
+            output=tmp_path / "diagnostic.json",
+        )
+    )
+    assert report["ceg_native"]["status"] == "Passed", report
+    assert report["ceg_native"]["evidence"]["exit_code"] == 0
+    assert report["ceg_source_revision"] == CEG_REVISION
+    assert report["ceg_sha256"] == hashlib.sha256(ceg_bytes).hexdigest()
+    assert (
+        report["ceg_validator_sha256"]
+        == hashlib.sha256((ceg_repo / "tools/validate_domain.py").read_bytes()).hexdigest()
+    )
+    assert report["eie_native"]["status"] == "Passed"
+    assert report["compatibility"]["verdict"] == "pass"
+    assert code == 2 and report["release_ready"] is False
+    assert all(item["status"] == "Unknown" for item in report["approvals"].values())
 
 
 @pytest.mark.parametrize("seam", ["native_bytes", "scan_template"])
@@ -266,10 +377,13 @@ def test_parent_workflow_wiring_refuses_duplicate(seam: str) -> None:
 async def test_parent_workflow_wiring_materialize_reparse_refuses_duplicate(monkeypatch) -> None:
     from app.services import domain_spec_workflow as workflow
 
+    digest = hashlib.sha256(GOOD).hexdigest()
     record = SimpleNamespace(
         tenant_id="plasticos",
         domain="plasticos",
         node_label="Facility",
+        discovery_spec_sha256=digest,
+        ownership_contract_version=1,
         approval_status="approved",
         batch_run_id="test-only-batch",
         reviewed_by="test-only-reviewer",
@@ -283,10 +397,31 @@ async def test_parent_workflow_wiring_materialize_reparse_refuses_duplicate(monk
     monkeypatch.setattr(
         workflow.pg_store, "get_approved_schema_proposals", AsyncMock(return_value=[record])
     )
-    monkeypatch.setattr(
-        workflow, "materialize_approved_spec", lambda *_args, **_kwargs: DUPLICATES["name"]
-    )
+    original_dump = workflow.yaml.safe_dump
+    original_parse = workflow.parse_native_yaml
+    generated = []
+    parsed = []
+
+    def duplicate_generated_yaml(candidate, **kwargs):
+        serialized = original_dump(candidate, **kwargs)
+        assert "novel_field" in serialized
+        duplicate = "name: other\n" + serialized
+        generated.append(duplicate.encode("utf-8"))
+        return duplicate
+
+    def observe_parse(content):
+        parsed.append(content)
+        return original_parse(content)
+
+    monkeypatch.setattr(workflow.yaml, "safe_dump", duplicate_generated_yaml)
+    monkeypatch.setattr(workflow, "parse_native_yaml", observe_parse)
     with pytest.raises(yaml.YAMLError, match="[Dd]uplicate"):
         await workflow.materialize_audited_spec(
-            _parse(GOOD), tenant_id="plasticos", domain="plasticos", node_label="Facility"
+            _parse(GOOD),
+            tenant_id="plasticos",
+            domain="plasticos",
+            node_label="Facility",
+            discovery_specs={digest: GOOD},
         )
+    assert len(generated) == 1
+    assert parsed == [GOOD, generated[0]]
