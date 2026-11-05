@@ -596,7 +596,8 @@ components:
         reviewed_by:
           type: string
           minLength: 1
-          description: Explicit named reviewer recorded on every durable decision; immutable retries preserve original review coordinates.
+          maxLength: 256
+          description: Explicit named, unpadded reviewer recorded on every durable decision. Blank or padded values are refused. Immutable retries preserve original review coordinates.
       x-source-file: app/api/v1/converge.py:435
 
     ConvergeApprovalResponse:

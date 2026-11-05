@@ -334,8 +334,12 @@ async def test_approval_by_uuid_checks_binding_before_mutation(ledger: _Session)
         await pg_store.approve_schema_proposal(legacy.id, "reviewer", True)
     assert legacy.approval_status == "pending" and legacy.reviewed_at is None
     assert all(not str(s).lstrip().startswith("UPDATE") for s in ledger.statements)
-    with pytest.raises(LookupError, match="Schema proposal not found"):
+    with pytest.raises(
+        pg_store.SchemaProposalNotFoundError, match="Schema proposal not found"
+    ) as missing:
         await pg_store.approve_schema_proposal(uuid.uuid4(), "reviewer", True)
+    assert isinstance(missing.value, ValueError)
+    assert isinstance(missing.value, LookupError)
 
 
 async def test_approval_by_uuid_is_idempotent_not_a_decision_override(ledger: _Session) -> None:
