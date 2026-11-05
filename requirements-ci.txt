@@ -44,7 +44,7 @@ types-PyYAML>=6.0.12.20260906
 # typeshed stubs stop at redis 4 and shadow them (e.g. no Redis.aclose).
 
 # ── Testing ──────────────────────────────────────────────────────────────────
-pytest==9.1.1
+pytest==9.2.0
 pytest-asyncio>=1.0.0,<2.0.0
 pytest-cov==7.1.0
 pytest-xdist>=3.8.0
