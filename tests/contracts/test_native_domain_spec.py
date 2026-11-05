@@ -30,7 +30,7 @@ def test_real_native_spec_preserves_distinct_eie_shape(native: dict[str, Any]) -
     before = deepcopy(native)
     validated = validate_native_spec(native, "plasticos")
     assert validated == before
-    assert native == before
+    assert validated is not native
     validated["ontology"]["nodes"][0]["properties"].clear()
     assert native == before
     assert "domain" not in native

@@ -34,11 +34,13 @@ def _parent(path: str, *, create: bool = False) -> Iterator[tuple[int, str]]:
     file_path = file_path.absolute()
     descriptors: list[int] = []
     try:
-        current_fd = os.open(file_path.anchor, workflow._DIRECTORY_FLAGS)
-        descriptors.append(current_fd)
+        current_fd = workflow._track_descriptor(
+            descriptors, os.open(file_path.anchor, workflow._DIRECTORY_FLAGS)
+        )
         for part in file_path.parts[1:-1]:
-            current_fd = workflow._open_directory(current_fd, part, create=create)
-            descriptors.append(current_fd)
+            current_fd = workflow._track_descriptor(
+                descriptors, workflow._open_directory(current_fd, part, create=create)
+            )
         yield current_fd, file_path.name
     finally:
         for descriptor in reversed(descriptors):

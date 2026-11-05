@@ -749,7 +749,7 @@ async def approve_schema_proposal(
         )
         record = result.scalar_one_or_none()
         if record is None:
-            raise ValueError("Schema proposal not found")
+            raise LookupError("Schema proposal not found")
         validate_schema_proposal_binding(record)
         _validate_proposal_scope(record.tenant_id, record.domain, record.batch_run_id)
         _review_proposal(record, reviewed_by, approved, datetime.now(UTC))

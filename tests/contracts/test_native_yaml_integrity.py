@@ -214,11 +214,35 @@ def test_pair_duplicate_refused_before_ceg_subprocess(tmp_path: Path, monkeypatc
         pair.check_pair(args)
 
 
+def _compatible_ceg_bytes() -> bytes:
+    """CEG intersection derived from the in-repo EIE specimen, not a sibling checkout."""
+    eie = _parse(GOOD)
+    eie_nodes = {node["label"]: node for node in eie["ontology"]["nodes"]}
+    nodes: dict[str, dict] = {}
+    for endpoint in eie["sync"]["endpoints"]:
+        label = endpoint["targetnode"]
+        source = eie_nodes.get(label)
+        properties = [dict(prop) for prop in source["properties"]] if source else []
+        if endpoint["idproperty"] not in {prop["name"] for prop in properties}:
+            properties.append({"name": endpoint["idproperty"], "type": "string"})
+        nodes[label] = {"label": label, "properties": properties}
+    spec = {
+        "domain": {"id": eie["name"], "version": "1.3.0-reviewed"},
+        "ontology": {"nodes": list(nodes.values())},
+        "sync": {"endpoints": [dict(endpoint) for endpoint in eie["sync"]["endpoints"]]},
+    }
+    return yaml.safe_dump(spec, sort_keys=False).encode()
+
+
 def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkeypatch) -> None:
     from scripts import check_domain_compatibility as pair
 
-    ceg_repo = ROOT.parent / "Cognitive.Engine.Graphs"
-    ceg_bytes = (ceg_repo / "domains/plasticos/spec.yaml").read_bytes()
+    ceg_repo = tmp_path / "ceg-subject"
+    (ceg_repo / "tools").mkdir(parents=True)
+    (ceg_repo / "tools/validate_domain.py").write_bytes(
+        b"# fixture validator; subprocess is patched\n"
+    )
+    ceg_bytes = _compatible_ceg_bytes()
     eie = tmp_path / "eie.yaml"
     ceg = tmp_path / "ceg.yaml"
     eie.write_bytes(GOOD)
@@ -229,7 +253,7 @@ def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkey
         eie_receipt=None,
         ceg_receipt=None,
         ceg_repo=ceg_repo,
-        ceg_python=ceg_repo / ".venv/bin/python",
+        ceg_python=tmp_path / "python",
         field_mappings=None,
         output=tmp_path / "report.json",
     )
@@ -239,7 +263,13 @@ def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkey
         if "rev-parse" in command:
             return SimpleNamespace(returncode=0, stdout="test-only-revision", stderr="")
         snapshots.append(Path(command[2]).read_bytes())
-        assert command[3:6] == ["--strict", "--complete", "--json"]
+        assert command[3:] == [
+            "--root",
+            str(Path(command[2]).parent),
+            "--strict",
+            "--complete",
+            "--json",
+        ]
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
     monkeypatch.setattr(pair.subprocess, "run", diagnostic_run)
@@ -266,10 +296,13 @@ def test_parent_workflow_wiring_refuses_duplicate(seam: str) -> None:
 async def test_parent_workflow_wiring_materialize_reparse_refuses_duplicate(monkeypatch) -> None:
     from app.services import domain_spec_workflow as workflow
 
+    digest = hashlib.sha256(GOOD).hexdigest()
     record = SimpleNamespace(
         tenant_id="plasticos",
         domain="plasticos",
         node_label="Facility",
+        discovery_spec_sha256=digest,
+        ownership_contract_version=1,
         approval_status="approved",
         batch_run_id="test-only-batch",
         reviewed_by="test-only-reviewer",
@@ -283,10 +316,19 @@ async def test_parent_workflow_wiring_materialize_reparse_refuses_duplicate(monk
     monkeypatch.setattr(
         workflow.pg_store, "get_approved_schema_proposals", AsyncMock(return_value=[record])
     )
-    monkeypatch.setattr(
-        workflow, "materialize_approved_spec", lambda *_args, **_kwargs: DUPLICATES["name"]
-    )
+    original_dump = workflow.yaml.safe_dump
+
+    def duplicate_generated_yaml(candidate, **kwargs):
+        serialized = original_dump(candidate, **kwargs)
+        assert "novel_field" in serialized
+        return "name: other\n" + serialized
+
+    monkeypatch.setattr(workflow.yaml, "safe_dump", duplicate_generated_yaml)
     with pytest.raises(yaml.YAMLError, match="[Dd]uplicate"):
         await workflow.materialize_audited_spec(
-            _parse(GOOD), tenant_id="plasticos", domain="plasticos", node_label="Facility"
+            _parse(GOOD),
+            tenant_id="plasticos",
+            domain="plasticos",
+            node_label="Facility",
+            discovery_specs={digest: GOOD},
         )
