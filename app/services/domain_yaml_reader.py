@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from app.engines.native_yaml import parse_native_yaml
 
 
 @dataclass
@@ -49,8 +49,7 @@ class DomainSpec:
     @classmethod
     def from_yaml(cls, path: Path) -> DomainSpec:
         """Load DomainSpec from YAML file."""
-        with open(path) as f:
-            data = yaml.safe_load(f)
+        data = parse_native_yaml(path.read_bytes())
 
         fields = [
             FieldSpec(

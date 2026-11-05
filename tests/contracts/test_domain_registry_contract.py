@@ -35,8 +35,12 @@ L9_META:
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import importlib
 import importlib.util
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -344,7 +348,10 @@ def test_tenant_scoped_converge_routes_are_refused_outside_unsigned_runtimes(
         client = _direct_client(monkeypatch, environment)
         approve = client.post(
             "/v1/converge/00000000-0000-0000-0000-000000000000/approve",
-            json={"decisions": [{"field_name": "annual_capacity_mt", "approved": True}]},
+            json={
+                "decisions": [{"field_name": "annual_capacity_mt", "approved": True}],
+                "reviewed_by": "test-fixture-only",
+            },
         )
         proposals = client.get("/v1/converge/proposals/plasticos")
     finally:
@@ -366,15 +373,20 @@ class _FakeTx:
     async def __aexit__(self, exc_type, exc, tb) -> bool:
         if exc_type is None:
             self._session.committed = True
+            self._session.durable = list(self._session.added)
         return False
 
 
 class _FakeSession:
-    """What `pg_store.get_session` drives: one `begin()`, commit on clean exit."""
+    """Insert DO NOTHING + locked reload, under the real get_session transaction."""
 
     def __init__(self, opened: list[_FakeSession], fail_on_flush: bool) -> None:
         self.fail_on_flush = fail_on_flush
         self.added: list[Any] = []
+        self.durable: list[Any] = []
+        self.statements: list[Any] = []
+        self.flushes = 0
+        self.begins = 0
         self.committed = False
         self.rolled_back = False
         opened.append(self)
@@ -386,24 +398,63 @@ class _FakeSession:
         return False
 
     def begin(self) -> _FakeTx:
+        self.begins += 1
         return _FakeTx(self)
 
-    async def execute(self, _stmt: Any) -> Any:
-        return SimpleNamespace(scalar_one_or_none=lambda: None)
+    async def execute(self, stmt: Any) -> Any:
+        from sqlalchemy.dialects import postgresql
+        from sqlalchemy.sql.dml import Insert
 
-    def add(self, record: Any) -> None:
-        self.added.append(record)
+        from app.services.pg_models import SchemaProposalRecord
+
+        self.statements.append(stmt)
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        identity = ("tenant_id", "domain", "batch_run_id", "node_label", "field_name")
+        if isinstance(stmt, Insert):
+            assert "DO NOTHING" in str(compiled) and "DO UPDATE" not in str(compiled)
+            values = dict(compiled.params)
+            key = tuple(values[name] for name in identity)
+            if not any(tuple(getattr(row, name) for name in identity) == key for row in self.added):
+                record = SchemaProposalRecord(**values)
+                record.id = uuid.uuid4()
+                record.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+                self.added.append(record)
+            return SimpleNamespace(scalar_one_or_none=lambda: None)
+        assert "FOR UPDATE" in str(compiled)
+        assert stmt.get_execution_options()["populate_existing"] is True
+        key = tuple(compiled.params[f"{name}_1"] for name in identity)
+        row = next(
+            (r for r in self.added if tuple(getattr(r, name) for name in identity) == key),
+            None,
+        )
+        return SimpleNamespace(scalar_one_or_none=lambda: row)
 
     async def flush(self) -> None:
+        self.flushes += 1
         if self.fail_on_flush:
+            assert len(self.added) >= 2, "earlier rows are staged before the final flush fails"
             raise RuntimeError("disk full")
 
     async def rollback(self) -> None:
         self.rolled_back = True
+        self.added.clear()
+        self.durable.clear()
 
 
 def _decisions() -> list[dict[str, Any]]:
-    base = {"field_type": "float", "source": "enrichment", "fill_rate": 1.0, "avg_confidence": 0.9}
+    # Intentional NEW discovery input, not a restamp of historical evidence.
+    discovery = yaml.safe_dump(_spec("plasticos"), sort_keys=False, allow_unicode=True).encode(
+        "utf-8"
+    )
+    base = {
+        "field_type": "float",
+        "source": "enrichment",
+        "fill_rate": 1.0,
+        "avg_confidence": 0.9,
+        "node_label": "Facility",
+        "discovery_spec_sha256": hashlib.sha256(discovery).hexdigest(),
+        "ownership_contract_version": 1,
+    }
     return [
         {"field_name": "annual_capacity_mt", "approved": True, **base},
         {"field_name": "facility_tier", "approved": False, **base},
@@ -429,9 +480,14 @@ async def test_approval_batch_is_one_transaction(monkeypatch: pytest.MonkeyPatch
 
     assert len(opened) == 1, "one session for the whole batch"
     assert opened[0].committed is True
+    assert opened[0].begins == 1
+    assert len(opened[0].durable) == 3
+    assert len(opened[0].statements) == 6, "each insert has a locked reload"
     assert [r.approval_status for r in records] == ["approved", "rejected", "approved"]
     assert all(r.tenant_id == r.domain == "plasticos" for r in records)
     assert all(r.batch_run_id == "run-1" and r.reviewed_by == "reviewer" for r in records)
+    assert all(r.node_label == "Facility" and r.ownership_contract_version == 1 for r in records)
+    assert all(r.discovery_spec_sha256 == _decisions()[0]["discovery_spec_sha256"] for r in records)
 
 
 @requires_db_runtime
@@ -454,6 +510,33 @@ async def test_failing_row_leaves_zero_durable_rows(monkeypatch: pytest.MonkeyPa
     assert len(opened) == 1
     assert opened[0].committed is False, "nothing of the batch is durable"
     assert opened[0].rolled_back is True
+    assert opened[0].begins == 1
+    assert opened[0].flushes == 1, "the batch flush fails after its rows were staged"
+    assert opened[0].durable == opened[0].added == []
+
+
+@requires_db_runtime
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_legacy_unbound_batch_refuses_before_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    pg_store = _pg_store()
+    opened: list[_FakeSession] = []
+    monkeypatch.setattr(pg_store, "_session_factory", lambda: _FakeSession(opened, False))
+    decisions = _decisions()
+    for decision in decisions:
+        for key in ("node_label", "discovery_spec_sha256", "ownership_contract_version"):
+            decision.pop(key)
+    before = copy.deepcopy(decisions)
+    with pytest.raises(ValueError, match="^Schema proposal is legacy-unbound$"):
+        await pg_store.persist_schema_proposal_batch(
+            tenant_id="plasticos",
+            domain="plasticos",
+            batch_run_id="run-1",
+            reviewed_by="reviewer",
+            decisions=decisions,
+        )
+    assert opened == [], "invalid input opens no transaction and writes no rows"
+    assert decisions == before
 
 
 @requires_db_runtime
@@ -461,17 +544,29 @@ async def test_failing_row_leaves_zero_durable_rows(monkeypatch: pytest.MonkeyPa
 @pytest.mark.asyncio
 async def test_api_seam_persists_every_decided_field_through_the_batch_operation() -> None:
     converge, proposer = _converge(), _schema_proposer()
+    binding = {
+        key: _decisions()[0][key]
+        for key in ("node_label", "discovery_spec_sha256", "ownership_contract_version")
+    }
     proposal_set = proposer.SchemaProposalSet(
+        domain="plasticos",
+        tenant_id="plasticos",
+        discovery_spec_sha256=binding["discovery_spec_sha256"],
+        ownership_contract_version=1,
         proposed_fields=[
-            proposer.FieldProposal(field_name="annual_capacity_mt", field_type="float"),
-            proposer.FieldProposal(field_name="facility_tier", field_type="string"),
-            proposer.FieldProposal(field_name="undecided", field_type="string"),
+            proposer.FieldProposal(field_name="annual_capacity_mt", field_type="float", **binding),
+            proposer.FieldProposal(field_name="facility_tier", field_type="string", **binding),
+            proposer.FieldProposal(field_name="undecided", field_type="string", **binding),
         ],
         version_bump="0.4.0-discovered",
     )
     decisions = [
-        proposer.ApprovalDecision(field_name="annual_capacity_mt", approved=True),
-        proposer.ApprovalDecision(field_name="facility_tier", approved=False),
+        proposer.ApprovalDecision(
+            node_label="Facility", field_name="annual_capacity_mt", approved=True
+        ),
+        proposer.ApprovalDecision(
+            node_label="Facility", field_name="facility_tier", approved=False
+        ),
     ]
     batch = AsyncMock(side_effect=lambda **kw: [SimpleNamespace(**d) for d in kw["decisions"]])
     with patch.object(converge.pg_store, "persist_schema_proposal_batch", new=batch):
@@ -491,6 +586,7 @@ async def test_api_seam_persists_every_decided_field_through_the_batch_operation
         ("annual_capacity_mt", True),
         ("facility_tier", False),
     ]
+    assert all(all(d[key] == value for key, value in binding.items()) for d in sent["decisions"])
 
 
 @requires_db_runtime
@@ -510,11 +606,68 @@ def test_startup_replays_approved_rows_batch_by_batch() -> None:
         proposed_gate=None,
         proposed_scoring_dimension=None,
         approval_status="approved",
+        node_label=None,
+        discovery_spec_sha256=None,
+        ownership_contract_version=None,
     )
-    revised = _converge().apply_approved_records(_spec("plasticos"), [row])
+    before = copy.deepcopy(vars(row))
+    spec = _spec("plasticos")
+    with pytest.raises(ValueError, match="^Schema proposal is legacy-unbound$"):
+        _converge().apply_approved_records(spec, [row])
+    assert vars(row) == before, "historical rows must never acquire inferred ownership"
+    assert spec == _spec("plasticos")
+
+
+@requires_db_runtime
+@pytest.mark.unit
+def test_bound_startup_replay_preserves_original_discovery_and_associations() -> None:
+    fixture = Path(__file__).resolve().parents[2] / "domains/plasticos/spec.yaml"
+    spec = yaml.safe_load(fixture.read_bytes())
+    node = spec["ontology"]["nodes"][0]
+    node["properties"] = [
+        prop for prop in node["properties"] if prop["name"] != "annual_capacity_mt"
+    ]
+    node["enrichment_hints"]["priority_fields"].remove("annual_capacity_mt")
+    spec["inference_rules"] = [
+        rule
+        for rule in spec["inference_rules"]
+        if all(
+            member["field"] != "annual_capacity_mt"
+            for key in ("conditions", "outputs")
+            for member in rule[key]
+        )
+    ]
+    original_names = {prop["name"] for prop in node["properties"]}
+    discovery = yaml.safe_dump(spec, sort_keys=False, allow_unicode=True).encode("utf-8")
+    digest = hashlib.sha256(discovery).hexdigest()
+    row = SimpleNamespace(
+        tenant_id="plasticos",
+        domain="plasticos",
+        batch_run_id="run-1",
+        node_label="Facility",
+        discovery_spec_sha256=digest,
+        ownership_contract_version=1,
+        field_name="annual_capacity_mt",
+        field_type="float",
+        source="enrichment",
+        fill_rate=1.0,
+        avg_confidence=0.9,
+        sample_values=[],
+        value_distribution={},
+        proposed_gate=None,
+        proposed_scoring_dimension=None,
+        approval_status="approved",
+        reviewed_by="test-fixture-only",
+        reviewed_at=datetime(2026, 11, 3, 21, 0, tzinfo=UTC),
+    )
+    before = copy.deepcopy(vars(row))
+    revised = _converge().apply_approved_records(spec, [row], discovery_specs={digest: discovery})
     names = {p["name"] for p in revised["ontology"]["nodes"][0]["properties"]}
-    assert names == {"id", "annual_capacity_mt"}
+    assert names == original_names | {"annual_capacity_mt"}
     assert revised["version"] == "0.4.0-discovered"
+    assert revised["sync"] == spec["sync"]
+    assert revised["semantic_registry"] == spec["semantic_registry"]
+    assert vars(row) == before
 
 
 # ── 5. Readiness reflects the registry (provider runtime) ────────────────────

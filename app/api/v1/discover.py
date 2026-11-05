@@ -152,6 +152,12 @@ async def get_proposals(
         {
             "id": str(p.id),
             "field_name": p.field_name,
+            "node_label": p.node_label,
+            "discovery_spec_sha256": p.discovery_spec_sha256,
+            "ownership_contract_version": p.ownership_contract_version,
+            "ownership_status": (
+                "bound" if p.ownership_contract_version == 1 else "legacy_unbound"
+            ),
             "field_type": p.field_type,
             "source": p.source,
             "fill_rate": safe_float(p.fill_rate),
@@ -176,11 +182,16 @@ async def approve_proposal(
     proposal_id: uuid.UUID,
     request: ApprovalRequest,
 ) -> dict[str, str]:
-    await pg_store.approve_schema_proposal(
-        proposal_id=proposal_id,
-        reviewed_by=request.reviewed_by,
-        approved=request.approved,
-    )
+    try:
+        await pg_store.approve_schema_proposal(
+            proposal_id=proposal_id,
+            reviewed_by=request.reviewed_by,
+            approved=request.approved,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     status = "approved" if request.approved else "rejected"
     logger.info(
         "schema_proposal_reviewed",

@@ -464,6 +464,12 @@ components:
         domain:
           type: string
           description: Domain YAML identifier (e.g., 'plasticos').
+        node_label:
+          type: string
+          nullable: true
+          pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+          maxLength: 128
+          description: Explicit discovery-time ontology owner; required for a registered native domain. object_type never selects ownership. Ownerless diagnostic runs cannot be approved.
         max_passes:
           type: integer
           default: 5
@@ -557,10 +563,13 @@ components:
       description: |
         Reviewer decisions on the schema proposals of one held convergence run
         (`POST /v1/converge/{run_id}/approve`). Every decided field is persisted
-        to `schema_proposals` (approved and rejected) in one transaction.
+        to `schema_proposals` (approved and rejected) in one transaction using
+        recorded (node_label, field_name) ownership. Native runtime remains on
+        immutable published YAML until separately reviewed operator publication.
       type: object
       required:
         - decisions
+        - reviewed_by
       properties:
         decisions:
           type: array
@@ -568,10 +577,16 @@ components:
             type: object
             required:
               - field_name
+              - node_label
             properties:
               field_name:
                 type: string
                 example: annual_capacity_mt
+              node_label:
+                type: string
+                pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                maxLength: 128
+                description: Equality assertion against the recorded discovery owner, never an owner selector.
               approved:
                 type: boolean
                 default: true
@@ -580,8 +595,9 @@ components:
                 default: ""
         reviewed_by:
           type: string
-          default: converge-api
-          description: Recorded on every persisted decision (schema_proposals.reviewed_by).
+          minLength: 1
+          maxLength: 256
+          description: Explicit named, unpadded reviewer recorded on every durable decision. Blank or padded values are refused. Immutable retries preserve original review coordinates.
       x-source-file: app/api/v1/converge.py:435
 
     ConvergeApprovalResponse:
@@ -601,11 +617,33 @@ components:
         unapplied:
           type: array
           items:
-            type: string
+            type: array
+            minItems: 2
+            maxItems: 2
+            items:
+              type: string
           description: |
-            Approved field names that applied nothing (not proposed for this run,
-            or not a canonical name). An approval whose list of applied fields is
-            empty publishes no revision and bumps no version.
+            Owner-qualified [node_label, field_name] identities that applied
+            nothing. Unknown, duplicate, missing or conflicting owners are
+            refused before audit; a no-op bumps no version.
+        applied_fields:
+          type: array
+          items:
+            type: object
+            required: [node_label, field_name]
+            properties:
+              node_label:
+                type: string
+              field_name:
+                type: string
+        discovery_spec_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Exact original discovery artifact digest retained end-to-end; changed source requires fresh discovery.
+        publication_status:
+          type: string
+          enum: [awaiting_operator_publication, unchanged, legacy_in_memory]
+          description: Native audit approval never activates runtime YAML.
         persisted:
           type: integer
           description: Rows written to `schema_proposals` (approved and rejected).
@@ -613,7 +651,7 @@ components:
           type: string
           description: |
             The registry's version of the domain spec after the approval;
-            unchanged when nothing applied.
+            native effective published YAML remains unchanged by audit alone.
           example: 0.4.0-discovered
       x-source-file: app/api/v1/converge.py:673
 

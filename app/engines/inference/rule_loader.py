@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import structlog
-import yaml
 from pydantic import BaseModel, Field, field_validator
+
+from app.engines.native_yaml import parse_native_yaml
 
 logger = structlog.get_logger("inference.rule_loader")
 
@@ -272,8 +273,7 @@ def load_rules(yaml_path: str | Path) -> RuleRegistry:
     if not yaml_path.exists():
         raise FileNotFoundError(f"Domain YAML not found: {yaml_path}")
 
-    with open(yaml_path) as f:
-        data = yaml.safe_load(f)
+    data = parse_native_yaml(yaml_path.read_bytes())
 
     if not data:
         raise ValueError(f"Empty YAML file: {yaml_path}")

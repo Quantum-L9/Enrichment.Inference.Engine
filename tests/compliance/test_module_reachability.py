@@ -38,6 +38,14 @@ ENTRY_POINTS = {
     "app.main",
 }
 
+# Native-v3 deliberately exposes publication and pair checking through trusted
+# offline operator CLIs, never through a production HTTP or Gate action.
+# These are executable import edges, not exemptions or staged-artifact waivers.
+OPERATOR_ENTRY_POINTS = {
+    "app.services.domain_spec_workflow": "scripts/domain_spec_operator.py",
+    "app.engines.domain_spec_compatibility": "scripts/check_domain_compatibility.py",
+}
+
 # Modules that exist but are deliberately not wired yet. Each needs a reason
 # and a tracking reference so this never becomes a silent dumping ground.
 STAGED_ARTIFACTS = {
@@ -165,7 +173,18 @@ def _build_import_graph() -> tuple[set[str], set[str]]:
     imported: set[str] = set()
     for path in files:
         imported |= _imported_names(path, _module_name(path), is_package=path.name == "__init__.py")
+    for cli in OPERATOR_ENTRY_POINTS.values():
+        path = REPO_ROOT / cli
+        imported |= _imported_names(path, _module_name(path), is_package=False)
     return all_modules, imported
+
+
+def test_operator_entry_points_are_real_import_edges() -> None:
+    """The explicitly authorized offline CLIs must import their claimed owner."""
+    for module, relative_path in OPERATOR_ENTRY_POINTS.items():
+        path = REPO_ROOT / relative_path
+        assert path.is_file(), f"Operator CLI missing: {relative_path}"
+        assert module in _imported_names(path, _module_name(path), is_package=False)
 
 
 def test_staged_artifacts_all_exist() -> None:

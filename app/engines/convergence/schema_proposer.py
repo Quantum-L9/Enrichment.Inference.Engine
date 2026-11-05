@@ -59,10 +59,15 @@ BANNED_FIELD_NAMES_L9_KERNEL: frozenset[str] = frozenset(
 
 # L9 Master Kernel §3.1 — canonical snake_case form for any proposed field name.
 _SNAKE_CASE_RE: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9_]*$")
+_NODE_LABEL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class FieldProposal(BaseModel):
     field_name: str
+    node_label: str | None = None
+    discovery_spec_sha256: str | None = None
+    ownership_contract_version: int | None = None
     field_type: str = "string"
     source: str = "enrichment"
     fill_rate: float = 0.0
@@ -91,6 +96,9 @@ class ScoringDimensionProposal(BaseModel):
 
 class SchemaProposalSet(BaseModel):
     domain: str = ""
+    tenant_id: str | None = None
+    discovery_spec_sha256: str | None = None
+    ownership_contract_version: int | None = None
     proposed_fields: list[FieldProposal] = Field(default_factory=list)
     proposed_gates: list[GateProposal] = Field(default_factory=list)
     proposed_scoring_dimensions: list[ScoringDimensionProposal] = Field(default_factory=list)
@@ -101,6 +109,7 @@ class SchemaProposalSet(BaseModel):
 
 class ApprovalDecision(BaseModel):
     field_name: str
+    node_label: str | None = None
     approved: bool = True
     reason: str = ""
 
@@ -109,36 +118,91 @@ def propose(
     batch_results: list[dict[str, Any]],
     current_yaml: dict[str, Any],
     domain: str = "",
+    *,
+    node_label: str | None = None,
+    discovery_spec_sha256: str | None = None,
+    tenant_id: str | None = None,
 ) -> SchemaProposalSet:
-    """Aggregate discovered fields across a batch and propose schema changes."""
-    if not batch_results:
-        return SchemaProposalSet(domain=domain)
+    """Discover evidence under explicit owners; unbound calls are draft diagnostics.
 
-    existing_fields = _extract_existing_fields(current_yaml)
-    field_stats: dict[str, _FieldAcc] = {}
-
-    for result in batch_results:
-        _process_result_fields(result, existing_fields, field_stats)
-
-    entity_count = len(batch_results)
-    proposed_fields = _build_field_proposals(field_stats, entity_count)
+    The caller obtains the digest from exact discovery bytes before accumulation.
+    No provider source, object type, or sole-node heuristic supplies an owner.
+    """
+    bound = (
+        node_label is not None
+        or discovery_spec_sha256 is not None
+        or tenant_id is not None
+        or any(result.get("node_label") is not None for result in batch_results)
+    )
+    resolved_domain = domain or current_yaml.get("name", current_yaml.get("domain", ""))
+    if not isinstance(resolved_domain, str):
+        resolved_domain = ""
+    proposed_fields: list[FieldProposal] = []
+    if bound:
+        _validate_tenant_domain(tenant_id, resolved_domain, current_yaml)
+        _validate_discovery_digest(discovery_spec_sha256)
+        nodes = current_yaml.get("ontology", {}).get("nodes", {})
+        if node_label is not None:
+            _validate_node_label(node_label)
+            _target_node_def(nodes, node_label)
+        results_by_owner: dict[str, list[dict[str, Any]]] = {}
+        # Validate the entire batch before collecting any evidence.
+        for result in batch_results:
+            result_owner = result.get("node_label")
+            if node_label is not None and result_owner not in (None, node_label):
+                raise ValueError("Result node_label conflicts with discovery node_label")
+            owner = _validate_node_label(node_label if node_label is not None else result_owner)
+            _target_node_def(nodes, owner)
+            results_by_owner.setdefault(owner, []).append(result)
+        ambiguous: dict[str, set[str]] = {}
+        for owner, results in results_by_owner.items():
+            existing_fields = _extract_existing_fields(current_yaml, node_label=owner)
+            field_stats: dict[str, _FieldAcc] = {}
+            for result in results:
+                _process_result_fields(result, existing_fields, field_stats)
+            try:
+                owner_fields = _build_field_proposals(field_stats, len(results))
+            except SourceAttributionError as exc:
+                ambiguous.update(
+                    {f"{owner}.{name}": set(sources) for name, sources in exc.field_sources}
+                )
+                continue
+            for fp in owner_fields:
+                fp.node_label = owner
+                fp.discovery_spec_sha256 = discovery_spec_sha256
+                fp.ownership_contract_version = 1
+            proposed_fields.extend(owner_fields)
+        if ambiguous:
+            raise SourceAttributionError(ambiguous)
+    else:
+        if not batch_results:
+            return SchemaProposalSet(domain=domain)
+        existing_fields = _extract_existing_fields(current_yaml)
+        field_stats = {}
+        for result in batch_results:
+            _process_result_fields(result, existing_fields, field_stats)
+        proposed_fields = _build_field_proposals(field_stats, len(batch_results))
     proposed_fields.sort(key=lambda p: (-p.fill_rate, -p.avg_confidence))
 
-    proposed_gates = _propose_gates(proposed_fields)
-    proposed_dims = _propose_scoring_dimensions(proposed_fields)
+    # ADR-010: EIE discovers evidence fields, never CEG ranking policy.
+    proposed_gates: list[GateProposal] = []
+    proposed_dims: list[ScoringDimensionProposal] = []
 
     current_version = current_yaml.get("version", "0.1.0")
     version_bump = _bump_version(current_version)
     yaml_diff = _generate_yaml_diff(proposed_fields, proposed_gates, proposed_dims)
 
     return SchemaProposalSet(
-        domain=domain or current_yaml.get("domain", ""),
+        domain=resolved_domain,
+        tenant_id=tenant_id if bound else None,
+        discovery_spec_sha256=discovery_spec_sha256 if bound else None,
+        ownership_contract_version=1 if bound else None,
         proposed_fields=proposed_fields,
         proposed_gates=proposed_gates,
         proposed_scoring_dimensions=proposed_dims,
         yaml_diff=yaml_diff,
         version_bump=version_bump,
-        entities_analysed=entity_count,
+        entities_analysed=len(batch_results),
     )
 
 
@@ -146,48 +210,171 @@ def apply(
     current_yaml: dict[str, Any],
     approval_decisions: list[ApprovalDecision],
     proposal_set: SchemaProposalSet,
+    *,
+    node_label: str | None = None,
+    allow_overwrite: bool = False,
+    source_digest: str | None = None,
+    source_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Apply approved proposals to the domain YAML, returning the updated spec.
+    """Apply recorded owners atomically, preserving metadata and ADR-010.
 
-    A decision set that applies no proposal (every decision rejected, every
-    approval naming a field that was not proposed, or only non-canonical names
-    approved) returns an unchanged copy: no version bump, no revision. Only
-    approved rows are replayed at startup (``apply_approved_records``), so a
-    bump here for a batch that wrote nothing would land the live registry on a
-    version a restart can never reproduce (F-247-2).
+    Native execution requires bound fields/decisions and an exact current-source
+    digest assertion, even on a rejected/no-op batch. ``node_label`` is only an
+    equality assertion over every proposal owner, never a destination selector.
+    Legacy non-native draft helpers remain diagnostic compatibility seams.
     """
-    applied = applied_field_names(approval_decisions, proposal_set)
-    if not applied:
+    bound = _has_ownership_binding(proposal_set)
+    if "name" in current_yaml or bound:
+        validate_ownership(proposal_set, approval_decisions)
+        _validate_tenant_domain(proposal_set.tenant_id, proposal_set.domain, current_yaml)
+        digest = source_sha256 if source_sha256 is not None else source_digest
+        if (
+            source_sha256 is not None
+            and source_digest is not None
+            and source_sha256 != source_digest
+        ):
+            raise ValueError("Conflicting discovery source digest assertions")
+        if _validate_discovery_digest(digest) != proposal_set.discovery_spec_sha256:
+            raise ValueError("Stale discovery spec digest: current source differs")
+        nodes = current_yaml.get("ontology", {}).get("nodes", {})
+        if node_label is not None:
+            _validate_node_label(node_label)
+            _target_node_def(nodes, node_label)
+        for fp in proposal_set.proposed_fields:
+            _target_node_def(nodes, fp.node_label)
+            if node_label is not None and fp.node_label != node_label:
+                raise ValueError("node_label assertion conflicts with recorded proposal owner")
+        applied_keys = applied_field_keys(approval_decisions, proposal_set)
+        applied_count = len(applied_keys)
+    else:
+        applied_names = applied_field_names(approval_decisions, proposal_set)
+        applied_count = len(applied_names)
+        applied_keys = []
+    if not applied_count:
         logger.info(
             "schema_proposer.apply: no approved proposal applies (proposed=%d); version stays %s",
             len(proposal_set.proposed_fields),
             current_yaml.get("version"),
         )
         return copy.deepcopy(current_yaml)
-    approved_fields = {d.field_name for d in approval_decisions if d.approved}
     updated = copy.deepcopy(current_yaml)
 
     ontology = updated.setdefault("ontology", {})
     nodes = ontology.setdefault("nodes", {})
-    _apply_node_properties(nodes, approved_fields, proposal_set.proposed_fields)
-
-    gates = updated.setdefault("gates", [])
-    if isinstance(gates, list):
-        _apply_gate_proposals(gates, approved_fields, proposal_set.proposed_gates)
-
-    scoring = updated.setdefault("scoring", [])
-    if isinstance(scoring, list):
-        _apply_scoring_proposals(scoring, approved_fields, proposal_set.proposed_scoring_dimensions)
+    if bound:
+        selected_keys = set(applied_keys)
+        for fp in proposal_set.proposed_fields:
+            if (fp.node_label, fp.field_name) in selected_keys:
+                _apply_node_properties(
+                    nodes,
+                    {fp.field_name},
+                    [fp],
+                    node_label=fp.node_label,
+                    allow_overwrite=allow_overwrite,
+                )
+    else:
+        _apply_node_properties(
+            nodes,
+            set(applied_names),
+            proposal_set.proposed_fields,
+            node_label=node_label,
+            allow_overwrite=allow_overwrite,
+        )
 
     updated["version"] = proposal_set.version_bump
 
     logger.info(
         "schema_proposer.apply: approved=%d/%d version=%s",
-        len(applied),
+        applied_count,
         len(proposal_set.proposed_fields),
         proposal_set.version_bump,
     )
     return updated
+
+
+def _validate_node_label(value: object) -> str:
+    if not isinstance(value, str) or not _NODE_LABEL_RE.fullmatch(value):
+        raise ValueError(
+            "Explicit bound node_label must be a valid identifier of at most 128 characters"
+        )
+    return value
+
+
+def _validate_discovery_digest(value: object) -> str:
+    if not isinstance(value, str) or not _DIGEST_RE.fullmatch(value):
+        raise ValueError("Discovery spec digest must be a lowercase SHA-256 digest")
+    return value
+
+
+def _validate_tenant_domain(
+    tenant: object, domain: str, current_yaml: dict[str, Any] | None = None
+) -> None:
+    if not isinstance(tenant, str) or not tenant or domain != tenant:
+        raise ValueError("Bound proposal tenant_id must equal domain")
+    if current_yaml is not None and current_yaml.get("name", tenant) != tenant:
+        raise ValueError("Bound proposal tenant/domain does not match native spec")
+
+
+def _has_ownership_binding(proposal_set: SchemaProposalSet) -> bool:
+    return (
+        proposal_set.tenant_id is not None
+        or proposal_set.discovery_spec_sha256 is not None
+        or proposal_set.ownership_contract_version is not None
+        or any(
+            fp.node_label is not None
+            or fp.discovery_spec_sha256 is not None
+            or fp.ownership_contract_version is not None
+            for fp in proposal_set.proposed_fields
+        )
+    )
+
+
+def validate_ownership(
+    proposal_set: SchemaProposalSet,
+    approval_decisions: list[ApprovalDecision],
+) -> dict[tuple[str, str], bool]:
+    """Preflight binding and pair membership without writing or inferring owners."""
+    if proposal_set.ownership_contract_version != 1:
+        raise ValueError(
+            "Native proposals must be explicitly owner-bound with node_label (contract version 1)"
+        )
+    _validate_tenant_domain(proposal_set.tenant_id, proposal_set.domain)
+    digest = _validate_discovery_digest(proposal_set.discovery_spec_sha256)
+    keys: set[tuple[str, str]] = set()
+    for fp in proposal_set.proposed_fields:
+        key = (_validate_node_label(fp.node_label), fp.field_name)
+        if fp.ownership_contract_version != 1 or fp.discovery_spec_sha256 != digest:
+            raise ValueError(
+                "Every native field must retain the proposal's owner-bound discovery digest"
+            )
+        if key in keys:
+            raise ValueError("Duplicate proposed owner/field pair")
+        keys.add(key)
+    decisions: dict[tuple[str, str], bool] = {}
+    for decision in approval_decisions:
+        key = (_validate_node_label(decision.node_label), decision.field_name)
+        if key in decisions:
+            raise ValueError("Duplicate approval owner/field pair")
+        if key not in keys:
+            raise ValueError("Approval decision names an unproposed owner/field pair")
+        if not _is_canonical_field_name(decision.field_name):
+            raise ValueError("Approval decision names a noncanonical field")
+        decisions[key] = decision.approved
+    return decisions
+
+
+def applied_field_keys(
+    approval_decisions: list[ApprovalDecision],
+    proposal_set: SchemaProposalSet,
+) -> list[tuple[str, str]]:
+    """Return applying owner/field identities in proposal order; refuse unbound input."""
+    decisions = validate_ownership(proposal_set, approval_decisions)
+    return [
+        (_validate_node_label(fp.node_label), fp.field_name)
+        for fp in proposal_set.proposed_fields
+        if decisions.get((_validate_node_label(fp.node_label), fp.field_name), False)
+        and _is_canonical_field_name(fp.field_name)
+    ]
 
 
 def applied_field_names(
@@ -200,6 +387,11 @@ def applied_field_names(
     and its name is canonical (L9 §3.1 / §5.1 / §5.2). An approval answers this
     count, not the count of approving decisions.
     """
+    if _has_ownership_binding(proposal_set):
+        keys = applied_field_keys(approval_decisions, proposal_set)
+        if len({fp.node_label for fp in proposal_set.proposed_fields}) > 1:
+            raise ValueError("Multi-owner proposals require applied_field_keys, not field names")
+        return [name for _, name in keys]
     approved = {d.field_name for d in approval_decisions if d.approved}
     return [
         fp.field_name
@@ -260,6 +452,23 @@ def _process_result_fields(
     final_fields = result.get("final_fields", {})
     confidences_raw = result.get("final_field_confidences", {})
     conf_map = _build_confidence_map(confidences_raw)
+    observations: dict[str, list[str]] | None = None
+    if "field_source_observations" in result:
+        raw_observations = result["field_source_observations"]
+        if not isinstance(raw_observations, dict):
+            raise ValueError("Field source observations must be a field-keyed mapping")
+        observations = {}
+        for name, sources in raw_observations.items():
+            if (
+                not isinstance(name, str)
+                or not isinstance(sources, list)
+                or any(
+                    not isinstance(source, str) or not source.strip() or source != source.strip()
+                    for source in sources
+                )
+            ):
+                raise ValueError("Field source observations must be lists of nonblank strings")
+            observations[name] = sources
 
     for field_name, value in final_fields.items():
         if field_name in existing_fields:
@@ -271,6 +480,13 @@ def _process_result_fields(
         if value is not None:
             acc.non_null += 1
             acc.values.append(value)
+            if observations is not None:
+                sources = observations.get(field_name, [])
+                # Live observed provenance is complete. Missing observations are
+                # unsupported evidence, not permission for an enrichment default.
+                acc.confidences.append(conf_map.get(field_name, 0.0) if sources else 0.0)
+                acc.sources.update(sources)
+                continue
             acc.confidences.append(conf_map.get(field_name, 0.0))
             records = _confidence_records(confidences_raw)
             if records is not None:
@@ -284,12 +500,24 @@ def _process_result_fields(
                     acc.sources.add(entry.get("source", "enrichment"))
 
 
+class SourceAttributionError(ValueError):
+    """Refuse a proposal call while retaining every qualifying source conflict."""
+
+    def __init__(self, sources_by_field: dict[str, set[str]]) -> None:
+        self.field_sources: tuple[tuple[str, tuple[str, ...]], ...] = tuple(
+            (name, tuple(sorted(sources))) for name, sources in sorted(sources_by_field.items())
+        )
+        evidence = "; ".join(f"{name}={list(sources)!r}" for name, sources in self.field_sources)
+        super().__init__(f"Ambiguous source attribution: {evidence}")
+
+
 def _build_field_proposals(
     field_stats: dict[str, _FieldAcc],
     entity_count: int,
 ) -> list[FieldProposal]:
-    """Filter and build FieldProposal objects from accumulated field stats."""
-    proposals: list[FieldProposal] = []
+    """Filter, refuse ambiguous attribution, then build evidence field proposals."""
+    qualifying: list[tuple[str, _FieldAcc, float, float]] = []
+    ambiguous: dict[str, set[str]] = {}
     for field_name, acc in field_stats.items():
         fill_rate = acc.non_null / entity_count if entity_count > 0 else 0.0
         avg_conf = statistics.mean(acc.confidences) if acc.confidences else 0.0
@@ -304,9 +532,22 @@ def _build_field_proposals(
                 kernel_section=_KERNEL_SECTION,
             )
             continue
+        qualifying.append((field_name, acc, fill_rate, avg_conf))
+        if len(acc.sources) > 1:
+            ambiguous[field_name] = acc.sources
+    # Preflight the whole qualifying set before constructing or returning any
+    # proposal. Sorting is evidence presentation, never a source-priority rule.
+    if ambiguous:
+        raise SourceAttributionError(ambiguous)
+
+    proposals: list[FieldProposal] = []
+    for field_name, acc, fill_rate, avg_conf in qualifying:
         field_type = _infer_type(acc.values)
         distribution = _compute_distribution(acc.values, field_type)
-        source = next(iter(acc.sources)) if acc.sources else "enrichment"
+        if acc.sources:
+            (source,) = acc.sources
+        else:
+            source = "enrichment"
         proposals.append(
             FieldProposal(
                 field_name=field_name,
@@ -322,29 +563,50 @@ def _build_field_proposals(
     return proposals
 
 
-def _first_node_def(nodes: Any) -> dict[str, Any] | None:
-    """The first ontology node definition, in either spec shape.
-
-    Dict shape: ``nodes: {Label: {properties: {...}}}``. List shape (what
-    ``domains/*/spec.yaml`` carry and ``DomainYamlReader`` parses):
-    ``nodes: [{label: Label, properties: [{name, type}, ...]}]``.
-    """
+def _target_node_def(nodes: Any, node_label: str | None) -> dict[str, Any]:
+    """Select one node without silently assigning a field to the wrong entity."""
     if isinstance(nodes, dict):
-        first = next(iter(nodes.values()), None)
-        return first if isinstance(first, dict) else None
-    if isinstance(nodes, list):
-        return next((n for n in nodes if isinstance(n, dict)), None)
-    return None
+        candidates = [
+            value
+            for label, value in nodes.items()
+            if isinstance(value, dict) and (node_label is None or label == node_label)
+        ]
+    elif isinstance(nodes, list):
+        candidates = [
+            value
+            for value in nodes
+            if isinstance(value, dict) and (node_label is None or value.get("label") == node_label)
+        ]
+    else:
+        candidates = []
+    if len(candidates) != 1:
+        raise ValueError("node_label must identify exactly one ontology node")
+    return candidates[0]
 
 
-def _set_property(props: Any, field_name: str, definition: dict[str, Any]) -> None:
-    """Write one property into a dict-shaped or list-shaped ``properties`` block."""
+def _set_property(
+    props: Any,
+    field_name: str,
+    definition: dict[str, Any],
+    *,
+    allow_overwrite: bool = False,
+) -> None:
+    """Add a field, or explicitly update its type/source without losing metadata."""
     if isinstance(props, dict):
+        if field_name in props:
+            if not allow_overwrite:
+                raise ValueError(f"Property {field_name!r} already exists")
+            existing = props[field_name]
+            if isinstance(existing, dict):
+                existing.update(definition)
+                return
         props[field_name] = definition
         return
     if isinstance(props, list):
         for entry in props:
             if isinstance(entry, dict) and entry.get("name") == field_name:
+                if not allow_overwrite:
+                    raise ValueError(f"Property {field_name!r} already exists")
                 entry.update(definition)
                 return
         props.append({"name": field_name, **definition})
@@ -354,8 +616,11 @@ def _apply_node_properties(
     nodes: Any,
     approved_fields: set[str],
     proposed_fields: list[FieldProposal],
+    *,
+    node_label: str | None = None,
+    allow_overwrite: bool = False,
 ) -> None:
-    """Merge approved field proposals into the first ontology node's properties.
+    """Merge approved field proposals into the explicitly selected node.
 
     EIE-IDENT-03: the live specs declare ``ontology.nodes`` as a list of node
     definitions whose ``properties`` is a list of ``{name, type}`` entries; the
@@ -363,9 +628,7 @@ def _apply_node_properties(
     revision never reached the spec. Both shapes are served, each written back
     in its own shape.
     """
-    node_def = _first_node_def(nodes)
-    if node_def is None:
-        return
+    node_def = _target_node_def(nodes, node_label)
     props = node_def.get("properties")
     if not isinstance(props, (dict, list)):
         props = node_def["properties"] = [] if isinstance(nodes, list) else {}
@@ -379,7 +642,12 @@ def _apply_node_properties(
                     kernel_section=_KERNEL_SECTION,
                 )
                 continue
-            _set_property(props, fp.field_name, {"type": fp.field_type, "source": fp.source})
+            _set_property(
+                props,
+                fp.field_name,
+                {"type": fp.field_type, "source": fp.source},
+                allow_overwrite=allow_overwrite,
+            )
 
 
 def _apply_gate_proposals(
@@ -387,18 +655,8 @@ def _apply_gate_proposals(
     approved_fields: set[str],
     proposed_gates: list[GateProposal],
 ) -> None:
-    """Append approved gate proposals to the gates list."""
-    for gp in proposed_gates:
-        if gp.field_name in approved_fields:
-            if not _is_canonical_field_name(gp.field_name):
-                logger.warning(
-                    _KERNEL_NAME_INVARIANT_EVENT,
-                    field_name=gp.field_name,
-                    stage="apply",
-                    kernel_section=_KERNEL_SECTION,
-                )
-                continue
-            gates.append({"field": gp.field_name, "type": gp.gate_type, "auto_proposed": True})
+    """Legacy compatibility seam: CEG gate application is prohibited (ADR-010)."""
+    return None
 
 
 def _apply_scoring_proposals(
@@ -406,20 +664,8 @@ def _apply_scoring_proposals(
     approved_fields: set[str],
     proposed_dims: list[ScoringDimensionProposal],
 ) -> None:
-    """Append approved scoring dimension proposals to the scoring list."""
-    for sp in proposed_dims:
-        if sp.field_name in approved_fields:
-            if not _is_canonical_field_name(sp.field_name):
-                logger.warning(
-                    _KERNEL_NAME_INVARIANT_EVENT,
-                    field_name=sp.field_name,
-                    stage="apply",
-                    kernel_section=_KERNEL_SECTION,
-                )
-                continue
-            scoring.append(
-                {"field": sp.field_name, "type": sp.dimension_type, "auto_proposed": True}
-            )
+    """Legacy compatibility seam: CEG scoring application is prohibited (ADR-010)."""
+    return None
 
 
 class _FieldAcc:
@@ -433,19 +679,25 @@ class _FieldAcc:
         self.sources: set[str] = set()
 
 
-def _extract_existing_fields(yaml_spec: dict[str, Any]) -> set[str]:
-    """Property names already declared by any ontology node, in either spec shape."""
+def _extract_existing_fields(
+    yaml_spec: dict[str, Any], *, node_label: str | None = None
+) -> set[str]:
+    """Existing properties of the recorded owner; unbound drafts use the old union."""
     fields: set[str] = set()
     ontology = yaml_spec.get("ontology", {})
     if not isinstance(ontology, dict):
         return fields
     nodes = ontology.get("nodes", ontology.get("entities", {}))
     node_defs: list[Any] = (
-        list(nodes.values())
-        if isinstance(nodes, dict)
-        else nodes
-        if isinstance(nodes, list)
-        else []
+        [_target_node_def(nodes, node_label)]
+        if node_label is not None
+        else (
+            list(nodes.values())
+            if isinstance(nodes, dict)
+            else nodes
+            if isinstance(nodes, list)
+            else []
+        )
     )
     for node_def in node_defs:
         if not isinstance(node_def, dict):
@@ -469,6 +721,9 @@ def revision_from_approved(
     gates: list[GateProposal],
     dims: list[ScoringDimensionProposal],
     domain: str = "",
+    tenant_id: str | None = None,
+    discovery_spec_sha256: str | None = None,
+    ownership_contract_version: int | None = None,
 ) -> SchemaProposalSet:
     """A proposal set that re-applies proposals already approved and persisted.
 
@@ -478,13 +733,16 @@ def revision_from_approved(
     The version bump is computed from ``current_yaml`` the same way ``propose``
     computes it, so a replayed approval lands on the same version it did live.
     """
-    declared = current_yaml.get("domain", "")
+    declared = current_yaml.get("name", current_yaml.get("domain", ""))
     return SchemaProposalSet(
         domain=domain or (declared if isinstance(declared, str) else ""),
+        tenant_id=tenant_id,
+        discovery_spec_sha256=discovery_spec_sha256,
+        ownership_contract_version=ownership_contract_version,
         proposed_fields=fields,
-        proposed_gates=gates,
-        proposed_scoring_dimensions=dims,
-        yaml_diff=_generate_yaml_diff(fields, gates, dims),
+        proposed_gates=[],
+        proposed_scoring_dimensions=[],
+        yaml_diff=_generate_yaml_diff(fields, [], []),
         version_bump=_bump_version(str(current_yaml.get("version", "0.1.0"))),
         entities_analysed=0,
     )
@@ -532,51 +790,13 @@ def _compute_distribution(values: list[Any], field_type: str) -> dict[str, Any]:
 
 
 def _propose_gates(fields: list[FieldProposal]) -> list[GateProposal]:
-    gates: list[GateProposal] = []
-    for fp in fields:
-        if fp.field_type == "string" and fp.value_distribution:
-            top = fp.value_distribution.get("top_values", [])
-            distinct = len(top)
-            if 2 <= distinct <= 20:
-                gates.append(
-                    GateProposal(
-                        field_name=fp.field_name,
-                        gate_type="categorical",
-                        rationale=f"Categorical with {distinct} distinct values, {fp.fill_rate:.0%} fill rate",
-                        distinct_values=distinct,
-                    )
-                )
-        elif fp.field_type == "boolean":
-            gates.append(
-                GateProposal(
-                    field_name=fp.field_name,
-                    gate_type="boolean",
-                    rationale=f"Boolean gate with {fp.fill_rate:.0%} fill rate",
-                    distinct_values=2,
-                )
-            )
-    return gates
+    """Legacy compatibility seam: EIE never proposes CEG gates (ADR-010)."""
+    return []
 
 
 def _propose_scoring_dimensions(fields: list[FieldProposal]) -> list[ScoringDimensionProposal]:
-    dims: list[ScoringDimensionProposal] = []
-    for fp in fields:
-        if fp.field_type == "float" and fp.value_distribution:
-            dist = fp.value_distribution
-            stddev = dist.get("stddev", 0.0)
-            if stddev > 0:
-                dims.append(
-                    ScoringDimensionProposal(
-                        field_name=fp.field_name,
-                        dimension_type="numeric_distance",
-                        min_value=dist.get("min", 0.0),
-                        max_value=dist.get("max", 0.0),
-                        mean_value=dist.get("mean", 0.0),
-                        stddev=stddev,
-                        rationale=f"Numeric with meaningful variance (σ={stddev:.4f}), {fp.fill_rate:.0%} fill",
-                    )
-                )
-    return dims
+    """Legacy compatibility seam: EIE never proposes CEG scoring (ADR-010)."""
+    return []
 
 
 def _bump_version(current: str) -> str:
@@ -594,29 +814,19 @@ def _generate_yaml_diff(
     gates: list[GateProposal],
     dims: list[ScoringDimensionProposal],
 ) -> str:
+    """Describe evidence fields only, even for historical ranking payloads."""
     lines: list[str] = ["# Proposed Schema Additions", ""]
     if fields:
         lines.append("## New Properties")
         for fp in fields:
-            lines.append(f"  {fp.field_name}:")
+            identity = (
+                f"{fp.node_label}.{fp.field_name}" if fp.node_label is not None else fp.field_name
+            )
+            lines.append(f"  {identity}:")
             lines.append(f"    type: {fp.field_type}")
             lines.append(f"    source: {fp.source}")
             lines.append(
                 f"    # fill_rate: {fp.fill_rate:.0%}, confidence: {fp.avg_confidence:.2f}"
             )
-            lines.append("")
-    if gates:
-        lines.append("## Proposed Gates")
-        for gp in gates:
-            lines.append(f"  - field: {gp.field_name}")
-            lines.append(f"    type: {gp.gate_type}")
-            lines.append(f"    # {gp.rationale}")
-            lines.append("")
-    if dims:
-        lines.append("## Proposed Scoring Dimensions")
-        for sp in dims:
-            lines.append(f"  - field: {sp.field_name}")
-            lines.append(f"    type: {sp.dimension_type}")
-            lines.append(f"    # {sp.rationale}")
             lines.append("")
     return "\n".join(lines)

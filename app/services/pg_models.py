@@ -22,6 +22,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -31,6 +32,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -210,6 +212,13 @@ class SchemaProposalRecord(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     domain: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     batch_run_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    node_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    discovery_spec_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # NULL remains historical/unbound. New writers explicitly send 1; the
+    # server default refuses old writers that omit owner and digest.
+    ownership_contract_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, server_default=text("1")
+    )
     field_name: Mapped[str] = mapped_column(String(256), nullable=False)
     field_type: Mapped[str] = mapped_column(String(64), nullable=False)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -230,12 +239,42 @@ class SchemaProposalRecord(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint(
+        CheckConstraint(
+            "((node_label IS NULL AND discovery_spec_sha256 IS NULL "
+            "AND ownership_contract_version IS NULL) OR "
+            "(ownership_contract_version IS NOT NULL AND ownership_contract_version = 1 "
+            "AND node_label IS NOT NULL AND char_length(node_label) <= 128 "
+            "AND node_label ~ '^[A-Za-z_][A-Za-z0-9_]*$' "
+            "AND discovery_spec_sha256 IS NOT NULL "
+            "AND discovery_spec_sha256 ~ '^[0-9a-f]{64}$'))",
+            name="ck_schema_proposal_ownership_binding",
+        ),
+        Index(
+            "uq_schema_proposal_batch_node_field",
+            "tenant_id",
+            "domain",
+            "batch_run_id",
+            "node_label",
+            "field_name",
+            unique=True,
+            postgresql_where=text("ownership_contract_version = 1"),
+        ),
+        Index(
+            "uq_schema_proposal_legacy_batch_field",
             "tenant_id",
             "domain",
             "batch_run_id",
             "field_name",
-            name="uq_schema_proposal_batch_field",
+            unique=True,
+            postgresql_where=text("ownership_contract_version IS NULL"),
+        ),
+        Index(
+            "ix_schema_proposals_owner_status_created",
+            "tenant_id",
+            "domain",
+            "node_label",
+            "approval_status",
+            "created_at",
         ),
         Index("ix_schema_proposals_domain_status", "domain", "approval_status"),
     )

@@ -28,13 +28,16 @@ Direct tenant access (F-247-4 / F-247-5):
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
 from collections import OrderedDict
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.utils.safe_convert import safe_float
 
@@ -47,8 +50,10 @@ from ...engines.convergence.schema_proposer import (
     GateProposal,
     SchemaProposalSet,
     ScoringDimensionProposal,
-    applied_field_names,
+    _target_node_def,
+    applied_field_keys,
     revision_from_approved,
+    validate_ownership,
 )
 from ...engines.convergence.schema_proposer import apply as apply_proposals
 from ...engines.convergence.schema_proposer import propose as propose_schema
@@ -57,6 +62,7 @@ from ...engines.domain_yaml_reader import (
     TENANT_ID_RESERVED_PREFIX,
     DomainYamlReader,
     declared_spec_identity,
+    enrichment_hints_for,
     is_legal_tenant_id,
 )
 from ...models.loop_schemas import ApprovalMode
@@ -69,6 +75,7 @@ from ...services.crm_field_scanner import (
     generate_discovery_report,
     scan_crm_fields,
 )
+from ...services.effective_domain_registry import EffectiveDomainRegistry
 from ...services.enrichment_profile import EnrichmentProfile, ProfileRegistry
 
 logger = structlog.get_logger(__name__)
@@ -207,7 +214,7 @@ def build_domain_spec_registry(reader: DomainYamlReader) -> dict[str, dict[str, 
             continue
         registry[domain_id] = spec
     logger.info("domain_registry_built", domains=sorted(registry))
-    return registry
+    return EffectiveDomainRegistry(reader, registry)
 
 
 def registered_domains() -> list[str]:
@@ -223,9 +230,13 @@ def _record_proposals(
     gates: list[GateProposal] = []
     dims: list[ScoringDimensionProposal] = []
     for record in records:
+        pg_store.validate_schema_proposal_binding(record)
         fields.append(
             FieldProposal(
                 field_name=record.field_name,
+                node_label=record.node_label,
+                discovery_spec_sha256=record.discovery_spec_sha256,
+                ownership_contract_version=record.ownership_contract_version,
                 field_type=record.field_type or "string",
                 source=record.source or "enrichment",
                 fill_rate=safe_float(record.fill_rate),
@@ -246,21 +257,65 @@ def _record_proposals(
     return fields, gates, dims
 
 
-def apply_approved_records(spec: dict[str, Any], records: list[Any]) -> dict[str, Any]:
+def apply_approved_records(
+    spec: dict[str, Any], records: list[Any], *, discovery_specs: dict[str, bytes] | None = None
+) -> dict[str, Any]:
     """Replay approved ``schema_proposals`` rows onto ``spec``, batch by batch.
 
     Each ``batch_run_id`` was one approval, so each is one revision and one
     version bump, applied in the order the rows were created.
     """
+    from ...services.domain_spec_workflow import _native_bytes
+
     batches: OrderedDict[str, list[Any]] = OrderedDict()
     for record in records:
+        pg_store.validate_schema_proposal_binding(record)
+        tenant = declared_spec_identity(spec)[0]
+        if record.tenant_id != tenant or record.domain != tenant:
+            raise ValueError("Replay audit row has cross-tenant identity")
+        if record.approval_status != "approved":
+            raise ValueError("Replay requires approved audit records")
+        reviewed_at = getattr(record, "reviewed_at", None)
+        reviewed_by = getattr(record, "reviewed_by", None)
+        if not isinstance(reviewed_by, str) or not reviewed_by.strip():
+            raise ValueError("Replay audit row has no named reviewer")
+        if (
+            not isinstance(reviewed_at, datetime)
+            or reviewed_at.tzinfo is None
+            or reviewed_at > datetime.now(UTC)
+        ):
+            raise ValueError("Replay audit row has invalid review time")
+        if not discovery_specs or record.discovery_spec_sha256 not in discovery_specs:
+            raise ValueError("Retained replay requires the recorded discovery artifact")
+        discovery, digest = _native_bytes(
+            discovery_specs[record.discovery_spec_sha256], record.tenant_id
+        )
+        if digest != record.discovery_spec_sha256:
+            raise ValueError("Discovery artifact digest mismatch")
+        _target_node_def(discovery["ontology"]["nodes"], record.node_label)
         batches.setdefault(record.batch_run_id, []).append(record)
     revised = spec
     for batch in batches.values():
         fields, gates, dims = _record_proposals(batch)
-        revision = revision_from_approved(revised, fields=fields, gates=gates, dims=dims)
-        decisions = [ApprovalDecision(field_name=f.field_name, approved=True) for f in fields]
-        revised = apply_proposals(revised, decisions, revision)
+        revision = revision_from_approved(
+            revised,
+            fields=fields,
+            gates=gates,
+            dims=dims,
+            domain=batch[0].domain,
+            tenant_id=batch[0].tenant_id,
+            discovery_spec_sha256=batch[0].discovery_spec_sha256,
+            ownership_contract_version=1,
+        )
+        if any(r.discovery_spec_sha256 != revision.discovery_spec_sha256 for r in batch):
+            raise ValueError("One replay batch must bind one discovery artifact")
+        decisions = [
+            ApprovalDecision(field_name=f.field_name, node_label=f.node_label, approved=True)
+            for f in fields
+        ]
+        revised = apply_proposals(
+            revised, decisions, revision, source_sha256=revision.discovery_spec_sha256
+        )
     return revised
 
 
@@ -275,6 +330,11 @@ async def hydrate_approved_revisions() -> dict[str, int]:
     ``hydrate_failed`` and readiness answers 503, so a node serving a rolled
     back revision is never Ready (F-247-10).
     """
+    if isinstance(_domain_specs, EffectiveDomainRegistry):
+        # Native-v3: DB decisions are the audit ledger, not a second live spec.
+        # Published YAML is already complete; replay would create split ownership.
+        _domain_specs.verify_all()
+        return {}
     applied: dict[str, int] = {}
     for domain in registered_domains():
         try:
@@ -320,7 +380,17 @@ async def persist_approved_revision(
     whatever the store raised so the caller can refuse to apply an
     unpersisted revision.
     """
-    decided = {d.field_name: d.approved for d in decisions}
+    if proposal_set.tenant_id != tenant_id or proposal_set.domain != domain:
+        raise ValueError("Proposal and audit tenant/domain disagree")
+    validate_ownership(proposal_set, decisions)
+    if proposal_set.ownership_contract_version != 1 or not proposal_set.discovery_spec_sha256:
+        raise ValueError("Legacy unbound proposal cannot enter the audit ledger")
+    decided = {(d.node_label, d.field_name): d.approved for d in decisions}
+    if len(decided) != len(decisions):
+        raise ValueError("Duplicate owner-qualified approval decision")
+    proposed = {(fp.node_label, fp.field_name) for fp in proposal_set.proposed_fields}
+    if any(node is None or key not in proposed for key in decided for node in [key[0]]):
+        raise ValueError("Decision must bind a proposed owner-qualified field")
     gate_by_field = {g.field_name: g.gate_type for g in proposal_set.proposed_gates}
     dim_by_field = {
         d.field_name: d.dimension_type for d in proposal_set.proposed_scoring_dimensions
@@ -328,6 +398,9 @@ async def persist_approved_revision(
     rows = [
         {
             "field_name": fp.field_name,
+            "node_label": fp.node_label,
+            "discovery_spec_sha256": proposal_set.discovery_spec_sha256,
+            "ownership_contract_version": 1,
             "field_type": fp.field_type,
             "source": fp.source,
             "fill_rate": fp.fill_rate,
@@ -337,10 +410,10 @@ async def persist_approved_revision(
             "proposed_gate": gate_by_field.get(fp.field_name),
             "proposed_scoring_dimension": dim_by_field.get(fp.field_name),
             "yaml_diff": proposal_set.yaml_diff,
-            "approved": decided[fp.field_name],
+            "approved": decided[(fp.node_label, fp.field_name)],
         }
         for fp in proposal_set.proposed_fields
-        if fp.field_name in decided
+        if (fp.node_label, fp.field_name) in decided
     ]
     if not rows:
         return 0
@@ -377,7 +450,13 @@ def get_domain_spec(domain: str) -> dict[str, Any]:
     populated once at startup via :func:`configure` (main.py lifespan).
     """
     require_direct_domain_access()
-    domain_spec = _domain_specs.get(domain)
+    try:
+        domain_spec = _domain_specs.get(domain)
+    except (ValueError, OSError, yaml.YAMLError) as exc:
+        logger.error("domain_effective_revision_unavailable", domain=domain, error=str(exc))
+        raise HTTPException(
+            status_code=503, detail="Effective domain revision unavailable"
+        ) from exc
     if not domain_spec:
         available = sorted(_domain_specs)
         raise HTTPException(
@@ -402,10 +481,100 @@ def scan_registered_domain(
     return result, domain_spec
 
 
+def _discovery_snapshot(
+    domain: str, node_label: str | None, *, context: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], str]:
+    """Fix the explicit owner and exact artifact identity before accumulating evidence."""
+    if (
+        not isinstance(node_label, str)
+        or len(node_label) > 128
+        or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", node_label) is None
+    ):
+        raise HTTPException(status_code=422, detail="An explicit valid node_label is required")
+    if not is_legal_tenant_id(domain):
+        raise HTTPException(status_code=422, detail="A valid discovery tenant/domain is required")
+    try:
+        if domain not in _domain_specs:
+            raise HTTPException(status_code=404, detail=f"Domain '{domain}' not found")
+        if isinstance(_domain_specs, EffectiveDomainRegistry):
+            snapshot = _domain_specs.reader.load(domain)
+            spec, digest = snapshot.raw_spec, snapshot.source_sha256
+            if context is not None:
+                if snapshot.inference_rules_path is not None:
+                    raise ValueError("Owner-bound discovery requires inline reviewed native rules")
+                context["hints"] = enrichment_hints_for(snapshot, node_label)
+                context["rules"] = spec.get("inference_rules") or []
+        else:
+            spec = _domain_specs[domain]
+            # Legacy injected mappings have no original file-byte provenance.
+            # New local discovery explicitly binds this serialized candidate;
+            # this never stamps an old run or a historical audit row.
+            subject = yaml.safe_dump(spec, sort_keys=False, allow_unicode=True).encode("utf-8")
+            digest = hashlib.sha256(subject).hexdigest()
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError("Discovery artifact digest is unavailable")
+        nodes = spec.get("ontology", {}).get("nodes", [])
+        if isinstance(nodes, list):
+            owners = [
+                node for node in nodes if isinstance(node, dict) and node.get("label") == node_label
+            ]
+        elif isinstance(nodes, dict):
+            owners = [nodes[node_label]] if node_label in nodes else []
+        else:
+            owners = []
+        if len(owners) != 1:
+            raise ValueError("node_label must identify exactly one ontology node")
+        if context is not None and not isinstance(_domain_specs, EffectiveDomainRegistry):
+            context["hints"] = dict(owners[0].get("enrichment_hints") or {})
+            context["rules"] = spec.get("inference_rules") or []
+        declared, _ = declared_spec_identity(spec)
+        if declared is not None and declared != domain:
+            raise ValueError("Discovery artifact has a different tenant identity")
+        return spec, digest
+    except (ValueError, OSError, yaml.YAMLError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _retain_discovery_evidence(state: LoopState, response: Any) -> None:
+    """Retain measured confidence and all observed sources, never choose a winner."""
+    feature = response.feature_vector or {}
+    tracking = feature.get("confidence_tracking", {})
+    measured = tracking.get("fields", {}) if isinstance(tracking, dict) else {}
+    sources: dict[str, set[str]] = {}
+    for inference_pass in response.inferences or []:
+        if not isinstance(inference_pass, dict):
+            continue
+        for section, source in (
+            ("enriched", "enrichment"),
+            ("inferred", "inference"),
+            ("graph_seeded", "graph_inference"),
+        ):
+            names = inference_pass.get(section, [])
+            if not isinstance(names, list):
+                continue
+            for name in names:
+                if isinstance(name, str) and name in state.accumulated_fields:
+                    sources.setdefault(name, set()).add(source)
+    state.observed_field_sources = {name: sorted(values) for name, values in sources.items()}
+    state.discovery_field_confidences = (
+        {
+            name: {"confidence": value["confidence"]}
+            for name, value in measured.items()
+            if isinstance(name, str)
+            and name in sources
+            and isinstance(value, dict)
+            and isinstance(value.get("confidence"), (float, int))
+        }
+        if isinstance(measured, dict)
+        else {}
+    )
+
+
 class ConvergeRequestBody(BaseModel):
     entity: dict[str, Any] = Field(...)
     object_type: str = "Account"
     domain: str = ""
+    node_label: str | None = None
     objective: str = "Full entity enrichment and inference"
     max_passes: int = Field(default=5, ge=1, le=20)
     max_budget_tokens: int = Field(default=50000, ge=1000)
@@ -418,6 +587,8 @@ class BatchConvergeRequestBody(BaseModel):
     profile_name: str | None = None
     inline_profile: EnrichmentProfile | None = None
     domain: str = ""
+    node_label: str | None = None
+    approval_mode: str = "auto"
     entity_ids: list[str] = Field(default_factory=list)
     entities: list[dict[str, Any]] = Field(
         default_factory=list,
@@ -433,7 +604,15 @@ class ScanRequestBody(BaseModel):
 class ApproveRequestBody(BaseModel):
     decisions: list[ApprovalDecision]
     # Recorded on every persisted decision (schema_proposals.reviewed_by).
-    reviewed_by: str = "converge-api"
+    reviewed_by: str = Field(min_length=1, max_length=256)
+
+    @field_validator("reviewed_by")
+    @classmethod
+    def validate_reviewed_by(cls, value: str) -> str:
+        """Require a named, unpadded reviewer, matching the durable ledger contract."""
+        if not value.strip() or value != value.strip():
+            raise ValueError("An explicit named, unpadded reviewer is required")
+        return value
 
 
 class ConvergeSingleResponse(BaseModel):
@@ -482,21 +661,30 @@ async def converge_single(
     # (400) every other direct route applies (tenant id == domain spec id).
     domain_hints: dict[str, Any] = {}
     inference_rules: Any = []
+    discovery_digest: str | None = None
     if body.domain:
         require_direct_domain_access()
         try:
             domain_id = validate_tenant_id(body.domain)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        domain_hints, inference_rules = await _load_domain_convergence_context(
-            domain_id=domain_id, node_label=None
-        )
+        if body.domain in _domain_specs or body.node_label is not None:
+            context: dict[str, Any] = {}
+            _, discovery_digest = _discovery_snapshot(body.domain, body.node_label, context=context)
+            domain_hints, inference_rules = context["hints"], context["rules"]
+        else:
+            domain_hints, inference_rules = await _load_domain_convergence_context(
+                domain_id=domain_id, node_label=body.node_label
+            )
 
     store = _get_state_store()
 
     state = LoopState(
         entity_id=str(body.entity.get("id", body.entity.get("Name", "unknown"))),
         domain=body.domain,
+        node_label=body.node_label if discovery_digest is not None else None,
+        discovery_spec_sha256=discovery_digest,
+        ownership_contract_version=1 if discovery_digest is not None else None,
         status=LoopStatus.RUNNING,
     )
     await store.save(state)
@@ -535,6 +723,7 @@ async def converge_single(
         raise HTTPException(status_code=500, detail="Internal error during convergence") from exc
 
     state.accumulated_fields = conv_response.fields or {}
+    _retain_discovery_evidence(state, conv_response)
     state.current_pass = conv_response.pass_count
     if conv_response.state != "completed":
         state.status = LoopStatus.FAILED
@@ -571,6 +760,13 @@ async def converge_batch(
     from ...engines.convergence.convergence_config import ConvergenceConfig
     from ...engines.convergence_controller import run_convergence_loop
 
+    try:
+        approval_mode = ApprovalMode(body.approval_mode)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"approval_mode must be one of {[m.value for m in ApprovalMode]}",
+        ) from exc
     registry = _get_profile_registry()
     store = _get_state_store()
 
@@ -582,6 +778,11 @@ async def converge_batch(
     if profile is None:
         raise HTTPException(status_code=400, detail="No profile specified or found")
 
+    discovery_digest: str | None = None
+    context: dict[str, Any] = {"hints": {}, "rules": []}
+    if body.domain in _domain_specs or body.node_label is not None:
+        require_direct_domain_access()
+        _, discovery_digest = _discovery_snapshot(body.domain, body.node_label, context=context)
     entities = body.entities
     if not entities:
         return BatchConvergeResponse(
@@ -607,6 +808,9 @@ async def converge_batch(
         state = LoopState(
             entity_id=str(entity_dict.get("id", entity_dict.get("Name", "unknown"))),
             domain=body.domain,
+            node_label=body.node_label if discovery_digest is not None else None,
+            discovery_spec_sha256=discovery_digest,
+            ownership_contract_version=1 if discovery_digest is not None else None,
             status=LoopStatus.RUNNING,
         )
         await store.save(state)
@@ -616,11 +820,20 @@ async def converge_batch(
                 settings=settings,
                 kb_resolver=_kb_resolver,
                 idem_store=_idem_store,
+                domain_hints=context["hints"],
+                inference_rules=context["rules"],
                 convergence_config=convergence_cfg,
             )
             state.accumulated_fields = resp.fields or {}
+            _retain_discovery_evidence(state, resp)
             state.current_pass = resp.pass_count
-            state.status = LoopStatus.CONVERGED if resp.state == "completed" else LoopStatus.FAILED
+            state.status = (
+                LoopStatus.FAILED
+                if resp.state != "completed"
+                else LoopStatus.HUMAN_HOLD
+                if approval_mode is ApprovalMode.HUMAN
+                else LoopStatus.CONVERGED
+            )
             total_tokens += resp.tokens_used
             processed += 1
         except Exception as exc:
@@ -655,6 +868,9 @@ async def get_convergence_status(run_id: str) -> dict[str, Any]:
         "run_id": state.run_id,
         "entity_id": state.entity_id,
         "domain": state.domain,
+        "node_label": state.node_label,
+        "discovery_spec_sha256": state.discovery_spec_sha256,
+        "ownership_contract_version": state.ownership_contract_version,
         "status": state.status.value,
         "current_pass": state.current_pass,
         "fields_accumulated": len(state.accumulated_fields),
@@ -664,17 +880,44 @@ async def get_convergence_status(run_id: str) -> dict[str, Any]:
     }
 
 
-def _propose_for_run(run: LoopState, domain_spec: dict[str, Any], domain: str) -> SchemaProposalSet:
+def _propose_for_run(
+    run: LoopState, domain_spec: dict[str, Any], domain: str, *, source_sha256: str | None = None
+) -> SchemaProposalSet:
     """Schema proposals from one held run's accumulated fields and confidences."""
+    if (
+        run.domain != domain
+        or run.ownership_contract_version != 1
+        or run.node_label is None
+        or run.discovery_spec_sha256 is None
+    ):
+        raise HTTPException(
+            status_code=409, detail="Legacy unbound discovery run cannot be approved"
+        )
+    if source_sha256 is None:
+        current, source_sha256 = _discovery_snapshot(domain, run.node_label)
+        if current != domain_spec:
+            raise HTTPException(status_code=409, detail="Discovery schema changed during proposal")
+    if source_sha256 != run.discovery_spec_sha256:
+        raise HTTPException(
+            status_code=409,
+            detail="Discovery artifact changed; fresh owner-bound discovery required",
+        )
     return propose_schema(
         batch_results=[
             {
+                "node_label": run.node_label,
                 "final_fields": run.accumulated_fields,
-                "final_field_confidences": run.accumulated_confidences,
+                "final_field_confidences": (
+                    run.discovery_field_confidences or run.accumulated_confidences
+                ),
+                "field_source_observations": run.observed_field_sources,
             }
         ],
         current_yaml=domain_spec,
         domain=domain,
+        tenant_id=domain,
+        node_label=run.node_label,
+        discovery_spec_sha256=run.discovery_spec_sha256,
     )
 
 
@@ -724,14 +967,25 @@ async def approve_proposals(run_id: str, body: ApproveRequestBody) -> dict[str, 
     # a second approval for the same domain proposes against the revision the
     # first one published, not against the snapshot both started from.
     async with _domain_lock(state.domain):
-        domain_spec = _domain_specs.get(state.domain, {})
+        if state.ownership_contract_version != 1 or state.node_label is None:
+            raise HTTPException(
+                status_code=409, detail="Legacy unbound discovery run cannot be approved"
+            )
+        domain_spec, source_sha256 = _discovery_snapshot(state.domain, state.node_label)
         if not domain_spec:
             raise HTTPException(
                 status_code=404, detail=f"Domain spec for '{state.domain}' not found"
             )
-        proposal_set = _propose_for_run(state, domain_spec, state.domain)
-        applied = applied_field_names(body.decisions, proposal_set)
-        updated_yaml = apply_proposals(domain_spec, body.decisions, proposal_set)
+        try:
+            proposal_set = _propose_for_run(
+                state, domain_spec, state.domain, source_sha256=source_sha256
+            )
+            applied = applied_field_keys(body.decisions, proposal_set)
+            updated_yaml = apply_proposals(
+                domain_spec, body.decisions, proposal_set, source_sha256=source_sha256
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         # EIE-IDENT-03: the revision is durable before the registry takes it. An
         # in-memory-only revision vanished on the next restart while every caller
         # had been told it was approved. Identity contract: tenant_id == domain.
@@ -740,7 +994,7 @@ async def approve_proposals(run_id: str, body: ApproveRequestBody) -> dict[str, 
         # approved rows only, so publishing a bump for it would land the live
         # registry on a version no restart reproduces. Rejections are still
         # persisted above as the audit trail.
-        if applied:
+        if applied and not isinstance(_domain_specs, EffectiveDomainRegistry):
             _domain_specs[state.domain] = updated_yaml
         published = _domain_specs[state.domain]
         state.status = LoopStatus.CONVERGED
@@ -751,10 +1005,21 @@ async def approve_proposals(run_id: str, body: ApproveRequestBody) -> dict[str, 
         "approved": len(applied),
         "rejected": sum(1 for d in body.decisions if not d.approved),
         "unapplied": sorted(
-            d.field_name for d in body.decisions if d.approved and d.field_name not in applied_set
+            (d.node_label, d.field_name)
+            for d in body.decisions
+            if d.approved and (d.node_label, d.field_name) not in applied_set
         ),
+        "applied_fields": [{"node_label": node, "field_name": field} for node, field in applied],
+        "discovery_spec_sha256": state.discovery_spec_sha256,
         "persisted": persisted,
         "new_version": published.get("version", "unknown"),
+        "publication_status": (
+            "awaiting_operator_publication"
+            if applied and isinstance(_domain_specs, EffectiveDomainRegistry)
+            else "unchanged"
+            if not applied
+            else "legacy_in_memory"
+        ),
     }
 
 
@@ -769,7 +1034,13 @@ async def get_pending_proposals(domain: str) -> dict[str, Any]:
     for run in held_runs:
         ps = _propose_for_run(run, domain_spec, domain)
         proposals.append(
-            {"run_id": run.run_id, "entity_id": run.entity_id, "proposal": ps.model_dump()}
+            {
+                "run_id": run.run_id,
+                "entity_id": run.entity_id,
+                "node_label": run.node_label,
+                "discovery_spec_sha256": run.discovery_spec_sha256,
+                "proposal": ps.model_dump(),
+            }
         )
     return {"domain": domain, "pending_count": len(proposals), "proposals": proposals}
 

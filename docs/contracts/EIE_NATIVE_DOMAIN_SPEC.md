@@ -1,0 +1,98 @@
+# EIE native DomainSpec and effective reader
+
+**Contract version:** `eie.native-domain-spec/v1`
+**Executable owner:** `app/engines/domain_yaml_reader.py::validate_native_spec`
+**Execution authority:** `native-domain-supply-chain-g27r-v3` (local source changes only)
+
+EIE enrichment/inference YAML and CEG graph/matching YAML are distinct artifacts with independent versions and hashes. EIE does not inherit CEG's DomainSpec schema, generate graph ranking policy, or require a semantic compiler. The checked-in `domains/plasticos/spec.yaml` is an immutable authoring/test specimen, not an implicitly approved production artifact.
+
+## Native validation
+
+```python
+from app.engines.domain_yaml_reader import validate_native_spec
+
+validated = validate_native_spec(raw, tenant_id="plasticos")
+```
+
+The function accepts an object, raises `ValueError` for refused native structure, and returns a deep-copied `dict[str, Any]` preserving reviewed values. It does not normalize identities, rewrite YAML, add defaults, coerce fields into CEG models, or create review evidence.
+
+The root must be a string-keyed mapping. Native identity is top-level `name` and `version`; `name` must equal the requested tenant. The existing shared Neo4j/tenant grammar is unchanged: lowercase, a leading letter, then letters/digits/dots/dashes, 3–63 characters, excluding the reserved `system` prefix. Legacy `domain`/`domain_identity` blocks are not native identity authority. `version` must be a semantic-version string, including optional prerelease/build identifiers; numeric prerelease identifiers cannot have leading zeroes. Numeric YAML versions and booleans are refused.
+
+`ontology.nodes` is a nonempty list of node mappings with unique identifier-shaped `label` values. Each node has a nonempty list of property mappings with unique identifier-shaped `name` values and an explicit supported `type`. Types are `string`, `float`, `int`, `integer`, `bool`, `boolean`, `list`, `dict`, `object`, `number`, `date`, or `datetime`. Optional `required` is a boolean. Native properties are not a CEG-style mapping or legacy string list. Optional `queryschema.fields` uses the same property-list checks.
+
+Optional node `enrichment_hints` is a mapping. Empty hints are allowed; nonempty hints require a nonblank `objective_template`. Supported keys are `objective_template`, `priority_fields`, `kb_context`, `refresh_interval_days`, `min_confidence`, `max_variations_discovery`, and `max_variations_targeted`. Priority fields must be unique declarations on that node. `kb_context` is a nonblank string or null. Confidence must be finite and within `[0, 1]`, excluding booleans. Refresh days and variation limits are positive integers.
+
+Optional `inference_rules` is a list of uniquely identified rules. Each rule requires nonempty conditions and outputs, a nonblank `rule_id`, nonblank `rule_or_model_version` provenance, and finite `[0, 1]` confidence. Priority is an integer in `[0, 100]` when present. An optional rule domain equals the tenant. Condition/output fields must be declared in the EIE ontology. Existing EIE `RuleDefinition` validation owns operator and output semantics: `CONTAINS`, `EQUALS`, `GT`, `LT`, `GTE`, `LTE`, `IN`, `NOTIN`, `ISTRUE`, `ISFALSE`, and `EXISTS`; output derivations are `classification`, `computation`, `lookup`, and `transform`. Validation preserves the original dictionaries rather than model-coerced output.
+
+Drafts may instead declare an `inference_rules_path` using a bounded relative `.yaml`/`.yml` path with safe alphanumeric/dot/dash/underscore components. Absolute paths, URLs, backslashes, empty components, `.`/`..`, and control characters are refused. Nonempty inline rules and a reference cannot coexist. **Published artifacts must contain inline rules:** no referenced external file is admitted as effective authority. An operator must materialize and review those rules inside the exact published YAML bytes.
+
+Optional `semantic_registry` is a mapping with a boolean `enabled` when supplied. `canonical_entities` is a list of unique declared EIE node types. Each entry declares a resolution strategy (`exact`, `fuzzy`, `semantic`, or `hybrid`), finite `[0, 1]` resolution threshold, and nonempty unique key fields declared on that node.
+
+Optional `sync.endpoints` is a nonempty list of mappings with unique local `/v1/sync/<endpoint>` paths and identifier-shaped `targetnode`/`idproperty`. Optional `batchstrategy` is `UNWINDMERGE`. Sync target and identifier vocabulary belongs to CEG and is checked by the separately owned compatibility contract; the reader does not require every CEG target/id field to exist in EIE's enrichment ontology.
+
+Nonempty `gates`, `ranking`, `ranking_rules`, `matching`, `matchentities`, `match_entities`, or `scoring_dimensions` are refused at the root, node, and rule ownership surfaces. EIE `gates: []` and `scoring: {dimensions: []}` remain compatible with PlasticOS. No nonempty scoring dimensions or alternative scoring policy is admitted.
+
+## Published filesystem layout
+
+```text
+<root>/<tenant>/
+  current.json
+  revisions/<sha256>/
+    spec.yaml
+    receipt.json
+```
+
+`current.json` has exactly this schema and a lowercase 64-character hexadecimal digest:
+
+```json
+{"schema": "eie.domain-current/v1", "sha256": "<sha256-of-exact-spec.yaml-bytes>"}
+```
+
+The per-artifact approval receipt requires:
+
+| Field | Reader admission requirement |
+| --- | --- |
+| `schema` | `eie.domain-approval/v1` |
+| `tenant_id` | Equals requested tenant and native `name` |
+| `version` | Equals native top-level `version` |
+| `sha256` | Equals current pointer, revision directory, and exact YAML byte digest |
+| `reviewed_input_sha256` | Equals that same exact published byte digest; stale review input is refused |
+| `reviewed_by` | Explicit nonblank caller-supplied review identity |
+| `approval_ref` | Explicit nonblank caller-supplied evidence reference |
+| `reviewed_at` | Parseable timezone-aware ISO timestamp, not in the future |
+| `previous_sha256` | Present; null for first revision, otherwise a distinct lowercase SHA-256 digest |
+| `approval_batches` | Present list of unique nonblank batch identifiers; empty is allowed |
+
+The reader neither invents nor verifies a human's real-world authorization. Receipt structure and byte hashes are not signatures. The operator-owned publication process, approval audit, permissions, and read-only runtime mount remain the trust boundary. A structurally valid receipt substituted before a fresh reader starts cannot be authenticated from these unsigned files alone. There is no invented expiration interval or reviewer allowlist.
+
+## Effective-reader API and failure behavior
+
+```python
+from app.engines.domain_yaml_reader import (
+    DomainPublicationError,
+    DomainYamlReader,
+    enrichment_hints_for,
+)
+
+reader = DomainYamlReader(operator_root, require_published=True, max_cache_entries=128)
+config = reader.load("plasticos")
+hints = enrichment_hints_for(config, "Facility")  # no second revision read
+```
+
+`require_published` is a public read-only property. When true, a missing/non-directory or symlinked production root fails in the constructor. Publication admission rejects symlinked root ancestors or descendants, hardlinked files, nonregular files, over-limit files, unsafe pointers, unreadable/missing bytes or receipts, digest/identity/version/review mismatches, future/naive timestamps, and seed/draft-only artifacts. YAML is read with `yaml.safe_load`; JSON duplicate keys are refused. Approved `spec.yaml` bytes are read once per `load`, hashed, validated, and parsed from that same read. Pointer and receipt are reread before return; changes during admission fail closed and require an explicit caller retry.
+
+Every `load` rechecks filesystem bytes and admission, including cache hits. SHA-256 verification is not replaced by mtime, file size, or TTL checks. The bounded LRU retains at most `max_cache_entries` parsed configurations; `invalidate(tenant)` or `invalidate()` evicts snapshots. A receipt byte change for the same revision while its cached provenance is retained is refused, including valid-looking review-reference edits. Retained provenance is never returned after failed admission. Integrity restoration permits a later fresh admission; eviction/restart does not provide historical signature verification.
+
+If `current.json` exists (including a dangling symlink), or `require_published` is true, **there is no legacy fallback**. A reader also remembers tenants for which it has observed publication, so deleting their pointer does not silently revive `<tenant>/spec.yaml` or `<tenant>.yaml` in that reader. Fresh production readers remain protected by `require_published=True`.
+
+`DomainPublicationError` subclasses `ValueError`; effective consumers must propagate it rather than interpreting publication refusal as “domain absent” or running an unconfigured fallback. Other owners are responsible for wiring this reader into registry, handlers, router, and readiness policy.
+
+`DomainEnrichmentConfig` adds optional `source_sha256` and `approval_ref`. Published snapshots include both; legacy snapshots leave both null. All `load` returns are deep copies of cached configurations. `get_target_schema` and `get_enrichment_hints` return caller-owned data. `enrichment_hints_for(config, node_label)` extracts defensive hints from an existing snapshot without I/O, enabling hints and rules to come from one revision; missing labels/hints return `{}`.
+
+`list_directory_domains` includes tenants with either `current.json` or legacy `spec.yaml`. Listing is discovery, not approval. Legacy flat-file discovery remains available for existing diagnostics, but production load refuses it. With `require_published=False` and no observed pointer, permissive `_parse`, `_declared_id`, `_declared_version`, and `declared_spec_identity` behavior is preserved for historical nonproduction fixtures. Legacy files are rehashed on load, so mutation/deletion is no longer masked by an indefinite cache.
+
+## Validation and delivery limits
+
+Contract tests are `tests/contracts/test_native_domain_spec.py`; reader tests are `tests/unit/test_effective_domain_reader.py`. They cover actual PlasticOS admission, hostile schema variants, receipt/hash drift, pointer reload/restart, cached tamper, unsafe filesystem entries, same-size/restored-mtime corruption, admission races, published-reference refusal, bounded cache, and defensive snapshots.
+
+Local diagnostic pytest uses `--no-cov` only to avoid applying the repository-wide coverage calculation to a narrow slice. This does not change or satisfy the mandatory canonical coverage gate. This implementation performs no production publication, deployment, push, PR, merge, or commit, and generates no real approval.
