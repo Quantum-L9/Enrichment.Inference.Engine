@@ -283,11 +283,20 @@ jobs:
     name: OpenSSF Scorecard
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Private repository: Scorecard's GraphQL/REST checks (Branch-Protection,
+    # Code-Review, CI-Tests) read issues, pull requests and check runs. Without
+    # them main failed with "ListCommits ... githubv4.Query: Resource not
+    # accessible by integration" (run 42026824470). These are the
+    # scorecard-action README's recommended reads for private repos; the two
+    # writes are its publish_results requirements, held on this job only.
     permissions:
       security-events: write
       id-token: write
       contents: read
       actions: read
+      issues: read
+      pull-requests: read
+      checks: read
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
