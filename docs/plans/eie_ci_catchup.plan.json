@@ -1,0 +1,601 @@
+{
+	"schema_version": "1.0.0",
+	"mode": "plan",
+	"title": "EIE CI and compliance catch-up to CEG parity",
+	"objective": "Bring Quantum-L9/Enrichment.Inference.Engine main to CEG's CI/compliance level. The required org check Analyze (central Core) must be green with no false-positive-driven verdicts. main's Vulnerability Scan and OpenSSF Scorecard must be green. EIE must hold zero toolchain mismatches against Core, run hash-locked CI installs with a deterministic lock gate, isolate the networked SDK channel check, use precise pinned local Semgrep rules, SHA-pin its workflow actions, and drop dead workflows and scratch. All of this lands through fixes at each instrument's owner (l9-ci-sdk, l9-ci-core, EIE CI files) and never through EIE application-code edits or suppressions.",
+	"success_criteria": [
+		"V1: l9-ci-sdk precision PR merged; SDK self-CI green; semgrep --test over tests/fixtures/semgrep/rules/python passes, including the new true-positive and true-negative lines",
+		"V2: ci-parity semgrep-l9 lane on EIE main with the promoted SDK reports blocking=0 (baseline 27 at 12d8b351)",
+		"V3: Core step 1 and step 2 merged; `python3 tools/advance_core_action_pins.py <sha> --check` passes; Core self-CI green",
+		"V4: Analyze (central Core) success on an EIE PR head after V3",
+		"V5: first EIE main push after PR-1 shows Vulnerability Scan and OpenSSF Scorecard success; baseline-ratchet-caller.yml no longer runs",
+		"V6: central toolchain-alignment step on EIE reports 0 mismatches (baseline 8)",
+		"V7: lock --check exits 0 on main and 1 on a stale-lock negative-control test; every CI Python install uses --require-hashes",
+		"V8: EIE pytest suite passes with no new skip or xfail (baseline 3032 passed, 25 skipped, 4 xfailed)",
+		"V9: pinned local semgrep --test passes on the EIE fixture; semgrep --config .semgrep --error . reports 0",
+		"V10: 0 workflow `uses:` refs pinned by mutable tag (baseline 96)",
+		"V11: SonarCloud new-code S8541/S8544 count 0 after PR-4 (baseline ~95)",
+		"V12: every EIE PR passes the .pre-commit-config.yaml hook catalog on its diff"
+	],
+	"scope": {
+		"in": [
+			"U1 (l9-ci-sdk): rule precision for AST-LOGGING forbidden-secret-field/keyword token regex, baseline sql-string-format constant-only interpolations, routing httpx/requests direct-node-dispatch and transport raw-execute-dict-contract receiver scoping, handler raw-payload-parameter handler-name requirement; fixtures and an ADR",
+			"U2 (l9-ci-core): semgrep-policy.yaml v4 classifies python.lang.security.audit.insecure-file-permissions advisory, with a note",
+			"U3 (l9-ci-core): step 1 SDK promotion in .l9/sdk-compatibility.yaml plus all sdk-pin-mirrors paths and tests/provisioning",
+			"U4 (l9-ci-core): step 2 advances org-ci.yml Core action pins and the sdk-revision fallback",
+			"EIE PR-1: workflow permissions (docker-build actions: read; Scorecard issues/pull-requests/checks read), delete baseline-ratchet-caller.yml, delete the 16 tracked `Current Work/` files",
+			"EIE PR-2: toolchain to Core pins (ruff 0.16.1, mypy 2.3.0, pytest 9.1.1), SHA-pinned pre-commit revs, mirrors-mypy deps aligned with CI, the pytest-unit hook made able to fail, a Dependabot ignore for Core-owned tools, requires-python >=3.12",
+			"EIE PR-3: move scripts/validate_sdk_pin.py --verify-tag out of the validate job into a networked sdk-channel job",
+			"EIE PR-4: deterministic tools/lock_requirements.sh (committed-lock seed, recorded --exclude-newer, --check), a hashed requirements-ci.lock, scripts/install_locked.sh, all CI installs switched, --check in sdk-channel",
+			"EIE PR-5: pinned local Semgrep plus CEG #418 precise rules with fixtures and a semgrep --test CI step",
+			"EIE PR-6: SHA-pin every workflow action ref",
+			"EIE PR-7 (only after explicit operator APPROVED): docker-build.yml builds Dockerfile.prod"
+		],
+		"out": [
+			"EIE application code under app/, migrations/ (separate concern per operator)",
+			"V2 execution contract adoption (.l9/repo-workflow.json, facade Makefile, Repo.mk) - later, deliberate",
+			"4 known-gap xfails and 25 cross-engine e2e skips",
+			"Dockerfile and Dockerfile.prod edits (curl/git removal, python healthcheck) without explicit APPROVED",
+			"CEG follow-ups: docker-build actions: read and the dead baseline-ratchet caller in CEG (ledgered, not executed)",
+			"open EIE PR #282 contents",
+			"SonarCloud residual Dockerfile and text:S8565 issues (re-measured after PR-4, ledgered)"
+		]
+	},
+	"code_in_scope": true,
+	"pre_validation": [
+		{
+			"id": "P0",
+			"command_or_action": "bind workspace /home/user/eie-plan, branch agent/claude-code/eie-ci-catchup-plan at origin/main 12d8b351b3c804094d3fe539ea578ea946da494b; hook catalog .pre-commit-config.yaml",
+			"pass_criteria": "single repository root; HEAD equals fetched origin/main; clean tree",
+			"status": "passed"
+		},
+		{
+			"id": "P1",
+			"command_or_action": "ci-parity gate HEAD --lanes semgrep-l9 on EIE 12d8b351 (SDK 6d70e829, semgrep 1.171.0, Core policy v3)",
+			"pass_criteria": "blocking=27, every finding classified false positive with file:line",
+			"status": "passed"
+		},
+		{
+			"id": "P2",
+			"command_or_action": "prototype SDK ruleset (scratchpad eie-sg/rules-fixed) across EIE, CEG, l9-ci-core, l9-ci-sdk, l9-constellation-topology plus the SDK fixture suite",
+			"pass_criteria": "EIE 27 to 0 (with Current Work removed for its 2), other repos 0 delta, all SDK fixtures pass",
+			"status": "passed"
+		},
+		{
+			"id": "P3",
+			"command_or_action": "read docker-build.yml permissions, the ci.yml scorecard job, scripts/docker-entrypoint.sh, Dockerfile.prod, Core AGENTS.md \u00a716/\u00a719 and .l9/core-repo-policy.json sdk-pin-mirrors",
+			"pass_criteria": "the missing permissions, the DEV-image publication and the two-step promotion procedure are confirmed",
+			"status": "passed"
+		},
+		{
+			"id": "P4",
+			"command_or_action": "ruff 0.16.1 check + format --check and mypy 2.3.0 on EIE",
+			"pass_criteria": "clean, no code churn from the pin move",
+			"status": "passed"
+		},
+		{
+			"id": "P5",
+			"command_or_action": "gh api repos/Quantum-L9/Enrichment.Inference.Engine (merge methods) + branch rules",
+			"pass_criteria": "squash allowed; linear history required on main",
+			"status": "passed"
+		}
+	],
+	"todos": [
+		{
+			"id": "T1",
+			"task": "l9-ci-sdk PR: precision for the token regex (exclude count/tokenize forms, keep credential *_tokens), constant-only sql-string-format (flag only non-UPPER_CASE interpolations), receiver-scoped routing and raw-execute rules (L9 node/peer/gate sources only), and a handler-name requirement for raw-payload-parameter. Keep canonical_rule_ids, rule ids and L9_META headers; add TP/TN fixture lines and ADR-0019",
+			"files": [
+				"l9-ci-sdk:l9_ci/rulesets/semgrep/python/l9-logging.yml",
+				"l9-ci-sdk:l9_ci/rulesets/semgrep/python/l9-baseline-security.yml",
+				"l9-ci-sdk:l9_ci/rulesets/semgrep/python/l9-routing.yml",
+				"l9-ci-sdk:l9_ci/rulesets/semgrep/python/l9-transport.yml",
+				"l9-ci-sdk:l9_ci/rulesets/semgrep/python/l9-handler-signature.yml",
+				"l9-ci-sdk:tests/fixtures/semgrep/rules/python/",
+				"l9-ci-sdk:docs/adr/0019-rule-precision-saas-and-usage-counts.md"
+			],
+			"effort": "M",
+			"risk": "medium",
+			"dependencies": [],
+			"operation": "Replace",
+			"anchor": "rule pattern/regex blocks; ids and metadata unchanged",
+			"layer": "ops",
+			"leverage_rank": 1
+		},
+		{
+			"id": "T2",
+			"task": "l9-ci-core PR: semgrep-policy.yaml metadata.version 4, classify insecure-file-permissions as advisory and extend the note with the numeric-mode reason (0o700 owner-only reported as permissive)",
+			"files": [
+				"l9-ci-core:.github/actions/resolve-governance/semgrep-policy.yaml"
+			],
+			"effort": "S",
+			"risk": "low",
+			"dependencies": [],
+			"operation": "Insert",
+			"anchor": "rules map after python-logger-credential-disclosure",
+			"layer": "ops",
+			"leverage_rank": 3
+		},
+		{
+			"id": "T3",
+			"task": "l9-ci-core step 1: promote the T1 merge SHA in .l9/sdk-compatibility.yaml (keep 6d70e829 as rollback), update every sdk-pin-mirrors path, regenerate the provision-sdk runtime lock with lock_runtime.py, update tests/provisioning",
+			"files": [
+				"l9-ci-core:.l9/sdk-compatibility.yaml",
+				"l9-ci-core:.github/actions/provision-sdk/action.yml",
+				"l9-ci-core:.github/actions/provision-sdk/provision.py",
+				"l9-ci-core:.github/actions/provision-sdk/lock_runtime.py",
+				"l9-ci-core:.github/actions/provision-sdk/locks/",
+				"l9-ci-core:.github/workflows/normalize-semgrep-report.yml",
+				"l9-ci-core:.github/workflows/publish-analysis.yml",
+				"l9-ci-core:.github/workflows/sdk-contract-check.yml",
+				"l9-ci-core:.l9/architecture.yaml",
+				"l9-ci-core:.l9/artifact-protocol.yaml",
+				"l9-ci-core:tests/provisioning/"
+			],
+			"effort": "M",
+			"risk": "medium",
+			"dependencies": ["T1"],
+			"operation": "Replace",
+			"anchor": "SDK revision 6d70e829cdd9987279f5e48eed340b2b67881662 occurrences",
+			"layer": "ops",
+			"leverage_rank": 2
+		},
+		{
+			"id": "T4",
+			"task": "l9-ci-core step 2: advance org-ci.yml Core action pins to the step-1 commit and its sdk-revision fallback to the T1 SHA; prove with tools/advance_core_action_pins.py <sha> --check; add the dated AGENTS.md activation section (append-only)",
+			"files": [
+				"l9-ci-core:.github/workflows/org-ci.yml",
+				"l9-ci-core:.github/workflows/analyze-semgrep.yml",
+				"l9-ci-core:AGENTS.md"
+			],
+			"effort": "S",
+			"risk": "medium",
+			"dependencies": ["T2", "T3"],
+			"operation": "Replace",
+			"anchor": "org-ci.yml uses: Quantum-L9/l9-ci-core/...@<sha> and sdk-revision fallback",
+			"layer": "ops",
+			"leverage_rank": 2
+		},
+		{
+			"id": "T5",
+			"task": "EIE PR-1: docker-build.yml add `actions: read`; ci.yml scorecard job add issues/pull-requests/checks read (CEG #416); delete .github/workflows/baseline-ratchet-caller.yml (ADR-0016); git rm the 16 tracked `Current Work/` files (already in .gitignore)",
+			"files": [
+				".github/workflows/docker-build.yml",
+				".github/workflows/ci.yml",
+				".github/workflows/baseline-ratchet-caller.yml",
+				"Current Work/"
+			],
+			"effort": "S",
+			"risk": "low",
+			"dependencies": [],
+			"operation": "Delete",
+			"anchor": "workflow-level permissions block; scorecard job permissions block",
+			"layer": "ops",
+			"leverage_rank": 4
+		},
+		{
+			"id": "T6",
+			"task": "EIE PR-2: ruff 0.16.1 / mypy 2.3.0 / pytest 9.1.1 in pyproject [dev], requirements-ci.txt and pre-commit; pre-commit revs by SHA with tag comments; mirrors-mypy additional_dependencies equal to the CI type-check deps; pytest-unit hook drops `2>/dev/null || true`; Dependabot pip ignore for ruff/mypy/pytest (Core-owned); requires-python >=3.12 (CEG #409)",
+			"files": [
+				"pyproject.toml",
+				"requirements-ci.txt",
+				".pre-commit-config.yaml",
+				".github/dependabot.yml"
+			],
+			"effort": "S",
+			"risk": "low",
+			"dependencies": [],
+			"operation": "Replace",
+			"anchor": "tool version pins",
+			"layer": "ops",
+			"leverage_rank": 5
+		},
+		{
+			"id": "T7",
+			"task": "EIE PR-3: split the networked `validate_sdk_pin.py --verify-tag` step out of validate into an sdk-channel job that CI Gate reports but validate no longer waits on (CEG #412); keep the offline pin check in validate",
+			"files": [".github/workflows/ci.yml", "docs/CI_PIPELINE.md"],
+			"effort": "S",
+			"risk": "low",
+			"dependencies": ["T5"],
+			"operation": "Wrap",
+			"anchor": "ci.yml validate job lines 60-75",
+			"layer": "ops",
+			"leverage_rank": 7
+		},
+		{
+			"id": "T8",
+			"task": "EIE PR-4: tools/lock_requirements.sh renders seeded from the committed lock with a recorded --exclude-newer cutoff (tools/deps/exclude-newer.txt) and pinned uv; add --check (exit 1 on drift) plus a requirements-ci.lock hashed render; add scripts/install_locked.sh (--require-hashes) and switch all 13 requirements installs plus the pr-pipeline git+@v1 SDK install; add a lock --check step to sdk-channel; add a unit test proving --check fails on a stale lock (CEG #394/#419)",
+			"files": [
+				"tools/lock_requirements.sh",
+				"tools/deps/exclude-newer.txt",
+				"requirements-ci.lock",
+				"requirements.lock",
+				"scripts/install_locked.sh",
+				".github/workflows/",
+				"tests/unit/test_requirement_locks.py"
+			],
+			"effort": "M",
+			"risk": "medium",
+			"dependencies": ["T6", "T7"],
+			"operation": "Replace",
+			"anchor": "pip install -r requirements-ci.txt steps",
+			"layer": "ops",
+			"leverage_rank": 6
+		},
+		{
+			"id": "T9",
+			"task": "EIE PR-5: pin the CI Semgrep install; port CEG #418 precise float/singleton rules into .semgrep/semgrep-rules.yaml with fixtures under .semgrep/fixtures/, a .semgrepignore and a semgrep --test CI step",
+			"files": [
+				".semgrep/semgrep-rules.yaml",
+				".semgrep/fixtures/semgrep-rules.py",
+				".semgrepignore",
+				".github/workflows/"
+			],
+			"effort": "S",
+			"risk": "low",
+			"dependencies": ["T8"],
+			"operation": "Replace",
+			"anchor": "float-requires-try-except and singleton-requires-lock rules",
+			"layer": "ops",
+			"leverage_rank": 8
+		},
+		{
+			"id": "T10",
+			"task": "EIE PR-6: SHA-pin all 96 tag-pinned workflow `uses:` refs with `# vX` comments; the Dependabot github-actions ecosystem keeps them current",
+			"files": [".github/workflows/"],
+			"effort": "S",
+			"risk": "low",
+			"dependencies": ["T7", "T8", "T9"],
+			"operation": "Replace",
+			"anchor": "every uses: owner/action@vN line",
+			"layer": "ops",
+			"leverage_rank": 9
+		},
+		{
+			"id": "T11",
+			"task": "EIE PR-7, BLOCKED until explicit operator APPROVED (rules 90/93, Docker/deploy protection): docker-build.yml build-push-action `file: Dockerfile.prod`, so CI publishes the digest-pinned, hash-locked, non-root production image instead of the DEV image",
+			"files": [".github/workflows/docker-build.yml"],
+			"effort": "S",
+			"risk": "high",
+			"dependencies": ["T5", "T8"],
+			"operation": "Insert",
+			"anchor": "build-push-action with: block (context: .)",
+			"layer": "ops",
+			"leverage_rank": 10
+		},
+		{
+			"id": "T12",
+			"task": "Ledger: record session_debt findings for the CEG follow-ups (docker-build actions: read; dead baseline-ratchet caller), EIE V2 contract adoption, SonarCloud residual (Dockerfile + text:S8565) after PR-4, and Dockerfile curl/git runtime removal pending APPROVED",
+			"files": ["blocker: ledger only, no repository file"],
+			"effort": "S",
+			"risk": "low",
+			"dependencies": ["T8"],
+			"operation": "Insert",
+			"anchor": "ops/autonomy/session_debt.py record",
+			"layer": "ops",
+			"leverage_rank": 11
+		}
+	],
+	"critical_path": ["T1", "T3", "T4", "T5", "T7", "T8", "T10"],
+	"milestones": [
+		{
+			"id": "M1",
+			"outcome": "T1 and T2 merged (SDK precision, Core policy v4)",
+			"unlocks": "T3 promotion to an exact merged SDK SHA"
+		},
+		{
+			"id": "M2",
+			"outcome": "T3 and T4 merged: the required check evaluates with the precise SDK",
+			"unlocks": "EIE PR merges (Analyze (central Core) green)"
+		},
+		{
+			"id": "M3",
+			"outcome": "PR-1 and PR-2 merged: main red checks cleared, toolchain aligned",
+			"unlocks": "PR-3 / PR-4 on fresh main"
+		},
+		{
+			"id": "M4",
+			"outcome": "PR-3, PR-4 and PR-5 merged: sdk-channel, locks and precise local rules",
+			"unlocks": "PR-6 SHA pinning over the final workflow set"
+		},
+		{
+			"id": "M5",
+			"outcome": "PR-6 merged; PR-7 merged or held on the operator decision; ledger written",
+			"unlocks": "convergence"
+		}
+	],
+	"checkpoints": [
+		{
+			"id": "C1",
+			"after": "M1",
+			"evidence_required": "V1 plus ci-parity with the merged SDK ruleset on EIE: blocking 0 apart from insecure-file-permissions (advisory under v4)",
+			"no_go_action": "if any true-positive fixture line stops matching, or another repo gains a finding, fix the rule; never accept a recall loss to clear EIE"
+		},
+		{
+			"id": "C2",
+			"after": "M2",
+			"evidence_required": "V3 and V4",
+			"no_go_action": "if Core provisioning tests fail, do not advance step 2; repair step 1 at its owner"
+		},
+		{
+			"id": "C3",
+			"after": "M3",
+			"evidence_required": "V5 and V6 on the first main push",
+			"no_go_action": "if Vulnerability Scan still fails, read the job log before PR-3; do not stack fixes on an unproven one"
+		},
+		{
+			"id": "C4",
+			"after": "M4",
+			"evidence_required": "V7, V8, V9, V11",
+			"no_go_action": "if --check flaps without a repo change, the seed or cutoff is wrong; fix the renderer, never drop the gate"
+		},
+		{
+			"id": "C5",
+			"after": "M5",
+			"evidence_required": "V10; ledger entries present in session_debt status",
+			"no_go_action": "report the remaining items as deferred with reasons"
+		}
+	],
+	"doc_root_surface_impact": [
+		{
+			"surface": "AGENTS.md (EIE)",
+			"action": "n_a",
+			"reason": "no command, contract or tier change; Makefile targets unchanged"
+		},
+		{
+			"surface": "docs/CI_PIPELINE.md (EIE)",
+			"action": "update",
+			"todo_ids": ["T7", "T8", "T9"]
+		},
+		{
+			"surface": "l9-ci-sdk docs/adr",
+			"action": "update",
+			"todo_ids": ["T1"]
+		},
+		{
+			"surface": "l9-ci-core AGENTS.md dated activation section",
+			"action": "update",
+			"todo_ids": ["T4"]
+		},
+		{
+			"surface": "Makefile (EIE)",
+			"action": "n_a",
+			"reason": "append-only root file; no target change needed"
+		}
+	],
+	"stress_test": {
+		"disconfirming_questions": [
+			"Does the narrowed token regex still catch access_token, refresh_tokens and auth token values passed to a logger?",
+			"Could the constant-only SQL rule miss f\"... {user_input}\" when the variable is UPPER_CASE by convention?",
+			"Do the receiver-scoped routing rules miss an L9 node call made through a generic httpx.post with a URL built from settings?",
+			"Can EIE PRs merge before the Core promotion, given that the required check is red on 25 app/ findings until T4?",
+			"Does publishing Dockerfile.prod break a deploy that relied on the DEV entrypoint's auto-migration?",
+			"Will SHA-pinning 96 refs conflict textually with PR-3/4/5 edits to the same workflow files?"
+		],
+		"assumed_false_ifs": [
+			"the 27 findings contain a real secret, SQL or node-dispatch defect (audit: none; each read at file:line)",
+			"another governed repo depends on the over-broad rules for a real true positive (prototype: 0 delta across 4 repos)"
+		],
+		"blast_radius": "An SDK recall regression would silently stop blocking real secret logging or Gate bypass across every governed repo. A bad Core promotion reds every repo's required check. A wrong lock render breaks every EIE CI job. Dockerfile.prod publication changes the running production image.",
+		"rollback": "SDK: revert PR, Core keeps 6d70e829 as rollback-compatible revision; Core: revert step 2 then step 1; EIE PRs: each independently revertible by squash revert; PR-7: revert restores DEV-image publication"
+	},
+	"leverage": {
+		"ranked_todo_ids": [
+			"T1",
+			"T3",
+			"T4",
+			"T2",
+			"T5",
+			"T6",
+			"T8",
+			"T7",
+			"T9",
+			"T10",
+			"T11",
+			"T12"
+		],
+		"shared_causes": [
+			"verdicts set by an owner other than the property they claim (rule over-approximation, local re-declaration of Core-owned versions, index-dependent lock render)",
+			"the dead or degraded instruments (dead caller, || true hook, missing permissions) report red or green without meaning"
+		],
+		"deletions_or_consolidations": [
+			"delete baseline-ratchet-caller.yml",
+			"delete 16 tracked Current Work/ files",
+			"delete EIE-local tool version drift (3 declarations collapse to Core pins)"
+		]
+	},
+	"risks": [
+		{
+			"risk": "SDK precision loses a true positive fleet-wide",
+			"mitigation": "TP fixtures for each narrowed rule; cross-repo ci-parity delta at C1; promotion keeps rollback revision"
+		},
+		{
+			"risk": "EIE PRs sit red on the required check until T4 merges",
+			"mitigation": "publish EIE PRs in parallel and converge every other check; merge once V4 holds; this is sequencing, not a wait-for-merge finish"
+		},
+		{
+			"risk": "linear history rejects stacked merge commits",
+			"mitigation": "publish every EIE PR unstacked from origin/main (PR_STACK empty) so stack_safe_merge selects squash; T10 last to avoid overlap"
+		},
+		{
+			"risk": "networked lock --check flaps on PyPI/GitHub outage",
+			"mitigation": "runs only in the networked sdk-channel job; seed and --exclude-newer make the render repository-determined"
+		},
+		{
+			"risk": "PR-7 changes deployed image behaviour (no auto-migrate, py3.12, non-root)",
+			"mitigation": "blocked on explicit operator APPROVED; production schema step is already an operator release step per docker-entrypoint.sh"
+		}
+	],
+	"unknowns": [],
+	"final_validation": [
+		{
+			"id": "V1",
+			"command": "cd l9-ci-sdk && ruff check . && ruff format --check . && mypy l9_ci && pytest -q && semgrep --test --config l9_ci/rulesets/semgrep/python tests/fixtures/semgrep/rules/python",
+			"pass_criteria": "all pass, including new TP/TN lines",
+			"status": "pending"
+		},
+		{
+			"id": "V2",
+			"command": "python3 /root/.cursor-governance/ops/ci_parity/run.py --gate HEAD --workspace <eie> --base <sha> --lanes semgrep-l9 (with promoted SDK)",
+			"pass_criteria": "blocking=0",
+			"status": "pending"
+		},
+		{
+			"id": "V3",
+			"command": "cd l9-ci-core && python3 tools/advance_core_action_pins.py <sha> --check && pytest -q tests/provisioning",
+			"pass_criteria": "pins proven; provisioning tests pass; Core self-CI green",
+			"status": "pending"
+		},
+		{
+			"id": "V4",
+			"command": "gh api repos/Quantum-L9/Enrichment.Inference.Engine/commits/<pr-head>/check-runs (Analyze (central Core))",
+			"pass_criteria": "conclusion success",
+			"status": "pending"
+		},
+		{
+			"id": "V5",
+			"command": "gh api repos/Quantum-L9/Enrichment.Inference.Engine/commits/<main-sha>/check-runs (Vulnerability Scan, OpenSSF Scorecard)",
+			"pass_criteria": "both success; no baseline-ratchet run",
+			"status": "pending"
+		},
+		{
+			"id": "V6",
+			"command": "toolchain-alignment step output in Analyze (central Core) on EIE",
+			"pass_criteria": "0 mismatches",
+			"status": "pending"
+		},
+		{
+			"id": "V7",
+			"command": "bash tools/lock_requirements.sh --check && pytest -q tests/unit/test_requirement_locks.py && ! grep -rnE 'pip install (-r requirements|.*git\\+)' .github/workflows",
+			"pass_criteria": "--check exit 0 on main; negative-control test passes; no unhashed install remains",
+			"status": "pending"
+		},
+		{
+			"id": "V8",
+			"command": "pytest -q (EIE full suite as CI runs it)",
+			"pass_criteria": ">=3032 passed, skipped <=25, xfailed <=4, 0 failed",
+			"status": "pending"
+		},
+		{
+			"id": "V9",
+			"command": "semgrep --test --config .semgrep/semgrep-rules.yaml .semgrep/fixtures/semgrep-rules.py && semgrep --config .semgrep --error .",
+			"pass_criteria": "fixture pass; 0 findings",
+			"status": "pending"
+		},
+		{
+			"id": "V10",
+			"command": "grep -hoE 'uses: [^ ]+@[^ ]+' .github/workflows/*.yml | grep -vcE '@[0-9a-f]{40}'",
+			"pass_criteria": "0",
+			"status": "pending"
+		},
+		{
+			"id": "V11",
+			"command": "SonarCloud api/issues/search rules=githubactions:S8541,githubactions:S8544 on main",
+			"pass_criteria": "0 open",
+			"status": "pending"
+		},
+		{
+			"id": "V12",
+			"command": "pre-commit run --config .pre-commit-config.yaml --from-ref origin/main --to-ref HEAD (each EIE PR)",
+			"pass_criteria": "all hooks pass, including the now-failing-capable pytest-unit hook",
+			"status": "pending"
+		}
+	],
+	"convergence": {
+		"status": "partial",
+		"remaining_unknown_ids": [],
+		"next_skill": "l9-pr-remediation",
+		"stop_reason": "plan validated; U1-U3 resolved by probes; awaiting operator approval before any mutation; T11 additionally needs explicit APPROVED"
+	},
+	"gmp_handoff": {
+		"may_modify": [
+			"l9-ci-sdk: l9_ci/rulesets/semgrep/python/*.yml, tests/fixtures/semgrep/rules/python/, docs/adr/",
+			"l9-ci-core: semgrep-policy.yaml, .l9/sdk-compatibility.yaml and sdk-pin-mirrors paths, provision-sdk locks, tests/provisioning/, org-ci.yml, analyze-semgrep.yml, AGENTS.md (append-only)",
+			".github/workflows/",
+			".github/dependabot.yml",
+			".pre-commit-config.yaml",
+			"pyproject.toml",
+			"requirements-ci.txt",
+			"requirements-ci.lock",
+			"requirements.lock",
+			"tools/lock_requirements.sh",
+			"tools/deps/exclude-newer.txt",
+			"scripts/install_locked.sh",
+			"tests/unit/test_requirement_locks.py",
+			".semgrep/",
+			".semgrepignore",
+			"docs/CI_PIPELINE.md",
+			"Current Work/ (deletion only)"
+		],
+		"must_not_modify": [
+			"app/",
+			"migrations/",
+			"Makefile",
+			"Dockerfile",
+			"Dockerfile.prod",
+			"docker-compose*.yml",
+			"tests/ (except tests/unit/test_requirement_locks.py)"
+		],
+		"preserved_contracts": [
+			"CI must never fail on a false positive; precision at the rule owner, never suppression or code rewording",
+			"never skip, xfail or weaken a test to go green",
+			"publication only via make pr; merges via stack_safe_merge.py (squash; unstacked)",
+			"Docker/deploy files need explicit APPROVED (rules 90/93)",
+			"C-18 L9_META headers on new tracked files where the repo requires them",
+			"SDK rule ids and canonical_rule_ids unchanged"
+		],
+		"validation_commands": [
+			".pre-commit-config.yaml",
+			"make lint",
+			"make test",
+			"bash tools/lock_requirements.sh --check",
+			"semgrep --test --config .semgrep/semgrep-rules.yaml .semgrep/fixtures/semgrep-rules.py",
+			"python3 /root/.cursor-governance/ops/ci_parity/run.py --gate HEAD --lanes semgrep-l9"
+		]
+	},
+	"depth": "deep",
+	"checklist": [
+		"SDK precision PR",
+		"Core policy v4",
+		"Core SDK promotion step 1 and step 2",
+		"EIE PR-1 permissions + dead caller + scratch",
+		"EIE PR-2 toolchain",
+		"EIE PR-3 sdk-channel",
+		"EIE PR-4 locks",
+		"EIE PR-5 local semgrep",
+		"EIE PR-6 SHA pins",
+		"EIE PR-7 on APPROVED",
+		"ledger"
+	],
+	"estimate": "11 PRs across 3 repos (4 upstream, 7 EIE), about 2 working sessions",
+	"owner": "igor_beylin",
+	"execution_envelope": {
+		"network": {
+			"mode": "named_services_only",
+			"allowed_services": [
+				"github.com",
+				"api.github.com",
+				"pypi.org",
+				"files.pythonhosted.org",
+				"sonarcloud.io"
+			]
+		},
+		"secrets": {
+			"access": "none"
+		}
+	},
+	"complexity": {
+		"architectural_boundaries_crossed": [
+			"org CI policy (SDK rulesets, Core semgrep-policy)",
+			"Core SDK provisioning pin",
+			"dependency supply chain (hash locks)",
+			"image publication (gated)"
+		],
+		"external_systems_touched": [
+			"GitHub Actions",
+			"PyPI",
+			"GHCR",
+			"SonarCloud"
+		],
+		"migration_required": false
+	}
+}
