@@ -17,7 +17,7 @@
 repos:
   # ── Basic file checks ───────────────────────────────────────────────
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: c4a0b883114b00d8d76b479c820ce7950211c99b  # v4.5.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -33,7 +33,7 @@ repos:
 
   # ── Code formatting ──────────────────────────────────────────────────
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.8
+    rev: 39d9ac5938dadb73df0564a45f163e25ff9fa6e2  # v0.16.1 (Core toolchain lock)
     hooks:
       - id: ruff
         args: [--fix]
@@ -43,18 +43,23 @@ repos:
 
   # ── Secrets scanning ─────────────────────────────────────────────────
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.21.2
+    rev: 43fae355e6fe4d99d2a7b240a224b85e2903aeb4  # v8.21.2
     hooks:
       - id: gitleaks
         args: ["protect", "--staged", "--config=.gitleaks.toml"]
 
   # ── Type checking ────────────────────────────────────────────────────
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.1
+    rev: 41e691678310dfd3833f7ab4e180ddb014310356  # v2.3.0 (Core toolchain lock)
     hooks:
       - id: mypy
         args: [--ignore-missing-imports, "--exclude=app/engines/field_classifier\\.py", "--exclude=app/engines/inference_bridge_v2\\.py"]
-        additional_dependencies: [pydantic, pydantic-settings, types-PyYAML, structlog, httpx, types-aiofiles]
+        # Pinned to the versions the CI type-check environment resolves
+        # (requirements-ci.txt + mypy --install-types), so the hook and the
+        # required job type-check against the same stubs. CI installs no
+        # types-aiofiles, so the hook does not either.
+        additional_dependencies:
+          [pydantic==2.14.3, pydantic-settings==2.16.2, types-PyYAML==6.0.12.20261103, structlog==26.1.0, httpx==0.28.1]
         language_version: python3.12
         exclude: ^(tests/|tools/|docs/|kb/|readme/|LEAD ENRICHMENT|Enrichment-Deployment-pack/|Current Work/|app/engines/field_classifier\.py|app/engines/inference_bridge_v2\.py|engine/kge/rotate3d\.py|app/engines/search_optimizer\.py|app/agents/data_hygiene\.py|plastics_enrichment_client\.py|app/models/schemas\.py|app/services/score/|app/services/perplexity_client\.py|app/services/crm/odoo_client\.py|app/services/crm/salesforce_client\.py|app/services/crm/hubspot_client\.py|app/core/config\.py|app/services/enrichment/sources/apollo\.py|app/engines/graph_sync_client\.py)
 
@@ -63,7 +68,8 @@ repos:
     hooks:
       - id: pytest-unit
         name: pytest unit tests
-        entry: bash -c 'PYTHONPATH="${PYTHONPATH}:." python3 -m pytest tests/ -m "unit" --tb=short -q 2>/dev/null || true'
+        # No `2>/dev/null || true`: a failing unit test must fail the hook.
+        entry: bash -c 'PYTHONPATH="${PYTHONPATH}:." python3 -m pytest tests/ -m "unit" --tb=short -q'
         language: system
         pass_filenames: false
         always_run: true
