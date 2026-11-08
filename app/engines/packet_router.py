@@ -319,6 +319,19 @@ def _sync_idempotency_key(tenant_id: str, entity_id: str, row: dict[str, Any]) -
 
 RELATIONSHIP_ASSERTION_STATUSES = frozenset({"observed", "reported", "inferred"})
 RELATIONSHIP_POLARITIES = frozenset({"positive", "negative"})
+# CEG's row key for D-9 provenance (Cognitive.Engine.Graphs engine/sync/generator.py).
+OBSERVED_ASSOCIATION_KEY = "observed_association"
+# The error class CEG answers when its own tenant spec does not declare the
+# association a row claims (engine/handlers.py). A failure packet carries the
+# class name, not the message.
+CEG_OBSERVED_ASSOCIATION_REJECTED = "ObservedAssociationRejectedError"
+OBSERVED_ASSOCIATION_FIELDS = (
+    "provider",
+    "fromobjecttype",
+    "toobjecttype",
+    "associationcategory",
+    "associationtypeid",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +356,10 @@ class RelationshipAssertion:
     polarity: str
     source_revision: str | None = None
     expires_at: str | None = None
+    # D-9: the provider association an observed row was read from, as
+    # (provider, fromobjecttype, toobjecttype, associationcategory,
+    # associationtypeid). CEG checks it against its own ``observedfrom``.
+    observed_association: tuple[str, str, str, str, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,7 +401,28 @@ def relationship_assertion_defects(assertion: RelationshipAssertion) -> list[str
         value = getattr(assertion, name)
         if value is not None and not _non_empty_text(value):
             defects.append(f"{name} must be a non-empty string when present")
+    association = assertion.observed_association
+    if association is not None:
+        if assertion.assertion_status != "observed":
+            defects.append("observed_association is sent only with assertion_status observed")
+        if not _is_association_key(association):
+            defects.append(
+                "observed_association must be (provider, fromobjecttype, toobjecttype, "
+                "associationcategory, associationtypeid)"
+            )
     return defects
+
+
+def _is_association_key(value: Any) -> bool:
+    if not isinstance(value, tuple) or len(value) != len(OBSERVED_ASSOCIATION_FIELDS):
+        return False
+    *texts, type_id = value
+    return (
+        all(_non_empty_text(text) for text in texts)
+        and isinstance(type_id, int)
+        and not isinstance(type_id, bool)
+        and type_id >= 1
+    )
 
 
 def _declares_sync_edge(domain_spec: dict[str, Any], contract: RelationshipSyncContract) -> bool:
@@ -466,6 +504,10 @@ def _relationship_sync_row(assertion: RelationshipAssertion) -> dict[str, Any]:
         row["source_revision"] = assertion.source_revision
     if assertion.expires_at is not None:
         row["expires_at"] = assertion.expires_at
+    if assertion.observed_association is not None:
+        row[OBSERVED_ASSOCIATION_KEY] = dict(
+            zip(OBSERVED_ASSOCIATION_FIELDS, assertion.observed_association, strict=True)
+        )
     return row
 
 

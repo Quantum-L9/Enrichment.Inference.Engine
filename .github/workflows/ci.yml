@@ -179,6 +179,27 @@ jobs:
           if [ -f "${{ env.REQUIREMENTS_FILE }}" ]; then
             pip install -r ${{ env.REQUIREMENTS_FILE }}
           fi
+      - name: Checkout pinned native CEG subject
+        uses: actions/checkout@v7
+        with:
+          repository: Quantum-L9/Cognitive.Engine.Graphs
+          ref: 93cf1a83bdb88656a627b442a6d114c3a3502cde
+          path: .ci-subjects/ceg
+          token: ${{ secrets.SDK_TOKEN }}
+          persist-credentials: false
+      - name: Prepare native CEG validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          subject="$GITHUB_WORKSPACE/.ci-subjects/ceg"
+          test "$(git -C "$subject" rev-parse HEAD)" = "93cf1a83bdb88656a627b442a6d114c3a3502cde"
+          python -m venv "$RUNNER_TEMP/ceg-native-venv"
+          native_python="$RUNNER_TEMP/ceg-native-venv/bin/python"
+          "$native_python" -m pip install --require-hashes --no-deps -r "$subject/requirements-runtime.lock"
+          # Import/CLI only: no CEG service, graph connection, or approval.
+          "$native_python" "$subject/tools/validate_domain.py" --help
+          echo "L9_CEG_NATIVE_REPO=$subject" >> "$GITHUB_ENV"
+          echo "L9_CEG_NATIVE_PYTHON=$native_python" >> "$GITHUB_ENV"
       - name: Run Tests with Coverage
         env:
           TESTING: "true"

@@ -28,8 +28,10 @@ from ..core.config import get_settings
 from ..engines.convergence.convergence_config import ConvergenceConfig
 from ..engines.convergence_controller import run_convergence_loop
 from ..engines.domain_yaml_reader import (
+    DomainEnrichmentConfig,
     DomainPublicationError,
     DomainYamlReader,
+    default_node_label,
     enrichment_hints_for,
 )
 from ..engines.enrichment_orchestrator import enrich_batch, enrich_entity
@@ -477,7 +479,7 @@ async def _run_odoo_compat_converge(
     request = build_enrich_request(parsed)
     domain_hints, inference_rules = await _load_domain_convergence_context(
         domain_id=parsed["domain"],
-        node_label=payload.get("node_label") or "Partner",
+        node_label=payload.get("node_label"),
     )
     convergence_config = ConvergenceConfig(max_passes=parsed["max_passes"])
 
@@ -556,9 +558,13 @@ async def _load_domain_convergence_context(
     from `inference_rules_path`, else the spec's own `inference_rules`; they are
     returned unvalidated — InferenceBridge accepts the set whole or reports it refused.
 
-    A relative `inference_rules_path` resolves against the process working
-    directory — the service runs from the repository root, beside `domains/` —
-    not against the spec's own directory; an absolute path is unambiguous. A
+    The enrichment hints are the named node's. With no `node_label`, they are
+    the spec's only node's; a multi-node spec with no named node yields no hints
+    (logged), never a hard-coded label the spec may not define (#238).
+
+    A relative `inference_rules_path` resolves against the directory of the
+    spec file that declared it, so a spec loads the same rules whatever the
+    process working directory is (#242); an absolute path is unambiguous. A
     referenced file that is missing or unreadable is returned as its error text:
     InferenceBridge refuses any non-list rule set, so the response reports
     `invalid_rules`, and the warning logged here names the path and the cause. A
@@ -570,7 +576,6 @@ async def _load_domain_convergence_context(
     if not domain_id or not _domain_reader:
         return domain_hints, inference_rules
 
-    label = node_label or "Partner"
     # Resolve once: pointer publication between two reads must never pair old
     # enrichment hints with a different revision's rules.
     try:
@@ -586,7 +591,7 @@ async def _load_domain_convergence_context(
             error=str(exc),
         )
         return domain_hints, inference_rules
-    domain_hints = enrichment_hints_for(config, label)
+    domain_hints = _node_hints(config, domain_id, node_label)
     logger.info(
         "handlers.converge_effective_revision",
         domain_id=domain_id,
@@ -596,27 +601,51 @@ async def _load_domain_convergence_context(
     )
 
     if config.inference_rules_path:
-        from pathlib import Path
-
-        rules_path = Path(config.inference_rules_path)
-        try:
-            async with aiofiles.open(rules_path) as f:
-                content = await f.read()
-            inference_rules = _rules_section(parse_native_yaml(content))
-        except (OSError, yaml.YAMLError) as exc:
-            logger.warning(
-                "handlers.converge_inference_rules_unreadable",
-                domain_id=domain_id,
-                path=str(rules_path.resolve()),
-                error=str(exc),
-            )
-            inference_rules = (
-                f"inference_rules_path {rules_path.resolve()} could not be loaded: {exc}"
-            )
+        inference_rules = await _load_referenced_rules(config, domain_id)
     else:
         inference_rules = config.raw_spec.get("inference_rules") or []
 
     return domain_hints, inference_rules
+
+
+def _node_hints(
+    config: DomainEnrichmentConfig, domain_id: str, node_label: str | None
+) -> dict[str, Any]:
+    """The named node's hints; with no name, the spec's only node's (#238)."""
+    label = node_label or default_node_label(config)
+    if label is None:
+        logger.warning(
+            "handlers.converge_node_label_ambiguous",
+            domain_id=domain_id,
+            nodes=sorted(config.node_schemas),
+        )
+        return {}
+    return enrichment_hints_for(config, label)
+
+
+async def _load_referenced_rules(config: DomainEnrichmentConfig, domain_id: str) -> Any:
+    """Read a spec's `inference_rules_path`, resolved against the spec's directory (#242).
+
+    A file that cannot be read or parsed is returned as its error text, so
+    InferenceBridge reports `invalid_rules` naming the path.
+    """
+    from pathlib import Path
+
+    rules_path = Path(str(config.inference_rules_path))
+    if not rules_path.is_absolute() and config.source_dir:
+        rules_path = Path(config.source_dir) / rules_path
+    try:
+        async with aiofiles.open(rules_path) as f:
+            content = await f.read()
+        return _rules_section(parse_native_yaml(content))
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning(
+            "handlers.converge_inference_rules_unreadable",
+            domain_id=domain_id,
+            path=str(rules_path.resolve()),
+            error=str(exc),
+        )
+        return f"inference_rules_path {rules_path.resolve()} could not be loaded: {exc}"
 
 
 def _rules_section(document: Any) -> Any:

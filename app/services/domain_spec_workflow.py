@@ -337,7 +337,7 @@ def _install_revision(
         os.fsync(revisions_fd)
     finally:
         if not installed:
-            os.fchmod(stage_fd, 0o700)
+            os.fchmod(stage_fd, stat.S_IRWXU)
             for name in ("spec.yaml", "receipt.json"):
                 try:
                     os.unlink(name, dir_fd=stage_fd)

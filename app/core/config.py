@@ -118,6 +118,13 @@ class Settings(BaseSettings):
     # "": a tenant without a spec-declared endpoint fails closed (no sync is
     # sent, `graph_sync_skipped_no_contract` names it). plasticos declares its
     # endpoints in domains/plasticos/spec.yaml and needs no fallback.
+    # D-9 (Cognitive.Engine.Graphs#386): send each observed relationship row's
+    # provider association as `observed_association` so CEG cross-checks it
+    # against its own tenant spec instead of trusting this node's mirror. Off
+    # until the deployed CEG accepts the key (Cognitive.Engine.Graphs#422): an
+    # older CEG refuses any unknown row key. Turn on before CEG's
+    # OBSERVED_ASSOCIATION_REQUIRED.
+    observed_association_send_enabled: bool = False
     graph_sync_entity_type: str = ""
     graph_sync_id_property: str = ""
 

@@ -28,6 +28,14 @@ updates:
       - "python"
     reviewers:
       - "cryptoxdog"
+    # ruff, mypy and pytest are pinned by Quantum-L9/l9-ci-core's toolchain lock
+    # (.github/actions/install-consumer-ci/toolchain-lock.json). A Dependabot
+    # bump moves EIE off that lock -- 0.17.3 / 2.4.1 / 9.2.0 was the drift --
+    # so the versions change only when Core's lock does.
+    ignore:
+      - dependency-name: "ruff"
+      - dependency-name: "mypy"
+      - dependency-name: "pytest"
     groups:
       web-framework:
         patterns:

@@ -669,16 +669,25 @@ async def test_concurrent_approvals_for_one_domain_keep_both_field_sets(api_clie
                     headers=AUTH,
                 ),
             )
-        assert [r.status_code for r in responses] == [200, 409], [r.text for r in responses]
+        # gather() does not fix which request takes the domain lock first, so the
+        # winner is read from the answers: exactly one applies, the other is stale.
+        statuses = [r.status_code for r in responses]
+        assert sorted(statuses) == [200, 409], [r.text for r in responses]
+        won = statuses.index(200)
+        (winner, winner_field), (loser, _loser_field) = (
+            ((first, "annual_capacity_mt"), (second, "certifications"))
+            if won == 0
+            else ((second, "certifications"), (first, "annual_capacity_mt"))
+        )
         assert (
-            responses[1].json()["detail"]
+            responses[1 - won].json()["detail"]
             == "Discovery artifact changed; fresh owner-bound discovery required"
         )
         revised = converge_module._domain_specs["plasticos"]
-        assert _property_names(revised) == {"id", "annual_capacity_mt"}
+        assert _property_names(revised) == {"id", winner_field}
         assert revised["version"] == "0.4.0-discovered", "only the nonstale approval applies"
-        assert second.status == LoopStatus.HUMAN_HOLD
-        assert second.discovery_spec_sha256 == first.discovery_spec_sha256
+        assert loser.status == LoopStatus.HUMAN_HOLD
+        assert loser.discovery_spec_sha256 == winner.discovery_spec_sha256
         ledger.assert_awaited_once(), "stale second discovery cannot write an audit decision"
     finally:
         for name, value in original.items():

@@ -332,3 +332,35 @@ class TestConditionRules:
 
     def test_no_context_is_reported(self):
         assert InferenceBridge().describe()["status"] == "not_configured"
+
+
+class TestConditionRuleUnlockMap:
+    """#237: condition rules inform search targeting through unlock_map."""
+
+    def test_sole_missing_condition_field_is_credited(self, condition_rules):
+        bridge = InferenceBridge(rules=condition_rules)
+        result = bridge.run({"polymer_types": ["HDPE"], "annual_capacity_mt": 7000}, {})
+
+        # grade-a needs only contamination_tolerance; tier-1 needs grade-a's output.
+        assert result.unlock_map == {"contamination_tolerance": 1.0, "material_grade": 1.0}
+        assert bridge.unlock_map == result.unlock_map
+
+    def test_a_present_condition_that_fails_earns_no_credit(self, condition_rules):
+        result = InferenceBridge(rules=condition_rules).run({"polymer_types": ["PP"]}, {})
+        assert "contamination_tolerance" not in result.unlock_map
+
+    def test_two_missing_condition_fields_earn_no_credit(self, condition_rules):
+        result = InferenceBridge(rules=condition_rules).run({}, {})
+        assert result.unlock_map == {}
+
+    def test_a_rule_whose_output_is_known_earns_no_credit(self, condition_rules):
+        result = InferenceBridge(rules=condition_rules).run(
+            {"polymer_types": ["HDPE"], "material_grade": "B"}, {}
+        )
+        assert "contamination_tolerance" not in result.unlock_map
+
+    def test_registry_is_exposed_for_the_planner(self, condition_rules):
+        bridge = InferenceBridge(rules=condition_rules)
+        assert bridge.rule_registry is not None
+        assert {r.rule_id for r in bridge.rule_registry.all_rules()} == {"grade-a", "tier-1"}
+        assert InferenceBridge().rule_registry is None

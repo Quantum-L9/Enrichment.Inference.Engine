@@ -16,7 +16,7 @@ from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.utils.safe_convert import safe_float
 
@@ -59,7 +59,15 @@ class ScanRequest(BaseModel):
 
 class ApprovalRequest(BaseModel):
     approved: bool
-    reviewed_by: str
+    reviewed_by: str = Field(min_length=1, max_length=256)
+
+    @field_validator("reviewed_by")
+    @classmethod
+    def validate_reviewed_by(cls, value: str) -> str:
+        """Require a named, unpadded reviewer, matching the durable ledger contract."""
+        if not value.strip() or value != value.strip():
+            raise ValueError("An explicit named, unpadded reviewer is required")
+        return value
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
