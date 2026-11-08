@@ -6,6 +6,8 @@ Exit 1: validation/compatibility/approval evidence refused.
 Exit 2: diagnostic compatibility passes but approvals are Unknown (not release-ready).
 
 The supplied CEG checkout/interpreter are explicit operator execution inputs.
+They must be trusted by the operator; accepting untrusted executable inputs is
+not a supported sandbox boundary. Artifact reads/writes refuse symlink components.
 No remote service, package installation, deployment, or publication is performed.
 """
 
@@ -16,9 +18,11 @@ import datetime
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -32,6 +36,67 @@ from app.engines.domain_yaml_reader import (
     validate_native_spec,
 )
 from app.engines.native_yaml import parse_native_yaml
+from app.services import domain_spec_workflow as workflow
+from scripts.domain_spec_operator import _parent, _read
+
+
+def _write_report(path: Path, content: bytes) -> None:
+    """Atomically replace only a private regular child, never follow a link.
+
+    Unlike reviewed operator artifacts, a diagnostic report may be overwritten.
+    Stage complete bytes first so a write failure preserves the previous report.
+    Parent directories must already exist, as with the original report writer.
+    """
+    with _parent(str(path)) as (parent_fd, name):
+        previous = None
+        try:
+            descriptor = os.open(name, workflow._FILE_FLAGS, dir_fd=parent_fd)
+        except FileNotFoundError:
+            previous = None
+        else:
+            try:
+                previous = os.fstat(descriptor)
+                if not stat.S_ISREG(previous.st_mode) or previous.st_nlink != 1:
+                    raise ValueError("Report output must be a private regular file")
+            finally:
+                os.close(descriptor)
+        staging = f".pair-report-{uuid.uuid4().hex}"
+        installed = False
+        try:
+            workflow._write_file(parent_fd, staging, content, mode=0o600)
+            if previous is None:
+                # A concurrent new child must not be silently overwritten.
+                os.link(
+                    staging,
+                    name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            else:
+                current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    not stat.S_ISREG(current.st_mode)
+                    or current.st_nlink != 1
+                    or (current.st_dev, current.st_ino) != (previous.st_dev, previous.st_ino)
+                ):
+                    raise ValueError("Report output changed during write")
+                # replace never follows the destination, even if changed after stat.
+                os.replace(staging, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            installed = True
+        finally:
+            try:
+                os.unlink(staging, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        if installed:
+            # The report is already installed. A failed directory sync must not
+            # look like a refusal or invite main() to describe a successful file
+            # as rejected.
+            try:
+                os.fsync(parent_fd)
+            except OSError:
+                return
 
 
 def _receipt(data: bytes | None, engine: str, tenant: str, version: str, digest: str) -> dict:
@@ -75,14 +140,16 @@ def _receipt(data: bytes | None, engine: str, tenant: str, version: str, digest:
 
 
 def check_pair(args: argparse.Namespace) -> tuple[dict, int]:
-    eie_bytes, ceg_bytes = args.eie_spec.read_bytes(), args.ceg_spec.read_bytes()
-    eie_receipt_bytes = args.eie_receipt.read_bytes() if args.eie_receipt else None
-    ceg_receipt_bytes = args.ceg_receipt.read_bytes() if args.ceg_receipt else None
+    eie_bytes, ceg_bytes = _read(str(args.eie_spec)), _read(str(args.ceg_spec))
+    eie_receipt_bytes = _read(str(args.eie_receipt)) if args.eie_receipt else None
+    ceg_receipt_bytes = _read(str(args.ceg_receipt)) if args.ceg_receipt else None
     eie_hash, ceg_hash = (
         hashlib.sha256(eie_bytes).hexdigest(),
         hashlib.sha256(ceg_bytes).hexdigest(),
     )
     eie, ceg = parse_native_yaml(eie_bytes), parse_native_yaml(ceg_bytes)
+    mapping_path = getattr(args, "field_mappings", None)
+    mappings = json.loads(_read(str(mapping_path))) if mapping_path else None
     tenant = eie.get("name") if isinstance(eie, dict) else None
     report = {
         "schema": "eie.domain-pair-check/v1",
@@ -108,6 +175,8 @@ def check_pair(args: argparse.Namespace) -> tuple[dict, int]:
         (args.ceg_repo / "tools/validate_domain.py").read_bytes()
     ).hexdigest()
     try:
+        if not isinstance(tenant, str):
+            raise ValueError("Native EIE tenant must be a string")
         validate_native_spec(eie, tenant)
         report["eie_native"] = {"status": "Passed"}
     except (ValueError, TypeError) as exc:
@@ -118,7 +187,7 @@ def check_pair(args: argparse.Namespace) -> tuple[dict, int]:
     # one file while the pair record points at another.
     with tempfile.TemporaryDirectory(prefix="native-domain-pair-") as temp:
         ceg_tenant = ceg.get("domain", {}).get("id") if isinstance(ceg, dict) else None
-        if not is_legal_tenant_id(ceg_tenant):
+        if not isinstance(ceg_tenant, str) or not is_legal_tenant_id(ceg_tenant):
             report["ceg_native"] = {"status": "Failed", "reason": "illegal native CEG tenant"}
             return report, 1
         snapshot = Path(temp) / ceg_tenant / "spec.yaml"
@@ -161,7 +230,6 @@ def check_pair(args: argparse.Namespace) -> tuple[dict, int]:
     }
     if result.returncode != 0:
         return report, 1
-    mappings = json.loads(args.field_mappings.read_text()) if args.field_mappings else None
     proof = check_compatibility(eie, ceg, field_mappings=mappings)
     report["compatibility"] = proof
     if proof["verdict"] != "pass":
@@ -192,7 +260,7 @@ def check_pair(args: argparse.Namespace) -> tuple[dict, int]:
         "compatibility": {
             "rule_set": RULE_SET,
             "verdict": "pass",
-            "proof_ref": str(args.output.resolve()),
+            "proof_ref": str(args.output.expanduser().absolute()),
             "rule_set_sha256": report["rule_set_sha256"],
             "ceg_source_revision": report["ceg_source_revision"],
             "ceg_validator_sha256": report["ceg_validator_sha256"],
@@ -232,7 +300,18 @@ def main() -> int:
             },
             1,
         )
-    args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    try:
+        _write_report(args.output, (json.dumps(report, indent=2, sort_keys=True) + "\n").encode())
+    except (OSError, ValueError) as exc:
+        report, code = (
+            {
+                "schema": "eie.domain-pair-check/v1",
+                "release_ready": False,
+                "status": "Failed",
+                "reason": f"Report output refused: {exc}",
+            },
+            1,
+        )
     print(json.dumps(report, indent=2, sort_keys=True))
     return code
 

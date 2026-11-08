@@ -729,8 +729,8 @@ async def get_approved_schema_proposals(tenant_id: str, domain: str) -> list[Sch
 class SchemaProposalNotFoundError(LookupError, ValueError):
     """Missing proposal UUID.
 
-    ``LookupError`` keeps the HTTP route on 404. ``ValueError`` keeps the
-    documented service contract for non-HTTP callers.
+    LookupError keeps the HTTP route on 404. ValueError keeps the documented
+    service contract for non-HTTP callers.
     """
 
 
