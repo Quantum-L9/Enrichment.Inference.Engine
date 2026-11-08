@@ -7,6 +7,15 @@ file existence, router mounting, or a coverage run — not carried forward on tr
 
 ---
 
+## Issue unblock (session reference)
+
+**Cluster:** Quantum-L9/Enrichment.Inference.Engine#237, #238, #242 (+ #280 E9; #236 closed already-fixed)
+**Owning fix:** `2da2514` + `f4fbd51` on `claude-mobile/lucid-allen-qotk8h` (local; publication blocked by #287)
+**Next:** after Quantum-L9/l9-ci-core#239 merges, `PR_REMEDIATE=0 make pr` this branch, then close #237/#238/#242 on the PR
+**Pickup:** Graphiti PICKUP not written 2026-11-08 (no memory MCP tool on this surface: BLOCKED_PICKUP)
+
+---
+
 ## Priority Legend
 
 - 🔴 **CRITICAL** — Blocks production deployment
