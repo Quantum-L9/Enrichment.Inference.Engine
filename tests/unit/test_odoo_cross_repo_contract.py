@@ -25,10 +25,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.engines.handlers import handle_converge
+from app.engines.handlers import DEFAULT_CONVERGE_TIMEOUT_SECONDS, handle_converge
 from app.models.schemas import EnrichResponse
 from app.services import perplexity_client
-from app.services.odoo_gate_converge import DEFAULT_CONVERGE_TIMEOUT_SECONDS
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 

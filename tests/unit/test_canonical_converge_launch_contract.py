@@ -32,13 +32,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from perplexity import APITimeoutError, Perplexity
 
-from app.engines.handlers import handle_converge
+from app.engines.handlers import DEFAULT_CONVERGE_TIMEOUT_SECONDS, handle_converge
 from app.models.schemas import EnrichRequest, EnrichResponse
 from app.services import perplexity_client
-from app.services.odoo_gate_converge import (
-    DEFAULT_CONVERGE_TIMEOUT_SECONDS,
-    is_odoo_compat_converge_payload,
-)
 from app.services.request_deadline import (
     CANONICAL_CONVERGE_BUDGET_SECONDS,
     RESPONSE_RESERVE_SECONDS,
@@ -375,14 +371,8 @@ async def test_live_odoo_payload_selects_the_canonical_branch(canonical_converge
     drops `entity["id"]`, substitutes its own objective and object_type, and
     truncates the response fields to the partner allowlist.
     """
-    assert is_odoo_compat_converge_payload(_odoo_request()) is False
+    result = await handle_converge("acme", _odoo_request())
 
-    with patch(
-        "app.engines.handlers._handle_odoo_compat_converge", new_callable=AsyncMock
-    ) as compat:
-        result = await handle_converge("acme", _odoo_request())
-
-    assert compat.await_count == 0, "the live payload was claimed by the compat adapter"
     assert canonical_converge_probes["loop"].await_count == 1
     assert result["state"] == "completed"
 
