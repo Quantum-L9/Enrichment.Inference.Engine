@@ -139,12 +139,12 @@ invariants:
     type, tenant, database, relevance or score. An assertion missing any of them is
     skipped with its defects (`relationship_sync_skipped_incomplete_assertion`); nothing
     is defaulted.
-  - D-9 (Cognitive.Engine.Graphs#386): with `observed_association_send_enabled` on, an
+  - D-9 (Cognitive.Engine.Graphs#386) -- with `observed_association_send_enabled` on, an
     observed row carries `observed_association` {provider, fromobjecttype, toobjecttype,
     associationcategory, associationtypeid} -- the association EIE's mirror mapped. CEG
     refuses the row unless its OWN tenant spec's `observedfrom` declares it, answering
     `ObservedAssociationRejectedError`; the producer reports that as
-    `MAPPING_REJECTED_BY_CEG` (`observed_association_mirror_drift`). Order: deploy the
+    `MAPPING_REJECTED_BY_CEG` (`observed_association_mirror_drift`). Rollout order -- deploy the
     CEG change, turn this on, then CEG's `OBSERVED_ASSOCIATION_REQUIRED`. An older CEG
     refuses the unknown key, so this ships off.
   - A relationship is synchronized only on CEG's relationship acknowledgment —
