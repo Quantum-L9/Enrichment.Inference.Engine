@@ -45,6 +45,11 @@ rule outcome and the convergence confidence map:
     the record's own data and bounds nothing (1.0);
   - every derived field carries provenance: rule id, rule-set version, the
     inputs and their confidences, and the cascade level;
+  - search targeting: a rule that has not produced its output and whose other
+    condition fields are present and hold credits its one missing condition
+    field 1.0 in `unlock_map` (summed with the derivation graph's signal), the
+    same sole-blocker credit `inference_bridge_v2` gives a derivation edge. It
+    only reorders fields already targeted (#237);
   - the entity is provider output and may hold any JSON shape. The rule engine
     is total over such values; should execution still fail, the fault is
     isolated here and reported in describe()["errors"] — the converge that
@@ -58,7 +63,7 @@ from typing import Any
 
 import structlog
 
-from .inference.rule_engine import RuleFired, infer
+from .inference.rule_engine import RuleFired, condition_holds, infer
 from .inference.rule_loader import RuleDefinition, RuleRegistry, parse_rules
 from .inference_bridge_v2 import (
     DerivationGraph,
@@ -188,6 +193,13 @@ class InferenceBridge:
         result = self._run_derivation_graph(entity, confidence_map or {})
         if self._registry is not None:
             self._run_condition_rules(self._registry, entity, confidence_map or {}, result)
+            known = {k: v for k, v in entity.items() if v is not None}
+            known.update(result.derived_fields)
+            unlock = dict(result.unlock_map)
+            for name, credit in _condition_unlock_values(self._registry, known).items():
+                unlock[name] = unlock.get(name, 0.0) + credit
+            result.unlock_map = unlock
+            self._last_unlock_map = unlock
         return result
 
     def _run_derivation_graph(
@@ -357,6 +369,11 @@ class InferenceBridge:
         return self._last_unlock_map
 
     @property
+    def rule_registry(self) -> RuleRegistry | None:
+        """The strict registry of accepted domain `inference_rules`, if any."""
+        return self._registry
+
+    @property
     def graph(self) -> DerivationGraph | None:
         """Direct access to v2 graph for advanced consumers."""
         return self._graph
@@ -383,3 +400,29 @@ def _provenance_record(
         "confidence": min([rule.confidence, *input_confidence.values()]),
         "cascade_level": fired.cascade_level,
     }
+
+
+def _condition_unlock_values(registry: RuleRegistry, known: dict[str, Any]) -> dict[str, float]:
+    """Credit each field that is the sole missing input of a rule that could still fire.
+
+    A rule counts only when one of its outputs is still unknown, exactly one of
+    its distinct condition fields is absent, and every present condition field
+    already satisfies its condition — finding that one field could fire it.
+    """
+    unlock: dict[str, float] = {}
+    for rule in registry.all_rules():
+        if all(known.get(output.field) is not None for output in rule.outputs):
+            continue
+        missing: set[str] = set()
+        holds = True
+        for condition in rule.conditions:
+            value = known.get(condition.field)
+            if value is None:
+                missing.add(condition.field)
+            elif not condition_holds(condition, value):
+                holds = False
+                break
+        if holds and len(missing) == 1:
+            (blocker,) = missing
+            unlock[blocker] = unlock.get(blocker, 0.0) + 1.0
+    return unlock

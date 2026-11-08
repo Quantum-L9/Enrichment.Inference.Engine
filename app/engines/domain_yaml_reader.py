@@ -188,6 +188,21 @@ class DomainEnrichmentConfig:
     raw_spec: dict[str, Any] = field(default_factory=dict)
     source_sha256: str | None = None
     approval_ref: str | None = None
+    # Directory of the legacy spec file this snapshot was read from. A relative
+    # `inference_rules_path` resolves against it, never against the process
+    # working directory. Published revisions refuse `inference_rules_path`.
+    source_dir: str | None = None
+
+
+def default_node_label(config: DomainEnrichmentConfig) -> str | None:
+    """The node a request that names none addresses: the spec's only node.
+
+    A spec with several nodes has no implicit owner; the caller must name one.
+    Never a hard-coded label that the spec may not define.
+    """
+    if len(config.node_schemas) == 1:
+        return next(iter(config.node_schemas))
+    return None
 
 
 def enrichment_hints_for(config: DomainEnrichmentConfig, node_label: str) -> dict[str, Any]:
@@ -281,11 +296,14 @@ class DomainYamlReader:
                     raise FileNotFoundError(f"Domain spec not found: {spec_path}")
                 content = spec_path.read_bytes()
                 fingerprint = ("legacy", str(spec_path), hashlib.sha256(content).hexdigest())
-                return self._snapshot(
-                    domain_id,
-                    fingerprint,
-                    lambda: self._parse(domain_id, parse_native_yaml(content)),
-                )
+                spec_dir = str(spec_path.parent)
+
+                def build_legacy() -> DomainEnrichmentConfig:
+                    config = self._parse(domain_id, parse_native_yaml(content))
+                    config.source_dir = spec_dir
+                    return config
+
+                return self._snapshot(domain_id, fingerprint, build_legacy)
             except (OSError, ValueError, AttributeError, TypeError, yaml.YAMLError):
                 self._cache.pop(domain_id, None)
                 raise

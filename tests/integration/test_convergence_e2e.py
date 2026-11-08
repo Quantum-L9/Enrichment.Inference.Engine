@@ -656,3 +656,21 @@ class TestLiveDomainInference:
         # Odoo's partner contract is unchanged: derived plastics fields stay out.
         assert "material_grade" not in response["fields"]
         assert "facility_tier" not in response["fields"]
+
+    async def test_planner_receives_the_condition_rule_registry(self, sdk_converge) -> None:
+        """#237: the domain's condition rules and their unlock index reach the planner."""
+        from app.engines.meta_prompt_planner import MetaPromptPlanner
+
+        _state, run, _router = sdk_converge
+        with patch(
+            "app.engines.convergence_controller.MetaPromptPlanner", wraps=MetaPromptPlanner
+        ) as planner:
+            response, _provider_mock = await run(_canonical_payload())
+
+        assert response["state"] == "completed"
+        kwargs = planner.call_args.kwargs
+        assert {r.rule_id for r in kwargs["rule_registry"].all_rules()} >= {
+            "grade-assignment-hdpe-a",
+            "tier-1-high-capacity",
+        }
+        assert "grade-assignment-hdpe-a" in kwargs["unlock_index"]["contamination_tolerance"]
