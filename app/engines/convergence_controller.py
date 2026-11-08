@@ -31,6 +31,7 @@ from .convergence.confidence_tracker import UNCERTAINTY_SCALE, ConfidenceTracker
 from .convergence.convergence_config import ConvergenceConfig  # NEW
 from .convergence.cost_tracker import CostTracker
 from .field_classifier import DomainClassification, auto_classify_domain
+from .inference.rule_loader import build_unlock_index
 from .inference_bridge_adapter import InferenceBridge
 from .inference_bridge_v2 import prioritize_search_targets
 from .meta_prompt_planner import MetaPromptPlanner, PromptPlan
@@ -191,8 +192,13 @@ async def run_convergence_loop(
     # F-017: gaps are fields below the loop's own threshold, not a fixed 0.7.
     # F-019: the domain's priority fields (config first, else the handlers'
     # enrichment_hints) are targeted first.
+    # #237: the strict registry of the domain's condition rules and its unlock
+    # index inform the planner's ranking; ordering only, never new targets.
+    rule_registry = bridge.rule_registry
     planner = MetaPromptPlanner(
         domain_spec=domain_spec,
+        rule_registry=rule_registry,
+        unlock_index=build_unlock_index(rule_registry) if rule_registry is not None else None,
         confidence_threshold=config.confidence_threshold,
         priority_fields=config.priority_fields or (domain_hints or {}).get("priority_fields"),
         uncertainty_threshold=config.uncertainty_threshold,

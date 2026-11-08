@@ -119,6 +119,11 @@ def _evaluate_condition(condition: RuleCondition, value: Any) -> bool:
     return False
 
 
+def condition_holds(condition: RuleCondition, value: Any) -> bool:
+    """Public form of the single-condition test `infer` applies."""
+    return _evaluate_condition(condition, value)
+
+
 def _normalise(v: Any) -> Any:
     if isinstance(v, str):
         return v.strip().lower()

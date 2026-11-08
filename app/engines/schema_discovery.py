@@ -7,10 +7,11 @@ schema defined, and produces PropertySpec proposals for schema evolution.
 Aligned with L9 Contract Specifications domain spec versioning:
   0.1.0-seed → 0.2.0-discovered → 0.3.0-inferred → 0.4.0-proposed
 
-Output is a SchemaProposal that can be:
-  - Written back to Odoo as a schema evolution record
-  - Emitted as TransportPacket(packettype="schema_proposal")
-  - Fed to the graph engine's DomainPackLoader for next sync
+Output is a SchemaProposal returned to the caller only: the `discover` action
+(`handlers.handle_discover`) and `POST /api/v1/discover` put it in their
+response. No code emits it as a `schema_proposal` TransportPacket, writes it
+back to Odoo, or feeds it to CEG's domain loader; a proposal reaches a tenant
+spec only through the reviewed promotion path (Quantum-L9/Cognitive.Engine.Graphs#400).
 """
 
 from __future__ import annotations
