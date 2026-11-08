@@ -219,6 +219,7 @@ async def _produce(
     key: ObservedAssociationKey | None = None,
     from_id: str = FROM_ID,
     to_id: str = TO_ID,
+    send_observed_association: bool | None = None,
 ) -> tuple[Any, MagicMock, AsyncMock]:
     entity_type = VOCABULARIES[tenant][3]
     get = (
@@ -239,6 +240,7 @@ async def _produce(
             to_record_id=to_id,
             hubspot=hubspot,
             router=router,
+            send_observed_association=send_observed_association,
         )
     return result, get, execute
 
@@ -749,6 +751,100 @@ async def test_a_refused_or_unconfirmed_send_is_not_acknowledged(
     assert result.status is ProducerStatus.NOT_ACKNOWLEDGED
     assert result.ceg_ack is None
     assert execute.await_count == 1  # a refusal is never retried
+
+
+# ── D-9 (Cognitive.Engine.Graphs#386): CEG cross-checks the mirror's mapping ──
+
+
+def test_sending_the_association_ships_off_until_ceg_accepts_it() -> None:
+    from app.core.config import Settings
+
+    assert Settings.model_fields["observed_association_send_enabled"].default is False
+
+
+@pytest.mark.parametrize("tenant", sorted(VOCABULARIES))
+async def test_the_row_carries_the_association_the_mirror_mapped(
+    router: PacketRouter, hubspot: HubSpotClient, tenant: str
+) -> None:
+    result, _get, execute = await _produce(
+        router,
+        hubspot,
+        tenant,
+        http=_http(body=_associations_body(tenant)),
+        send_observed_association=True,
+    )
+    assert result.status is ProducerStatus.SYNCED
+    (from_type, to_type), type_id = VOCABULARIES[tenant][4], VOCABULARIES[tenant][5]
+    (row,) = execute.await_args.kwargs["payload"]["batch"]
+    assert row["observed_association"] == {
+        "provider": "hubspot",
+        "fromobjecttype": from_type,
+        "toobjecttype": to_type,
+        "associationcategory": "HUBSPOT_DEFINED",
+        "associationtypeid": type_id,
+    }
+
+
+async def test_the_association_is_not_sent_unless_enabled(
+    router: PacketRouter, hubspot: HubSpotClient
+) -> None:
+    _result, _get, execute = await _produce(
+        router,
+        hubspot,
+        "orbit-yard",
+        http=_http(body=_associations_body("orbit-yard")),
+        send_observed_association=False,
+    )
+    (row,) = execute.await_args.kwargs["payload"]["batch"]
+    assert "observed_association" not in row
+
+
+def _ceg_rejected_packet() -> Any:
+    """CEG's answer when its own spec does not declare the association (class name only)."""
+    request = _ack("orbit-yard", "stocks")
+    return request.derive(
+        packet_type="failure",
+        source_node="graph-engine",
+        destination_node="enrichment-engine",
+        reply_to="graph-engine",
+        payload={
+            "status": "failed",
+            "error": "ObservedAssociationRejectedError",
+            "message": "ObservedAssociationRejectedError",
+        },
+    )
+
+
+async def test_a_ceg_refusal_of_the_association_is_reported_as_mirror_drift(
+    router: PacketRouter, hubspot: HubSpotClient
+) -> None:
+    result, _get, execute = await _produce(
+        router,
+        hubspot,
+        "orbit-yard",
+        http=_http(body=_associations_body("orbit-yard")),
+        gate=_ceg_rejected_packet(),
+        send_observed_association=True,
+    )
+    assert result.status is ProducerStatus.MAPPING_REJECTED_BY_CEG
+    assert "drifted" in result.detail
+    assert result.mapping_fingerprint is not None
+    assert result.ceg_ack is None
+    assert execute.await_count == 1  # a refusal is never retried
+
+
+async def test_drift_is_claimed_only_when_the_association_was_sent(
+    router: PacketRouter, hubspot: HubSpotClient
+) -> None:
+    result, _get, _execute = await _produce(
+        router,
+        hubspot,
+        "orbit-yard",
+        http=_http(body=_associations_body("orbit-yard")),
+        gate=_ceg_rejected_packet(),
+        send_observed_association=False,
+    )
+    assert result.status is ProducerStatus.NOT_ACKNOWLEDGED
 
 
 # ── Domain neutrality ─────────────────────────────────────────────────────────

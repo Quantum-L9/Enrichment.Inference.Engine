@@ -15,10 +15,12 @@ CEG would refuse at load: a malformed entry anywhere, an ambiguous or conflictin
 namespace, an association declared twice, a reversed or undeclared edge. Nothing
 is guessed or defaulted, and there is no second mapping source.
 
-The mirror is NOT CEG's approval. Until CEG cross-checks an observed row against
-its own copy (D-9, Cognitive.Engine.Graphs#386), every resolution is labelled
+The mirror is NOT CEG's approval. Every resolution is labelled
 ``MAPPING_UNVERIFIED_MIRROR`` and ``mirror_drift`` is the explicit comparison
-against an authoritative CEG spec.
+against an authoritative CEG spec. CEG's D-9 cross-check
+(Cognitive.Engine.Graphs#386) verifies an observed row only when the row carries
+the association (``Settings.observed_association_send_enabled``); a CEG refusal
+is reported as ``MAPPING_REJECTED_BY_CEG`` by the producer.
 """
 
 from __future__ import annotations

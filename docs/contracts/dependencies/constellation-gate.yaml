@@ -5,8 +5,14 @@
 #           app/services/graph_return_channel.py,
 #           app/engines/convergence_controller.py,
 #           app/engines/observed_association_contract.py
-# Version:  1.8.0
-# Updated:  2026-10-29 (QM.POC0.TENANT_ASSOCIATION_MAPPING.004: an observed provider
+# Version:  1.9.0
+# Updated:  2026-11-08 (D-9, Cognitive.Engine.Graphs#386: an observed row may carry
+#           `observed_association`, the provider association EIE's mirror mapped, so
+#           CEG cross-checks it against its own observedfrom. Sent only while
+#           observed_association_send_enabled is on (default off until the deployed CEG
+#           accepts the key, Cognitive.Engine.Graphs#422). CEG's refusal
+#           `ObservedAssociationRejectedError` is reported as MAPPING_REJECTED_BY_CEG)
+#           2026-10-29 (QM.POC0.TENANT_ASSOCIATION_MAPPING.004: an observed provider
 #           association resolves to its relationship and node refs only from the tenant
 #           spec's sync.endpoints[].observedfrom / refnamespace, before any provider I/O,
 #           and every resolution is labelled an unverified EIE mirror until CEG's D-9
@@ -43,7 +49,7 @@ usages:
 
   - purpose: Gate-only egress — relationship evidence sync (CEG action `sync`, targetedge endpoint)
     source_file: app/engines/packet_router.py
-    pattern: GateClient.execute(action="sync", payload={entity_type, batch:[{from_id, to_id, evidence_ref, source_ref, confidence, assertion_status, polarity, source_revision?, expires_at?}]})
+    pattern: GateClient.execute(action="sync", payload={entity_type, batch:[{from_id, to_id, evidence_ref, source_ref, confidence, assertion_status, polarity, source_revision?, expires_at?, observed_association?}]})
 
   - purpose: Gate-only egress — graph match / outcomes (CEG actions `match`, `outcomes`)
     source_file: app/engines/graph_sync_client.py
@@ -129,10 +135,18 @@ invariants:
   - EIE proposes, CEG admits. The row carries only the endpoints' declared stable ids and
     the producer's evidence — `evidence_ref`, `source_ref`, explicit `confidence` in
     [0, 1], `assertion_status` (observed / reported / inferred), `polarity` (positive /
-    negative), optional `source_revision` / `expires_at` — never a label, relationship
+    negative), optional `source_revision` / `expires_at` / `observed_association` — never a label, relationship
     type, tenant, database, relevance or score. An assertion missing any of them is
     skipped with its defects (`relationship_sync_skipped_incomplete_assertion`); nothing
     is defaulted.
+  - D-9 (Cognitive.Engine.Graphs#386) -- with `observed_association_send_enabled` on, an
+    observed row carries `observed_association` {provider, fromobjecttype, toobjecttype,
+    associationcategory, associationtypeid} -- the association EIE's mirror mapped. CEG
+    refuses the row unless its OWN tenant spec's `observedfrom` declares it, answering
+    `ObservedAssociationRejectedError`; the producer reports that as
+    `MAPPING_REJECTED_BY_CEG` (`observed_association_mirror_drift`). Rollout order -- deploy the
+    CEG change, turn this on, then CEG's `OBSERVED_ASSOCIATION_REQUIRED`. An older CEG
+    refuses the unknown key, so this ships off.
   - A relationship is synchronized only on CEG's relationship acknowledgment —
     `relationship_sync_acknowledged` requires `graph_sync_acknowledged` for the resolved endpoint
     AND integer `created_count` + `replayed_count` equal to the rows sent. A node-shaped

@@ -56,6 +56,7 @@ import structlog
 
 from app.engines.observed_association_contract import ObservedRelationshipContract
 from app.engines.packet_router import (
+    CEG_OBSERVED_ASSOCIATION_REJECTED,
     PacketRouter,
     RelationshipAssertion,
     RelationshipSyncOutcome,
@@ -85,6 +86,9 @@ class ProducerStatus(StrEnum):
     CONTRACT_NOT_DECLARED = "CONTRACT_NOT_DECLARED"
     TRANSPORT_UNAVAILABLE = "TRANSPORT_UNAVAILABLE"
     NOT_ACKNOWLEDGED = "NOT_ACKNOWLEDGED"
+    # D-9: CEG refused the provider association this mirror mapped, because CEG's
+    # own tenant spec does not declare it -- the mirror has drifted from CEG.
+    MAPPING_REJECTED_BY_CEG = "MAPPING_REJECTED_BY_CEG"
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,8 +208,17 @@ async def produce_observed_relationship(
     hubspot: HubSpotClient,
     router: PacketRouter,
     correlation_id: str | None = None,
+    send_observed_association: bool | None = None,
 ) -> ObservedRelationshipResult:
-    """Read one observed association and propose it as graph evidence. Never raises for a refusal."""
+    """Read one observed association and propose it as graph evidence. Never raises for a refusal.
+
+    ``send_observed_association`` (default: ``Settings.observed_association_send_enabled``)
+    sends the association on the row so CEG cross-checks it against its own spec (D-9).
+    """
+    if send_observed_association is None:
+        from app.core.config import get_settings
+
+        send_observed_association = get_settings().observed_association_send_enabled
     defects = _key_defects(key)
     for name, value in (("from_record_id", from_record_id), ("to_record_id", to_record_id)):
         if not is_canonical_record_id(value):
@@ -276,6 +289,17 @@ async def produce_observed_relationship(
         confidence=OBSERVED_MEMBERSHIP_CONFIDENCE,
         assertion_status="observed",
         polarity="positive",
+        observed_association=(
+            (
+                contract.provider,
+                contract.from_object_type,
+                contract.to_object_type,
+                contract.association_category,
+                contract.association_type_id,
+            )
+            if send_observed_association
+            else None
+        ),
     )
     assertion_defects = relationship_assertion_defects(assertion)
     if assertion_defects:
@@ -304,6 +328,26 @@ async def produce_observed_relationship(
             contract,
             ProducerStatus.TRANSPORT_UNAVAILABLE,
             f"Gate could not carry the relationship after retries: {sync.detail}",
+            evidence_ref,
+            source_ref,
+        )
+    if (
+        assertion.observed_association is not None
+        and CEG_OBSERVED_ASSOCIATION_REJECTED in sync.detail
+    ):
+        logger.warning(
+            "observed_association_mirror_drift",
+            tenant_id=tenant_id,
+            relation_type=contract.sync.relation_type,
+            entity_type=contract.sync.entity_type,
+            mapping_fingerprint=contract.mapping_fingerprint,
+            detail=sync.detail,
+        )
+        return _resolved(
+            contract,
+            ProducerStatus.MAPPING_REJECTED_BY_CEG,
+            "CEG refused the association this node's spec mirror mapped; the mirror has "
+            f"drifted from CEG's tenant spec: {sync.detail}",
             evidence_ref,
             source_ref,
         )

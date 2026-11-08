@@ -39,6 +39,7 @@ from app.engines.packet_router import (
     RelationshipSyncOutcome,
     RelationshipSyncResult,
     _relationship_idempotency_key,
+    _relationship_sync_row,
     relationship_assertion_defects,
     relationship_sync_acknowledged,
     resolve_graph_sync_contract,
@@ -568,3 +569,50 @@ def test_relationship_sender_names_no_product_domain() -> None:
     section = "\n".join(source.splitlines()[start - 1 :]).lower()
     for name in ("plasticos", "hubspot", "polymer", "recycl"):
         assert name not in section
+
+
+# ── D-9 (Cognitive.Engine.Graphs#386): observed_association provenance ────────
+
+ASSOCIATION = ("synthcrm", "caves", "affineurs", "SYNTH_DEFINED", 7)
+
+
+def test_an_observed_association_rides_on_the_row_as_cegs_object() -> None:
+    row = _relationship_sync_row(_assertion(observed_association=ASSOCIATION))
+    assert row["observed_association"] == {
+        "provider": "synthcrm",
+        "fromobjecttype": "caves",
+        "toobjecttype": "affineurs",
+        "associationcategory": "SYNTH_DEFINED",
+        "associationtypeid": 7,
+    }
+    assert relationship_assertion_defects(_assertion(observed_association=ASSOCIATION)) == []
+
+
+def test_without_an_association_the_row_is_unchanged() -> None:
+    assert "observed_association" not in _relationship_sync_row(_assertion())
+
+
+@pytest.mark.parametrize("status", ["reported", "inferred"])
+def test_an_association_is_sent_only_on_an_observed_row(status: str) -> None:
+    defects = relationship_assertion_defects(
+        _assertion(assertion_status=status, observed_association=ASSOCIATION)
+    )
+    assert defects == ["observed_association is sent only with assertion_status observed"]
+
+
+@pytest.mark.parametrize(
+    "association",
+    [
+        ("synthcrm", "caves", "affineurs", "SYNTH_DEFINED"),
+        ("synthcrm", "caves", "affineurs", "SYNTH_DEFINED", 0),
+        ("synthcrm", "caves", "affineurs", "SYNTH_DEFINED", True),
+        ("synthcrm", "caves", "affineurs", "SYNTH_DEFINED", "7"),
+        ("", "caves", "affineurs", "SYNTH_DEFINED", 7),
+        ["synthcrm", "caves", "affineurs", "SYNTH_DEFINED", 7],
+    ],
+    ids=["short", "zero-id", "bool-id", "text-id", "empty-provider", "list"],
+)
+def test_a_malformed_association_is_never_sent(association: Any) -> None:
+    defects = relationship_assertion_defects(_assertion(observed_association=association))
+    assert len(defects) == 1
+    assert defects[0].startswith("observed_association must be")
