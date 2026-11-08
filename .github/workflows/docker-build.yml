@@ -104,6 +104,16 @@ jobs:
     timeout-minutes: 15
     needs: build
     if: github.event_name != 'pull_request'
+    # Job-scoped, replacing the workflow-level grant for this job only. On a
+    # private repository upload-sarif reads the workflow run, so it needs
+    # actions: read; without it main's scan failed with "Resource not
+    # accessible by integration - get-a-workflow-run" (run 42026823817). The
+    # scan only pulls the image, so packages is read and id-token is absent.
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+      actions: read
 
     steps:
       - name: Checkout Repository
