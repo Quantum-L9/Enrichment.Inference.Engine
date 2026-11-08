@@ -25,7 +25,7 @@ permissions:
 jobs:
   ratchet:
     name: Baseline Ratchet
-    uses: Quantum-L9/l9-ci-core/.github/workflows/baseline-ratchet.yml@1bc4df6910b932d82d70bded7b9edab5e5623fc6
+    uses: Quantum-L9/l9-ci-core/.github/workflows/baseline-ratchet.yml@a715fac67635bf194de9bc1840a633c5b54e07bc
     with:
       core-revision: d81a06ed821106a487df2e5ad06d93e347392af6
       sdk-revision: 0779fca8238011f8abea551895f96584676e9d17
