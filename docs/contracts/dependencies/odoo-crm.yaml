@@ -1,25 +1,58 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: Odoo CRM Dependency
-# Source:   app/services/crm/odoo_client.py, config/crm/odoo_mapping.yaml
-# Version:  1.0.0
-# Updated:  2026-04-05
+# Source:   app/services/crm/odoo_client.py, app/services/crm/writeback.py,
+#           app/services/crm/__init__.py (CLIENT_REGISTRY), config/crm/odoo_mapping.yaml
+# Version:  2.0.0
+# Updated:  2026-11-08 (the live Odoo relationship is Gate-routed `converge`, not
+#           HTTP /api/v1/enrich; this file now covers only EIE's optional XML-RPC
+#           writeback connector, which is disabled unless a trusted owner activates it)
+#           2026-04-05 (initial)
 # ═══════════════════════════════════════════════════════════════
 
 service_name: OdooCRM
 type: external
-protocol: xmlrpc  # Odoo standard XMLRPC/JSON-RPC
-auth_method: Username + password (ODOO_USERNAME, ODOO_PASSWORD)
-base_url_env: ODOO_URL
-database_env: ODOO_DB
+protocol: xmlrpc  # /xmlrpc/2/common and /xmlrpc/2/object (defusedxml-patched)
+auth_method: Odoo username + password, supplied per connector in CRMCredentials (url, db, username, password)
+required: false
+
+# ODOO_URL, ODOO_DB, ODOO_USERNAME and ODOO_PASSWORD are declared in
+# app/core/config.py Settings and docs/contracts/config/env-contract.yaml, but
+# no app code reads them: OdooClient takes its connection only from the
+# CRMCredentials of a TrustedCRMConnector.
+declared_env: [ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD]
+declared_env_consumed: false
 
 role: |
-  Primary CRM consumer #1. Odoo ERP integration:
-  - async_executor.py calls POST /api/v1/enrich for each entity
-  - CRM writeback writes enriched fields to res.partner, crm.lead, etc.
-  - Odoo nightly cron calls POST /api/v1/enrich/batch
-  - plasticos_research_enrichment Odoo module integrates directly.
+  Optional CRM writeback target. EIE selects OdooClient from
+  app.services.crm.CLIENT_REGISTRY (CRMType.ODOO) when WriteBackOrchestrator
+  writes enriched fields back to a CRM. A TrustedCRMConnector carries the
+  credentials and an activation level, and the default level is
+  CRMActivationLevel.DISABLED: nothing is written to Odoo until the trusted
+  owner sets local_test, gate_sandbox or production_enabled.
 
-odoo_module: odoo_modules/plasticos_research_enrichment
+  This is NOT how the live PlasticOS Odoo talks to EIE. IB-Odoo_19
+  (plasticos_gate / plasticos_enrichment) sends the Gate action `converge` as a
+  Gate_SDK TransportPacket, Gate routes it to EIE, and
+  app.engines.handlers.handle_converge answers with an EnrichResponse. Odoo
+  never calls EIE's HTTP API directly (IB-Odoo_19 ADR-003-single, ADR-002), and
+  it applies its own allowlisted partner writeback from that response. That
+  path is governed by dependencies/constellation-gate.yaml and the canonical
+  converge fixture contracts/converge_request.json, not by this file.
+
+  odoo_modules/plasticos_research_enrichment in this repository is not the live
+  producer. IB-Odoo_19 does not install it.
+
+usages:
+  - purpose: CRM writeback when a trusted connector activates it
+    source_file: app/services/crm/odoo_client.py
+    pattern: OdooClient(credentials).update_record / query_records over XML-RPC
+  - purpose: EIE field name -> Odoo model/field mapping for that writeback
+    source_file: config/crm/odoo_mapping.yaml
+    pattern: Settings.crm_mapping_path (app/core/config.py)
+
+failure_semantics: |
+  A query timeout is not reported as not-found, and a false write
+  acknowledgement is rejected (tests/contracts/test_crm_provider_parity.py).
+
 field_mapping: config/crm/odoo_mapping.yaml
 source_file: app/services/crm/odoo_client.py
-
