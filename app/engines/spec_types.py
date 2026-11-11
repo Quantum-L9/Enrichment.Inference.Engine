@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -53,9 +53,8 @@ _RETIRED = {
     "object": "declare `type: map` with `properties`",
 }
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_DURATION = re.compile(
-    r"^-?P(?=\d|T\d)(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(\d+H)?(\d+M)?(\d+(\.\d+)?S)?)?$"
-)
+# One ISO-8601 duration component, e.g. ``12D`` or ``1.5S``; see _is_iso_duration.
+_DURATION_UNIT = re.compile(r"(\d+(?:\.\d+)?)([A-Z])")
 
 
 class TypeDeclarationError(ValueError):
@@ -79,48 +78,66 @@ def validate_declaration(decl: object, context: str, *, item: bool = False) -> N
         )
     if "required" in decl and type(decl["required"]) is not bool:
         raise TypeDeclarationError(f"{context}.required must be boolean")
-    if type_name == LIST:
-        if item:
-            raise TypeDeclarationError(f"{context}: a list of lists is not declarable")
-        if "properties" in decl:
-            raise TypeDeclarationError(f"{context}: `properties` belongs to a map, not a list")
-        if "items" not in decl:
-            raise TypeDeclarationError(
-                f"{context}: `type: list` requires `items` (e.g. `items: {{type: string}}`)"
-            )
-        validate_declaration(decl["items"], f"{context}.items", item=True)
-        return
-    if type_name == MAP:
-        if "items" in decl:
-            raise TypeDeclarationError(f"{context}: `items` belongs to a list, not a map")
-        properties = decl.get("properties")
-        if not isinstance(properties, list) or not properties:
-            raise TypeDeclarationError(f"{context}: `type: map` requires nonempty `properties`")
-        seen: set[str] = set()
-        for entry in properties:
-            if not isinstance(entry, Mapping):
-                raise TypeDeclarationError(f"{context}.properties entries must be mappings")
-            name = entry.get("name")
-            if not isinstance(name, str) or not _IDENTIFIER.fullmatch(name):
-                raise TypeDeclarationError(f"{context}.properties name must be an identifier")
-            if name in seen:
-                raise TypeDeclarationError(f"{context}.properties: duplicate {name}")
-            seen.add(name)
-            validate_declaration(entry, f"{context}.{name}")
-        return
+    validator = _DECLARATION_VALIDATORS.get(type_name, _validate_scalar_declaration)
+    validator(decl, context, item)
+
+
+def _validate_list_declaration(decl: Mapping[str, Any], context: str, item: bool) -> None:
+    if item:
+        raise TypeDeclarationError(f"{context}: a list of lists is not declarable")
+    if "properties" in decl:
+        raise TypeDeclarationError(f"{context}: `properties` belongs to a map, not a list")
+    if "items" not in decl:
+        raise TypeDeclarationError(
+            f"{context}: `type: list` requires `items` (e.g. `items: {{type: string}}`)"
+        )
+    validate_declaration(decl["items"], f"{context}.items", item=True)
+
+
+def _validate_map_declaration(decl: Mapping[str, Any], context: str, _item: bool) -> None:
+    if "items" in decl:
+        raise TypeDeclarationError(f"{context}: `items` belongs to a list, not a map")
+    properties = decl.get("properties")
+    if not isinstance(properties, list) or not properties:
+        raise TypeDeclarationError(f"{context}: `type: map` requires nonempty `properties`")
+    seen: set[str] = set()
+    for entry in properties:
+        name = _map_property_name(entry, context)
+        if name in seen:
+            raise TypeDeclarationError(f"{context}.properties: duplicate {name}")
+        seen.add(name)
+        validate_declaration(entry, f"{context}.{name}")
+
+
+def _map_property_name(entry: object, context: str) -> str:
+    if not isinstance(entry, Mapping):
+        raise TypeDeclarationError(f"{context}.properties entries must be mappings")
+    name = entry.get("name")
+    if not isinstance(name, str) or not _IDENTIFIER.fullmatch(name):
+        raise TypeDeclarationError(f"{context}.properties name must be an identifier")
+    return name
+
+
+def _validate_scalar_declaration(decl: Mapping[str, Any], context: str, _item: bool) -> None:
+    type_name = str(decl["type"])
     if _scalar(type_name) not in SCALAR_TYPES:
         raise TypeDeclarationError(f"{context}: unsupported type {type_name!r}")
-    for key in ("items", "properties"):
-        if key in decl:
-            raise TypeDeclarationError(
-                f"{context}: `{key}` is only declarable on a {'list' if key == 'items' else 'map'}"
-            )
-    if "values" in decl and (
-        not isinstance(decl["values"], list)
-        or not decl["values"]
-        or any(not isinstance(v, str) for v in decl["values"])
-    ):
+    if "items" in decl:
+        raise TypeDeclarationError(f"{context}: `items` is only declarable on a list")
+    if "properties" in decl:
+        raise TypeDeclarationError(f"{context}: `properties` is only declarable on a map")
+    if "values" in decl and not _is_string_list(decl["values"]):
         raise TypeDeclarationError(f"{context}.values must be a nonempty list of strings")
+
+
+def _is_string_list(values: object) -> bool:
+    return isinstance(values, list) and bool(values) and all(isinstance(v, str) for v in values)
+
+
+_DECLARATION_VALIDATORS: dict[str, Callable[[Mapping[str, Any], str, bool], None]] = {
+    LIST: _validate_list_declaration,
+    MAP: _validate_map_declaration,
+}
 
 
 def is_container(decl: Mapping[str, Any]) -> bool:
@@ -212,35 +229,88 @@ class TypeDefect:
         return f"{self.field}: declared {self.declared}, got {self.actual} ({self.reason})"
 
 
+def _check_string(value: object, _decl: Mapping[str, Any]) -> str | None:
+    return None if isinstance(value, str) else "not a string"
+
+
+def _check_bool(value: object, _decl: Mapping[str, Any]) -> str | None:
+    return None if isinstance(value, bool) else "not a boolean"
+
+
+def _check_int(value: object, _decl: Mapping[str, Any]) -> str | None:
+    return None if isinstance(value, int) and not isinstance(value, bool) else "not an integer"
+
+
+def _check_float(value: object, _decl: Mapping[str, Any]) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "not a number"
+    return None if _as_float(value) is not None else "not a finite number"
+
+
+def _check_enum(value: object, decl: Mapping[str, Any]) -> str | None:
+    if not isinstance(value, str):
+        return "not a string"
+    allowed = decl.get("values")
+    return None if not allowed or value in allowed else f"not one of {allowed}"
+
+
+def _check_datetime(value: object, _decl: Mapping[str, Any]) -> str | None:
+    if isinstance(value, datetime) or (isinstance(value, str) and _iso(value, datetime)):
+        return None
+    return "not an ISO datetime"
+
+
+def _check_date(value: object, _decl: Mapping[str, Any]) -> str | None:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return None
+    return None if isinstance(value, str) and _iso(value, date) else "not an ISO date"
+
+
+def _check_duration(value: object, _decl: Mapping[str, Any]) -> str | None:
+    return None if isinstance(value, str) and _is_iso_duration(value) else "not ISO-8601"
+
+
+_SCALAR_CHECKS: dict[str, Callable[[object, Mapping[str, Any]], str | None]] = {
+    "string": _check_string,
+    "bool": _check_bool,
+    "int": _check_int,
+    "float": _check_float,
+    "enum": _check_enum,
+    "datetime": _check_datetime,
+    "date": _check_date,
+    "duration": _check_duration,
+}
+
+
 def _scalar_ok(type_name: str, value: object, decl: Mapping[str, Any]) -> str | None:
     """None when ``value`` is a valid ``type_name`` scalar, else the reason."""
-    kind = _scalar(type_name)
-    if kind == "string":
-        return None if isinstance(value, str) else "not a string"
-    if kind == "bool":
-        return None if isinstance(value, bool) else "not a boolean"
-    if kind == "int":
-        return None if isinstance(value, int) and not isinstance(value, bool) else "not an integer"
-    if kind == "float":
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return "not a number"
-        return None if math.isfinite(value) else "not a finite number"
-    if kind == "enum":
-        if not isinstance(value, str):
-            return "not a string"
-        allowed = decl.get("values")
-        return None if not allowed or value in allowed else f"not one of {allowed}"
-    if kind == "datetime":
-        if isinstance(value, datetime):
-            return None
-        return None if isinstance(value, str) and _iso(value, datetime) else "not an ISO datetime"
-    if kind == "date":
-        if isinstance(value, date) and not isinstance(value, datetime):
-            return None
-        return None if isinstance(value, str) and _iso(value, date) else "not an ISO date"
-    if kind == "duration":
-        return None if isinstance(value, str) and _DURATION.fullmatch(value) else "not ISO-8601"
-    return f"undeclarable type {type_name!r}"
+    check = _SCALAR_CHECKS.get(_scalar(type_name))
+    if check is None:
+        return f"undeclarable type {type_name!r}"
+    return check(value, decl)
+
+
+def _is_iso_duration(text: str) -> bool:
+    """An ISO-8601 duration: ``[-]P[nY][nM][nW][nD][T[nH][nM][n[.n]S]]``, one component at least."""
+    body = text.removeprefix("-")
+    if not body.startswith("P"):
+        return False
+    date_part, _, time_part = body[1:].partition("T")
+    if not date_part and not time_part:  # "P" and "PT" carry no component
+        return False
+    return _duration_units(date_part, "YMWD") and _duration_units(time_part, "HMS")
+
+
+def _duration_units(text: str, order: str) -> bool:
+    """Components of one duration part, each unit at most once and in ``order``."""
+    position, last = 0, -1
+    for match in _DURATION_UNIT.finditer(text):
+        index = order.find(match.group(2))
+        fractional = "." in match.group(1)
+        if match.start() != position or index <= last or (fractional and match.group(2) != "S"):
+            return False
+        position, last = match.end(), index
+    return position == len(text)
 
 
 def _iso(text: str, kind: type[date]) -> bool:
@@ -258,37 +328,44 @@ def value_defects(value: object, decl: Mapping[str, Any], path: str) -> list[Typ
     map value carries beyond its declared properties are not defects: the
     encoder drops them (:func:`encode_value`), as CEG drops undeclared keys.
     """
-    declared = describe(decl)
     if value is None:
-        if decl.get("required"):
-            return [TypeDefect(path, declared, "null", "required")]
-        return []
+        required = bool(decl.get("required"))
+        return [TypeDefect(path, describe(decl), "null", "required")] if required else []
     type_name = decl.get("type")
     if type_name == LIST:
-        if not isinstance(value, (list, tuple)):
-            return [TypeDefect(path, declared, actual_type(value), "not a list")]
-        items = decl.get("items", {})
-        defects: list[TypeDefect] = []
-        for index, member in enumerate(value):
-            if member is None:
-                defects.append(TypeDefect(f"{path}[{index}]", describe(items), "null", "null item"))
-            else:
-                defects.extend(value_defects(member, items, f"{path}[{index}]"))
-        return defects
+        return _list_defects(value, decl, path)
     if type_name == MAP:
-        if not isinstance(value, Mapping) or any(not isinstance(k, str) for k in value):
-            return [TypeDefect(path, declared, actual_type(value), "not a string-keyed map")]
-        defects = []
-        for prop in decl.get("properties", []):
-            name = prop["name"]
-            child = value.get(name)
-            if child is None and prop.get("required"):
-                defects.append(TypeDefect(f"{path}.{name}", describe(prop), "missing", "required"))
-                continue
-            defects.extend(value_defects(child, prop, f"{path}.{name}"))
-        return defects
+        return _map_defects(value, decl, path)
     reason = _scalar_ok(str(type_name), value, decl)
-    return [] if reason is None else [TypeDefect(path, declared, actual_type(value), reason)]
+    return [] if reason is None else [TypeDefect(path, describe(decl), actual_type(value), reason)]
+
+
+def _list_defects(value: object, decl: Mapping[str, Any], path: str) -> list[TypeDefect]:
+    if not isinstance(value, (list, tuple)):
+        return [TypeDefect(path, describe(decl), actual_type(value), "not a list")]
+    items = decl.get("items", {})
+    defects: list[TypeDefect] = []
+    for index, member in enumerate(value):
+        where = f"{path}[{index}]"
+        if member is None:
+            defects.append(TypeDefect(where, describe(items), "null", "null item"))
+        else:
+            defects.extend(value_defects(member, items, where))
+    return defects
+
+
+def _map_defects(value: object, decl: Mapping[str, Any], path: str) -> list[TypeDefect]:
+    if not isinstance(value, Mapping) or any(not isinstance(k, str) for k in value):
+        return [TypeDefect(path, describe(decl), actual_type(value), "not a string-keyed map")]
+    defects: list[TypeDefect] = []
+    for prop in decl.get("properties", []):
+        where = f"{path}.{prop['name']}"
+        child = value.get(prop["name"])
+        if child is None and prop.get("required"):
+            defects.append(TypeDefect(where, describe(prop), "missing", "required"))
+        else:
+            defects.extend(value_defects(child, prop, where))
+    return defects
 
 
 def encode_value(value: Any, decl: Mapping[str, Any]) -> Any:
@@ -313,8 +390,18 @@ def encode_value(value: Any, decl: Mapping[str, Any]) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if _scalar(str(type_name)) == "float" and isinstance(value, int):
-        return float(value)
+        converted = _as_float(value)
+        return value if converted is None else converted
     return value
+
+
+def _as_float(value: int | float) -> float | None:
+    """``value`` as a finite float, else None (an int too large for a float)."""
+    try:
+        converted = float(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return converted if math.isfinite(converted) else None
 
 
 def node_properties(spec: Mapping[str, Any], label: str) -> list[dict[str, Any]] | None:

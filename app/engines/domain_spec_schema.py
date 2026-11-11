@@ -219,35 +219,43 @@ def _sync_row_contract(
     child's ``targetid``; a taxonomy-edge field is a scalar or a list of scalars.
     """
     row = {n: p for n, p in declared.items() if p.get("evidenceonly") is not True}
-    identifier = endpoint["idproperty"]
-    if (
-        identifier not in row
-        or not is_scalar_or_scalar_list(row[identifier])
-        or (row[identifier].get("type") == "list")
-    ):
-        raise ValueError(f"{path}: idproperty {identifier} must be a declared scalar row property")
     children = {c["field"]: c for c in endpoint.get("childsync", [])}
+    _check_row_id(row, endpoint["idproperty"], path)
+    _check_wire_shapes(row, children, path)
+    for name, child in children.items():
+        _check_childsync_field(row.get(name), name, child["targetid"], path)
+    for edge in endpoint.get("taxonomyedges", []):
+        _check_taxonomy_field(row.get(edge["field"]), edge["field"], path)
+
+
+def _check_row_id(row: dict[str, dict[str, Any]], identifier: str, path: str) -> None:
+    decl = row.get(identifier)
+    if decl is None or decl.get("type") in {"list", "map"}:
+        raise ValueError(f"{path}: idproperty {identifier} must be a declared scalar row property")
+
+
+def _check_wire_shapes(row: dict[str, dict[str, Any]], children: dict[str, Any], path: str) -> None:
     for name, prop in row.items():
         if is_container(prop) and name not in children:
             raise ValueError(
                 f"{path}: {name} is declared {describe(prop)}; a map shape is valid "
                 "only as the field of a childsync entry"
             )
-    for name, child in children.items():
-        container = row.get(name)
-        if container is None or not is_container(container):
-            raise ValueError(f"{path}: childsync field {name} must be a declared map or list<map>")
-        element = container["items"] if container["type"] == "list" else container
-        if child["targetid"] not in {p["name"] for p in element["properties"]}:
-            raise ValueError(
-                f"{path}: childsync field {name} items must declare {child['targetid']}"
-            )
-    for edge in endpoint.get("taxonomyedges", []):
-        edge_field = row.get(edge["field"])
-        if edge_field is None or not is_scalar_or_scalar_list(edge_field):
-            raise ValueError(
-                f"{path}: taxonomy field {edge['field']} must be a declared scalar or list<scalar>"
-            )
+
+
+def _check_childsync_field(
+    container: dict[str, Any] | None, name: str, targetid: str, path: str
+) -> None:
+    if container is None or not is_container(container):
+        raise ValueError(f"{path}: childsync field {name} must be a declared map or list<map>")
+    element = container["items"] if container["type"] == "list" else container
+    if targetid not in {p["name"] for p in element["properties"]}:
+        raise ValueError(f"{path}: childsync field {name} items must declare {targetid}")
+
+
+def _check_taxonomy_field(decl: dict[str, Any] | None, name: str, path: str) -> None:
+    if decl is None or not is_scalar_or_scalar_list(decl):
+        raise ValueError(f"{path}: taxonomy field {name} must be a declared scalar or list<scalar>")
 
 
 def _sync(value: object, nodes: dict[str, dict[str, dict[str, Any]]]) -> None:

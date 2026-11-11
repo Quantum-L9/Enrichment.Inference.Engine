@@ -92,13 +92,7 @@ def validate_response(
             if value is None:
                 continue
 
-            items: Mapping[str, Any] | None = None
-            if isinstance(declared, Mapping):
-                field_type_str = str(declared.get("type", ""))
-                raw_items = declared.get("items")
-                items = raw_items if isinstance(raw_items, Mapping) else None
-            else:
-                field_type_str = declared
+            field_type_str, items = _declared_type(declared)
             expected = TYPE_MAP.get(field_type_str.lower())
             if expected is None:
                 # Unknown type — accept as-is
@@ -129,6 +123,16 @@ def validate_response(
     return normalized
 
 
+def _declared_type(
+    declared: str | Mapping[str, Any],
+) -> tuple[str, Mapping[str, Any] | None]:
+    """A schema value as (type name, declared list items): a name or a typed declaration."""
+    if not isinstance(declared, Mapping):
+        return declared, None
+    items = declared.get("items")
+    return str(declared.get("type", "")), items if isinstance(items, Mapping) else None
+
+
 def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) -> Any:
     """Coerce a value to the expected type.
 
@@ -144,19 +148,22 @@ def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) 
         return bool(value)
 
     if expected is list:
-        if isinstance(value, str):
-            members: list[Any] = [s for s in value.split(",") if s.strip()]
-        elif isinstance(value, (list, tuple)):
-            members = [v for v in value if v]
-        else:
-            members = [value]
-        return _dedup([_coerce_member(v, items) for v in members])
+        return _dedup([_coerce_member(v, items) for v in _list_members(value)])
 
     if expected in (int, float):
         return expected(value)
 
     # str
     return str(value).strip()[:4096]
+
+
+def _list_members(value: Any) -> list[Any]:
+    """The members a list field carries: CSV text split, empties dropped."""
+    if isinstance(value, str):
+        return [s for s in value.split(",") if s.strip()]
+    if isinstance(value, (list, tuple)):
+        return [v for v in value if v]
+    return [value]
 
 
 def _coerce_member(value: Any, items: Mapping[str, Any] | None) -> Any:
@@ -182,19 +189,23 @@ def _coerce_map(value: Mapping[str, Any], decl: Mapping[str, Any] | None) -> dic
     result: dict[str, Any] = {}
     for prop in properties:
         name = prop.get("name") if isinstance(prop, Mapping) else None
-        if not isinstance(name, str) or value.get(name) is None:
-            continue
-        expected = TYPE_MAP.get(str(prop.get("type", "")).lower())
-        nested = prop.get("items") if isinstance(prop.get("items"), Mapping) else None
-        if str(prop.get("type", "")).lower() == "map":
-            if not isinstance(value[name], Mapping):
-                raise TypeError(f"declared map property {name} is not a mapping")
-            result[name] = _coerce_map(value[name], prop)
-        elif expected is None:
-            result[name] = value[name]
-        else:
-            result[name] = _coerce(value[name], expected, nested)
+        if isinstance(name, str) and value.get(name) is not None:
+            result[name] = _coerce_property(value[name], prop)
     return result
+
+
+def _coerce_property(value: Any, prop: Mapping[str, Any]) -> Any:
+    """One declared property of a map member, by its declared type."""
+    type_name = str(prop.get("type", "")).lower()
+    if type_name == "map":
+        if not isinstance(value, Mapping):
+            raise TypeError(f"declared map property {prop.get('name')} is not a mapping")
+        return _coerce_map(value, prop)
+    expected = TYPE_MAP.get(type_name)
+    if expected is None:
+        return value
+    nested = prop.get("items")
+    return _coerce(value, expected, nested if isinstance(nested, Mapping) else None)
 
 
 def _dedup(members: list[Any]) -> list[Any]:

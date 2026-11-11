@@ -646,18 +646,24 @@ def _infer_scalar(values: list[Any]) -> str | None:
 def _infer_items(samples: list[Any]) -> dict[str, Any]:
     """Item declaration for a list field from its sample lists (see _typed_definition)."""
     members = [m for sample in samples if isinstance(sample, list) for m in sample if m is not None]
-    if members and all(
-        isinstance(m, dict) and m and all(isinstance(k, str) for k in m) for m in members
-    ):
-        keys = sorted({k for m in members for k in m})
-        properties = []
-        for key in keys:
-            scalar = _infer_scalar([m[key] for m in members if m.get(key) is not None])
-            if scalar is None or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-                return {"type": "string"}
-            properties.append({"name": key, "type": scalar})
-        return {"type": "map", "properties": properties}
+    if members and all(_is_named_map(m) for m in members):
+        return _infer_map_items(members)
     return {"type": _infer_scalar(members) or "string"}
+
+
+def _is_named_map(member: Any) -> bool:
+    return isinstance(member, dict) and bool(member) and all(isinstance(k, str) for k in member)
+
+
+def _infer_map_items(members: list[dict[str, Any]]) -> dict[str, Any]:
+    """A map item declaration, or string when a key or value is not declarable."""
+    properties = []
+    for key in sorted({k for m in members for k in m}):
+        scalar = _infer_scalar([m[key] for m in members if m.get(key) is not None])
+        if scalar is None or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            return {"type": "string"}
+        properties.append({"name": key, "type": scalar})
+    return {"type": "map", "properties": properties}
 
 
 def _apply_node_properties(
