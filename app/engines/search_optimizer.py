@@ -16,7 +16,8 @@ Integration:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, replace
+from copy import copy
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
@@ -181,18 +182,17 @@ def cap_variations(config: SonarConfig, cap: int) -> SonarConfig:
     capped = min(config.variations, max(cap, 0))
     if capped == config.variations:
         return config
-    return replace(
-        config,
-        variations=capped,
-        estimated_cost_per_call=estimate_call_cost(
-            config.model, config.search_context_size, config.max_tokens, capped
-        ),
-        resolution_reason=(
-            f"{config.resolution_reason} capped×{capped}"
-            if config.resolution_reason
-            else f"capped×{capped}"
-        ),
+    bounded = copy(config)
+    bounded.variations = capped
+    bounded.estimated_cost_per_call = estimate_call_cost(
+        config.model, config.search_context_size, config.max_tokens, capped
     )
+    bounded.resolution_reason = (
+        f"{config.resolution_reason} capped×{capped}"
+        if config.resolution_reason
+        else f"capped×{capped}"
+    )
+    return bounded
 
 
 # ──────────────────────────────────────────────
