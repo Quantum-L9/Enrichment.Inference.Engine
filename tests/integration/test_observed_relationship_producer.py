@@ -30,7 +30,9 @@ The processes come from Constellation.Gate's seam harness
 (``constellation-gate/tests/e2e/seam/harness.py``), imported from the sibling
 checkout. The test is skipped when that layout, a CEG checkout with a ``.venv``,
 or a disposable Neo4j (``L9_SEAM_NEO4J_URI`` / ``L9_SEAM_NEO4J_PASSWORD``) is not
-available: the same environment condition the harness itself skips on.
+available: the same environment condition the harness itself skips on. Under
+``EIE_REQUIRE_INTEGRATION=1`` (CI's ``integration`` job) each of those skips is a
+failure instead.
 Integration fixtures run ``DETACH DELETE`` on the two tenant databases they
 create; point them only at a disposable instance.
 """
@@ -57,6 +59,7 @@ from app.engines.observed_association_contract import (
     mapping_fingerprint,
     mirror_drift,
 )
+from tests.conftest import skip_or_fail_unavailable
 
 pytestmark = pytest.mark.integration
 
@@ -262,12 +265,12 @@ def harness() -> ModuleType:
         or gate_python is None
         or not (CEG_ROOT / ".venv" / "bin" / "python").exists()
     ):
-        pytest.skip(
+        skip_or_fail_unavailable(
             "synthetic E2E needs sibling Constellation.Gate (seam harness + .venv) and "
             "Cognitive.Engine.Graphs (.venv) checkouts, or L9_SEAM_GATE_ROOT / L9_SEAM_CEG_ROOT"
         )
     if not NEO4J_PASSWORD:
-        pytest.skip(
+        skip_or_fail_unavailable(
             "synthetic E2E needs a disposable Neo4j: set L9_SEAM_NEO4J_URI / L9_SEAM_NEO4J_PASSWORD"
         )
     return module
@@ -331,7 +334,7 @@ class Seam:
         os.environ.setdefault("L9_SEAM_BASE_PORT", "19400")
         ctx = harness.build_context(receipt_dir)
         if ctx is None:
-            pytest.skip("seam harness could not resolve EIE/CEG peers")
+            skip_or_fail_unavailable("seam harness could not resolve EIE/CEG peers")
         ctx.gate_python = _gate_python()
         ctx.eie = harness.Peer("eie", EIE_ROOT, EIE_ROOT / ".venv" / "bin" / "python", ctx.eie.port)
         ctx.ceg = harness.Peer("ceg", CEG_ROOT, CEG_ROOT / ".venv" / "bin" / "python", ctx.ceg.port)

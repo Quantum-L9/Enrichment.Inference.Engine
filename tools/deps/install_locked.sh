@@ -3,6 +3,7 @@
 #
 #   bash tools/deps/install_locked.sh full     # project (editable) + every group
 #   bash tools/deps/install_locked.sh runtime  # [project] dependencies + licenses (Dockerfile.prod)
+#   bash tools/deps/install_locked.sh group N  # one single-purpose dependency group only (release)
 #   bash tools/deps/install_locked.sh uv       # uv only (for `uv lock --check`)
 #
 # `uv sync --locked` installs exactly the versions uv.lock records and verifies
@@ -33,11 +34,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PYTHON="${PYTHON:-python}"
 
+# Single-purpose groups: installed alone by the one workflow that needs them,
+# never part of the development profile.
+SINGLE_PURPOSE_GROUPS=(release)
+
 case "${1:-}" in
-  full) args=(--all-groups) ;;
+  full)
+    args=(--all-groups)
+    for group in "${SINGLE_PURPOSE_GROUPS[@]}"; do args+=(--no-group "$group"); done
+    ;;
   runtime) args=(--no-default-groups --group licenses --no-install-project) ;;
+  group)
+    group="${2:-}"
+    if [[ ! " ${SINGLE_PURPOSE_GROUPS[*]} " =~ " ${group} " ]]; then
+      echo "usage: $0 group <${SINGLE_PURPOSE_GROUPS[*]// /|}>" >&2; exit 2
+    fi
+    # --only-group installs that group alone: no project, no default groups.
+    args=(--only-group "$group")
+    ;;
   uv) args=() ;;
-  *) echo "usage: $0 full|runtime|uv" >&2; exit 2 ;;
+  *) echo "usage: $0 full|runtime|group <name>|uv" >&2; exit 2 ;;
 esac
 
 # Keep --require-hashes on this command line. Scorecard's pin probe does not

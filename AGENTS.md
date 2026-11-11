@@ -378,3 +378,19 @@ Durable, non-obvious notes for running this service in the Cursor Cloud VM. The 
 > (`L9_CI_CORE_REF` overrides it). A Core version bump needs no edit here.
 > A plain `uv sync` without `--inexact` removes them.
 > `tests/unit/test_core_toolchain_pins.py` fails on any declaration.
+
+> **2026-11-11 correction (additive; append-only):** EIE declares Quantum-L9
+> Core's Repository Execution V2 contract (`l9.repo-execution/v2`, facade
+> `make-v1`; issue #253). The root `Makefile` is now Core's generated facade,
+> reproduced byte-for-byte from `l9-ci-core` `tools/l9_repo/facades/make-v1.mk`.
+> Never edit it: regenerate it with `python3 -m tools.l9_repo --workspace <EIE>
+> reconcile` from a Core checkout. Every recipe lives in the repository-owned
+> `Repo.mk`, which implements `repo-setup` / `repo-validate` / `repo-check` /
+> `repo-test` and must not define `help`, `setup`, `validate`, `check` or
+> `test`. The required org check `Analyze (central Core)` validates the
+> contract, the facade and the `Repo.mk` ABI, then runs `make setup`, `make
+> validate`, `make check`, `make test` in order and stops at the first failure.
+> No leaf may need Docker, a database, a secret or the private CEG checkout.
+> `make test` is now the full suite with the 71% coverage floor (C-15); the
+> pre-V2 quick run is `make test-quick`. Wherever a line above says
+> "the `Makefile`" selects or defines a target, read `Repo.mk`.

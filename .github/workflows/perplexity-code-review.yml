@@ -84,8 +84,10 @@ jobs:
           cache: pip
 
       - name: Install Dependencies
+        # httpx, pyyaml, pydantic and pydantic-settings are runtime dependencies:
+        # installed hash-verified from uv.lock, never by an unhashed install.
         run: |
-          pip install "httpx>=0.27.0" pyyaml pydantic pydantic-settings
+          bash tools/deps/install_locked.sh runtime
 
       - name: Get PR Diff
         id: diff

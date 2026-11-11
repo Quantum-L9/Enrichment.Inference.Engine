@@ -16,7 +16,8 @@ this is the Redis replay layer in front of it.
 Redis comes from REDIS_URL, as the CI `test` job provides it (pr-pipeline.yml,
 `redis:7-alpine` service). Each test uses fresh random tenants and keys and a
 short TTL, so nothing is flushed and parallel workers cannot collide. Where no
-Redis answers, the module skips: a deterministic substitute is exercised by
+Redis answers, the module skips (fails under EIE_REQUIRE_INTEGRATION=1, as in
+CI's `integration` job): a deterministic substitute is exercised by
 tests/unit/test_idempotency_store.py, so the skip hides no coverage of the
 store's own logic.
 """
@@ -39,6 +40,7 @@ import redis.asyncio as redis_async
 from app.engines import handlers
 from app.services.idempotency import IdempotencyStore
 from app.services.perplexity_client import SonarResponse
+from tests.conftest import skip_or_fail_unavailable
 
 pytestmark = [pytest.mark.integration]
 
@@ -86,7 +88,7 @@ async def store():
     try:
         await probe.ping()
     except Exception as exc:  # noqa: BLE001 — any failure means no usable Redis
-        pytest.skip(f"no Redis at REDIS_URL ({type(exc).__name__}); CI provides one")
+        skip_or_fail_unavailable(f"no Redis at REDIS_URL ({type(exc).__name__}); CI provides one")
     finally:
         await probe.aclose()
 

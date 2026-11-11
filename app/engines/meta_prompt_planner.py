@@ -13,7 +13,7 @@ derived-field output per Sonar token spent.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any, Literal
 
 import structlog
@@ -22,6 +22,7 @@ from app.utils.safe_convert import safe_float
 
 from ..models.loop_schemas import PassContext
 from ..services.domain_yaml_reader import DomainSpec
+from .convergence.confidence_tracker import normalize_confidence, value_present
 
 logger = structlog.get_logger("meta_prompt_planner")
 
@@ -107,9 +108,13 @@ class MetaPromptPlanner:
         mode = self._determine_mode(pass_number, uncertainty_score=5.0)
         priority_fields = domain_hints.get("priority_fields", [])
         if not priority_fields:
-            # Identify missing fields from entity
+            # Identify missing fields from entity, at the planner's own bar.
             all_fields = set(entity.keys()) | set(known_fields.keys())
-            priority_fields = [f for f in all_fields if known_fields.get(f, 0) < 0.8]
+            priority_fields = sorted(
+                f
+                for f in all_fields
+                if normalize_confidence(known_fields.get(f)) < self.confidence_threshold
+            )
 
         return PromptPlan(
             mode=mode,
@@ -126,6 +131,9 @@ class MetaPromptPlanner:
         pass_context: PassContext,
         field_confidences: dict[str, float],
         uncertainty_score: float,
+        required_fields: Sequence[str] | None = None,
+        field_thresholds: Mapping[str, float] | None = None,
+        deciding_fields: Collection[str] | None = None,
     ) -> PromptPlan:
         """
         Plan enrichment strategy for next convergence pass.
@@ -134,14 +142,43 @@ class MetaPromptPlanner:
             entity_state: Current entity field values
             pass_context: Pass number, budget remaining, previous results
             field_confidences: Per-field confidence scores (0.0-1.0)
-            uncertainty_score: Aggregate uncertainty metric
+            uncertainty_score: Operational uncertainty U_action (D-9 v2): the
+                weakest required field's deficit. It sets the pass-level
+                variation budget and, when no field is unresolved, the mode.
+            required_fields: The caller's explicit schema, if any. Each such
+                field is a target until it is ready, even when the entity does
+                not carry it yet, and leads the target list.
+            field_thresholds: Consumer per-field readiness bars. A field without
+                an entry uses the planner's confidence threshold.
+            deciding_fields: Without a schema, the tracked fields that decide
+                convergence (inference-derived values excluded). Any of them
+                still unresolved keeps the pass targeted.
 
         Returns:
             PromptPlan with mode, priority fields, KB fragments, variation budget
         """
-        mode = self._determine_mode(pass_context.pass_number, uncertainty_score)
-        missing_fields = self._identify_missing_fields(entity_state, field_confidences)
-        priority_fields = self._hints_first(self._rank_fields(missing_fields, mode))
+        required = list(dict.fromkeys(required_fields or []))
+        thresholds = dict(field_thresholds or {})
+        missing_fields = self._identify_missing_fields(
+            entity_state,
+            field_confidences,
+            required_fields=required,
+            field_thresholds=thresholds,
+        )
+        gap_names = {gap.field_name for gap in missing_fields}
+        has_required_gaps = any(name in gap_names for name in required)
+        has_deciding_gaps = not required and any(
+            name in gap_names for name in (deciding_fields or ())
+        )
+        mode = self._determine_mode(
+            pass_context.pass_number,
+            uncertainty_score,
+            has_required_gaps=has_required_gaps,
+            has_deciding_gaps=has_deciding_gaps,
+        )
+        priority_fields = self._required_first(
+            self._hints_first(self._rank_fields(missing_fields, mode)), required
+        )
         kb_fragments = self._select_kb_fragments(priority_fields, mode)
         variation_budget = self._compute_variation_budget(
             uncertainty_score, pass_context.budget_remaining
@@ -172,37 +209,68 @@ class MetaPromptPlanner:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _determine_mode(
-        self, pass_number: int, uncertainty_score: float
+        self,
+        pass_number: int,
+        uncertainty_score: float,
+        *,
+        has_required_gaps: bool = False,
+        has_deciding_gaps: bool = False,
     ) -> Literal["discovery", "targeted", "verification"]:
         """
-        Select enrichment mode based on pass number and uncertainty.
+        Select enrichment mode (D-9 v2 precedence).
 
-        - Pass 1: Always discovery (broad research)
-        - Pass 2+: Targeted if uncertainty > uncertainty_threshold (2.0), else verification
+        - Pass 1: discovery (broad research)
+        - Pass 2+, an explicitly required field still unresolved: targeted
+        - Pass 2+, no schema, a deciding field still unresolved: targeted
+        - Pass 2+, U_action > uncertainty_threshold (2.0): targeted
+        - Otherwise: verification
+
+        A field is unresolved when its value is missing or its confidence is
+        below its own threshold, so a low U_action cannot hide a stricter
+        consumer bar (confidence 0.90 against a 0.95 threshold is U_action 1,
+        but the field is still a target).
         """
         if pass_number == 1:
             return "discovery"
-        elif uncertainty_score > self.uncertainty_threshold:
+        if has_required_gaps or has_deciding_gaps:
             return "targeted"
-        else:
-            return "verification"
+        if uncertainty_score > self.uncertainty_threshold:
+            return "targeted"
+        return "verification"
+
+    def _threshold_for(self, field_name: str, field_thresholds: Mapping[str, float]) -> float:
+        """A field's readiness bar: its consumer threshold, else the planner's."""
+        return field_thresholds.get(field_name, self.confidence_threshold)
 
     def _identify_missing_fields(
-        self, entity_state: dict[str, Any], field_confidences: dict[str, float]
+        self,
+        entity_state: dict[str, Any],
+        field_confidences: dict[str, float],
+        required_fields: Sequence[str] = (),
+        field_thresholds: Mapping[str, float] | None = None,
     ) -> list[FieldGap]:
         """
-        Identify fields that are NULL or low-confidence.
+        Identify fields that are missing or below their own confidence threshold.
+
+        Candidates are the entity's fields, the domain hint fields and the
+        explicitly required fields, so a required or hinted field the entity
+        does not carry yet is a gap (F-019). A value of None or "" is missing;
+        0 and False are values. Confidence is normalized (absent, non-numeric or
+        non-finite counts as 0) and compared with the field's consumer
+        threshold, else the planner's.
 
         Returns list of FieldGap objects with field name, current value, confidence.
         """
+        thresholds = field_thresholds or {}
         gaps: list[FieldGap] = []
-        # Hint fields the entity does not carry yet are gaps too (F-019).
         candidates = dict(entity_state)
-        for hinted in self.priority_fields:
-            candidates.setdefault(hinted, None)
+        for named in (*self.priority_fields, *required_fields):
+            candidates.setdefault(named, None)
         for field_name, value in candidates.items():
-            confidence = field_confidences.get(field_name, 0.0)
-            is_missing = value is None or value == "" or confidence < self.confidence_threshold
+            confidence = normalize_confidence(field_confidences.get(field_name))
+            is_missing = not value_present(value) or confidence < self._threshold_for(
+                field_name, thresholds
+            )
 
             if is_missing:
                 gaps.append(
@@ -274,6 +342,16 @@ class MetaPromptPlanner:
         hinted = [name for name in dict.fromkeys(self.priority_fields) if name in gaps]
         return hinted + [name for name in ranked if name not in set(hinted)]
 
+    @staticmethod
+    def _required_first(ranked: list[str], required: Sequence[str]) -> list[str]:
+        """Unresolved required fields before optional gaps; ranking kept within each.
+
+        The plan keeps at most ten targets, so an optional gap must never push a
+        required one out of the list.
+        """
+        wanted = set(required)
+        return [n for n in ranked if n in wanted] + [n for n in ranked if n not in wanted]
+
     def _select_kb_fragments(self, priority_fields: list[str], mode: str) -> list[str]:
         """
         Select KB fragment IDs relevant to priority fields.
@@ -286,12 +364,15 @@ class MetaPromptPlanner:
 
     def _compute_variation_budget(self, uncertainty_score: float, budget_remaining: int) -> int:
         """
-        Compute optimal Sonar variation count based on uncertainty and budget.
+        Compute the pass-level Sonar variation count from U_action and budget.
 
-        - High uncertainty (> 5.0): 5 variations
-        - Medium uncertainty (2.0-5.0): 3 variations
-        - Low uncertainty (< 2.0): 2 variations
+        - U_action > 5.0: 5 variations
+        - 2.0 < U_action <= 5.0: 3 variations
+        - U_action <= 2.0: 2 variations
         - Budget exhausted: 1 variation minimum
+
+        These are planning values: the loop still caps them at the request's
+        max_variations, and token budget and deadline still bound the pass.
         """
         if budget_remaining < 1000:
             return 1
@@ -362,7 +443,7 @@ class MetaPromptPlanner:
     ) -> str:
         """Generate human-readable reasoning for this plan."""
         top_fields = ", ".join(priority_fields[:5])
-        return f"Mode: {mode} | Uncertainty: {uncertainty_score:.2f} | Top fields: {top_fields}"
+        return f"Mode: {mode} | U_action: {uncertainty_score:.2f} | Top fields: {top_fields}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

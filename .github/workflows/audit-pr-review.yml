@@ -54,8 +54,9 @@ jobs:
           cache: 'pip'
 
       - name: Install Dependencies
+        # Hash-verified from uv.lock (pyyaml is a runtime dependency).
         run: |
-          pip install pyyaml
+          bash tools/deps/install_locked.sh runtime
 
       - name: Run Audit Engine
         id: audit

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -37,9 +38,23 @@ def _read_constitution() -> dict[str, Any]:
     return _load_yaml(CONSTITUTION_PATH)
 
 
-def _git_changed_files(base: str, head: str) -> list[str]:
+# A revision is a SHA, a ref name, or a ref with ~N / ^N suffixes. It never starts
+# with "-" (it would be parsed as an option) and carries no shell or range syntax.
+_GIT_REVISION_RE = re.compile(r"\w[\w./~^-]{0,254}", re.ASCII)
+
+
+def validate_git_revision(value: str) -> str:
+    """Return ``value`` when it is a plain git revision; raise ``ValueError`` otherwise."""
+    if not isinstance(value, str) or not _GIT_REVISION_RE.fullmatch(value) or ".." in value:
+        raise ValueError(f"invalid git revision: {value!r}")
+    return value
+
+
+def git_changed_files(base: str, head: str) -> list[str]:
+    """Files changed between two validated revisions (no option or range injection)."""
+    revisions = [validate_git_revision(base), validate_git_revision(head)]
     output = subprocess.check_output(
-        ["git", "diff", "--name-only", base, head],
+        ["git", "diff", "--name-only", "--end-of-options", *revisions, "--"],
         cwd=REPO_ROOT,
         text=True,
     )
@@ -167,6 +182,12 @@ def verify_attestation() -> tuple[bool, list[str]]:
     return len(errors) == 0, errors
 
 
+def declared_gate_commands() -> frozenset[str]:
+    """Every command declared by the CI gate contract; the only commands a runner may run."""
+    spec = _load_yaml(CI_GATE_PATH)
+    return frozenset(command for gate in spec["gates"].values() for command in gate["commands"])
+
+
 def select_gates(changed_files: list[str]) -> GateSelection:
     spec = _load_yaml(CI_GATE_PATH)
     selected_ids: list[str] = []
@@ -184,10 +205,7 @@ def select_gates(changed_files: list[str]) -> GateSelection:
 def build_review_signal(changed_files: list[str]) -> tuple[bool, str]:
     policy = _load_yaml(REVIEW_POLICY_PATH)
     fail = False
-    lines: list[str] = []
-    lines.append("## L9 Contract Control Review Signal")
-    lines.append("")
-    lines.append("### Changed files")
+    lines: list[str] = ["## L9 Contract Control Review Signal", "", "### Changed files"]
     for path in changed_files:
         lines.append(f"- `{path}`")
 
@@ -220,10 +238,12 @@ def build_review_signal(changed_files: list[str]) -> tuple[bool, str]:
         and not companion_changed
     ):
         fail = True
-        lines.append("")
-        lines.append("### Blocking finding")
-        lines.append(
-            "- contract-bound files changed without companion contract/test/control updates"
+        lines.extend(
+            [
+                "",
+                "### Blocking finding",
+                "- contract-bound files changed without companion contract/test/control updates",
+            ]
         )
 
     if policy["review_signal"]["fail_if_required_companion_missing"] and contract_bound:
@@ -294,7 +314,7 @@ def _resolve_changed_files(args: argparse.Namespace) -> list[str]:
     if getattr(args, "files", None):
         return [path for path in args.files if path]
     if getattr(args, "base", None) and getattr(args, "head", None):
-        return _git_changed_files(args.base, args.head)
+        return git_changed_files(args.base, args.head)
     return []
 
 

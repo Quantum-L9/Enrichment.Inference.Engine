@@ -331,7 +331,8 @@ def _install_revision(
         _write_file(stage_fd, "spec.yaml", spec_bytes)
         _write_file(stage_fd, "receipt.json", _json_bytes(receipt))
         os.fsync(stage_fd)
-        os.fchmod(stage_fd, 0o555)
+        # Read/traverse for owner and group only; no write bit, nothing for others.
+        os.fchmod(stage_fd, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP)
         os.rename(staging, sha256, src_dir_fd=revisions_fd, dst_dir_fd=revisions_fd)
         installed = True
         os.fsync(revisions_fd)

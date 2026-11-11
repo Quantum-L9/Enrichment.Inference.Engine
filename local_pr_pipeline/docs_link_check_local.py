@@ -35,7 +35,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
-EXTERNAL_PREFIXES = ("http://", "https://", "mailto:", "tel:", "//")
+# Link targets with these URI schemes are external and skipped; nothing is fetched,
+# so no scheme here is ever used as a transport.
+EXTERNAL_SCHEMES = frozenset({"http", "https", "mailto", "tel"})
+NETWORK_PATH_PREFIX = "//"
+
+
+def _is_external(target: str) -> bool:
+    scheme, separator, _ = target.partition(":")
+    return target.startswith(NETWORK_PATH_PREFIX) or (
+        bool(separator) and scheme in EXTERNAL_SCHEMES
+    )
 
 
 def _default_targets() -> list[Path]:
@@ -47,8 +57,19 @@ def _resolve_targets(args_paths: list[str], scan_all: bool) -> list[Path]:
     if scan_all:
         return sorted(p for p in REPO_ROOT.rglob("*.md") if ".git" not in p.parts)
     if args_paths:
-        return [Path(p) if Path(p).is_absolute() else REPO_ROOT / p for p in args_paths]
+        return [_confined_path(p) for p in args_paths]
     return _default_targets()
+
+
+def _confined_path(raw: str) -> Path:
+    """Resolve a CLI path and refuse any location outside the repository root."""
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = REPO_ROOT / candidate
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(REPO_ROOT):
+        raise ValueError(f"path is outside the repository: {raw}")
+    return resolved
 
 
 def _check_file(md_path: Path) -> list[str]:
@@ -56,7 +77,7 @@ def _check_file(md_path: Path) -> list[str]:
     text = md_path.read_text(encoding="utf-8", errors="ignore")
     for target in LINK_RE.findall(text):
         raw = target.strip()
-        if not raw or raw.startswith(EXTERNAL_PREFIXES) or raw.startswith("#"):
+        if not raw or _is_external(raw) or raw.startswith("#"):
             continue
         path_part = raw.split("#", 1)[0].strip()
         if not path_part:
@@ -77,7 +98,12 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="Walk the whole repo tree")
     args = parser.parse_args()
 
-    targets = [p for p in _resolve_targets(args.paths, args.all) if p.is_file()]
+    try:
+        resolved = _resolve_targets(args.paths, args.all)
+    except ValueError as exc:
+        print(f"❌ {exc}")
+        return 2
+    targets = [p for p in resolved if p.is_file()]
     if not targets:
         print("✅ No markdown files to check")
         return 0

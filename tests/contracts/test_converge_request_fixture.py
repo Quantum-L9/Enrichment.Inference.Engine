@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from app.models.schemas import EnrichRequest
-from app.services.odoo_gate_converge import is_odoo_compat_converge_payload, odoo_entity_ref
 
 FIXTURE = Path(__file__).resolve().parents[2] / "contracts" / "converge_request.json"
 
@@ -45,8 +44,11 @@ def test_fixture_carries_the_odoo_envelope(payload: dict) -> None:
 
 
 @pytest.mark.unit
-def test_fixture_is_not_diverted_to_the_compatibility_path(payload: dict) -> None:
-    assert is_odoo_compat_converge_payload(payload) is False
+def test_fixture_carries_identity_inside_the_canonical_entity(payload: dict) -> None:
+    """The retired compat dialect put identity at the top level; the live payload never does."""
+    assert isinstance(payload["entity"], dict)
+    assert "entity_snapshot" not in payload
+    assert "entity_id" not in payload
 
 
 @pytest.mark.unit
@@ -59,7 +61,5 @@ def test_fixture_validates_as_the_canonical_enrich_request(payload: dict) -> Non
     assert request.entity["name"] == "Acme Recycling"
     assert request.object_type == "plasticos"
     assert request.max_variations == 5
-    # The canonical branch keeps `entity` verbatim; the compat resolver must
-    # NOT claim this payload (that was the lossy routing the audit found).
-    assert odoo_entity_ref(payload) is None
+    # The canonical branch keeps `entity` verbatim, Odoo alias included.
     assert request.entity["_odoo_entity_id"] == "res.partner:55"

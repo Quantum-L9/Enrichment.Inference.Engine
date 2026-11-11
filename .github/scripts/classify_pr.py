@@ -11,6 +11,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -78,13 +79,23 @@ def _event() -> dict[str, object]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+# Event payloads are file content: only a full hex object id may reach git argv.
+_COMMIT_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def _commit_sha(value: object) -> str:
+    """Return ``value`` when it is a full commit SHA, else "" (treated as missing)."""
+    text = str(value or "")
+    return text if _COMMIT_SHA_RE.fullmatch(text) else ""
+
+
 def _nested_sha(container: object, *keys: str) -> str:
     current = container
     for key in keys:
         if not isinstance(current, dict):
             return ""
         current = current.get(key)
-    return str(current or "")
+    return _commit_sha(current)
 
 
 def _changed_files(event: dict[str, object]) -> tuple[list[str], bool]:
@@ -95,18 +106,40 @@ def _changed_files(event: dict[str, object]) -> tuple[list[str], bool]:
         head_sha = _nested_sha(event, "pull_request", "head", "sha")
         if base_sha and head_sha:
             try:
-                _run(["git", "fetch", "--no-tags", "--depth=100", "origin", base_sha, head_sha])
-                changed = _run(["git", "diff", "--name-only", f"{base_sha}...{head_sha}"])
+                _run(
+                    [
+                        "git",
+                        "fetch",
+                        "--no-tags",
+                        "--depth=100",
+                        "--end-of-options",
+                        "origin",
+                        base_sha,
+                        head_sha,
+                    ]
+                )
+                changed = _run(
+                    [
+                        "git",
+                        "diff",
+                        "--name-only",
+                        "--end-of-options",
+                        f"{base_sha}...{head_sha}",
+                        "--",
+                    ]
+                )
                 return changed.splitlines(), False
             except subprocess.CalledProcessError as exc:
                 print(f"classifier warning: PR diff failed: {exc.output}", file=sys.stderr)
                 return [], True
 
-    before = str(event.get("before", ""))
-    after = os.environ.get("GITHUB_SHA", "") or str(event.get("after", ""))
+    before = _commit_sha(event.get("before", ""))
+    after = _commit_sha(os.environ.get("GITHUB_SHA", "") or event.get("after", ""))
     if before and after and before != ZERO_SHA:
         try:
-            changed = _run(["git", "diff", "--name-only", f"{before}...{after}"])
+            changed = _run(
+                ["git", "diff", "--name-only", "--end-of-options", f"{before}...{after}", "--"]
+            )
             return changed.splitlines(), False
         except subprocess.CalledProcessError as exc:
             print(f"classifier warning: push diff failed: {exc.output}", file=sys.stderr)

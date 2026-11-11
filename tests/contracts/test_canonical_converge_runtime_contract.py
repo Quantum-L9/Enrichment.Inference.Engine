@@ -41,7 +41,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.models.schemas import EnrichRequest, EnrichResponse
-from app.services.odoo_gate_converge import is_odoo_compat_converge_payload
 
 pytestmark = pytest.mark.asyncio
 
@@ -141,9 +140,14 @@ def converge_runtime():
 
 
 @pytest.mark.unit
-async def test_live_payload_is_not_claimed_by_the_compatibility_adapter() -> None:
-    """One canonical contract: the adapter cannot answer for a canonical payload."""
-    assert is_odoo_compat_converge_payload(_live_producer_payload()) is False
+async def test_retired_compatibility_shape_is_not_a_valid_enrich_request() -> None:
+    """One canonical contract: the pre-canonical dialect no longer validates."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        EnrichRequest.model_validate(
+            {"entity_id": ENTITY_REF, "domain": "plasticos", "entity_snapshot": {"name": "Acme"}}
+        )
 
 
 @pytest.mark.unit
@@ -167,12 +171,8 @@ async def test_live_payload_validates_as_a_canonical_enrich_request() -> None:
 async def test_dispatch_routes_the_live_payload_to_the_canonical_branch(
     converge_runtime,
 ) -> None:
-    with patch(
-        "app.engines.handlers._handle_odoo_compat_converge", new_callable=AsyncMock
-    ) as compat:
-        await _handle_converge()("plasticos", _live_producer_payload())
+    await _handle_converge()("plasticos", _live_producer_payload())
 
-    assert compat.await_count == 0
     assert converge_runtime["loop"].await_count == 1
 
 
@@ -214,22 +214,26 @@ async def test_canonical_converge_makes_zero_graph_calls(converge_runtime) -> No
 
 
 @requires_app_runtime
-async def test_compatibility_dialect_still_has_a_home(converge_runtime) -> None:
-    """EIE20 — the compatibility branch is quarantined, not deleted."""
+async def test_retired_compatibility_dialect_fails_closed(converge_runtime) -> None:
+    """EIE20 (retired) — the pre-canonical dialect is refused, never translated.
+
+    The live Odoo producer emits only the canonical EnrichRequest. A payload in
+    the retired `entity_snapshot` / top-level `entity_id` shape is answered as an
+    invalid request: no convergence, no persistence, no Graph sync.
+    """
     payload = {
         "entity_id": ENTITY_REF,
         "domain": "plasticos",
         "entity_snapshot": {"name": "Acme Recycling"},
     }
-    assert is_odoo_compat_converge_payload(payload) is True
 
-    with patch(
-        "app.engines.handlers._handle_odoo_compat_converge", new_callable=AsyncMock
-    ) as compat:
-        compat.return_value = {"state": "completed", "fields": {}}
-        await _handle_converge()("plasticos", payload)
+    result = await _handle_converge()("plasticos", payload)
 
-    assert compat.await_count == 1
+    assert result["state"] == "failed"
+    assert result["failure_reason"].startswith("invalid converge request")
+    assert converge_runtime["loop"].await_count == 0
+    assert converge_runtime["persist"].call_count == 0
+    assert converge_runtime["router"].notify_graph_sync.await_count == 0
 
 
 # Keys every derived-field provenance record carries. Additive to EnrichResponse:

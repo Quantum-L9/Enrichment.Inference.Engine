@@ -72,8 +72,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install review dependencies
+        # Hash-verified from uv.lock (pyyaml is a runtime dependency).
         run: |
-          python -m pip install pyyaml
+          bash tools/deps/install_locked.sh runtime
 
       - name: Emit review signal
         # shell: bash runs `bash --noprofile --norc -eo pipefail`; the default

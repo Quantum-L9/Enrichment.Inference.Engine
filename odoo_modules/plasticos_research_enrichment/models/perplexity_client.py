@@ -4,6 +4,9 @@ import random
 
 import httpx
 
+# Non-cryptographic: retry-backoff jitter only; a dedicated instance keeps it explicit.
+_RETRY_JITTER = random.Random()
+
 
 class PerplexityClient:
     """Async Perplexity API client with retry and strict JSON validation."""
@@ -39,8 +42,9 @@ class PerplexityClient:
                     )
                     response.raise_for_status()
                     content = response.json()["choices"][0]["message"]["content"]
-                    return json.loads(content)
+                    parsed: dict = json.loads(content)
+                    return parsed
             except Exception:
-                await asyncio.sleep((2**attempt) + random.random())
+                await asyncio.sleep((2**attempt) + _RETRY_JITTER.random())
 
         raise RuntimeError("Perplexity API failure after 3 attempts")

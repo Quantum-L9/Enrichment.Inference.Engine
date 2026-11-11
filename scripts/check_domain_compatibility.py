@@ -139,6 +139,33 @@ def _receipt(data: bytes | None, engine: str, tenant: str, version: str, digest:
     }
 
 
+def _operator_path(value: Path, label: str) -> Path:
+    """Absolute form of an operator path; refuse control characters before any use.
+
+    Not resolved: a venv interpreter is a symlink whose location selects its
+    site-packages. An absolute path always starts with "/", so it can never be
+    read as an option by the program receiving it.
+    """
+    text = str(value)
+    if not text or any(ord(char) < 0x20 or ord(char) == 0x7F for char in text):
+        raise ValueError(f"{label} contains control characters")
+    return Path(value).expanduser().absolute()
+
+
+def _trusted_ceg_inputs(args: argparse.Namespace) -> tuple[Path, Path, Path]:
+    """Validate the operator's CEG checkout, interpreter and native validator script."""
+    repo = _operator_path(args.ceg_repo, "--ceg-repo")
+    if not repo.is_dir():
+        raise ValueError("--ceg-repo must be an existing directory")
+    python = _operator_path(args.ceg_python, "--ceg-python")
+    if not python.is_file() or not os.access(python, os.X_OK):
+        raise ValueError("--ceg-python must be an existing executable file")
+    validator = repo / "tools/validate_domain.py"
+    if not validator.is_file() or not validator.resolve().is_relative_to(repo.resolve()):
+        raise ValueError("--ceg-repo must contain tools/validate_domain.py inside the checkout")
+    return repo, python, validator
+
+
 def check_pair(args: argparse.Namespace) -> tuple[dict, int]:
     eie_bytes, ceg_bytes = _read(str(args.eie_spec)), _read(str(args.ceg_spec))
     eie_receipt_bytes = _read(str(args.eie_receipt)) if args.eie_receipt else None
@@ -161,8 +188,9 @@ def check_pair(args: argparse.Namespace) -> tuple[dict, int]:
     }
     rule_path = Path(__file__).resolve().parents[1] / "app/engines/domain_spec_compatibility.py"
     report["rule_set_sha256"] = hashlib.sha256(rule_path.read_bytes()).hexdigest()
+    ceg_repo, ceg_python, ceg_validator = _trusted_ceg_inputs(args)
     revision = subprocess.run(
-        ["git", "-C", str(args.ceg_repo), "rev-parse", "HEAD"],
+        ["git", "-C", str(ceg_repo), "rev-parse", "HEAD"],
         capture_output=True,
         text=True,
         timeout=10,
@@ -171,9 +199,7 @@ def check_pair(args: argparse.Namespace) -> tuple[dict, int]:
     report["ceg_source_revision"] = (
         revision.stdout.strip() if revision.returncode == 0 else "Unknown"
     )
-    report["ceg_validator_sha256"] = hashlib.sha256(
-        (args.ceg_repo / "tools/validate_domain.py").read_bytes()
-    ).hexdigest()
+    report["ceg_validator_sha256"] = hashlib.sha256(ceg_validator.read_bytes()).hexdigest()
     try:
         if not isinstance(tenant, str):
             raise ValueError("Native EIE tenant must be a string")
@@ -209,16 +235,16 @@ def check_pair(args: argparse.Namespace) -> tuple[dict, int]:
             native_args.append("--require-reviewed")
         result = subprocess.run(
             [
-                str(args.ceg_python),
-                str(args.ceg_repo / "tools/validate_domain.py"),
+                str(ceg_python),
+                str(ceg_validator),
                 *native_args,
             ],
-            cwd=args.ceg_repo,
+            cwd=ceg_repo,
             capture_output=True,
             text=True,
             timeout=60,
             check=False,
-            env={**os.environ, "PYTHONPATH": str(args.ceg_repo)},
+            env={**os.environ, "PYTHONPATH": str(ceg_repo)},
         )
     try:
         native = json.loads(result.stdout)

@@ -59,7 +59,7 @@ jobs:
 
       - name: GitGuardian scan
         if: steps.gate.outputs.run == 'true'
-        uses: GitGuardian/ggshield-action@v1
+        uses: GitGuardian/ggshield-action@5cc1ed2be3e8bf625d354c7170731880670f74de # v1.56.1
         env:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
           GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}

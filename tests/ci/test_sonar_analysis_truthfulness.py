@@ -160,7 +160,15 @@ def test_native_scanner_waits_for_actual_quality_gate_and_propagates_failure() -
     properties = _analysis_properties()
     assert properties["sonar.qualitygate.wait"] == "true"
     assert properties["sonar.qualitygate.timeout"] == "300"
-    assert scan["uses"] == "SonarSource/sonarqube-scan-action@v8"
+    # Pinned to the full commit SHA of the reviewed v8 release (SonarCloud
+    # githubactions:S7637); the trailing comment names the tag it resolves to.
+    assert scan["uses"] == (
+        "SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65"
+    )
+    assert (
+        "uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1"
+        in WORKFLOW.read_text(encoding="utf-8")
+    )
     assert scan["env"] == {"SONAR_TOKEN": "${{ secrets.SONAR_TOKEN }}"}
     assert "if" not in scan
     assert "continue-on-error" not in scan

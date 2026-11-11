@@ -641,30 +641,20 @@ class TestLiveDomainInference:
             e["inferred"] for e in second["inferences"]
         ]
 
-    async def test_compat_dialect_loads_inference_but_keeps_partner_allowlist(
-        self, sdk_converge
-    ) -> None:
-        state, run, _router = sdk_converge
-        state["evidence"] = {
-            **_evidence(),
-            **dict.fromkeys(
-                ("name", "website", "city", "zip", "street", "street2", "email", "phone"),
-                ("x", 0.95),
-            ),
-        }
+    async def test_retired_compat_dialect_is_refused_through_the_sdk(self, sdk_converge) -> None:
+        """The pre-canonical dialect is retired: through the real SDK it fails closed."""
+        _state, run, _router = sdk_converge
         payload = {
             "entity_id": _ENTITY_REF,
             "domain": "plasticos",
             "entity_snapshot": {"name": "Acme Recycling"},
             "max_passes": 1,
         }
-        response, _provider_mock = await run(payload)
+        response, provider = await run(payload)
 
-        assert response["state"] == "completed"
-        assert _inferred(response)["tier"]["rule_id"] == "tier-1-high-capacity"
-        # Odoo's partner contract is unchanged: derived plastics fields stay out.
-        assert "material_grade" not in response["fields"]
-        assert "tier" not in response["fields"]
+        assert response["state"] == "failed"
+        assert response["failure_reason"].startswith("invalid converge request")
+        assert provider.await_count == 0
 
     async def test_planner_receives_the_condition_rule_registry(self, sdk_converge) -> None:
         """#237: the domain's condition rules and their unlock index reach the planner."""

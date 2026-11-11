@@ -1,0 +1,10 @@
+{
+  "schema": "l9.repo-execution/v2",
+  "facade": "make-v1",
+  "required_phases": [
+    "setup",
+    "validate",
+    "check",
+    "test"
+  ]
+}
