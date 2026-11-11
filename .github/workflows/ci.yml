@@ -210,6 +210,136 @@ jobs:
           flags: unittests
           fail_ci_if_error: false
 
+  # Advisory: not in ci-gate's needs and not a required check. It supplies every
+  # environment condition tests/integration skips on — Redis, Neo4j Enterprise,
+  # and pinned Cognitive.Engine.Graphs / Constellation.Gate checkouts with their
+  # own virtualenvs — and sets EIE_REQUIRE_INTEGRATION=1, under which
+  # tests/conftest.py turns any integration skip into a failure. Without the
+  # flag (the `test` jobs, local runs) skips are unchanged.
+  integration:
+    name: Integration Tests (Redis + Neo4j Enterprise + Gate/CEG peers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: validate
+    permissions:
+      contents: read
+    env:
+      # Peer subjects, pinned. Bump deliberately; each step verifies HEAD.
+      CEG_SUBJECT_SHA: 3379309971f9defa40c393b2292f2f1784aa90ac
+      GATE_SUBJECT_SHA: ab8fb674e65f2cafe4172178c1ce6de18b4bb0f4
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      neo4j:
+        # Enterprise: the seam test creates one database per disposable tenant
+        # (CREATE DATABASE), which Community rejects. Evaluation licence
+        # accepted for CI, as Cognitive.Engine.Graphs' integration job does.
+        image: neo4j:5.18-enterprise@sha256:745cfda6713a7fa14f763d0730f464fd5b16afaccf5328ff9b4c5785c87b5f37
+        env:
+          NEO4J_ACCEPT_LICENSE_AGREEMENT: 'yes'
+          NEO4J_AUTH: neo4j/l9-test-password
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p l9-test-password 'RETURN 1'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 30
+          --health-start-period 20s
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            uv.lock
+            pyproject.toml
+      - name: Checkout pinned Cognitive.Engine.Graphs peer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Quantum-L9/Cognitive.Engine.Graphs
+          ref: ${{ env.CEG_SUBJECT_SHA }}
+          path: .ci-subjects/ceg-peer
+          token: ${{ secrets.SDK_TOKEN }}
+          persist-credentials: false
+      - name: Checkout pinned Constellation.Gate peer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Quantum-L9/Constellation.Gate
+          ref: ${{ env.GATE_SUBJECT_SHA }}
+          path: .ci-subjects/gate-peer
+          token: ${{ secrets.SDK_TOKEN }}
+          persist-credentials: false
+      - name: Build EIE virtualenv (.venv)
+        # The seam harness and the cross-engine proof launch EIE from
+        # <root>/.venv/bin/python, so EIE installs into a real .venv here.
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
+          python -m venv .venv
+          PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" bash tools/deps/install_locked.sh full
+          git config --global --remove-section "url.https://x-access-token:${SDK_TOKEN}@github.com/"
+          .venv/bin/python -c "import app, pathlib; assert pathlib.Path(app.__file__).is_relative_to(pathlib.Path.cwd())"
+      - name: Build peer virtualenvs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ceg="$GITHUB_WORKSPACE/.ci-subjects/ceg-peer"
+          gate="$GITHUB_WORKSPACE/.ci-subjects/gate-peer"
+          test "$(git -C "$ceg" rev-parse HEAD)" = "$CEG_SUBJECT_SHA"
+          test "$(git -C "$gate" rev-parse HEAD)" = "$GATE_SUBJECT_SHA"
+          # CEG: its own hash-locked runtime profile, as its production image installs it.
+          python -m venv "$ceg/.venv"
+          PATH="$ceg/.venv/bin:$PATH" bash "$ceg/tools/deps/install_locked.sh" runtime
+          (cd "$ceg" && .venv/bin/python -c "import chassis.entrypoint, engine.graph.driver, uvicorn")
+          # Gate: its hash-locked requirements, then the package itself (src layout).
+          python -m venv "$gate/.venv"
+          "$gate/.venv/bin/python" -m pip install --disable-pip-version-check --require-hashes --no-deps -r "$gate/constellation-gate/requirements.lock"
+          "$gate/.venv/bin/python" -m pip install --disable-pip-version-check --no-deps -e "$gate/constellation-gate"
+          "$gate/.venv/bin/python" -c "import constellation_gate.api.main, uvicorn"
+      - name: Run Integration Tests
+        env:
+          EIE_REQUIRE_INTEGRATION: '1'
+          TESTING: "true"
+          # test_redis_idempotency_tenant_isolation.py
+          REDIS_URL: redis://localhost:6379/0
+          # tests/integration/conftest.py neo4j_container
+          NEO4J_TEST_URI: bolt://localhost:7687
+          NEO4J_TEST_USER: neo4j
+          NEO4J_TEST_PASSWORD: l9-test-password
+          # test_observed_relationship_producer.py (Constellation.Gate seam harness)
+          L9_SEAM_NEO4J_URI: bolt://127.0.0.1:7687
+          L9_SEAM_NEO4J_USER: neo4j
+          L9_SEAM_NEO4J_PASSWORD: l9-test-password
+          L9_SEAM_EIE_ROOT: ${{ github.workspace }}
+          L9_SEAM_CEG_ROOT: ${{ github.workspace }}/.ci-subjects/ceg-peer
+          L9_SEAM_GATE_ROOT: ${{ github.workspace }}/.ci-subjects/gate-peer/constellation-gate
+          L9_SEAM_GATE_PYTHON: ${{ github.workspace }}/.ci-subjects/gate-peer/.venv/bin/python
+          # test_cross_engine_native_release.py
+          CEG_REPO: ${{ github.workspace }}/.ci-subjects/ceg-peer
+          CEG_PYTHON: ${{ github.workspace }}/.ci-subjects/ceg-peer/.venv/bin/python
+        run: |
+          PYTHONPATH=. .venv/bin/python -m pytest tests/integration \
+            -p no:xdist \
+            --timeout=300 \
+            --tb=short \
+            -rfEs \
+            -v
+
   security:
     name: Security Scanning
     runs-on: ubuntu-latest

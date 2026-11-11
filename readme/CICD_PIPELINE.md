@@ -116,6 +116,28 @@ validate → lint → semgrep → test → security → sbom → scorecard → c
     └─ Python syntax + YAML validation + KB schema
 ```
 
+**Advisory `integration` job (ci.yml).** Runs `pytest tests/integration -p no:xdist`
+with `EIE_REQUIRE_INTEGRATION=1` against everything those tests otherwise skip
+without. It is not in `ci-gate`'s `needs` and is not a required check.
+
+| Provides | Satisfies |
+|----------|-----------|
+| `redis:7-alpine` service, `REDIS_URL` | `test_redis_idempotency_tenant_isolation.py` |
+| `neo4j:5.18-enterprise` service (evaluation licence accepted for CI), `NEO4J_TEST_URI` / `L9_SEAM_NEO4J_URI` | `tests/integration/conftest.py` `neo4j_container`; the seam test's per-tenant `CREATE DATABASE` (Enterprise only) |
+| Pinned `Quantum-L9/Cognitive.Engine.Graphs` checkout with `.venv` (its `install_locked.sh runtime`), `CEG_REPO` / `CEG_PYTHON`, `L9_SEAM_CEG_ROOT` | `test_cross_engine_native_release.py`, `test_observed_relationship_producer.py` |
+| Pinned `Quantum-L9/Constellation.Gate` checkout with `.venv` (`requirements.lock` + editable package), `L9_SEAM_GATE_ROOT` / `L9_SEAM_GATE_PYTHON` | `test_observed_relationship_producer.py` (seam harness) |
+| EIE installed into a real `.venv` (`install_locked.sh full`), `L9_SEAM_EIE_ROOT` | the seam harness and the cross-engine proof, which launch EIE from `<root>/.venv/bin/python` |
+
+Under `EIE_REQUIRE_INTEGRATION=1` (`1`/`true`/`yes`), `tests/conftest.py` turns every
+skip under `tests/integration` into a failure (explicit `xfail` is left alone), so a
+missing service fails the job instead of passing it vacuously. Without the flag —
+the `test` jobs and local runs — skips are unchanged. Peer SHAs are pinned in the
+job's `env` (`CEG_SUBJECT_SHA`, `GATE_SUBJECT_SHA`); both private peers are checked out
+with `secrets.SDK_TOKEN`.
+
+The cross-engine proof also accepts `L9_CEG_NATIVE_REPO` / `L9_CEG_NATIVE_PYTHON`, the
+pinned native CEG subject the hosted `test` jobs already provision, so it runs there too.
+
 **Note:** `ci-quality.yml` and `test.yml` were consolidated into `ci.yml` to eliminate redundant test runs. The `pr-pipeline.yml` workflow provides a unified gate that combines CI + compliance + L9 + docs checks.
 
 ---

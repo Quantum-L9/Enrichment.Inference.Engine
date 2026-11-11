@@ -27,8 +27,11 @@ tests/
 # All unit tests (fast — no services needed)
 pytest tests/unit/ -m unit
 
-# Integration tests (requires Redis + Graphiti + Perplexity key)
+# Integration tests (skip individually when their services/peers are absent)
 pytest tests/integration/ -m integration
+
+# Integration tests where a skip is a failure (what CI's advisory `integration` job runs)
+EIE_REQUIRE_INTEGRATION=1 pytest tests/integration/ -p no:xdist
 
 # Full suite with coverage
 pytest --cov=app --cov-report=term-missing
@@ -36,6 +39,13 @@ pytest --cov=app --cov-report=term-missing
 # Compliance only
 pytest tests/compliance/
 ```
+
+Integration skips and what lifts each one (Redis, Neo4j Enterprise, pinned
+Cognitive.Engine.Graphs / Constellation.Gate checkouts with `.venv`s, and the
+environment variables that point at them) are tabled in
+`readme/CICD_PIPELINE.md` under "Advisory `integration` job". With
+`EIE_REQUIRE_INTEGRATION=1` an integration skip is reported as a failure; an
+explicit `xfail` is not affected.
 
 ## Coverage Thresholds
 
