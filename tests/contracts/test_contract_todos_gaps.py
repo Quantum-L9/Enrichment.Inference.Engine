@@ -479,7 +479,8 @@ def _converge_status_response_keys() -> list[str]:
             for stmt in ast.walk(node):
                 if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Dict):
                     return [k.value for k in stmt.value.keys if isinstance(k, ast.Constant)]
-    pytest.fail("get_convergence_status return dict not found in app/api/v1/converge.py")
+    msg = "get_convergence_status return dict not found in app/api/v1/converge.py"
+    raise AssertionError(msg)
 
 
 def test_todo_10_converge_run_id_response_schema() -> None:
