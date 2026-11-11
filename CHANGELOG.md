@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Contract gaps TODO-01, TODO-04, TODO-05 closed (2026-11-11).**
+  - `docs/contracts/api/openapi.yaml` 2.4.0: the ten `/score/*` routes of
+    `app/score/score_api.py` (router prefix `/score`, no `/v1`), with request
+    schemas from their Pydantic models, the `ScoreEnvelope` wrapper and each
+    operation's payload. Their 500 is documented as what it is today: no code
+    configures the five score providers, so every permitted call answers 500.
+    `GET /v1/converge/{run_id}` now documents the dict its handler returns.
+  - `docs/contracts/data/graph-schema.yaml` 2.0.0: the subgraph EIE's `sync`
+    packets produce in CEG's Neo4j, verified live (disposable Neo4j 5.18,
+    EIE `notify_graph_sync` → CEG `handle_sync`, tenant `plasticos`). Retires
+    the unverified `Entity` / `Polymer` / `EnrichmentResult` /
+    `HAS_ENRICHMENT` / `HANDLES_POLYMER` entries, which nothing writes.
+  - `docs/contracts/dependencies/_index.yaml`: the enrichment waterfall's
+    provider order per domain, as `WaterfallEngine` runs it from
+    `config/waterfall_config.yaml` (Perplexity runs last, not first).
+  - Drift tests pin each to the code: `test_score_paths_match_score_router`,
+    `test_graph_schema_*`, `test_waterfall_order_contract.py`. The three gap
+    trackers are strict (`pytest.fail`) once resolved.
+
 ### Changed
 - **One manifest, one lock (2026-11-11).** `pyproject.toml` (`[project]` +
   `[dependency-groups]` dev, ci, licenses) and `uv.lock` replace
@@ -21,6 +41,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   render (uv ecosystem, safe-only).
 
 ### Fixed
+- **`/score/compare` reads the records it is asked to compare (2026-11-11).**
+  It read both sides with `score_store.get_score(entity_id, entity_id)` (the
+  second argument is the domain slot) and ignored `before_score_id` /
+  `after_score_id`; it now reads each by its own id through the new
+  `ScoreStore.get_score_by_id`, and a record of another entity is 404. It and
+  `/score/explain` also passed a profile to `ScoreExplainer.compare_scores` /
+  `explain`, which take none (TypeError). `openapi.yaml` 2.4.1 documents the
+  behaviour; `tests/unit/test_score_api_compare_explain.py` pins it. The five
+  score providers remain unwired: no `ProfileStore`, `ScoreStore`,
+  `DecayScoreStore` or `EntityDataProvider` implementation exists.
+- **`node.constitution.yaml` declares the `/score` ingress.** `ingress.rest.base_paths`
+  named `/api/v1` and `/v1` but not `/score`, which `app/main.py` mounts.
+  `test_every_mounted_route_is_under_a_declared_rest_base_path` now fails when
+  a mounted route falls outside the declared base paths, and
+  `test_every_declared_rest_base_path_is_mounted` when a declared one is unused.
 - **Graph-sync acknowledgment (RV-DOMAIN-RD-07).** `SideEffectReport.graph_synced`
   is set only when CEG acknowledges the `sync` operation (`status: success`,
   `synced_count >= 1`, the intended endpoint). A Gate outage, a worker

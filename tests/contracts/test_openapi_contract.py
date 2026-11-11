@@ -56,7 +56,47 @@ REQUIRED_PATHS = [
     ("POST", "/api/v1/proposals/{proposal_id}/approve"),  # {proposal_id} not {id}
     ("GET", "/api/v1/fields/{entity_id}"),
     ("GET", "/api/v1/fields/{entity_id}/{field_name}/history"),  # {field_name} not {field}
+    # Score service (TODO-01): app/score/score_api.py, router prefix /score (no /v1)
+    ("POST", "/score/entity"),
+    ("POST", "/score/batch"),
+    ("POST", "/score/rescore/{entity_id}"),
+    ("POST", "/score/explain"),
+    ("POST", "/score/compare"),
+    ("POST", "/score/decay/preview"),
+    ("POST", "/score/decay/apply"),
+    ("POST", "/score/profile"),
+    ("GET", "/score/profile/{profile_id}"),
+    ("GET", "/score/distribution/{domain}"),
 ]
+
+
+@pytest.mark.unit
+def test_score_paths_match_score_router(spec: dict) -> None:
+    """TODO-01: the documented /score surface is exactly the mounted router's.
+
+    Reads the router app/main.py mounts (`app.include_router(score_router)`,
+    no extra prefix), so a route added, removed or re-pathed in
+    app/score/score_api.py fails here until openapi.yaml follows.
+    """
+    from app.score.score_api import router as score_router
+
+    routed = {
+        (method, route.path)
+        for route in score_router.routes
+        for method in getattr(route, "methods", set())
+        if method != "HEAD"
+    }
+    documented = {
+        (method.upper(), path)
+        for path, item in spec.get("paths", {}).items()
+        if path.startswith("/score")
+        for method in item
+        if method in {"get", "post", "put", "patch", "delete"}
+    }
+    assert routed, "score router exposes no routes"
+    assert documented == routed, (
+        f"undocumented: {sorted(routed - documented)}; not routed: {sorted(documented - routed)}"
+    )
 
 
 @pytest.mark.unit
