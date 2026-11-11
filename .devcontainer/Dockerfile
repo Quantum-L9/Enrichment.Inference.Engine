@@ -41,11 +41,13 @@ ENV PATH=${PYENV_ROOT}/bin:${PYENV_ROOT}/shims:${HOME}/.local/bin:${PATH}
 # documented "Basic GitHub Checkout" from a pinned tag over https, and the
 # checked-out commit must equal the pinned sha (git's content addressing then
 # verifies every file) before anything from it runs.
-ARG PYENV_VERSION=v2.8.15
-ARG PYENV_COMMIT=03ffc48ef3cd33808899773df586f3cc7f74470a
+# (Not named PYENV_VERSION: build args are exported to RUN, and pyenv reads
+# PYENV_VERSION as the Python version to select.)
+ARG PYENV_GIT_TAG=v2.8.15
+ARG PYENV_GIT_COMMIT=03ffc48ef3cd33808899773df586f3cc7f74470a
 RUN git -c protocol.allow=never -c protocol.https.allow=always clone --depth 1 \
-        --branch ${PYENV_VERSION} https://github.com/pyenv/pyenv.git ${PYENV_ROOT} \
-    && test "$(git -C ${PYENV_ROOT} rev-parse HEAD)" = "${PYENV_COMMIT}" \
+        --branch ${PYENV_GIT_TAG} https://github.com/pyenv/pyenv.git ${PYENV_ROOT} \
+    && test "$(git -C ${PYENV_ROOT} rev-parse HEAD)" = "${PYENV_GIT_COMMIT}" \
     && echo 'eval "$(pyenv init -)"' >> ${HOME}/.zshrc \
     && pyenv install -v ${PYTHON_VERSION} \
     && pyenv global ${PYTHON_VERSION}
