@@ -40,9 +40,11 @@ Resolved (strict) on 2026-11-11:
            order (Perplexity first) was wrong: the engine is
            app/services/enrichment/waterfall_engine.py and, per
            config/waterfall_config.yaml, perplexity_sonar runs last.
-Open: TODO-10 expects `state` / `pass_count`, but GET /v1/converge/{run_id}
-returns `status` / `current_pass` (app/api/v1/converge.py
-get_convergence_status, built from LoopState, not ConvergeResponse).
+  TODO-10: GET /v1/converge/{run_id} schema documented. The audit expected
+           ConvergeResponse fields (`state` / `pass_count`); the route actually
+           returns a LoopState summary (`status` / `current_pass`, ...) built in
+           app/api/v1/converge.py get_convergence_status. The tracker now checks
+           the documented properties against that handler's returned keys.
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ from tests.contracts.conftest_contracts import (
     CONTRACTS_DIR,
     DATA_DIR,
     EVENTS_DIR,
+    REPO_ROOT,
     load_json,
     load_yaml,
 )
@@ -464,13 +467,31 @@ def test_todo_09_prompt_registry_not_empty() -> None:
 
 
 @pytest.mark.unit
+def _converge_status_response_keys() -> list[str]:
+    """Keys of the dict literal returned by get_convergence_status, read from source."""
+    import ast
+
+    source = (REPO_ROOT / "app" / "api" / "v1" / "converge.py").read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and (
+            node.name == "get_convergence_status"
+        ):
+            for stmt in ast.walk(node):
+                if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Dict):
+                    return [k.value for k in stmt.value.keys if isinstance(k, ast.Constant)]
+    pytest.fail("get_convergence_status return dict not found in app/api/v1/converge.py")
+
+
 def test_todo_10_converge_run_id_response_schema() -> None:
     """
-    TODO-10: GET /v1/converge/{run_id} response schema must document the
-    full ConvergeResponse including field_confidence_map, pass_count, state.
+    TODO-10: GET /v1/converge/{run_id} response schema must document exactly
+    what the route returns.
 
-    Resolved when: openapi.yaml has a complete response schema for this endpoint.
-    Source gap: app/models/loop_schemas.py ConvergeResponse not fully inspected.
+    The route returns a LoopState summary built in app/api/v1/converge.py
+    get_convergence_status (``status`` / ``current_pass``), not ConvergeResponse
+    (``state`` / ``pass_count``) as the audit assumed. The expected fields are
+    read from that handler, so the contract and the code cannot drift apart.
+    Resolved (strict) 2026-11-11.
     """
     spec = _load_yaml_safe(API_DIR / "openapi.yaml")
     if spec is None:
@@ -479,29 +500,25 @@ def test_todo_10_converge_run_id_response_schema() -> None:
     paths = spec.get("paths", {})
     path_key = "/v1/converge/{run_id}"
     if path_key not in paths:
-        pytest.skip(f"{path_key} not in spec")
+        pytest.fail(f"TODO-10 REGRESSED: {path_key} missing from openapi.yaml")
 
     get_op = paths[path_key].get("get", {})
     response_200 = get_op.get("responses", {}).get("200", {})
     schema = response_200.get("content", {}).get("application/json", {}).get("schema", {})
-
     if not schema:
-        pytest.xfail(
-            f"TODO-10 UNRESOLVED: {path_key} has no response schema.\n"
-            "Action: Inspect app/models/loop_schemas.py ConvergeResponse and "
-            "document all fields in openapi.yaml.\n"
-            "Expected fields include: run_id, state, pass_count, entity_final, "
-            "field_confidence_map, convergence_delta, total_tokens_used"
+        pytest.fail(f"TODO-10 REGRESSED: {path_key} has no 200 response schema.")
+
+    documented = set(schema.get("properties", {}))
+    returned = set(_converge_status_response_keys())
+    missing = sorted(returned - documented)
+    extra = sorted(documented - returned)
+    if missing or extra:
+        pytest.fail(
+            f"TODO-10 REGRESSED: {path_key} schema differs from get_convergence_status.\n"
+            f"Returned but undocumented: {missing}. Documented but not returned: {extra}."
         )
-
-    props = schema.get("properties", {})
-    if schema.get("$ref"):
-        return  # Resolved
-
-    converge_fields = ["state", "pass_count"]
-    missing = [f for f in converge_fields if f not in props]
-    if missing:
-        pytest.xfail(
-            f"TODO-10 PARTIALLY RESOLVED: {path_key} response missing fields: {missing}.\n"
-            "Source: app/models/loop_schemas.py"
+    undeclared_required = sorted(returned - set(schema.get("required", [])))
+    if undeclared_required:
+        pytest.fail(
+            f"TODO-10 REGRESSED: always-returned fields not required: {undeclared_required}"
         )
