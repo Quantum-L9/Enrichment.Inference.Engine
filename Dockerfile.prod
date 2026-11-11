@@ -21,12 +21,25 @@ RUN apt-get update \
 
 FROM base AS deps
 COPY requirements.lock ./
-RUN python -m pip install --require-hashes --no-deps -r requirements.lock
+# Wheels only; the single carve-out is constellation-node-sdk, which the lock
+# pins as the hash-verified GitHub source archive of its release commit.
+RUN python -m pip install --require-hashes --only-binary=:all: \
+        --no-binary=constellation-node-sdk --no-deps -r requirements.lock
 
 FROM deps AS prod
-COPY . .
 RUN adduser --disabled-password --gecos "" appuser \
-    && chown -R appuser /app
+    && chown appuser /app
+# Copy only what the runtime reads (no recursive copy of the build context) —
+# see the matching list in ./Dockerfile. The entrypoint script is dev-only.
+COPY --chown=appuser app/ ./app/
+COPY --chown=appuser config/ ./config/
+COPY --chown=appuser domains/ ./domains/
+COPY --chown=appuser kb/ ./kb/
+COPY --chown=appuser contracts/ ./contracts/
+COPY --chown=appuser docs/contracts/ ./docs/contracts/
+COPY --chown=appuser migrations/ ./migrations/
+COPY --chown=appuser alembic.ini ./
+COPY --chown=appuser scripts/l9_contract_control.py ./scripts/
 USER appuser
 
 EXPOSE 8000
