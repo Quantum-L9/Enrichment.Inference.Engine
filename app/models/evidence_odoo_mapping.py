@@ -74,12 +74,20 @@ class EvidenceOdooMappingContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     contract_version: Literal["1.0.0-draft"]
-    domain: Literal["plasticos"]
+    domain: str  # an admitted domain spec id (domain_admission), never a literal
     owner: Literal["eie"]
     description: str | None = None
     policy: MappingPolicy
     projections: list[MappingProjection] = Field(min_length=1)
     rules: list[str] = Field(default_factory=list)
+
+    @field_validator("domain")
+    @classmethod
+    def domain_is_admitted(cls, value: str) -> str:
+        """Any domain whose spec the effective reader admits; no spec is hard-coded."""
+        from app.models.domain_admission import admitted_domain
+
+        return admitted_domain(value)
 
     @field_validator("projections")
     @classmethod

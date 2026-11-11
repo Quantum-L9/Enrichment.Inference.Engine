@@ -273,9 +273,9 @@ async def test_converge_inference_provenance_shape() -> None:
     from app.services.side_effect_coordinator import get_side_effect_coordinator
 
     evidence = {
-        "polymer_types": (["HDPE"], 0.95),
+        "processed_polymers": ([{"code": "HDPE"}], 0.95),
         "contamination_tolerance": (0.02, 0.90),
-        "annual_capacity_mt": (6000.0, 0.90),
+        "capacity_tons_month": (500.0, 0.90),
     }
 
     async def provider(request, settings, kb_resolver=None, idem_store=None, **_kw):
@@ -305,8 +305,8 @@ async def test_converge_inference_provenance_shape() -> None:
     assert EnrichResponse.model_validate(result).model_dump() == result
     assert set(result["feature_vector"]["inference"]) == INFERENCE_CONTEXT_KEYS
     provenance = result["inferences"][0]["inference_provenance"]
-    assert set(provenance) == {"material_grade", "facility_tier"}
+    assert set(provenance) == {"material_grade", "tier"}
     for record in provenance.values():
         assert set(record) == INFERENCE_PROVENANCE_KEYS
-        assert record["rule_version"] == "plasticos-inference-0.3.0"
+        assert record["rule_version"] == "plasticos-inference-0.4.0"
         assert record["confidence"] <= min(record["input_confidence"].values())

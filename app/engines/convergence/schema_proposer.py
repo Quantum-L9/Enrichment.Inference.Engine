@@ -598,7 +598,7 @@ def _set_property(
                 raise ValueError(f"Property {field_name!r} already exists")
             existing = props[field_name]
             if isinstance(existing, dict):
-                existing.update(definition)
+                _retype(existing, definition)
                 return
         props[field_name] = definition
         return
@@ -607,9 +607,63 @@ def _set_property(
             if isinstance(entry, dict) and entry.get("name") == field_name:
                 if not allow_overwrite:
                     raise ValueError(f"Property {field_name!r} already exists")
-                entry.update(definition)
+                _retype(entry, definition)
                 return
         props.append({"name": field_name, **definition})
+
+
+def _retype(existing: dict[str, Any], definition: dict[str, Any]) -> None:
+    """Update a declaration in place; a new type never inherits the old type's nesting."""
+    for nested in ("items", "properties"):
+        if nested not in definition:
+            existing.pop(nested, None)
+    existing.update(definition)
+
+
+def _typed_definition(fp: FieldProposal) -> dict[str, Any]:
+    """The declaration a proposal adds, in the shared typed syntax (spec_types).
+
+    A ``list`` always declares its ``items`` (an untyped list is refused by
+    the native reader): inferred from the proposal's sample values, else
+    ``string`` -- what untyped list values were always coerced to.
+    """
+    definition: dict[str, Any] = {"type": fp.field_type, "source": fp.source}
+    if fp.field_type == "list":
+        definition["items"] = _infer_items(fp.sample_values)
+    return definition
+
+
+def _infer_scalar(values: list[Any]) -> str | None:
+    if values and all(isinstance(v, bool) for v in values):
+        return "bool"
+    if values and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
+        return "float"
+    if values and all(isinstance(v, str) for v in values):
+        return "string"
+    return None
+
+
+def _infer_items(samples: list[Any]) -> dict[str, Any]:
+    """Item declaration for a list field from its sample lists (see _typed_definition)."""
+    members = [m for sample in samples if isinstance(sample, list) for m in sample if m is not None]
+    if members and all(_is_named_map(m) for m in members):
+        return _infer_map_items(members)
+    return {"type": _infer_scalar(members) or "string"}
+
+
+def _is_named_map(member: Any) -> bool:
+    return isinstance(member, dict) and bool(member) and all(isinstance(k, str) for k in member)
+
+
+def _infer_map_items(members: list[dict[str, Any]]) -> dict[str, Any]:
+    """A map item declaration, or string when a key or value is not declarable."""
+    properties = []
+    for key in sorted({k for m in members for k in m}):
+        scalar = _infer_scalar([m[key] for m in members if m.get(key) is not None])
+        if scalar is None or not re.fullmatch(r"[A-Za-z_]\w*", key, re.ASCII):
+            return {"type": "string"}
+        properties.append({"name": key, "type": scalar})
+    return {"type": "map", "properties": properties}
 
 
 def _apply_node_properties(
@@ -645,7 +699,7 @@ def _apply_node_properties(
             _set_property(
                 props,
                 fp.field_name,
-                {"type": fp.field_type, "source": fp.source},
+                _typed_definition(fp),
                 allow_overwrite=allow_overwrite,
             )
 

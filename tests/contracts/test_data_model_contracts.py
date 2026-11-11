@@ -175,6 +175,8 @@ def test_graph_schema_inventory_matches_live_verification() -> None:
     relationship_types: set[str] = set()
     for tenant in schema["tenants"].values():
         labels |= {n["label"] for n in tenant["nodes"]}
+        # Nodes CEG MERGEs from an endpoint's childsync are in the graph too.
+        labels |= {n["label"] for n in tenant.get("child_nodes", [])}
         relationship_types |= {r["type"] for r in tenant["relationships"]}
         relationship_types |= {r["type"] for r in tenant["asserted_relationships"]}
     assert labels == set(observed["labels"])
@@ -199,6 +201,49 @@ def test_graph_schema_nodes_match_eie_tenant_sync_endpoints() -> None:
         declared = {(t, e, i) for e, i, t in _usable_sync_endpoints(spec)}
         documented = {(n["label"], n["entity_type"], n["idproperty"]) for n in tenant["nodes"]}
         assert documented == declared, tenant_id
+
+
+@pytest.mark.unit
+def test_graph_schema_child_nodes_match_eie_tenant_childsync() -> None:
+    """TODO-04: a node CEG creates from an EIE row is a childsync the tenant spec declares.
+
+    A childsync field on a sync endpoint makes CEG MERGE one child node and one
+    edge per element, so the documented child nodes are exactly the spec's
+    childsync declarations on its usable endpoints, and each edge is a
+    documented relationship from the endpoint's node to the child.
+    """
+    from app.engines.packet_router import _usable_sync_endpoints
+
+    schema = load_yaml(DATA_DIR / "graph-schema.yaml")
+    repo_root = DATA_DIR.parent.parent.parent
+    for tenant_id, tenant in schema["tenants"].items():
+        spec = load_yaml(repo_root / tenant["eie_spec"])
+        usable = {(e, t) for e, _i, t in _usable_sync_endpoints(spec)}
+        declared = set()
+        for endpoint in spec.get("sync", {}).get("endpoints", []):
+            target = endpoint.get("targetnode")
+            path = endpoint.get("path", "")
+            if (path.rsplit("/", 1)[-1], target) not in usable:
+                continue
+            for child in endpoint.get("childsync", []):
+                declared.add(
+                    (
+                        child["targetnode"],
+                        child["targetid"],
+                        path,
+                        child["field"],
+                        child["edgetype"],
+                    )
+                )
+        documented = {
+            (n["label"], n["idproperty"], n["from_endpoint"], n["field"], n["edge"])
+            for n in tenant.get("child_nodes", [])
+        }
+        assert documented == declared, tenant_id
+        node_by_path = {f"/v1/sync/{n['entity_type']}": n["label"] for n in tenant["nodes"]}
+        edges = {(r["type"], r["from"], r["to"]) for r in tenant["relationships"]}
+        for label, _id, path, _field, edge in declared:
+            assert (edge, node_by_path[path], label) in edges, (tenant_id, edge)
 
 
 @pytest.mark.unit

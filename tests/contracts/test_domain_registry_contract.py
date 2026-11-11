@@ -349,7 +349,7 @@ def test_tenant_scoped_converge_routes_are_refused_outside_unsigned_runtimes(
         approve = client.post(
             "/v1/converge/00000000-0000-0000-0000-000000000000/approve",
             json={
-                "decisions": [{"field_name": "annual_capacity_mt", "approved": True}],
+                "decisions": [{"field_name": "capacity_tons_month", "approved": True}],
                 "reviewed_by": "test-fixture-only",
             },
         )
@@ -456,8 +456,8 @@ def _decisions() -> list[dict[str, Any]]:
         "ownership_contract_version": 1,
     }
     return [
-        {"field_name": "annual_capacity_mt", "approved": True, **base},
-        {"field_name": "facility_tier", "approved": False, **base},
+        {"field_name": "capacity_tons_month", "approved": True, **base},
+        {"field_name": "tier", "approved": False, **base},
         {"field_name": "certifications", "approved": True, **base},
     ]
 
@@ -554,19 +554,17 @@ async def test_api_seam_persists_every_decided_field_through_the_batch_operation
         discovery_spec_sha256=binding["discovery_spec_sha256"],
         ownership_contract_version=1,
         proposed_fields=[
-            proposer.FieldProposal(field_name="annual_capacity_mt", field_type="float", **binding),
-            proposer.FieldProposal(field_name="facility_tier", field_type="string", **binding),
+            proposer.FieldProposal(field_name="capacity_tons_month", field_type="float", **binding),
+            proposer.FieldProposal(field_name="tier", field_type="string", **binding),
             proposer.FieldProposal(field_name="undecided", field_type="string", **binding),
         ],
         version_bump="0.4.0-discovered",
     )
     decisions = [
         proposer.ApprovalDecision(
-            node_label="Facility", field_name="annual_capacity_mt", approved=True
+            node_label="Facility", field_name="capacity_tons_month", approved=True
         ),
-        proposer.ApprovalDecision(
-            node_label="Facility", field_name="facility_tier", approved=False
-        ),
+        proposer.ApprovalDecision(node_label="Facility", field_name="tier", approved=False),
     ]
     batch = AsyncMock(side_effect=lambda **kw: [SimpleNamespace(**d) for d in kw["decisions"]])
     with patch.object(converge.pg_store, "persist_schema_proposal_batch", new=batch):
@@ -583,8 +581,8 @@ async def test_api_seam_persists_every_decided_field_through_the_batch_operation
     sent = batch.await_args.kwargs
     assert sent["tenant_id"] == sent["domain"] == "plasticos"
     assert [(d["field_name"], d["approved"]) for d in sent["decisions"]] == [
-        ("annual_capacity_mt", True),
-        ("facility_tier", False),
+        ("capacity_tons_month", True),
+        ("tier", False),
     ]
     assert all(all(d[key] == value for key, value in binding.items()) for d in sent["decisions"])
 
@@ -596,7 +594,7 @@ def test_startup_replays_approved_rows_batch_by_batch() -> None:
         tenant_id="plasticos",
         domain="plasticos",
         batch_run_id="run-1",
-        field_name="annual_capacity_mt",
+        field_name="capacity_tons_month",
         field_type="float",
         source="enrichment",
         fill_rate=1.0,
@@ -625,14 +623,14 @@ def test_bound_startup_replay_preserves_original_discovery_and_associations() ->
     spec = yaml.safe_load(fixture.read_bytes())
     node = spec["ontology"]["nodes"][0]
     node["properties"] = [
-        prop for prop in node["properties"] if prop["name"] != "annual_capacity_mt"
+        prop for prop in node["properties"] if prop["name"] != "capacity_tons_month"
     ]
-    node["enrichment_hints"]["priority_fields"].remove("annual_capacity_mt")
+    node["enrichment_hints"]["priority_fields"].remove("capacity_tons_month")
     spec["inference_rules"] = [
         rule
         for rule in spec["inference_rules"]
         if all(
-            member["field"] != "annual_capacity_mt"
+            member["field"] != "capacity_tons_month"
             for key in ("conditions", "outputs")
             for member in rule[key]
         )
@@ -647,7 +645,7 @@ def test_bound_startup_replay_preserves_original_discovery_and_associations() ->
         node_label="Facility",
         discovery_spec_sha256=digest,
         ownership_contract_version=1,
-        field_name="annual_capacity_mt",
+        field_name="capacity_tons_month",
         field_type="float",
         source="enrichment",
         fill_rate=1.0,
@@ -663,8 +661,8 @@ def test_bound_startup_replay_preserves_original_discovery_and_associations() ->
     before = copy.deepcopy(vars(row))
     revised = _converge().apply_approved_records(spec, [row], discovery_specs={digest: discovery})
     names = {p["name"] for p in revised["ontology"]["nodes"][0]["properties"]}
-    assert names == original_names | {"annual_capacity_mt"}
-    assert revised["version"] == "0.4.0-discovered"
+    assert names == original_names | {"capacity_tons_month"}
+    assert revised["version"] == "0.5.0-discovered"
     assert revised["sync"] == spec["sync"]
     assert revised["semantic_registry"] == spec["semantic_registry"]
     assert vars(row) == before

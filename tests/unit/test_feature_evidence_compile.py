@@ -41,6 +41,7 @@ def test_compile_map_aligns_with_field_confidence() -> None:
     )
     items = compile_field_confidence_map(
         cmap,
+        domain="plasticos",
         subject_ref="res.partner:102",
         execution_version="eie-0.9.0",
         source_ref="eie.convergence:run-123",
@@ -69,6 +70,7 @@ def test_inferred_without_version_or_kb_rejected() -> None:
     )
     with pytest.raises(ValidationError, match="rule_or_model_version"):
         feature_evidence_from_field_confidence(
+            domain="plasticos",
             field=field,
             subject_ref="res.partner:1",
             feature_id="facility.capacity.available_lbs_month",

@@ -31,7 +31,7 @@ class TestDefaultNodeLabel:
         hints, _rules = await _load(_REPO_DOMAINS, None)
 
         assert hints["min_confidence"] == pytest.approx(0.75)
-        assert hints["priority_fields"][:2] == ["polymer_types", "contamination_tolerance"]
+        assert hints["priority_fields"][:2] == ["processed_polymers", "contamination_tolerance"]
 
     async def test_unnamed_node_matches_explicit_facility(self) -> None:
         unnamed, _ = await _load(_REPO_DOMAINS, None)

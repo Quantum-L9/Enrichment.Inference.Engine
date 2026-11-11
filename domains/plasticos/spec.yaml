@@ -1,5 +1,5 @@
 name: plasticos
-version: "0.3.0"
+version: "0.4.0"
 description: >
   PlasticOS evidence and inference domain for EIE.
   Candidate ranking, matching gates, and scoring dimensions are owned by CEG
@@ -20,30 +20,48 @@ ontology:
   nodes:
   - label: Facility
     description: Plastics recycling or processing facility
+    # Row contract of /v1/sync/facilities (eie-ceg-sync/v2): every property
+    # below that is not `evidenceonly` is one EIE produces, declared exactly as
+    # CEG's Facility declares it (Cognitive.Engine.Graphs
+    # domains/plasticos/spec.yaml), name for name and typed shape for typed
+    # shape. CEG-owned properties EIE never produces (lat, lon, credit_score,
+    # food_grade_certified, community_id -- written by CEG's GDS job --
+    # rate_per_ton, rate_confidence, last_transaction_date) are deliberately
+    # not declared, so EIE can never send or overwrite them. packet_router
+    # builds each sync row from exactly these declarations and refuses a value
+    # that does not match one.
     properties:
-    - {name: id, type: string}
-    - {name: name, type: string}
-    - {name: city, type: string}
-    - {name: state, type: string}
-    - {name: zip_code, type: string}
-    - {name: polymer_types, type: list}
-    - {name: density_min, type: float}
-    - {name: density_max, type: float}
-    - {name: mfi_min, type: float}
-    - {name: mfi_max, type: float}
+    - {name: facility_id, type: string, required: true}
+    - {name: name, type: string, required: true}
+    - {name: min_density, type: float}
+    - {name: max_density, type: float}
+    - {name: min_mfi, type: float}
+    - {name: max_mfi, type: float}
     - {name: contamination_tolerance, type: float}
-    - {name: facility_tier, type: string}
-    - {name: material_grade, type: string}
-    - {name: certifications, type: list}
-    - {name: annual_capacity_mt, type: float}
+    - {name: capacity_tons_month, type: float}
+    - {name: tier, type: string}
+    # Wire-only shape: the childsync field below (PROCESSES -> PolymerFamily).
+    - name: processed_polymers
+      type: list
+      items:
+        type: map
+        properties:
+        - {name: code, type: string, required: true}
+    # EIE-only evidence: enrichment, inference and resolution inputs. CEG does
+    # not declare them, so they are never projected onto a sync row.
+    - {name: city, type: string, evidenceonly: true}
+    - {name: state, type: string, evidenceonly: true}
+    - {name: zip_code, type: string, evidenceonly: true}
+    - {name: material_grade, type: string, evidenceonly: true}
+    - {name: certifications, type: list, items: {type: string}, evidenceonly: true}
     enrichment_hints:
       objective_template: "Enrich plastics facility profile for evidence emission"
       priority_fields:
-      - polymer_types
+      - processed_polymers
       - contamination_tolerance
-      - mfi_min
-      - mfi_max
-      - annual_capacity_mt
+      - min_mfi
+      - max_mfi
+      - capacity_tons_month
       - certifications
       min_confidence: 0.75
 
@@ -54,7 +72,7 @@ queryschema:
   - {name: density, type: float, description: "g/cm³"}
   - {name: mfi, type: float, description: "melt flow index g/10min"}
   - {name: contamination, type: float, description: "contamination fraction 0–1"}
-  - {name: required_certifications, type: list, description: "list of cert codes"}
+  - {name: required_certifications, type: list, items: {type: string}, description: "list of cert codes"}
 
 # Ranking/match authority removed (owned by CEG).
 gates: []
@@ -72,36 +90,32 @@ chassisbinding:
   - match
   - outcomes
 
-# CEG `sync` endpoints (GRAPH-IDENT-02). Mirrors the owner's declaration in
-# Cognitive.Engine.Graphs domains/plasticos/spec.yaml `sync.endpoints` (CEG
-# SyncEndpointSpec keys path / targetnode / idproperty; CEG keys its sync handler
-# on the path's last segment and validates the batch against this same tenant's
-# spec). EIE's packet_router selects one per row: the node label, else the
-# single endpoint, else (no label given) the one whose targetnode is in this
-# ontology. Keep it in lockstep with CEG's: an endpoint CEG does not declare is
-# rejected there.
+# CEG `sync` endpoint EIE produces rows for (GRAPH-IDENT-02). The row schema an
+# endpoint accepts is this tenant spec's declared types: the target node's
+# properties that are not `evidenceonly`, including the childsync field. EIE's
+# packet_router projects every row onto that declaration (a list<map> travels as
+# a list of maps; a value whose type does not match is refused before sending;
+# an undeclared field is dropped). CEG validates the same rows against its own
+# tenant spec at ingress (flag sync_row_type_validation_enabled, landing in the
+# Cognitive.Engine.Graphs typed-contract change) and refuses the whole batch on
+# any defect. The compatibility contract eie-ceg-sync/v2
+# (app/engines/domain_spec_compatibility.py) proves every property EIE sends is
+# declared by CEG with the identical typed shape, checked
+# against tests/fixtures/ceg/plasticos.spec.yaml; CEG's other endpoints
+# (polymerfamilies, materialforms, supply-opportunities, buyer-demands) target
+# nodes EIE does not enrich, so EIE declares and sends none of them.
 sync:
   endpoints:
   - path: /v1/sync/facilities
     targetnode: Facility
     idproperty: facility_id
     batchstrategy: UNWINDMERGE
-  - path: /v1/sync/polymerfamilies
-    targetnode: PolymerFamily
-    idproperty: code
-    batchstrategy: UNWINDMERGE
-  - path: /v1/sync/materialforms
-    targetnode: MaterialForm
-    idproperty: form_id
-    batchstrategy: UNWINDMERGE
-  - path: /v1/sync/supply-opportunities
-    targetnode: SupplyOpportunity
-    idproperty: opportunity_id
-    batchstrategy: UNWINDMERGE
-  - path: /v1/sync/buyer-demands
-    targetnode: BuyerDemand
-    idproperty: demand_id
-    batchstrategy: UNWINDMERGE
+    childsync:
+    - field: processed_polymers
+      targetnode: PolymerFamily
+      targetid: code
+      edgetype: PROCESSES
+      edgedirection: parenttochild
 
 semantic_registry:
   enabled: true
@@ -114,31 +128,32 @@ semantic_registry:
 inference_rules:
 - rule_id: grade-assignment-hdpe-a
   conditions:
-  - {field: polymer_types, operator: CONTAINS, value: HDPE}
+  - {field: processed_polymers, operator: CONTAINS, value: {code: HDPE}}
   - {field: contamination_tolerance, operator: LT, value: 0.03}
   outputs:
   - {field: material_grade, value_expr: "A", derivation_type: classification}
   confidence: 0.92
   priority: 10
-  rule_or_model_version: plasticos-inference-0.3.0
+  rule_or_model_version: plasticos-inference-0.4.0
 
 - rule_id: grade-assignment-hdpe-b
   conditions:
-  - {field: polymer_types, operator: CONTAINS, value: HDPE}
+  - {field: processed_polymers, operator: CONTAINS, value: {code: HDPE}}
   - {field: contamination_tolerance, operator: GTE, value: 0.03}
   - {field: contamination_tolerance, operator: LTE, value: 0.07}
   outputs:
   - {field: material_grade, value_expr: "B", derivation_type: classification}
   confidence: 0.85
   priority: 5
-  rule_or_model_version: plasticos-inference-0.3.0
+  rule_or_model_version: plasticos-inference-0.4.0
 
 - rule_id: tier-1-high-capacity
   conditions:
-  - {field: annual_capacity_mt, operator: GTE, value: 5000}
+  # 5000 t/year expressed in CEG's monthly capacity unit (5000 / 12).
+  - {field: capacity_tons_month, operator: GTE, value: 416.67}
   - {field: material_grade, operator: IN, value: ["A", "A+"]}
   outputs:
-  - {field: facility_tier, value_expr: "tier_1", derivation_type: classification}
+  - {field: tier, value_expr: "tier_1", derivation_type: classification}
   confidence: 0.90
   priority: 8
-  rule_or_model_version: plasticos-inference-0.3.0
+  rule_or_model_version: plasticos-inference-0.4.0

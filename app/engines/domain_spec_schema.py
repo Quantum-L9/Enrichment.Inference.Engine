@@ -15,26 +15,20 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from app.engines.inference.rule_loader import RuleDefinition
+from app.engines.spec_types import (
+    TypeDeclarationError,
+    describe,
+    is_container,
+    is_scalar_or_scalar_list,
+    validate_declaration,
+)
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SEMVER = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
-_TYPES = {
-    "string",
-    "float",
-    "int",
-    "integer",
-    "bool",
-    "boolean",
-    "list",
-    "dict",
-    "object",
-    "number",
-    "date",
-    "datetime",
-}
+_EDGE_DIRECTIONS = {"parenttochild", "childtoparent"}
 
 
 def _mapping(value: object, context: str) -> dict[str, Any]:
@@ -115,17 +109,21 @@ def _reject_ceg(spec: dict[str, Any]) -> None:
             raise ValueError("EIE scoring may only contain empty dimensions")
 
 
-def _properties(value: object, context: str) -> set[str]:
-    fields: set[str] = set()
+def _properties(value: object, context: str) -> dict[str, dict[str, Any]]:
+    """Declared properties by name; every type follows the shared typed syntax."""
+    declared: dict[str, dict[str, Any]] = {}
     for entry in _list(value, context, nonempty=True):
         prop = _mapping(entry, context)
         name = _identifier(prop.get("name"), f"{context}.name")
-        _unique(name, fields, context)
-        if not isinstance(prop.get("type"), str) or prop["type"] not in _TYPES:
-            raise ValueError(f"Unsupported type for {context}.{name}")
-        if "required" in prop and type(prop["required"]) is not bool:
-            raise ValueError(f"{context}.{name}.required must be boolean")
-    return fields
+        _unique(name, set(declared), context)
+        try:
+            validate_declaration(prop, f"{context}.{name}")
+        except TypeDeclarationError as exc:
+            raise ValueError(str(exc)) from exc
+        if "evidenceonly" in prop and type(prop["evidenceonly"]) is not bool:
+            raise ValueError(f"{context}.{name}.evidenceonly must be boolean")
+        declared[name] = prop
+    return declared
 
 
 def _hints(value: object, fields: set[str]) -> None:
@@ -196,7 +194,71 @@ def _resolution(value: object, nodes: dict[str, set[str]]) -> None:
         _field_refs(entity.get("key_fields"), nodes[label], "key_fields", nonempty=True)
 
 
-def _sync(value: object) -> None:
+def _sync_children(endpoint: dict[str, Any], path: str) -> None:
+    """CEG's childsync / taxonomyedges declaration shapes (SyncEndpointSpec)."""
+    for entry in _list(endpoint.get("childsync", []), f"{path}.childsync"):
+        child = _mapping(entry, f"{path}.childsync")
+        for key in ("field", "targetnode", "targetid", "edgetype"):
+            _identifier(child.get(key), f"{path}.childsync.{key}")
+        if child.get("edgedirection") not in _EDGE_DIRECTIONS:
+            raise ValueError(f"{path}.childsync.edgedirection must be one of {_EDGE_DIRECTIONS}")
+    for entry in _list(endpoint.get("taxonomyedges", []), f"{path}.taxonomyedges"):
+        edge = _mapping(entry, f"{path}.taxonomyedges")
+        for key in ("field", "edgetype", "targetlabel", "targetid"):
+            _identifier(edge.get(key), f"{path}.taxonomyedges.{key}")
+
+
+def _sync_row_contract(
+    endpoint: dict[str, Any], path: str, declared: dict[str, dict[str, Any]]
+) -> None:
+    """The target node's row-scoped declarations must be a sendable row contract.
+
+    The same rules CEG applies to its own declaration: the id property is a
+    declared scalar; a map or list<map> is a wire-only shape, valid only as the
+    field of one of this endpoint's childsync entries, whose items carry the
+    child's ``targetid``; a taxonomy-edge field is a scalar or a list of scalars.
+    """
+    row = {n: p for n, p in declared.items() if p.get("evidenceonly") is not True}
+    children = {c["field"]: c for c in endpoint.get("childsync", [])}
+    _check_row_id(row, endpoint["idproperty"], path)
+    _check_wire_shapes(row, children, path)
+    for name, child in children.items():
+        _check_childsync_field(row.get(name), name, child["targetid"], path)
+    for edge in endpoint.get("taxonomyedges", []):
+        _check_taxonomy_field(row.get(edge["field"]), edge["field"], path)
+
+
+def _check_row_id(row: dict[str, dict[str, Any]], identifier: str, path: str) -> None:
+    decl = row.get(identifier)
+    if decl is None or decl.get("type") in {"list", "map"}:
+        raise ValueError(f"{path}: idproperty {identifier} must be a declared scalar row property")
+
+
+def _check_wire_shapes(row: dict[str, dict[str, Any]], children: dict[str, Any], path: str) -> None:
+    for name, prop in row.items():
+        if is_container(prop) and name not in children:
+            raise ValueError(
+                f"{path}: {name} is declared {describe(prop)}; a map shape is valid "
+                "only as the field of a childsync entry"
+            )
+
+
+def _check_childsync_field(
+    container: dict[str, Any] | None, name: str, targetid: str, path: str
+) -> None:
+    if container is None or not is_container(container):
+        raise ValueError(f"{path}: childsync field {name} must be a declared map or list<map>")
+    element = container["items"] if container["type"] == "list" else container
+    if targetid not in {p["name"] for p in element["properties"]}:
+        raise ValueError(f"{path}: childsync field {name} items must declare {targetid}")
+
+
+def _check_taxonomy_field(decl: dict[str, Any] | None, name: str, path: str) -> None:
+    if decl is None or not is_scalar_or_scalar_list(decl):
+        raise ValueError(f"{path}: taxonomy field {name} must be a declared scalar or list<scalar>")
+
+
+def _sync(value: object, nodes: dict[str, dict[str, dict[str, Any]]]) -> None:
     sync = _mapping(value, "sync")
     seen: set[str] = set()
     for entry in _list(sync.get("endpoints"), "sync.endpoints", nonempty=True):
@@ -205,11 +267,19 @@ def _sync(value: object) -> None:
         if not re.fullmatch(r"/v1/sync/[A-Za-z0-9_-]+", path):
             raise ValueError("sync.path must be a local /v1/sync/<endpoint> path")
         _unique(path, seen, "sync endpoint path")
-        _identifier(endpoint.get("targetnode"), "sync.targetnode")
+        target = _identifier(endpoint.get("targetnode"), "sync.targetnode")
         _identifier(endpoint.get("idproperty"), "sync.idproperty")
         if "batchstrategy" in endpoint and endpoint["batchstrategy"] != "UNWINDMERGE":
             raise ValueError("Unsupported sync.batchstrategy")
-        # CEG owns target/id vocabulary; not all targets exist in EIE ontology.
+        if "method" in endpoint and endpoint["method"] not in {"POST", "PATCH"}:
+            raise ValueError("Unsupported sync.method")
+        _sync_children(endpoint, path)
+        # CEG owns target/id vocabulary. A target this ontology declares carries
+        # the row contract EIE projects every row onto (packet_router); one it
+        # does not declare has no row EIE can build, and the compatibility
+        # contract (eie-ceg-sync/v2) reports it.
+        if target in nodes:
+            _sync_row_contract(endpoint, path, nodes[target])
 
 
 def validate_spec(raw: object, tenant_id: str) -> dict[str, Any]:
@@ -229,6 +299,7 @@ def validate_spec(raw: object, tenant_id: str) -> dict[str, Any]:
         raise ValueError("Native identity is top-level name/version, not legacy identity blocks")
     _reject_ceg(spec)
     ontology = _mapping(spec.get("ontology"), "ontology")
+    declarations: dict[str, dict[str, dict[str, Any]]] = {}
     nodes: dict[str, set[str]] = {}
     for entry in _list(ontology.get("nodes"), "ontology.nodes", nonempty=True):
         node = _mapping(entry, "ontology node")
@@ -236,7 +307,8 @@ def validate_spec(raw: object, tenant_id: str) -> dict[str, Any]:
         if label in nodes:
             raise ValueError(f"Duplicate node label: {label}")
         _reject_ceg(node)
-        nodes[label] = _properties(node.get("properties"), f"{label}.properties")
+        declarations[label] = _properties(node.get("properties"), f"{label}.properties")
+        nodes[label] = set(declarations[label])
         if "enrichment_hints" in node:
             _hints(node["enrichment_hints"], nodes[label])
     if "queryschema" in spec:
@@ -257,5 +329,5 @@ def validate_spec(raw: object, tenant_id: str) -> dict[str, Any]:
     if "semantic_registry" in spec:
         _resolution(spec["semantic_registry"], nodes)
     if "sync" in spec:
-        _sync(spec["sync"])
+        _sync(spec["sync"], declarations)
     return deepcopy(spec)

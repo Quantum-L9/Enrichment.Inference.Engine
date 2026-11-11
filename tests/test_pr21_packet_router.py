@@ -22,12 +22,13 @@ from app.engines.domain_yaml_reader import DomainYamlReader
 from app.engines.packet_router import (
     GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
     GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK,
+    GraphSyncContract,
     NodeTarget,
     NodeUnreachableError,
     PacketRouter,
-    _graph_sync_row,
     _retry_allowed,
     get_router,
+    project_graph_sync_row,
     resolve_graph_sync_contract,
 )
 
@@ -37,7 +38,18 @@ from app.engines.packet_router import (
 _PLASTICS_SPEC = {
     "name": "plastics",
     "version": "0.3.0",
-    "ontology": {"nodes": [{"label": "Facility", "properties": [{"name": "id"}]}]},
+    "ontology": {
+        "nodes": [
+            {
+                "label": "Facility",
+                "properties": [
+                    {"name": "facility_id", "type": "string"},
+                    {"name": "material_type", "type": "string"},
+                    {"name": "tags", "type": "list", "items": {"type": "string"}},
+                ],
+            }
+        ]
+    },
     "sync": {
         "endpoints": [
             {
@@ -52,6 +64,19 @@ _PLASTICS_SPEC = {
                 "idproperty": "code",
                 "batchstrategy": "UNWINDMERGE",
             },
+        ]
+    },
+}
+
+
+# The same tenant with PolymerFamily's row declared too: a label then selects
+# that endpoint and a typed row can be built for it.
+_PLASTICS_SPEC_WITH_FAMILIES = {
+    **_PLASTICS_SPEC,
+    "ontology": {
+        "nodes": [
+            *_PLASTICS_SPEC["ontology"]["nodes"],
+            {"label": "PolymerFamily", "properties": [{"name": "code", "type": "string"}]},
         ]
     },
 }
@@ -105,21 +130,27 @@ def test_orchestration_layer_does_not_import_dispatch_to_score():
                 )
 
 
-def test_graph_sync_row_is_a_ceg_sync_row_of_neo4j_primitives():
-    """Rows carry the CEG endpoint id property; nested values are JSON strings."""
-    row = _graph_sync_row(
+def test_graph_sync_row_is_projected_onto_the_declared_row():
+    """Rows carry the endpoint id property and declared fields only, typed as declared."""
+    contract = resolve_graph_sync_contract(_PLASTICS_SPEC)
+    assert contract is not None
+    projection = project_graph_sync_row(
         entity_id="ent-001",
         fields={"material_type": "HDPE", "nested": {"a": 1}, "tags": ["x", "y"]},
-        domain="plastics",
-        id_property="facility_id",
+        contract=contract,
     )
-    assert row["facility_id"] == "ent-001"
-    assert row["entity_id"] == "ent-001"
-    assert row["domain"] == "plastics"
-    assert row["material_type"] == "HDPE"
-    assert row["tags"] == ["x", "y"]
-    assert row["nested"] == '{"a": 1}'
-    assert row["enriched_by"] == "enrichment-engine"
+    assert projection.row == {"facility_id": "ent-001", "material_type": "HDPE", "tags": ["x", "y"]}
+    assert projection.dropped == ("nested",)
+    assert projection.defects == ()
+
+
+def test_graph_sync_row_without_a_declared_row_is_refused():
+    contract = GraphSyncContract(entity_type="facilities", id_property="facility_id", source="x")
+    projection = project_graph_sync_row(
+        entity_id="ent-001", fields={"material_type": "HDPE"}, contract=contract
+    )
+    assert projection.row is None
+    assert projection.defects
 
 
 @pytest.mark.asyncio
@@ -155,8 +186,7 @@ async def test_notify_graph_sync_sends_ceg_sync_contract_to_gate(plastics_router
     assert kwargs["action"] == "sync"
     assert kwargs["tenant"] == "plastics"
     assert kwargs["payload"]["entity_type"] == "facilities"
-    assert kwargs["payload"]["batch"][0]["facility_id"] == "ent-001"
-    assert kwargs["payload"]["batch"][0]["domain"] == "plastics"
+    assert kwargs["payload"]["batch"] == [{"facility_id": "ent-001", "material_type": "HDPE"}]
     assert kwargs["idempotency_key"].startswith("eie:sync:plastics:ent-001:")
     assert kwargs["timeout_ms"] == 10_000
 
@@ -247,24 +277,20 @@ async def test_graph_sync_fallback_is_labeled_and_only_used_without_a_spec_contr
     assert from_spec.source == GRAPH_SYNC_SOURCE_DOMAIN_SPEC
     assert (from_spec.entity_type, from_spec.id_property) == ("polymerfamilies", "code")
 
-    ok = {"status": "success", "entity_type": "facilities", "synced_count": 1}
-    with patch.object(
-        router._client, "execute", new_callable=AsyncMock, return_value=_ceg_response(ok)
-    ) as mock_exec:
+    # The fallback declares no row (typed rows, 2026-11-11): nothing is sent.
+    assert fallback.row_schema is None
+    with patch.object(router._client, "execute", new_callable=AsyncMock) as mock_exec:
         result = await router.notify_graph_sync(
             tenant_id="tenant-acme", entity_id="ent-9", fields={}, domain="metals"
         )
-    payload = mock_exec.await_args.kwargs["payload"]
-    assert payload["entity_type"] == "facilities"
-    assert payload["batch"][0]["facility_id"] == "ent-9"
-    assert result is not None
-    assert result["synced_count"] == 1
+    mock_exec.assert_not_awaited()
+    assert result is None
 
 
 @pytest.mark.asyncio
 async def test_acknowledgment_is_checked_against_the_domains_own_endpoint(tmp_path):
     """The ack must name the endpoint the domain spec resolved, not a global default."""
-    reader = DomainYamlReader(_domains_dir(tmp_path, {"plastics": _PLASTICS_SPEC}))
+    reader = DomainYamlReader(_domains_dir(tmp_path, {"plastics": _PLASTICS_SPEC_WITH_FAMILIES}))
     router = PacketRouter(gate_url="https://gate-node:8080", domain_reader=reader)
     acked_for_other_endpoint = {"status": "success", "entity_type": "facilities", "synced_count": 1}
     with patch.object(

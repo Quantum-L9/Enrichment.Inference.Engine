@@ -10,6 +10,7 @@ Audit fixes applied:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import structlog
@@ -41,12 +42,15 @@ TYPE_MAP: dict[str, type] = {
 
 def validate_response(
     payload: dict[str, Any],
-    target_schema: dict[str, str] | None = None,
+    target_schema: Mapping[str, str | Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     Validate and normalize an LLM enrichment response.
 
-    With schema: coerces each field to declared type, skips failures.
+    With schema: coerces each field to declared type, skips failures. A schema
+    value is a type name (``"float"``, ``"list"``) or a typed declaration in the
+    shared spec syntax (``{"type": "list", "items": {"type": "map", ...}}``,
+    ``app.engines.spec_types``); a declared list keeps its declared item type.
     Without schema: passes through with basic normalization.
     Always extracts and clamps confidence to [0.0, 1.0].
 
@@ -80,7 +84,7 @@ def validate_response(
 
     # ── Schema-driven validation ─────────────────────
     if target_schema:
-        for field_name, field_type_str in target_schema.items():
+        for field_name, declared in target_schema.items():
             if field_name == "confidence":
                 continue
 
@@ -88,6 +92,7 @@ def validate_response(
             if value is None:
                 continue
 
+            field_type_str, items = _declared_type(declared)
             expected = TYPE_MAP.get(field_type_str.lower())
             if expected is None:
                 # Unknown type — accept as-is
@@ -95,7 +100,7 @@ def validate_response(
                 continue
 
             try:
-                normalized[field_name] = _coerce(value, expected)
+                normalized[field_name] = _coerce(value, expected, items)
             except (ValueError, TypeError):
                 logger.debug(
                     "field_coercion_skipped",
@@ -118,8 +123,23 @@ def validate_response(
     return normalized
 
 
-def _coerce(value: Any, expected: type) -> Any:
-    """Coerce a value to the expected type."""
+def _declared_type(
+    declared: str | Mapping[str, Any],
+) -> tuple[str, Mapping[str, Any] | None]:
+    """A schema value as (type name, declared list items): a name or a typed declaration."""
+    if not isinstance(declared, Mapping):
+        return declared, None
+    items = declared.get("items")
+    return str(declared.get("type", "")), items if isinstance(items, Mapping) else None
+
+
+def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) -> Any:
+    """Coerce a value to the expected type.
+
+    A list keeps its members' shape: a mapping member stays a mapping (it is
+    never stringified into ``"{'code': 'PET'}"``), and when the list's ``items``
+    are declared every member is coerced to that declared item type.
+    """
     if expected is bool:
         if isinstance(value, bool):
             return value
@@ -128,14 +148,70 @@ def _coerce(value: Any, expected: type) -> Any:
         return bool(value)
 
     if expected is list:
-        if isinstance(value, list):
-            return list(dict.fromkeys(str(v).strip()[:256] for v in value if v))
-        if isinstance(value, str):
-            return list(dict.fromkeys(s.strip()[:256] for s in value.split(",") if s.strip()))
-        return [str(value)]
+        return _dedup([_coerce_member(v, items) for v in _list_members(value)])
 
     if expected in (int, float):
         return expected(value)
 
     # str
     return str(value).strip()[:4096]
+
+
+def _list_members(value: Any) -> list[Any]:
+    """The members a list field carries: CSV text split, empties dropped."""
+    if isinstance(value, str):
+        return [s for s in value.split(",") if s.strip()]
+    if isinstance(value, (list, tuple)):
+        return [v for v in value if v]
+    return [value]
+
+
+def _coerce_member(value: Any, items: Mapping[str, Any] | None) -> Any:
+    """One list member: by its declared item type, else by its own shape."""
+    item_type = str(items.get("type", "")).lower() if items else ""
+    if item_type == "map" or (not item_type and isinstance(value, Mapping)):
+        if not isinstance(value, Mapping):
+            raise TypeError("declared map item is not a mapping")
+        return _coerce_map(value, items)
+    expected = TYPE_MAP.get(item_type, str)
+    if expected is list:
+        raise TypeError("a list of lists is not declarable")
+    if expected is str:
+        return str(value).strip()[:256]
+    return _coerce(value, expected)
+
+
+def _coerce_map(value: Mapping[str, Any], decl: Mapping[str, Any] | None) -> dict[str, Any]:
+    """A mapping member; with declared properties, each declared key keeps its declared type."""
+    properties = decl.get("properties") if decl else None
+    if not isinstance(properties, list):
+        return dict(value)
+    result: dict[str, Any] = {}
+    for prop in properties:
+        name = prop.get("name") if isinstance(prop, Mapping) else None
+        if isinstance(name, str) and value.get(name) is not None:
+            result[name] = _coerce_property(value[name], prop)
+    return result
+
+
+def _coerce_property(value: Any, prop: Mapping[str, Any]) -> Any:
+    """One declared property of a map member, by its declared type."""
+    type_name = str(prop.get("type", "")).lower()
+    if type_name == "map":
+        if not isinstance(value, Mapping):
+            raise TypeError(f"declared map property {prop.get('name')} is not a mapping")
+        return _coerce_map(value, prop)
+    expected = TYPE_MAP.get(type_name)
+    if expected is None:
+        return value
+    nested = prop.get("items")
+    return _coerce(value, expected, nested if isinstance(nested, Mapping) else None)
+
+
+def _dedup(members: list[Any]) -> list[Any]:
+    """Order-preserving de-duplication that also handles unhashable mappings."""
+    seen: list[Any] = []
+    for member in members:
+        if member not in seen:
+            seen.append(member)
+    return seen

@@ -1,6 +1,6 @@
 # EIE native DomainSpec and effective reader
 
-**Contract version:** `eie.native-domain-spec/v1`
+**Contract version:** `eie.native-domain-spec/v2` (v2, 2026-11-11: typed property declarations shared with CEG; typed sync row contract)
 **Executable owner:** `app/engines/domain_yaml_reader.py::validate_native_spec`
 **Execution authority:** `native-domain-supply-chain-g27r-v3` (local source changes only)
 
@@ -18,7 +18,23 @@ The function accepts an object, raises `ValueError` for refused native structure
 
 The root must be a string-keyed mapping. Native identity is top-level `name` and `version`; `name` must equal the requested tenant. The existing shared Neo4j/tenant grammar is unchanged: lowercase, a leading letter, then letters/digits/dots/dashes, 3–63 characters, excluding the reserved `system` prefix. Legacy `domain`/`domain_identity` blocks are not native identity authority. `version` must be a semantic-version string, including optional prerelease/build identifiers; numeric prerelease identifiers cannot have leading zeroes. Numeric YAML versions and booleans are refused.
 
-`ontology.nodes` is a nonempty list of node mappings with unique identifier-shaped `label` values. Each node has a nonempty list of property mappings with unique identifier-shaped `name` values and an explicit supported `type`. Types are `string`, `float`, `int`, `integer`, `bool`, `boolean`, `list`, `dict`, `object`, `number`, `date`, or `datetime`. Optional `required` is a boolean. Native properties are not a CEG-style mapping or legacy string list. Optional `queryschema.fields` uses the same property-list checks.
+`ontology.nodes` is a nonempty list of node mappings with unique identifier-shaped `label` values. Each node has a nonempty list of property mappings with unique identifier-shaped `name` values and an explicit `type` in the typed declaration syntax EIE and CEG share (`app/engines/spec_types.py`, owner decision 2026-11-11):
+
+```yaml
+- {name: certifications, type: list, items: {type: string}}
+- name: processed_polymers
+  type: list
+  items:
+    type: map
+    properties:
+      - {name: code, type: string, required: true}
+- name: location
+  type: map
+  properties:
+    - {name: lat, type: float}
+```
+
+Scalar types are CEG's `string`, `int`, `float`, `bool`, `datetime`, `date`, `duration` and `enum` (optional nonempty string `values`); the EIE-native spellings `integer`, `boolean` and `number` remain admitted for EIE-only properties, but a property that rides a sync row must use CEG's spelling (eie-ceg-sync/v2 compares the literal type). `items` is required iff the type is `list` (a scalar, enum or map; never a list of lists) and `properties` is required iff it is `map`; `type: list` without `items` is refused, and the untyped containers `dict` and `object` are refused (declare a `map`). Optional `required` is a boolean. Optional `evidenceonly: true` marks an EIE enrichment, inference or resolution input that is never projected onto a sync row and is not part of the row contract. Native properties are not a CEG-style mapping or legacy string list. Optional `queryschema.fields` uses the same property-list checks.
 
 Optional node `enrichment_hints` is a mapping. Empty hints are allowed; nonempty hints require a nonblank `objective_template`. Supported keys are `objective_template`, `priority_fields`, `kb_context`, `refresh_interval_days`, `min_confidence`, `max_variations_discovery`, and `max_variations_targeted`. Priority fields must be unique declarations on that node. `kb_context` is a nonblank string or null. Confidence must be finite and within `[0, 1]`, excluding booleans. Refresh days and variation limits are positive integers.
 
@@ -28,7 +44,7 @@ Drafts may instead declare an `inference_rules_path` using a bounded relative `.
 
 Optional `semantic_registry` is a mapping with a boolean `enabled` when supplied. `canonical_entities` is a list of unique declared EIE node types. Each entry declares a resolution strategy (`exact`, `fuzzy`, `semantic`, or `hybrid`), finite `[0, 1]` resolution threshold, and nonempty unique key fields declared on that node.
 
-Optional `sync.endpoints` is a nonempty list of mappings with unique local `/v1/sync/<endpoint>` paths and identifier-shaped `targetnode`/`idproperty`. Optional `batchstrategy` is `UNWINDMERGE`. Sync target and identifier vocabulary belongs to CEG and is checked by the separately owned compatibility contract; the reader does not require every CEG target/id field to exist in EIE's enrichment ontology.
+Optional `sync.endpoints` is a nonempty list of mappings with unique local `/v1/sync/<endpoint>` paths and identifier-shaped `targetnode`/`idproperty`. Optional `batchstrategy` is `UNWINDMERGE`, optional `method` is `POST` or `PATCH`, and optional `childsync` (`field`, `targetnode`, `targetid`, `edgetype`, `edgedirection` of `parenttochild`/`childtoparent`) and `taxonomyedges` (`field`, `edgetype`, `targetlabel`, `targetid`) take CEG's `SyncEndpointSpec` shapes. Sync target and identifier vocabulary belongs to CEG. When the endpoint's `targetnode` is declared in this ontology, its properties that are not `evidenceonly` are the endpoint's typed **row contract**: the id property must be a declared scalar; a `map` or `list<map>` is a wire-only shape valid only as the `field` of one of the endpoint's childsync entries, whose items must declare that entry's `targetid`; a taxonomy-edge field must be a scalar or a list of scalars. `packet_router` builds every sync row from exactly that declaration (see `docs/contracts/dependencies/constellation-gate.yaml` `sync`). An endpoint whose target node this ontology does not declare has no row, and EIE sends nothing to it. The compatibility contract `eie-ceg-sync/v2` (`app/engines/domain_spec_compatibility.py`) proves, for every endpoint EIE declares, that the endpoint keys, childsync and taxonomyedges are identical to CEG's and that every property EIE can send is declared by CEG's target node with the identical typed shape (subset semantics: CEG-owned properties EIE never produces are not declared by EIE and pass).
 
 Nonempty `gates`, `ranking`, `ranking_rules`, `matching`, `matchentities`, `match_entities`, or `scoring_dimensions` are refused at the root, node, and rule ownership surfaces. EIE `gates: []` and `scoring: {dimensions: []}` remain compatible with PlasticOS. No nonempty scoring dimensions or alternative scoring policy is admitted.
 

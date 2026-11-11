@@ -201,20 +201,29 @@ def validate_fixtures() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
 def validate_evidence_authority() -> dict[str, Any]:
     """FeatureEvidence + mapping loader remain sole evidence authorities."""
+    from app.models.domain_admission import admitted_domain
     from app.models.evidence_odoo_mapping import load_evidence_odoo_mapping
 
     registry = _load_yaml(FEATURE_DIR / "feature_registry.yaml")
     feature_ids = [f["feature_id"] for f in registry.get("features", [])]
     contract = load_evidence_odoo_mapping(MAPPING_DIR / "evidence-odoo-mapping.yaml")
+    # Per loaded domain, never a literal: the registry and the mapping name the
+    # same domain, and that domain's spec is one the effective reader admits.
+    try:
+        domain_admitted = admitted_domain(registry.get("domain")) == contract.domain
+    except ValueError:
+        domain_admitted = False
     ok = (
         registry.get("owner") == "eie"
         and len(feature_ids) >= 1
         and contract.policy.default_write_mode == "proposal_only"
-        and contract.domain == "plasticos"
+        and domain_admitted
     )
     return {
         "evidence_model": "FeatureEvidence",
         "mapping_loader": "load_evidence_odoo_mapping",
+        "domain": contract.domain,
+        "domain_admitted": domain_admitted,
         "registry_owner": registry.get("owner"),
         "feature_count": len(feature_ids),
         "mapping_write_mode": contract.policy.default_write_mode,

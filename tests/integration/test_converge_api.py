@@ -85,7 +85,7 @@ async def test_converge_single_entity(mock_llm, api_client):
             "materials_handled": ["HDPE", "PP"],
             "material_grade": "A",
             "contamination_tolerance_pct": 0.02,
-            "facility_tier": "tier_1",
+            "tier": "tier_1",
             "confidence": 0.9,
         },
         tokens_used=1200,
@@ -256,7 +256,7 @@ def _native_discovery_spec() -> dict:
         (Path(__file__).resolve().parents[2] / "domains/plasticos/spec.yaml").read_bytes()
     )
     node = spec["ontology"]["nodes"][0]
-    discovered = {"annual_capacity_mt", "facility_tier", "certifications"}
+    discovered = {"capacity_tons_month", "tier", "certifications"}
     node["properties"] = [prop for prop in node["properties"] if prop["name"] not in discovered]
     node["enrichment_hints"]["priority_fields"] = [
         name for name in node["enrichment_hints"]["priority_fields"] if name not in discovered
@@ -426,7 +426,7 @@ def _held_state(domain: str = "plasticos", *, spec: dict | None = None, bound: b
     fcm = FieldConfidenceMap()
     fcm.set(
         FieldConfidence(
-            field_name="annual_capacity_mt",
+            field_name="capacity_tons_month",
             value=5000.0,
             confidence=0.9,
             source=FieldSource.ENRICHMENT,
@@ -435,7 +435,7 @@ def _held_state(domain: str = "plasticos", *, spec: dict | None = None, bound: b
     )
     fcm.set(
         FieldConfidence(
-            field_name="facility_tier",
+            field_name="tier",
             value="tier_1",
             confidence=0.88,
             source=FieldSource.INFERENCE,
@@ -453,11 +453,11 @@ def _held_state(domain: str = "plasticos", *, spec: dict | None = None, bound: b
         else None,
         ownership_contract_version=1 if bound else None,
         status=LoopStatus.HUMAN_HOLD,
-        accumulated_fields={"annual_capacity_mt": 5000.0, "facility_tier": "tier_1"},
+        accumulated_fields={"capacity_tons_month": 5000.0, "tier": "tier_1"},
         accumulated_confidences=fcm,
         observed_field_sources={
-            "annual_capacity_mt": ["enrichment"],
-            "facility_tier": ["inference"],
+            "capacity_tons_month": ["enrichment"],
+            "tier": ["inference"],
         },
     )
 
@@ -507,12 +507,12 @@ async def test_approve_persists_the_revision_before_the_registry_takes_it(api_cl
                     "decisions": [
                         {
                             "node_label": "Facility",
-                            "field_name": "annual_capacity_mt",
+                            "field_name": "capacity_tons_month",
                             "approved": True,
                         },
                         {
                             "node_label": "Facility",
-                            "field_name": "facility_tier",
+                            "field_name": "tier",
                             "approved": False,
                         },
                     ],
@@ -527,7 +527,7 @@ async def test_approve_persists_the_revision_before_the_registry_takes_it(api_cl
 
         revised = converge_module._domain_specs["plasticos"]
         # List-shaped ontology: the approved field landed, the rejected one did not.
-        assert _property_names(revised) == {"id", "annual_capacity_mt"}
+        assert _property_names(revised) == {"id", "capacity_tons_month"}
         assert revised["version"] == "0.4.0-discovered"
     finally:
         for name, value in original.items():
@@ -539,8 +539,8 @@ async def test_approve_persists_the_revision_before_the_registry_takes_it(api_cl
     assert sent["batch_run_id"] == state.run_id
     assert sent["reviewed_by"] == "ib@example.test"
     assert {(d["field_name"], d["approved"]) for d in sent["decisions"]} == {
-        ("annual_capacity_mt", True),
-        ("facility_tier", False),
+        ("capacity_tons_month", True),
+        ("tier", False),
     }
     assert all(
         d["node_label"] == "Facility" and d["ownership_contract_version"] == 1
@@ -567,7 +567,7 @@ async def test_historical_unbound_run_refuses_without_restamping_or_writes(api_c
                     "decisions": [
                         {
                             "node_label": "Facility",
-                            "field_name": "annual_capacity_mt",
+                            "field_name": "capacity_tons_month",
                             "approved": True,
                         }
                     ],
@@ -620,7 +620,7 @@ async def test_concurrent_approvals_for_one_domain_keep_both_field_sets(api_clie
             observed_field_sources={field: ["enrichment"]},
         )
 
-    first, second = _held("annual_capacity_mt", 5000.0), _held("certifications", "ISO")
+    first, second = _held("capacity_tons_month", 5000.0), _held("certifications", "ISO")
     names = ("_state_store", "_profile_registry", "_domain_specs", "_kb_resolver", "_idem_store")
     original = {name: getattr(converge_module, name) for name in names}
     converge_module.configure(
@@ -646,7 +646,7 @@ async def test_concurrent_approvals_for_one_domain_keep_both_field_sets(api_clie
                         "decisions": [
                             {
                                 "node_label": "Facility",
-                                "field_name": "annual_capacity_mt",
+                                "field_name": "capacity_tons_month",
                                 "approved": True,
                             }
                         ],
@@ -675,9 +675,9 @@ async def test_concurrent_approvals_for_one_domain_keep_both_field_sets(api_clie
         assert sorted(statuses) == [200, 409], [r.text for r in responses]
         won = statuses.index(200)
         (winner, winner_field), (loser, _loser_field) = (
-            ((first, "annual_capacity_mt"), (second, "certifications"))
+            ((first, "capacity_tons_month"), (second, "certifications"))
             if won == 0
-            else ((second, "certifications"), (first, "annual_capacity_mt"))
+            else ((second, "certifications"), (first, "capacity_tons_month"))
         )
         assert (
             responses[1 - won].json()["detail"]
@@ -699,7 +699,7 @@ async def test_serialized_fresh_discoveries_keep_both_field_sets(api_client):
     """Both fields survive when the second NEW discovery explicitly sees the first revision."""
     import app.api.v1.converge as converge_module
 
-    first = _held_for("annual_capacity_mt", 5000.0)
+    first = _held_for("capacity_tons_month", 5000.0)
     original = _configure_for_approval(converge_module, first, _list_shaped_spec())
     table = _ProposalTable()
     try:
@@ -712,7 +712,7 @@ async def test_serialized_fresh_discoveries_keep_both_field_sets(api_client):
                     "decisions": [
                         {
                             "node_label": "Facility",
-                            "field_name": "annual_capacity_mt",
+                            "field_name": "capacity_tons_month",
                             "approved": True,
                         }
                     ],
@@ -739,7 +739,7 @@ async def test_serialized_fresh_discoveries_keep_both_field_sets(api_client):
             response2.text,
         ]
         revised = converge_module._domain_specs["plasticos"]
-        assert _property_names(revised) == {"id", "annual_capacity_mt", "certifications"}
+        assert _property_names(revised) == {"id", "capacity_tons_month", "certifications"}
         assert revised["version"] == "0.5.0-discovered", "two fresh approvals, two version bumps"
         assert second.discovery_spec_sha256 != first.discovery_spec_sha256
         assert [row.discovery_spec_sha256 for row in table.rows] == [
@@ -764,7 +764,7 @@ async def test_concurrent_native_approvals_preserve_both_audits_without_activati
     monkeypatch.setattr(converge_module, "_domain_locks", {})
     spec = _native_discovery_spec()
     registry, digest = _published_fixture_registry(tmp_path, spec)
-    first = _held_for("annual_capacity_mt", 5000.0, spec=spec)
+    first = _held_for("capacity_tons_month", 5000.0, spec=spec)
     second = _held_for("certifications", "ISO", spec=spec)
     names = ("_state_store", "_profile_registry", "_domain_specs", "_kb_resolver", "_idem_store")
     original = {name: getattr(converge_module, name) for name in names}
@@ -799,13 +799,13 @@ async def test_concurrent_native_approvals_preserve_both_audits_without_activati
                         },
                         headers=AUTH,
                     )
-                    for state, field in ((first, "annual_capacity_mt"), (second, "certifications"))
+                    for state, field in ((first, "capacity_tons_month"), (second, "certifications"))
                 ]
             )
         assert [r.status_code for r in responses] == [200, 200], [r.text for r in responses]
         assert ledger.await_count == 2
         assert {(r.node_label, r.field_name) for r in table.rows} == {
-            ("Facility", "annual_capacity_mt"),
+            ("Facility", "capacity_tons_month"),
             ("Facility", "certifications"),
         }
         assert all(
@@ -815,7 +815,7 @@ async def test_concurrent_native_approvals_preserve_both_audits_without_activati
         assert all(r.reviewed_by == "test-fixture-only" for r in table.rows)
         assert all(
             r.json()["publication_status"] == "awaiting_operator_publication"
-            and r.json()["new_version"] == "0.3.0"
+            and r.json()["new_version"] == "0.4.0"
             for r in responses
         )
         assert converge_module._domain_specs is registry
@@ -849,7 +849,11 @@ async def test_approve_fails_closed_when_the_store_is_unavailable(api_client):
             f"/v1/converge/{state.run_id}/approve",
             json={
                 "decisions": [
-                    {"node_label": "Facility", "field_name": "annual_capacity_mt", "approved": True}
+                    {
+                        "node_label": "Facility",
+                        "field_name": "capacity_tons_month",
+                        "approved": True,
+                    }
                 ],
                 "reviewed_by": "test-fixture-only",
             },
@@ -899,8 +903,8 @@ async def test_hydrate_replays_approved_rows_onto_the_registry():
     names = ("_state_store", "_profile_registry", "_domain_specs", "_kb_resolver", "_idem_store")
     original = {name: getattr(converge_module, name) for name in names}
     rows = [
-        _approved_row("annual_capacity_mt", "float", "batch-1"),
-        _approved_row("facility_tier", "string", "batch-2", proposed_gate="categorical"),
+        _approved_row("capacity_tons_month", "float", "batch-1"),
+        _approved_row("tier", "string", "batch-2", proposed_gate="categorical"),
     ]
     before = copy.deepcopy([vars(row) for row in rows])
     converge_module.configure(
@@ -957,14 +961,14 @@ def test_explicit_bound_replay_keeps_batch_fields_associations_and_historical_pa
     first_digest = hashlib.sha256(first_bytes).hexdigest()
     second_discovery = copy.deepcopy(base)
     second_discovery["ontology"]["nodes"][0]["properties"].append(
-        {"name": "annual_capacity_mt", "type": "float", "source": "enrichment"}
+        {"name": "capacity_tons_month", "type": "float", "source": "enrichment"}
     )
-    second_discovery["version"] = "0.4.0-discovered"
+    second_discovery["version"] = "0.5.0-discovered"
     second_bytes = _discovery_bytes(second_discovery)
     second_digest = hashlib.sha256(second_bytes).hexdigest()
     rows = [
         _approved_row(
-            "annual_capacity_mt",
+            "capacity_tons_month",
             "float",
             "batch-1",
             node_label="Facility",
@@ -972,7 +976,7 @@ def test_explicit_bound_replay_keeps_batch_fields_associations_and_historical_pa
             ownership_contract_version=1,
         ),
         _approved_row(
-            "facility_tier",
+            "tier",
             "string",
             "batch-2",
             node_label="Facility",
@@ -987,18 +991,18 @@ def test_explicit_bound_replay_keeps_batch_fields_associations_and_historical_pa
         base, rows, discovery_specs={first_digest: first_bytes, second_digest: second_bytes}
     )
     assert _property_names(replayed) == _property_names(base) | {
-        "annual_capacity_mt",
-        "facility_tier",
+        "capacity_tons_month",
+        "tier",
     }
-    assert replayed["version"] == "0.5.0-discovered"
+    assert replayed["version"] == "0.6.0-discovered"
     assert replayed["sync"] == base["sync"]
     assert replayed["semantic_registry"] == base["semantic_registry"]
     assert replayed["inference_rules"] == base["inference_rules"]
     assert replayed["gates"] == [] and replayed["scoring"]["dimensions"] == []
     assert [vars(row) for row in rows] == before
-    assert "annual_capacity_mt" not in _property_names(
+    assert "capacity_tons_month" not in _property_names(base) and "tier" not in _property_names(
         base
-    ) and "facility_tier" not in _property_names(base)
+    )
 
 
 def test_apply_serves_list_shaped_and_dict_shaped_ontologies():
@@ -1011,10 +1015,10 @@ def test_apply_serves_list_shaped_and_dict_shaped_ontologies():
     )
 
     proposal = SchemaProposalSet(
-        proposed_fields=[FieldProposal(field_name="annual_capacity_mt", field_type="float")],
+        proposed_fields=[FieldProposal(field_name="capacity_tons_month", field_type="float")],
         version_bump="0.4.0-discovered",
     )
-    decisions = [ApprovalDecision(field_name="annual_capacity_mt", approved=True)]
+    decisions = [ApprovalDecision(field_name="capacity_tons_month", approved=True)]
 
     listed_spec = _list_shaped_spec()
     digest = hashlib.sha256(_discovery_bytes(listed_spec)).hexdigest()
@@ -1025,7 +1029,7 @@ def test_apply_serves_list_shaped_and_dict_shaped_ontologies():
         ownership_contract_version=1,
         proposed_fields=[
             FieldProposal(
-                field_name="annual_capacity_mt",
+                field_name="capacity_tons_month",
                 field_type="float",
                 node_label="Facility",
                 discovery_spec_sha256=digest,
@@ -1036,17 +1040,17 @@ def test_apply_serves_list_shaped_and_dict_shaped_ontologies():
     )
     listed = apply(
         listed_spec,
-        [ApprovalDecision(node_label="Facility", field_name="annual_capacity_mt", approved=True)],
+        [ApprovalDecision(node_label="Facility", field_name="capacity_tons_month", approved=True)],
         native_proposal,
         source_sha256=digest,
     )
-    assert {"name": "annual_capacity_mt", "type": "float", "source": "enrichment"} in listed[
+    assert {"name": "capacity_tons_month", "type": "float", "source": "enrichment"} in listed[
         "ontology"
     ]["nodes"][0]["properties"]
 
     dict_spec = {"version": "0.3.0", "ontology": {"nodes": {"Facility": {"properties": {}}}}}
     dicted = apply(dict_spec, decisions, proposal)
-    assert dicted["ontology"]["nodes"]["Facility"]["properties"]["annual_capacity_mt"] == {
+    assert dicted["ontology"]["nodes"]["Facility"]["properties"]["capacity_tons_month"] == {
         "type": "float",
         "source": "enrichment",
     }
@@ -1124,9 +1128,9 @@ async def test_unapplied_approvals_publish_no_revision_so_replay_matches_live(ap
     base = _native_discovery_spec()
     discovery = _discovery_bytes(base)
     digest = hashlib.sha256(discovery).hexdigest()
-    rejected = _held_for("annual_capacity_mt", 5000.0, spec=base)
+    rejected = _held_for("capacity_tons_month", 5000.0, spec=base)
     unproposed = _held_for("certifications", "ISO", spec=base)
-    applied = _held_for("facility_tier", "tier_1", spec=base)
+    applied = _held_for("tier", "tier_1", spec=base)
     table = _ProposalTable()
     names = ("_state_store", "_profile_registry", "_domain_specs", "_kb_resolver", "_idem_store")
     original = {name: getattr(converge_module, name) for name in names}
@@ -1138,13 +1142,13 @@ async def test_unapplied_approvals_publish_no_revision_so_replay_matches_live(ap
     sequence = [
         (
             rejected,
-            [{"node_label": "Facility", "field_name": "annual_capacity_mt", "approved": False}],
+            [{"node_label": "Facility", "field_name": "capacity_tons_month", "approved": False}],
         ),
         (
             unproposed,
             [{"node_label": "Facility", "field_name": "not_a_proposed_field", "approved": True}],
         ),
-        (applied, [{"node_label": "Facility", "field_name": "facility_tier", "approved": True}]),
+        (applied, [{"node_label": "Facility", "field_name": "tier", "approved": True}]),
     ]
     try:
         with (
@@ -1193,7 +1197,7 @@ async def test_unapplied_approvals_publish_no_revision_so_replay_matches_live(ap
     assert responses[1].json()["detail"] == "Approval decision names an unproposed owner/field pair"
     bodies = [responses[0].json(), responses[2].json()]
     assert [b["approved"] for b in bodies] == [0, 1], "applied counts, not decided counts"
-    assert [b["new_version"] for b in bodies] == ["0.3.0", "0.4.0-discovered"]
+    assert [b["new_version"] for b in bodies] == ["0.4.0", "0.5.0-discovered"]
     assert all(b["unapplied"] == [] for b in bodies)
     assert len(table.rows) == 2 and all(
         row.field_name != "not_a_proposed_field" for row in table.rows

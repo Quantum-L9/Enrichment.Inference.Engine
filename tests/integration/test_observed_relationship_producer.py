@@ -304,6 +304,39 @@ def domains_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
                         "associationtypeid": type_id,
                     }
                 ]
+        # CEG writes a namespaced label only through its own node endpoint (since
+        # Cognitive.Engine.Graphs #453): a childsync or taxonomy edge into it would
+        # create ids outside the namespace and the spec is refused. Drop those
+        # indirect writers (orbital-logistics' stocked_grades childsync); the
+        # observed relationship endpoint above is what writes the edge here. A
+        # dropped childsync's field is a wire-only list<map> nothing else
+        # consumes, which CEG also refuses, so its declaration goes with it.
+        namespaced = {
+            endpoint["targetnode"]
+            for endpoint in spec["sync"]["endpoints"]
+            if endpoint.get("refnamespace")
+        }
+        dropped_fields: set[tuple[str, str]] = set()
+        for endpoint in spec["sync"]["endpoints"]:
+            for key, label in (("childsync", "targetnode"), ("taxonomyedges", "targetlabel")):
+                kept = [w for w in endpoint.get(key, []) if w[label] not in namespaced]
+                if key in endpoint and len(kept) != len(endpoint[key]):
+                    if key == "childsync":
+                        dropped_fields |= {
+                            (endpoint["targetnode"], w["field"])
+                            for w in endpoint[key]
+                            if w not in kept
+                        }
+                    if kept:
+                        endpoint[key] = kept
+                    else:
+                        del endpoint[key]
+        for node in spec["ontology"]["nodes"]:
+            node["properties"] = [
+                p
+                for p in node.get("properties", [])
+                if (node["label"], p["name"]) not in dropped_fields
+            ]
         for edge in spec["ontology"]["edges"]:
             if edge["type"] == vocabulary["edge"][1]:
                 edge["evidencerelevance"] = vocabulary["relevance"]

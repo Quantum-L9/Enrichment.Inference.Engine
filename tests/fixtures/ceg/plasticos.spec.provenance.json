@@ -1,0 +1,10 @@
+{
+  "schema": "eie.ceg-spec-snapshot/v1",
+  "source_repository": "Quantum-L9/Cognitive.Engine.Graphs",
+  "source_path": "domains/plasticos/spec.yaml",
+  "source_commit": "e9e6ceb669d37bd75dc9bded206105b5875a9c60",
+  "source_sha256": "4394284b46f0b52cd79caf8bc73c7122cd0726faab96de9402ddf4e969b59b43",
+  "snapshot_sha256": "a04363e00a6893db1e6f3bd25895adc34dec34d70beea56d11c7a21e6902b2b5",
+  "overlay": [],
+  "refresh_required": "replace with the pinned CEG revision's bytes whenever CEG_REVISION moves (tests/contracts/test_native_yaml_integrity.py)"
+}
