@@ -12,36 +12,91 @@ Consumed by: convergence_controller.py for pass targeting
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from math import fsum, isfinite
 from typing import Any
 
 import structlog
 
-from app.utils.safe_convert import safe_float
-
 logger = structlog.get_logger("confidence_tracker")
 
-#: Scale of the uncertainty score U. The planner reads U > 2.0 as "targeted"
-#: and U > 5.0 as the 5-variation budget.
+#: Scale of the uncertainty scores. The planner reads U_action > 2.0 as
+#: "targeted" and U_action > 5.0 as the 5-variation budget.
 UNCERTAINTY_SCALE = 10.0
 
+#: Local identifier of the uncertainty policy implemented below (issue #266).
+UNCERTAINTY_POLICY = "D9-v2"
 
-def uncertainty_from_confidences(confidences: Iterable[float | None]) -> float:
-    """Uncertainty U of a set of required fields (WU-02 / F-002, owner decision D-9).
+# D-9 v2 (operator decision 2026-11-11, issue #266) supersedes D-9 v1, the
+# average-only policy, in its entirety. Two scores are computed over ONE
+# population of effective confidences c*:
+#
+#   U_mean   = 10 * (1 - mean(c*))   diagnostic and historical: the public
+#                                    EnrichResponse.uncertainty_score and the
+#                                    per-pass inferences[*].uncertainty
+#   U_action = 10 * (1 - min(c*))    operational: drives the planner's mode and
+#                                    pass-level variation budget
+#
+# An empty population is cold start: both scores are 10. Neither score decides
+# readiness. A field is ready only when its value is present and its effective
+# confidence meets its own threshold (the request's field_thresholds entry, else
+# the loop's confidence threshold); no aggregate overrides that.
+#
+# D-9 v1's acceptance claim (code and test docstrings said "owner-accepted
+# 2026-10-29" while merged PR #259 said "pending owner acceptance") was never
+# independently verified. D-9 v2 is a new decision, not a confirmation of v1.
 
-    ``U = UNCERTAINTY_SCALE * (1 - mean confidence)``, where a required field
-    with no confidence yet (``None``) counts as unknown, i.e. confidence 0.
-    Per-pass confidence 0.3 / 0.5 / 0.7 / 0.9 gives U 7 / 5 / 3 / 1. U depends
-    only on confidence — never on how many provider variations a pass ran.
 
-    D-9 status: accepted by the owner as the default (2026-10-29). This is
-    deliberately the only place U is computed so it can be replaced whole.
+def normalize_confidence(value: object) -> float:
+    """Effective confidence of one reported confidence value, in [0, 1].
+
+    Absent, boolean, non-numeric and non-finite values are unusable and count
+    as 0, so malformed input can never create confidence. Finite values,
+    including numeric strings, are clamped to [0, 1].
     """
-    values = [min(max(safe_float(c), 0.0), 1.0) for c in confidences]
+    if value is None or isinstance(value, bool):
+        return 0.0
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not isfinite(number):
+        return 0.0
+    return max(0.0, min(1.0, number))
+
+
+def value_present(value: Any) -> bool:
+    """A field value counts as present unless it is None or an empty string.
+
+    Legitimate falsy values such as ``0`` and ``False`` are present.
+    """
+    return value is not None and value != ""
+
+
+def uncertainty_from_confidences(confidences: Iterable[object]) -> float:
+    """U_mean: ``10 * (1 - mean effective confidence)``; 10 for no fields.
+
+    Diagnostic only under D-9 v2. Per-pass confidence 0.3 / 0.5 / 0.7 / 0.9
+    gives 7 / 5 / 3 / 1. Variation count is never an input.
+    """
+    values = [normalize_confidence(c) for c in confidences]
     if not values:
         return UNCERTAINTY_SCALE
-    return UNCERTAINTY_SCALE * (1.0 - sum(values) / len(values))
+    return UNCERTAINTY_SCALE * (1.0 - fsum(values) / len(values))
+
+
+def action_uncertainty_from_confidences(confidences: Iterable[object]) -> float:
+    """U_action: ``10 * (1 - min effective confidence)``; 10 for no fields.
+
+    The weakest required field decides: one poorly supported or missing field
+    cannot be concealed by confident peers, and raising any field's confidence
+    can never raise the score.
+    """
+    values = [normalize_confidence(c) for c in confidences]
+    if not values:
+        return UNCERTAINTY_SCALE
+    return UNCERTAINTY_SCALE * (1.0 - min(values))
 
 
 @dataclass
@@ -66,11 +121,19 @@ class ConfidenceTracker:
         self,
         confidence_threshold: float = 0.85,
         exclude_sources: frozenset[str] = frozenset(),
+        required_fields: Sequence[str] | None = None,
+        field_thresholds: Mapping[str, float] | None = None,
     ):
         self.fields: dict[str, FieldConfidenceState] = {}
         self.threshold = confidence_threshold
         # Sources whose fields never decide convergence (see has_converged).
         self.exclude_sources = exclude_sources
+        # The caller's explicit schema, when it named one. Readiness, the summary
+        # and both uncertainty scores are then measured over exactly these
+        # fields, whatever source last set them.
+        self.required_fields: list[str] | None = list(required_fields) if required_fields else None
+        # Consumer per-field bars; a missing entry falls back to `threshold`.
+        self.field_thresholds: dict[str, float] = dict(field_thresholds or {})
         self.current_pass = 0
 
     def begin_pass(self, pass_num: int) -> None:
@@ -91,7 +154,13 @@ class ConfidenceTracker:
         pass_num: int,
         source: str,
     ) -> None:
-        """Update or create field confidence state."""
+        """Update or create field confidence state.
+
+        Confidence is normalized here, where it enters the tracker, so every
+        later reading (scores, readiness, improvement, the serialized summary)
+        sees a finite value in [0, 1] and malformed input can never raise.
+        """
+        confidence = normalize_confidence(confidence)
         if name in self.fields:
             prior = self.fields[name]
             prior.prior_attempts.append(
@@ -113,65 +182,111 @@ class ConfidenceTracker:
         self.current_pass = max(self.current_pass, pass_num)
 
     def get_low_confidence_fields(self) -> list[str]:
-        """Return fields below confidence threshold."""
-        return [name for name, state in self.fields.items() if state.confidence < self.threshold]
+        """Return tracked fields that are not ready at their own threshold."""
+        return [name for name in self.fields if not self.field_ready(name)]
+
+    def threshold_for(self, name: str) -> float:
+        """The readiness bar for one field: its consumer threshold, else the loop's."""
+        return self.field_thresholds.get(name, self.threshold)
+
+    def effective_confidence(self, name: str) -> float:
+        """c* of one field: 0 when untracked, valueless or carrying unusable confidence."""
+        state = self.fields.get(name)
+        if state is None or not value_present(state.current_value):
+            return 0.0
+        return normalize_confidence(state.confidence)
+
+    def field_ready(self, name: str) -> bool:
+        """present(value) and c* >= the field's own threshold."""
+        state = self.fields.get(name)
+        if state is None or not value_present(state.current_value):
+            return False
+        return normalize_confidence(state.confidence) >= self.threshold_for(name)
+
+    def deciding_fields(self) -> list[str]:
+        """The fields readiness and both uncertainty scores are measured over.
+
+        The explicit schema when one was named; otherwise every tracked field
+        except those whose latest value came from an excluded source.
+        """
+        if self.required_fields is not None:
+            return list(self.required_fields)
+        return [s.field_name for s in self._deciding_states()]
 
     def has_converged(self) -> bool:
-        """Check if all fields meet threshold.
+        """Check whether every deciding field is ready.
 
-        Fields whose latest value came from a source in `exclude_sources` are
-        not considered; if no field remains, the tracker has not converged.
-        The same rule backs the serialized `converged` flag and the loop's stop
-        decision, so the two cannot disagree.
+        With an explicit schema every requested field must be present and meet
+        its own threshold, whatever source set it. Without one, fields whose
+        latest value came from a source in `exclude_sources` are not considered;
+        if no field remains, the tracker has not converged. The same rule backs
+        the serialized `converged` flag and the loop's stop decision, so the two
+        cannot disagree.
         """
-        states = [s for s in self.fields.values() if s.source_variation not in self.exclude_sources]
-        if not states:
+        names = self.deciding_fields()
+        if not names:
             return False
-        return all(state.confidence >= self.threshold for state in states)
+        return all(self.field_ready(name) for name in names)
 
     def had_meaningful_improvement(self, min_delta: float) -> bool:
         """Check whether the latest pass improved confidence meaningfully (F-058).
 
-        Only fields updated on ``current_pass`` count, so a gain made on an
-        earlier pass is not credited again. A field first resolved on this pass
-        improves from unknown (confidence 0). Sources in ``exclude_sources`` do
-        not count, as in :meth:`has_converged`.
+        Measured over the fields that decide readiness (:meth:`deciding_fields`:
+        the explicit schema when one was named), in effective confidence c*. An
+        optional field's gain therefore never buys another pass while every
+        required field is stuck, and a field that goes from a missing value to
+        a present one improves from 0 even if its reported confidence did not
+        move. Only fields updated on ``current_pass`` count, so a gain made on
+        an earlier pass is not credited again; a field first resolved on this
+        pass improves from unknown (0).
         """
         improvements = []
-        for state in self._deciding_states():
-            if state.pass_number != self.current_pass:
+        for name in self.deciding_fields():
+            state = self.fields.get(name)
+            if state is None or state.pass_number != self.current_pass:
                 continue
-            prior_confidence = (
-                state.prior_attempts[-1]["confidence"] if state.prior_attempts else 0.0
+            prior = state.prior_attempts[-1] if state.prior_attempts else None
+            prior_effective = (
+                normalize_confidence(prior["confidence"])
+                if prior is not None and value_present(prior["value"])
+                else 0.0
             )
-            improvements.append(state.confidence - prior_confidence)
+            improvements.append(self.effective_confidence(name) - prior_effective)
 
         return bool(improvements) and max(improvements) >= min_delta
 
+    def _population(self, required: Iterable[str] | None) -> list[float]:
+        """Effective confidences of one selected population, shared by both scores."""
+        names = list(required) if required is not None else self.deciding_fields()
+        return [self.effective_confidence(name) for name in names]
+
     def uncertainty(self, required: Iterable[str] | None = None) -> float:
-        """U over the required fields (or every deciding field when none are named)."""
-        if required is not None:
-            names = list(required)
-            return uncertainty_from_confidences(
-                self.fields[n].confidence if n in self.fields else None for n in names
-            )
-        return uncertainty_from_confidences(s.confidence for s in self._deciding_states())
+        """U_mean over the required fields (or the deciding fields when none are named)."""
+        return uncertainty_from_confidences(self._population(required))
+
+    def action_uncertainty(self, required: Iterable[str] | None = None) -> float:
+        """U_action over the same population as :meth:`uncertainty`."""
+        return action_uncertainty_from_confidences(self._population(required))
 
     def _deciding_states(self) -> list[FieldConfidenceState]:
         return [s for s in self.fields.values() if s.source_variation not in self.exclude_sources]
 
     def get_pass_summary(self) -> dict[str, Any]:
         """Return summary dict for API response."""
-        # Counted over the same fields has_converged() decides on, so the summary
-        # cannot report converged=True beside a below-threshold count (F-058).
-        states = self._deciding_states()
+        # Counted over the same fields, with the same per-field bars, that
+        # has_converged() decides on, so the summary cannot report
+        # converged=True beside a below-threshold count (F-058).
+        names = self.deciding_fields()
+        ready = sum(1 for name in names if self.field_ready(name))
         return {
             "total_passes": self.current_pass,
             "converged": self.has_converged(),
-            "fields_above_threshold": sum(1 for s in states if s.confidence >= self.threshold),
-            "fields_below_threshold": sum(1 for s in states if s.confidence < self.threshold),
+            "fields_above_threshold": ready,
+            "fields_below_threshold": len(names) - ready,
             "average_confidence": (
-                sum(s.confidence for s in states) / len(states) if states else 0.0
+                fsum(self.effective_confidence(name) for name in names) / len(names)
+                if names
+                else 0.0
             ),
         }
 

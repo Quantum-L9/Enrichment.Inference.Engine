@@ -8,6 +8,12 @@ Orchestrates the Schema Discovery Loop:
 
 Config: max_passes=3, convergence_threshold=2.0, min_delta=0.05
 
+Uncertainty (D-9 v2, issue #266): U_mean = 10 * (1 - mean c*) is reported as
+the diagnostic uncertainty_score; U_action = 10 * (1 - min c*) over the same
+required fields drives the planner. The loop converges only when every deciding
+field is ready (present value, effective confidence at its own threshold); every
+other stop is a bounded termination, never convergence.
+
 Consumed by: chassis handlers.py (action="enrich" with mode="converge")
 Produces: Final EnrichResponse with merged fields from all passes + inference results
 """
@@ -27,7 +33,12 @@ from ..models.schemas import EnrichRequest, EnrichResponse
 from ..services.graph_return_channel import EnrichmentTarget, GraphReturnChannel
 from ..services.idempotency import IdempotencyStore
 from ..services.request_deadline import current_deadline
-from .convergence.confidence_tracker import UNCERTAINTY_SCALE, ConfidenceTracker
+from .convergence.confidence_tracker import (
+    UNCERTAINTY_POLICY,
+    UNCERTAINTY_SCALE,
+    ConfidenceTracker,
+    normalize_confidence,
+)
 from .convergence.convergence_config import ConvergenceConfig  # NEW
 from .convergence.cost_tracker import CostTracker
 from .field_classifier import DomainClassification, auto_classify_domain
@@ -38,6 +49,7 @@ from .meta_prompt_planner import MetaPromptPlanner, PromptPlan
 from .search_optimizer import (
     EntitySignals,
     SonarConfig,
+    cap_variations,
     resolve_from_classification,
 )
 
@@ -114,9 +126,12 @@ class PassResult:
     # folded into a "completed" converge as though it had merely found nothing.
     state: str = "completed"
     failure_reason: str | None = None
-    # Uncertainty U after this pass (WU-02); None when the pass failed and U
-    # was carried forward unchanged.
+    # Diagnostic U_mean after this pass (WU-02, D-9 v2); None when the pass
+    # failed and both scores were carried forward unchanged.
     uncertainty: float | None = None
+    # Operational U_action after this pass (D-9 v2). Internal: it drives the
+    # next pass's plan and is logged, never serialized into the response.
+    action_uncertainty: float | None = None
 
 
 @dataclass
@@ -128,13 +143,20 @@ class ConvergenceState:
     inferred_fields: dict[str, Any] = field(default_factory=dict)
     pass_results: list[PassResult] = field(default_factory=list)
     total_tokens: int = 0
+    # True only when every deciding field met its own threshold. A loop that
+    # stopped on budget, deadline, insufficient improvement, max passes or an
+    # unsatisfied verification pass terminated without converging; the reason
+    # is in convergence_reason.
     converged: bool = False
     convergence_reason: str = ""
     unlock_map: dict[str, float] = field(default_factory=dict)
-    # Pass 1 plans with this seed before any pass has measured U. Nothing is
-    # known yet, which D-9 defines as maximal uncertainty — so the discovery
-    # pass gets the largest variation budget, not the smallest.
+    # D-9 v2 keeps two scores over one population. Nothing is known before pass
+    # 1, which is cold start: both seed at the maximum, so the discovery pass
+    # gets the largest variation budget, not the smallest.
+    # Diagnostic U_mean: the public uncertainty_score.
     uncertainty_score: float = UNCERTAINTY_SCALE
+    # Operational U_action: what the planner receives.
+    action_uncertainty: float = UNCERTAINTY_SCALE
 
 
 async def run_convergence_loop(
@@ -195,6 +217,7 @@ async def run_convergence_loop(
     # #237: the strict registry of the domain's condition rules and its unlock
     # index inform the planner's ranking; ordering only, never new targets.
     rule_registry = bridge.rule_registry
+    required_fields = _required_fields(request)
     planner = MetaPromptPlanner(
         domain_spec=domain_spec,
         rule_registry=rule_registry,
@@ -203,9 +226,13 @@ async def run_convergence_loop(
         priority_fields=config.priority_fields or (domain_hints or {}).get("priority_fields"),
         uncertainty_threshold=config.uncertainty_threshold,
     )
+    # The tracker owns the one required-field population and per-field bars
+    # that readiness, U_mean and U_action are all measured over (D-9 v2).
     confidence_tracker = ConfidenceTracker(
         confidence_threshold=config.confidence_threshold,
         exclude_sources=frozenset({INFERENCE_SOURCE}),
+        required_fields=required_fields,
+        field_thresholds=request.field_thresholds,
     )
 
     # ── Domain classification (cached per domain) ──────────
@@ -248,14 +275,12 @@ async def run_convergence_loop(
                 pass_number=pass_num,
                 remaining_s=round(deadline.remaining(), 3),
             )
-            state.converged = True
             state.convergence_reason = DEADLINE_EXHAUSTED_REASON
             break
 
         # ── Budget check ──────────────────────────────────
         if not cost_tracker.can_continue():
             logger.info("budget_exhausted", total_tokens=cost_tracker.total_tokens)
-            state.converged = True
             state.convergence_reason = "budget_exhausted"
             break
 
@@ -271,10 +296,11 @@ async def run_convergence_loop(
             )
 
         # --- META-PROMPT PLANNING ---
+        # D-9 v2: the planner receives the operational U_action, never U_mean.
         pass_context = PassContext(
             pass_number=pass_num,
             budget_remaining=cost_tracker.budget_remaining(),
-            previous_uncertainty=state.uncertainty_score,
+            previous_uncertainty=state.action_uncertainty,
         )
         search_plan: PromptPlan = planner.plan_pass(
             # The request's null fields stay visible as gaps (F-016); known_fields
@@ -282,7 +308,10 @@ async def run_convergence_loop(
             entity_state={**request.entity, **state.known_fields},
             pass_context=pass_context,
             field_confidences=confidence_tracker.get_all_confidences(),
-            uncertainty_score=state.uncertainty_score,
+            uncertainty_score=state.action_uncertainty,
+            required_fields=required_fields,
+            field_thresholds=request.field_thresholds,
+            deciding_fields=confidence_tracker.deciding_fields(),
         )
 
         # ── Inference-unlock target prioritization ─────────
@@ -328,6 +357,9 @@ async def run_convergence_loop(
                 classification=domain_classification,
                 budget_tokens=cost_tracker.budget_remaining(),
             )
+            # The optimizer only recommends a count. The pass budget (from
+            # U_action) and the caller's max_variations bound what runs.
+            sonar_config = cap_variations(sonar_config, _pass_variation_cap(request, search_plan))
             logger.info(
                 "sonar_config_resolved",
                 pass_number=pass_num,
@@ -363,9 +395,22 @@ async def run_convergence_loop(
             search_plan.variation_count = pass_response.variation_count
 
         # --- COLLECT ENRICHED FIELDS ---
+        # A failed pass is not evidence. Whatever fields its response carries
+        # (an injected enricher may return some) are dropped here, before they
+        # can reach state, the tracker, inference or the convergence check.
+        # Its tokens are still accounted and its failure still recorded.
+        provider_fields = pass_response.fields or {}
+        if pass_response.state == "failed" and provider_fields:
+            logger.warning(
+                "failed_pass_fields_discarded",
+                pass_number=pass_num,
+                fields=sorted(provider_fields),
+                failure_reason=pass_response.failure_reason,
+            )
+            provider_fields = {}
         pass_result = PassResult(
             pass_number=pass_num,
-            enriched_fields=pass_response.fields or {},
+            enriched_fields=provider_fields,
             confidence=pass_response.confidence,
             tokens_used=pass_response.tokens_used,
             search_plan=search_plan,
@@ -383,7 +428,9 @@ async def run_convergence_loop(
 
         # Merge into accumulated state with per-field confidence
         for field_name, value in pass_result.enriched_fields.items():
-            field_conf = per_field_conf.get(field_name, pass_response.confidence)
+            field_conf = normalize_confidence(
+                per_field_conf.get(field_name, pass_response.confidence)
+            )
             state.known_fields[field_name] = value
             state.confidence_map[field_name] = field_conf
             # Provider evidence for a field this loop had inferred makes it a
@@ -426,7 +473,9 @@ async def run_convergence_loop(
         for field_name, value in inference_result.derived_fields.items():
             state.inferred_fields[field_name] = value
             state.known_fields[field_name] = value
-            inferred_conf = inference_result.confidence_map.get(field_name, 0.7)
+            inferred_conf = normalize_confidence(
+                inference_result.confidence_map.get(field_name, 0.7)
+            )
             state.confidence_map[field_name] = inferred_conf
 
             # NEW: Update confidence tracker for inferred fields
@@ -441,20 +490,31 @@ async def run_convergence_loop(
         if hasattr(inference_result, "unlock_map"):
             state.unlock_map = inference_result.unlock_map
 
-        # --- UNCERTAINTY (WU-02 / F-002) ---
-        # Recomputed from required-field confidence after every successful pass;
-        # it drives the next pass's mode (targeted while U > 2.0) and variation
-        # budget. A failed pass learned nothing, so U carries forward.
+        # --- UNCERTAINTY (WU-02 / F-002, D-9 v2) ---
+        # Both scores are recomputed over the same required-field population
+        # after every successful pass. U_mean is reported; U_action drives the
+        # next pass's mode and variation budget. A failed pass learned nothing,
+        # so both carry forward.
         if pass_result.state != "failed":
-            state.uncertainty_score = confidence_tracker.uncertainty(_required_fields(request))
+            state.uncertainty_score = confidence_tracker.uncertainty(required_fields)
+            state.action_uncertainty = confidence_tracker.action_uncertainty(required_fields)
             pass_result.uncertainty = state.uncertainty_score
+            pass_result.action_uncertainty = state.action_uncertainty
+        logger.info(
+            "uncertainty_scored",
+            pass_number=pass_num,
+            policy=UNCERTAINTY_POLICY,
+            u_mean=round(state.uncertainty_score, 4),
+            u_action=round(state.action_uncertainty, 4),
+            carried_forward=pass_result.state == "failed",
+        )
 
         state.pass_results.append(pass_result)
 
         # --- CONVERGENCE CHECK ---
         # A sufficient first pass stops the loop. The improvement-delta check
         # still needs a previous pass to compare, so it stays on pass 2+.
-        if _pass_meets_convergence(request, confidence_tracker):
+        if confidence_tracker.has_converged():
             state.converged = True
             state.convergence_reason = _convergence_reason(request, config)
             logger.info(
@@ -468,7 +528,6 @@ async def run_convergence_loop(
         if pass_num >= 2 and not confidence_tracker.had_meaningful_improvement(
             config.min_improvement_delta
         ):
-            state.converged = True
             state.convergence_reason = (
                 f"insufficient_improvement_delta_{config.min_improvement_delta}"
             )
@@ -479,8 +538,9 @@ async def run_convergence_loop(
             )
             break
 
+        # A verification pass that did not make every field ready ends the loop
+        # without converging: one bounded check, not a claim of readiness.
         if search_plan.mode == "verification":
-            state.converged = True
             state.convergence_reason = "verification_pass_complete"
             break
     else:
@@ -500,7 +560,12 @@ async def run_convergence_loop(
 
 
 def _required_fields(request: EnrichRequest) -> list[str] | None:
-    """The fields whose confidence decides U: the caller's schema, when named."""
+    """The fields whose readiness and uncertainty decide: the caller's schema.
+
+    Every requested field except the reserved ``confidence`` key. An omitted or
+    empty schema returns None: the loop keeps its schema-free discovery
+    behavior and measures the deciding fields it tracks instead.
+    """
     names = [name for name in (request.schema_ or {}) if name != "confidence"]
     return names or None
 
@@ -509,34 +574,6 @@ def _convergence_reason(request: EnrichRequest, config: ConvergenceConfig) -> st
     if request.field_thresholds:
         return "requested_fields_meet_field_thresholds"
     return f"all_fields_above_threshold_{config.confidence_threshold}"
-
-
-def _pass_meets_convergence(
-    request: EnrichRequest,
-    confidence_tracker: ConfidenceTracker,
-) -> bool:
-    """True when this pass already satisfies the fields the caller asked for.
-
-    With a schema, every requested field must be present. A consumer field
-    threshold wins over the loop's own confidence bar. With no schema, every
-    field this loop has tracked must clear the loop bar — except values this
-    loop's inference derived. A derived confidence is bounded by its inputs and
-    its rule; another provider pass cannot raise it except by raising those
-    inputs, which are tracked themselves. Counting it would buy paid passes
-    that cannot change the outcome. An empty tracker has not converged.
-    """
-    names = [name for name in (request.schema_ or {}) if name != "confidence"]
-    if not names:
-        return confidence_tracker.has_converged()
-    thresholds = request.field_thresholds or {}
-    for name in names:
-        field_state = confidence_tracker.fields.get(name)
-        if field_state is None:
-            return False
-        required = thresholds.get(name, confidence_tracker.threshold)
-        if field_state.confidence < required:
-            return False
-    return True
 
 
 def _own_derivations(confidence_tracker: ConfidenceTracker) -> set[str]:
@@ -738,6 +775,16 @@ def _build_pass_request(
     # only the fallback for a request that did not name its targets.
     if original.schema_:
         pass_schema = original.schema_
+        # The full schema stays the output contract, so a targeted pass tells
+        # the provider which of its fields are still unresolved through the
+        # objective, the one prompt input build_prompt() puts in front of it.
+        focus = [name for name in plan.priority_fields if name in pass_schema]
+        if plan.mode == "targeted" and focus:
+            pass_objective = (
+                f"{original.objective}\n\n"
+                f"PRIORITY THIS PASS: these requested fields are still unresolved; "
+                f"research them first: {', '.join(focus)}"
+            )
     elif plan.priority_fields:
         pass_schema = dict.fromkeys(plan.priority_fields, "string")
     else:
@@ -752,10 +799,12 @@ def _build_pass_request(
             "kb_context": original.kb_context,
             "consensus_threshold": original.consensus_threshold,
             "field_thresholds": original.field_thresholds,
-            "max_variations": min(
-                plan.variation_count or original.max_variations,
-                original.max_variations,
-            ),
+            "max_variations": _pass_variation_cap(original, plan),
             "idempotency_key": None,
         }
     )
+
+
+def _pass_variation_cap(original: EnrichRequest, plan: PromptPlan) -> int:
+    """Variations this pass may run: the plan's budget, never above the caller's."""
+    return min(plan.variation_count or original.max_variations, original.max_variations)

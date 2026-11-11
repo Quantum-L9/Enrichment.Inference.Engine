@@ -185,3 +185,30 @@ class TestSonarConfigSerialization:
         params = config.to_api_params()
         assert params["model"] == "sonar"
         assert "web_search_options" in params
+
+
+# ── #320 review F1: the optimizer recommends, the pass budget authorizes ─────
+
+
+def test_cap_variations_bounds_count_and_recomputes_cost() -> None:
+    from app.engines.search_optimizer import cap_variations
+
+    config = SonarConfig(
+        model=SonarModel.SONAR_PRO,
+        search_context_size=SearchContextSize.HIGH,
+        max_tokens=2048,
+        variations=4,
+        estimated_cost_per_call=estimate_call_cost(
+            SonarModel.SONAR_PRO, SearchContextSize.HIGH, 2048, 4
+        ),
+        resolution_reason="mode=discovery",
+    )
+    capped = cap_variations(config, 2)
+    assert capped.variations == 2
+    assert capped.estimated_cost_per_call == estimate_call_cost(
+        SonarModel.SONAR_PRO, SearchContextSize.HIGH, 2048, 2
+    )
+    assert capped.resolution_reason.endswith("capped×2")
+    # The original is not mutated, and a cap above the count changes nothing.
+    assert config.variations == 4
+    assert cap_variations(config, 7) is config

@@ -14,7 +14,7 @@ prompts:
       Core enrichment prompt for Perplexity Sonar. Builds a structured system
       prompt with schema definition, field types, and output format example.
       Supports SYSTEM_USER_ASSISTANT strategy for injecting known fields.
-    
+
     system_template: |
       You are a domain research analyst. Your task is to research
       the given entity and extract structured data matching the requested schema.
@@ -84,19 +84,40 @@ prompts:
       - KB fragments to inject
       - Optimal variation budget (1-5 variations)
 
+    # D-9 v2 (operator decision 2026-11-11, issue #266) supersedes D-9 v1, which
+    # chose mode and budget from the average-only U. The triggers previously
+    # listed here (U > 7.0, U in [3.0, 7.0], pass >= 5) never matched the code.
+    uncertainty_policy:
+      id: D9-v2
+      u_mean: 10 * (1 - mean effective confidence); diagnostic only (public uncertainty_score)
+      u_action: 10 * (1 - min effective confidence); input to mode and variation budget
+      effective_confidence: >-
+        absent field, missing value (None or ""), absent/boolean/non-numeric/non-finite
+        confidence count as 0; finite values clamp to [0, 1]
+      population: >-
+        explicit schema fields except the reserved `confidence` key; without a schema,
+        tracked fields not derived by this loop's inference; empty population is 10
+      field_ready: >-
+        present value AND effective confidence >= field_thresholds[field], else the
+        loop confidence_threshold (default 0.85); no aggregate overrides it
     modes:
       discovery:
         description: Initial pass, broad exploration of entity
-        trigger: pass_number == 1 OR uncertainty_score > 7.0
-        variation_budget: 3-5
+        trigger: pass_number == 1
       targeted:
         description: Focused on specific missing/low-confidence fields
-        trigger: 2 <= pass_number <= 4 AND uncertainty_score in [3.0, 7.0]
-        variation_budget: 2-3
+        trigger: >-
+          pass_number >= 2 AND (a required field is unresolved OR, without a schema,
+          a deciding field is unresolved OR u_action > uncertainty_threshold (2.0))
       verification:
-        description: Final validation of high-confidence fields
-        trigger: pass_number >= 5 OR uncertainty_score < 3.0
-        variation_budget: 1-2
+        description: Final validation when every field is ready and u_action is low
+        trigger: pass_number >= 2 AND no unresolved field AND u_action <= 2.0
+    variation_budget:
+      basis: u_action (pass-level), capped by the request's max_variations
+      high: u_action > 5.0 -> 5
+      medium: 2.0 < u_action <= 5.0 -> 3
+      low: u_action <= 2.0 -> 2
+      budget_exhausted: remaining tokens < 1000 -> 1
 
     input_variables:
       - name: entity_state
@@ -113,8 +134,20 @@ prompts:
         required: true
       - name: uncertainty_score
         type: float
-        description: Aggregate uncertainty metric
+        description: Operational U_action (weakest required field), not the diagnostic mean
         required: true
+      - name: required_fields
+        type: list
+        description: The caller's explicit schema; each field is a target until ready
+        required: false
+      - name: field_thresholds
+        type: dict
+        description: Consumer per-field readiness bars (fallback is the planner threshold)
+        required: false
+      - name: deciding_fields
+        type: list
+        description: Without a schema, the tracked non-inference fields that decide convergence
+        required: false
 
     output:
       type: PromptPlan
@@ -144,12 +177,12 @@ prompts:
     description: |
       Builds an assistant message summarizing known fields from prior passes.
       Primes the model with existing knowledge so targeted passes focus on gaps.
-    
+
     template: |
       I already have the following verified data for this entity:
         {field}: {value}
         ...
-      
+
       Focus your research on the fields I'm still missing from the target schema.
 
     input_variables:

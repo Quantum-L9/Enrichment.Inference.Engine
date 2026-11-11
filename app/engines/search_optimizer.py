@@ -16,6 +16,7 @@ Integration:
 from __future__ import annotations
 
 import logging
+from copy import copy
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -167,6 +168,31 @@ def estimate_call_cost(
     tokens_per_var = max_tokens * 1.5
     cost_per_var = (tokens_per_var / 1000) * base * ctx_mult
     return round(cost_per_var * variations, 5)
+
+
+def cap_variations(config: SonarConfig, cap: int) -> SonarConfig:
+    """Bound a resolved config's variation count by ``cap``.
+
+    The optimizer recommends a count from field difficulty and signals; the
+    convergence loop's pass budget (D-9 v2, from U_action) and the caller's
+    ``max_variations`` are the authorizations. The provider runs the smallest
+    of the three, and the cost estimate is recomputed for that count so the
+    estimate never describes calls that will not be made.
+    """
+    capped = min(config.variations, max(cap, 0))
+    if capped == config.variations:
+        return config
+    bounded = copy(config)
+    bounded.variations = capped
+    bounded.estimated_cost_per_call = estimate_call_cost(
+        config.model, config.search_context_size, config.max_tokens, capped
+    )
+    bounded.resolution_reason = (
+        f"{config.resolution_reason} capped×{capped}"
+        if config.resolution_reason
+        else f"capped×{capped}"
+    )
+    return bounded
 
 
 # ──────────────────────────────────────────────

@@ -236,3 +236,194 @@ def test_a_hint_field_already_resolved_is_not_retargeted() -> None:
         uncertainty_score=3.0,
     )
     assert plan.priority_fields == ["employees"]
+
+
+# ── D-9 v2: threshold-aware targeting and U_action budgeting (issue #266) ──
+
+
+def _plan_v2(pass_number: int = 2, uncertainty: float = 1.0, **kwargs):
+    planner_kwargs = {
+        "confidence_threshold": kwargs.pop("confidence_threshold", 0.85),
+        "priority_fields": kwargs.pop("priority_fields", None),
+    }
+    if "domain_spec" in kwargs:
+        planner_kwargs["domain_spec"] = kwargs.pop("domain_spec")
+    return MetaPromptPlanner(**planner_kwargs).plan_pass(
+        pass_context=_ctx(pass_number), uncertainty_score=uncertainty, **kwargs
+    )
+
+
+def test_default_threshold_targets_every_field_below_it() -> None:
+    """T03: at 0.85, both author (0.30) and date (0.80) are targets, not just author."""
+    plan = _plan_v2(
+        uncertainty=7.0,
+        entity_state={"title": "T", "author": "A", "date": "2026"},
+        field_confidences={"title": 0.95, "author": 0.30, "date": 0.80},
+        required_fields=["title", "author", "date"],
+    )
+    assert set(plan.priority_fields) == {"author", "date"}
+    assert plan.mode == "targeted"
+
+
+def test_stricter_consumer_threshold_keeps_a_low_u_field_targeted() -> None:
+    """T04: confidence 0.90 under a 0.95 bar is U_action 1, yet still a target."""
+    plan = _plan_v2(
+        uncertainty=1.0,
+        entity_state={"street": "1 Main St"},
+        field_confidences={"street": 0.90},
+        required_fields=["street"],
+        field_thresholds={"street": 0.95},
+    )
+    assert plan.mode == "targeted"
+    assert plan.priority_fields == ["street"]
+    assert plan.variation_count == 2  # U_action 1 keeps the small budget
+
+
+def test_boundary_u_of_two_does_not_suppress_targeting() -> None:
+    """T05: confidence 0.80 under 0.85 is U_action 2.0, and still targeted."""
+    plan = _plan_v2(
+        uncertainty=10 * (1 - 0.80),
+        entity_state={"industry": "Recycling"},
+        field_confidences={"industry": 0.80},
+        required_fields=["industry"],
+    )
+    assert plan.mode == "targeted"
+    assert plan.priority_fields == ["industry"]
+
+
+@pytest.mark.parametrize(
+    ("confidence", "expected_budget"),
+    [(0.50, 3), (0.49, 5), (0.81, 2)],
+)
+def test_variation_budget_follows_u_action(confidence: float, expected_budget: int) -> None:
+    """T06/T07: U_action 5 is the medium budget; 5.1 is eligible for the high one."""
+    plan = _plan_v2(
+        uncertainty=10 * (1 - confidence),
+        entity_state={"industry": "Recycling"},
+        field_confidences={"industry": confidence},
+        required_fields=["industry"],
+    )
+    assert plan.variation_count == expected_budget
+
+
+def test_low_u_action_with_every_field_ready_is_verification() -> None:
+    plan = _plan_v2(
+        uncertainty=1.0,
+        entity_state={"street": "1 Main St"},
+        field_confidences={"street": 0.97},
+        required_fields=["street"],
+        field_thresholds={"street": 0.95},
+    )
+    assert plan.mode == "verification"
+    assert plan.priority_fields == []
+
+
+def test_schema_free_deciding_gap_keeps_the_pass_targeted() -> None:
+    plan = _plan_v2(
+        uncertainty=1.8,
+        entity_state={"industry": "Recycling"},
+        field_confidences={"industry": 0.82},
+        deciding_fields=["industry"],
+    )
+    assert plan.mode == "targeted"
+
+
+def test_pass_one_is_discovery_whatever_the_gaps() -> None:
+    plan = _plan_v2(
+        pass_number=1,
+        uncertainty=10.0,
+        entity_state={"name": "Acme"},
+        field_confidences={},
+        required_fields=["street"],
+    )
+    assert plan.mode == "discovery"
+    assert "street" in plan.priority_fields
+
+
+def test_required_field_absent_from_the_entity_is_a_gap() -> None:
+    """T22: a requested field the entity does not carry yet is targeted."""
+    plan = _plan_v2(
+        uncertainty=10.0,
+        entity_state={"name": "Acme"},
+        field_confidences={"name": 0.95},
+        required_fields=["website"],
+    )
+    assert plan.priority_fields == ["website"]
+
+
+def test_hints_still_lead_within_the_required_group() -> None:
+    """T23: domain hints keep their order inside the required group."""
+    plan = _plan_v2(
+        uncertainty=10.0,
+        entity_state={"name": "Acme", "notes": None},
+        field_confidences={"name": 0.95},
+        required_fields=["street", "website"],
+        priority_fields=["website"],
+    )
+    assert plan.priority_fields[:2] == ["website", "street"]
+    assert plan.priority_fields[-1] == "notes"
+
+
+def test_gate_critical_ranking_is_kept_within_required_fields() -> None:
+    """T23: gate-critical required gaps outrank other required gaps."""
+    spec = {
+        "ontology": {
+            "nodes": {
+                "Company": {
+                    "properties": {
+                        "street": {"metadata": {"gate_critical": False}},
+                        "facility_type": {"metadata": {"gate_critical": True}},
+                    }
+                }
+            }
+        }
+    }
+    plan = _plan_v2(
+        uncertainty=10.0,
+        entity_state={},
+        field_confidences={},
+        required_fields=["street", "facility_type"],
+        domain_spec=spec,
+    )
+    assert plan.priority_fields == ["facility_type", "street"]
+
+
+def test_top_ten_never_drops_a_required_gap() -> None:
+    """T24: with more than ten gaps, required ones survive the cut, deterministically."""
+    entity = {f"optional_{i:02d}": None for i in range(12)}
+    kwargs = {
+        "uncertainty": 10.0,
+        "entity_state": entity,
+        "field_confidences": {},
+        "required_fields": ["street", "website"],
+    }
+    first = _plan_v2(**kwargs)
+    second = _plan_v2(**kwargs)
+    assert len(first.priority_fields) == 10
+    # Both required gaps lead; the existing ranking orders them within the group.
+    assert set(first.priority_fields[:2]) == {"street", "website"}
+    assert first.priority_fields == second.priority_fields
+
+
+def test_missing_value_with_reported_confidence_is_targeted() -> None:
+    """T10 at the planner: an empty value at 0.99 is still a gap."""
+    plan = _plan_v2(
+        uncertainty=1.0,
+        entity_state={"street": ""},
+        field_confidences={"street": 0.99},
+        required_fields=["street"],
+    )
+    assert plan.mode == "targeted"
+    assert plan.priority_fields == ["street"]
+
+
+def test_zero_and_false_values_are_not_gaps() -> None:
+    """T11 at the planner."""
+    plan = _plan_v2(
+        uncertainty=1.0,
+        entity_state={"employees": 0, "is_public": False},
+        field_confidences={"employees": 0.9, "is_public": 0.9},
+        required_fields=["employees", "is_public"],
+    )
+    assert plan.priority_fields == []
+    assert plan.mode == "verification"

@@ -142,9 +142,11 @@ async def enrich_entity(
             max_variations=request.max_variations,
         )
 
-        # Use sonar_config.variations if provided, else fall back to uncertainty
+        # Use sonar_config.variations if provided, else fall back to uncertainty.
+        # request.max_variations is the authorization (the caller's cap, and in
+        # the convergence loop also the pass budget): no config exceeds it.
         if sonar_config and sonar_config.variations > 0:
-            variation_count = sonar_config.variations
+            variation_count = min(sonar_config.variations, request.max_variations)
         else:
             variation_count = min(uncertainty, request.max_variations)
 
