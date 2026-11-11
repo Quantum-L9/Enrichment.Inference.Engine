@@ -83,7 +83,7 @@ from odoo_modules.plasticos_research_enrichment.models.synthesis_engine import S
 
 def test_synthesis_filters_below_threshold():
     payloads = [
-        {"industry_tags": ["plastics"], "material_indicators": [], 
+        {"industry_tags": ["plastics"], "material_indicators": [],
          "contamination_flags": [], "compliance_signals": [], "confidence": 0.3}
     ]
     result = SynthesisEngine.synthesize(payloads)
