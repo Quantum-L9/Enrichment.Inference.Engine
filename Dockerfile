@@ -1,22 +1,25 @@
-FROM python:3.14-slim AS base
+# Dev image. Same digest-pinned python:3.12-slim base as Dockerfile.prod (the
+# project requires Python 3.12, which uv.lock is resolved for).
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159 AS base
 
 WORKDIR /app
 
-# The app runs from /app on PYTHONPATH; nothing is pip-installed from the tree.
+# The app runs from /app on PYTHONPATH; nothing is installed from the tree.
 ENV PYTHONPATH=/app
 
+# git: uv fetches the Gate SDK from its git source at the commit uv.lock records.
 RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm -rf /var/lib/apt/lists/*
 
-# Supply chain: install exactly what requirements.lock pins, hash-verified,
-# wheels only. The single carve-out is constellation-node-sdk: the lock pins it
-# as the GitHub source archive of the commit the `v1` channel resolved to (with
-# that archive's sha256), and a source archive has no wheel to choose.
-# Regenerate the lock with `bash tools/lock_requirements.sh`.
+# Supply chain: uv.lock is the single lock. install_locked.sh bootstraps a
+# hash-pinned uv and syncs the runtime profile ([project] dependencies, each
+# verified against the sha256 uv.lock records, and the Gate SDK at the commit it
+# records) into /opt/venv. Only the lock inputs are copied for this layer.
 # Unprivileged runtime user (created in the same layer as the install).
-COPY requirements.lock .
-RUN pip install --no-cache-dir --require-hashes --only-binary=:all: \
-        --no-binary=constellation-node-sdk --no-deps -r requirements.lock \
+COPY pyproject.toml uv.lock ./
+COPY tools/deps/install_locked.sh tools/deps/uv-bootstrap.txt tools/deps/
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv PIP_NO_CACHE_DIR=1 bash tools/deps/install_locked.sh runtime \
     && adduser --disabled-password --gecos "" appuser
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy only what the runtime reads (no recursive copy of the build context):
 # the app package; scripts/l9_contract_control.py (imported by
