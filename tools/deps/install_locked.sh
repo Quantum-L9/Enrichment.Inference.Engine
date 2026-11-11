@@ -3,7 +3,7 @@
 #
 #   bash tools/deps/install_locked.sh full     # project (editable) + every group
 #   bash tools/deps/install_locked.sh runtime  # [project] dependencies + licenses (Dockerfile.prod)
-#   bash tools/deps/install_locked.sh group N  # one single-purpose dependency group only (release, sbom)
+#   bash tools/deps/install_locked.sh group N  # one single-purpose dependency group only (release)
 #   bash tools/deps/install_locked.sh uv       # uv only (for `uv lock --check`)
 #
 # `uv sync --locked` installs exactly the versions uv.lock records and verifies
@@ -36,7 +36,7 @@ PYTHON="${PYTHON:-python}"
 
 # Single-purpose groups: installed alone by the one workflow that needs them,
 # never part of the development profile.
-SINGLE_PURPOSE_GROUPS=(release sbom)
+SINGLE_PURPOSE_GROUPS=(release)
 
 case "${1:-}" in
   full)
