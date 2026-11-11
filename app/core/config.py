@@ -116,8 +116,11 @@ class Settings(BaseSettings):
     # every use is logged as `graph_sync_contract_resolved` with
     # `source="settings_fallback"` and the id it stood in for. Both default to
     # "": a tenant without a spec-declared endpoint fails closed (no sync is
-    # sent, `graph_sync_skipped_no_contract` names it). plasticos declares its
-    # endpoints in domains/plasticos/spec.yaml and needs no fallback.
+    # sent, `graph_sync_skipped_no_contract` names it). A fallback endpoint
+    # declares no typed row (the row schema is the tenant spec's declared
+    # types), so even a configured fallback sends nothing: every row is refused
+    # as `graph_sync_refused_row_type`. plasticos declares its endpoint in
+    # domains/plasticos/spec.yaml and needs no fallback.
     # D-9 (Cognitive.Engine.Graphs#386): send each observed relationship row's
     # provider association as `observed_association` so CEG cross-checks it
     # against its own tenant spec instead of trusting this node's mirror. Off
