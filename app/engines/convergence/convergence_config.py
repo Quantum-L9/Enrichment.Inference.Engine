@@ -31,7 +31,9 @@ class ConvergenceConfig:
     domain_constraints: dict[str, Any] = field(default_factory=dict)
     # Per-run token cap (F-007). It only lowers settings.max_budget_tokens.
     max_budget_tokens: int | None = None
-    # Uncertainty above which pass 2+ runs "targeted" rather than "verification".
+    # D-9 v2: operational U_action above which pass 2+ runs "targeted" rather
+    # than "verification" once no field is unresolved. A field below its own
+    # threshold keeps the pass targeted whatever U_action is.
     uncertainty_threshold: float = 2.0
     # Optional advanced convergence features (default off — no behavior change)
     synthesize_composites: bool = False

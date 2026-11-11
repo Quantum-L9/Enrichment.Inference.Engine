@@ -953,7 +953,7 @@ class TestPassFailurePropagation:
         assert response.failure_reason is None
 
 
-# ── WU-02 / F-002 / F-058 / D-9: per-pass uncertainty ─────────────────────
+# ── WU-02 / F-002 / F-058 / D-9 v2: per-pass uncertainty ──────────────────
 
 
 class TestPerPassUncertainty:
@@ -1009,7 +1009,7 @@ class TestPerPassUncertainty:
 
     @pytest.mark.asyncio
     async def test_discovery_pass_plans_with_maximal_uncertainty(self) -> None:
-        """D-9: nothing known yet is maximal uncertainty, so pass 1 gets the largest budget.
+        """D-9 v2: nothing known yet is cold start (both scores 10), so pass 1 gets the largest budget.
 
         Pass 1 used to plan with a stale seed of U=1.0 and ran the *smallest*
         budget (observed [2, 5, 3, 3]) on the pass that knows the least.
@@ -1042,12 +1042,26 @@ class TestPerPassUncertainty:
 
 
 class TestUncertaintyFormulaD9:
-    """D-9 formula (owner-accepted 2026-10-29): U = 10 * (1 - mean confidence)."""
+    """D-9 v2 (operator decision 2026-11-11, issue #266), superseding D-9 v1.
+
+    U_mean = 10 * (1 - mean c*) stays the diagnostic score; U_action =
+    10 * (1 - min c*) drives planning. Both use one effective-confidence
+    population. D-9 v1's "owner-accepted 2026-10-29" claim was never verified;
+    v2 is a new decision, not a confirmation of v1.
+    """
 
     def test_confidence_ladder_maps_to_seven_five_three_one(self) -> None:
-        from app.engines.convergence.confidence_tracker import uncertainty_from_confidences
+        """T27: with one field, both scores give the familiar ladder."""
+        from app.engines.convergence.confidence_tracker import (
+            action_uncertainty_from_confidences,
+            uncertainty_from_confidences,
+        )
 
-        assert [uncertainty_from_confidences([c]) for c in (0.3, 0.5, 0.7, 0.9)] == pytest.approx(
+        ladder = (0.3, 0.5, 0.7, 0.9)
+        assert [uncertainty_from_confidences([c]) for c in ladder] == pytest.approx(
+            [7.0, 5.0, 3.0, 1.0]
+        )
+        assert [action_uncertainty_from_confidences([c]) for c in ladder] == pytest.approx(
             [7.0, 5.0, 3.0, 1.0]
         )
 
@@ -1056,21 +1070,141 @@ class TestUncertaintyFormulaD9:
 
         assert uncertainty_from_confidences([0.4, 0.6]) != uncertainty_from_confidences([0.9, 0.9])
 
+    def test_mean_and_action_diverge_on_a_weak_field(self) -> None:
+        """T01: [0.95, 0.30, 0.80] -> U_mean 3.1667, U_action 7."""
+        from app.engines.convergence.confidence_tracker import (
+            action_uncertainty_from_confidences,
+            uncertainty_from_confidences,
+        )
+
+        confidences = [0.95, 0.30, 0.80]
+        assert uncertainty_from_confidences(confidences) == pytest.approx(3.166667, abs=1e-6)
+        assert action_uncertainty_from_confidences(confidences) == pytest.approx(7.0)
+
+    def test_one_missing_field_cannot_be_diluted(self) -> None:
+        """T02: nine fields at 1.0 and one absent -> U_mean 1, U_action 10."""
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        names = [f"f{i}" for i in range(10)]
+        tracker = ConfidenceTracker(required_fields=names)
+        for name in names[:9]:
+            tracker.update_field(name, "v", 1.0, 1, "consensus")
+        assert tracker.uncertainty(names) == pytest.approx(1.0)
+        assert tracker.action_uncertainty(names) == pytest.approx(10.0)
+
     def test_missing_requested_field_counts_as_unknown(self) -> None:
         from app.engines.convergence.confidence_tracker import ConfidenceTracker
 
         tracker = ConfidenceTracker()
         tracker.update_field("a", "x", 0.8, 1, "consensus")
         assert tracker.uncertainty(["a", "b"]) == pytest.approx(6.0)
+        assert tracker.action_uncertainty(["a", "b"]) == pytest.approx(10.0)
         assert tracker.uncertainty(["a"]) == pytest.approx(2.0)
+        assert tracker.action_uncertainty(["a"]) == pytest.approx(2.0)
 
     def test_nothing_known_is_maximal_uncertainty(self) -> None:
+        """T14: an empty population is cold start for both scores, and not converged."""
         from app.engines.convergence.confidence_tracker import (
             UNCERTAINTY_SCALE,
             ConfidenceTracker,
         )
 
-        assert ConfidenceTracker().uncertainty() == UNCERTAINTY_SCALE
+        tracker = ConfidenceTracker()
+        assert tracker.uncertainty() == UNCERTAINTY_SCALE
+        assert tracker.action_uncertainty() == UNCERTAINTY_SCALE
+        assert tracker.has_converged() is False
+
+    @pytest.mark.parametrize(
+        "raw", [None, float("nan"), float("inf"), float("-inf"), "high", True, False, object()]
+    )
+    def test_unusable_confidence_is_zero_and_scores_stay_finite(self, raw: object) -> None:
+        """T08: absent, non-numeric, non-finite and boolean confidence count as 0."""
+        import math
+
+        from app.engines.convergence.confidence_tracker import (
+            action_uncertainty_from_confidences,
+            normalize_confidence,
+            uncertainty_from_confidences,
+        )
+
+        assert normalize_confidence(raw) == 0.0
+        for score in (
+            uncertainty_from_confidences([raw, 0.9]),
+            action_uncertainty_from_confidences([raw, 0.9]),
+        ):
+            assert math.isfinite(score)
+            assert 0.0 <= score <= 10.0
+        assert action_uncertainty_from_confidences([raw, 0.9]) == pytest.approx(10.0)
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"), [(1.5, 1.0), (-0.2, 0.0), ("0.7", 0.7), (0.42, 0.42), (1, 1.0)]
+    )
+    def test_finite_confidence_is_clamped(self, raw: object, expected: float) -> None:
+        """T09: out-of-range values clamp to [0, 1]; finite numeric strings still count."""
+        from app.engines.convergence.confidence_tracker import normalize_confidence
+
+        assert normalize_confidence(raw) == pytest.approx(expected)
+
+    def test_missing_value_with_high_confidence_is_not_evidence(self) -> None:
+        """T10: a None or empty value at confidence 0.99 is effective confidence 0."""
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        for empty in (None, ""):
+            tracker = ConfidenceTracker(required_fields=["street"])
+            tracker.update_field("street", empty, 0.99, 1, "consensus")
+            assert tracker.effective_confidence("street") == 0.0
+            assert tracker.field_ready("street") is False
+            assert tracker.has_converged() is False
+            assert tracker.action_uncertainty(["street"]) == pytest.approx(10.0)
+
+    def test_zero_and_false_are_values(self) -> None:
+        """T11: legitimate falsy values are present and can be ready."""
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker(required_fields=["employees", "is_public"])
+        tracker.update_field("employees", 0, 0.9, 1, "consensus")
+        tracker.update_field("is_public", False, 0.9, 1, "consensus")
+        assert tracker.field_ready("employees") is True
+        assert tracker.field_ready("is_public") is True
+        assert tracker.has_converged() is True
+
+    def test_consumer_threshold_governs_readiness_not_the_aggregate(self) -> None:
+        """T04: confidence 0.90 against a 0.95 consumer bar: U_action 1, still not ready."""
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker(
+            confidence_threshold=0.85,
+            required_fields=["street"],
+            field_thresholds={"street": 0.95},
+        )
+        tracker.update_field("street", "1 Main St", 0.90, 1, "consensus")
+        assert tracker.action_uncertainty(["street"]) == pytest.approx(1.0)
+        assert tracker.field_ready("street") is False
+        assert tracker.has_converged() is False
+        summary = tracker.get_pass_summary()
+        assert summary["converged"] is False
+        assert summary["fields_below_threshold"] == 1
+
+    def test_schema_free_ignores_inference_only_fields(self) -> None:
+        """T15: without a schema, inference-derived fields never decide convergence."""
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker(exclude_sources=frozenset({"inference"}))
+        tracker.update_field("material_grade", "A", 0.99, 1, "inference")
+        assert tracker.deciding_fields() == []
+        assert tracker.has_converged() is False
+        assert tracker.action_uncertainty() == pytest.approx(10.0)
+
+    def test_explicit_schema_counts_a_required_inferred_field(self) -> None:
+        """T16: a requested field decides readiness whatever source set it (unchanged policy)."""
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker(
+            exclude_sources=frozenset({"inference"}), required_fields=["material_grade"]
+        )
+        tracker.update_field("material_grade", "A", 0.9, 1, "inference")
+        assert tracker.deciding_fields() == ["material_grade"]
+        assert tracker.has_converged() is True
 
 
 class TestTrackerStopSignals:
@@ -1275,3 +1409,305 @@ def test_begin_pass_advances_current_pass_without_fields() -> None:
     tracker.update_field("a", "x", 0.5, 1, "consensus")
     tracker.begin_pass(2)
     assert tracker.had_meaningful_improvement(0.05) is False
+
+
+# ── D-9 v2: dual-score wiring through the real loop (issue #266) ───────────
+
+
+def _fields_pass(confidences: dict[str, float], tokens: int = 100) -> EnrichResponse:
+    """A completed pass whose fields carry their own per-field confidence."""
+    fields = {name: f"v-{name}" for name in confidences}
+    return EnrichResponse(
+        state="completed",
+        fields=fields,
+        confidence=sum(confidences.values()) / max(len(confidences), 1),
+        tokens_used=tokens,
+        feature_vector={"per_field_confidence": dict(confidences)},
+    )
+
+
+def _tracking(response: EnrichResponse) -> dict:
+    assert response.feature_vector is not None
+    return response.feature_vector["confidence_tracking"]
+
+
+class TestD9V2Loop:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("schema", [None, {}])
+    async def test_schema_free_requests_keep_discovery(self, schema) -> None:
+        """T12/T13: an omitted or empty schema keeps schema-free discovery on pass 1."""
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+        from app.engines.convergence_controller import _required_fields
+
+        request = EnrichRequest(
+            entity={"name": "Acme", "industry": None},
+            object_type="Account",
+            objective="x",
+            schema=schema,
+        )
+        assert _required_fields(request) is None
+        seen: list = []
+        response = await run_convergence_loop(
+            request=request,
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.95, {"industry": "Recycling"})], seen),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        assert response.inferences[0]["mode"] == "discovery"
+        assert "industry" in (seen[0].schema_ or {})
+
+    def test_reserved_confidence_key_is_not_a_required_field(self) -> None:
+        from app.engines.convergence_controller import _required_fields
+
+        request = EnrichRequest(
+            entity={"name": "Acme"},
+            object_type="Account",
+            objective="x",
+            schema={"industry": "string", "confidence": "float"},
+        )
+        assert _required_fields(request) == ["industry"]
+
+    @pytest.mark.asyncio
+    async def test_no_tracked_fields_is_cold_start_not_convergence(self) -> None:
+        """T14: a pass that returns nothing leaves both scores at 10 and does not converge."""
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.9, {})]),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        assert response.uncertainty_score == pytest.approx(10.0)
+        assert _tracking(response)["converged"] is False
+        assert not (response.convergence_reason or "").startswith("all_fields_above")
+
+    @pytest.mark.asyncio
+    async def test_failed_pass_updates_neither_score(self, monkeypatch) -> None:
+        """T17: a failed pass carries both scores forward and learns nothing."""
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen_u: list[float] = []
+        _spy_planner(monkeypatch, seen_u)
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"industry": "string", "website": "string"},
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher(
+                [
+                    _fields_pass({"industry": 0.9, "website": 0.3}),
+                    _failed_pass(),
+                    _fields_pass({"industry": 0.9, "website": 0.3}),
+                ]
+            ),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        # Pass 2 planned on pass 1's U_action (7); the failed pass changed nothing.
+        assert seen_u == pytest.approx([10.0, 7.0])
+        assert response.inferences[0]["uncertainty"] == pytest.approx(4.0)
+        assert response.inferences[1]["uncertainty"] is None
+        assert response.uncertainty_score == pytest.approx(4.0)
+        assert response.failure_reason is None
+
+    @pytest.mark.asyncio
+    async def test_insufficient_improvement_is_not_convergence(self) -> None:
+        """T18: a bounded stop without readiness keeps its reason and converged=False."""
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.31)]),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+        assert response.convergence_reason == "insufficient_improvement_delta_0.05"
+        assert _tracking(response)["converged"] is False
+        assert response.state == "completed"
+
+    @pytest.mark.asyncio
+    async def test_budget_exhaustion_is_not_convergence(self) -> None:
+        """T19: budget exhaustion stops the loop without claiming readiness."""
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(max_budget_tokens=150),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3, tokens=200)]),
+            convergence_config=ConvergenceConfig(max_passes=5),
+        )
+        assert response.convergence_reason == "budget_exhausted"
+        assert _tracking(response)["converged"] is False
+
+    @pytest.mark.asyncio
+    async def test_max_passes_is_not_threshold_success(self) -> None:
+        """T20: running out of passes never reads as every field meeting its bar."""
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(entity={"name": "Acme"}, object_type="Account", objective="x"),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_pass(0.3), _pass(0.5)]),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        assert response.convergence_reason == "max_passes_reached"
+        assert _tracking(response)["converged"] is False
+
+    def test_both_scores_start_at_cold_start(self) -> None:
+        from app.engines.convergence_controller import ConvergenceState
+
+        state = ConvergenceState()
+        assert state.converged is False
+        assert state.uncertainty_score == pytest.approx(10.0)
+        assert state.action_uncertainty == pytest.approx(10.0)
+
+    @pytest.mark.asyncio
+    async def test_planner_receives_action_uncertainty(self, monkeypatch) -> None:
+        """T28/T21: the real loop hands U_action to the planner and budgets 5 variations."""
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen_u: list[float] = []
+        seen: list = []
+        _spy_planner(monkeypatch, seen_u)
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"industry": "string", "website": "string"},
+                max_variations=5,
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher(
+                [
+                    _fields_pass({"industry": 0.95, "website": 0.3}),
+                    _fields_pass({"industry": 0.95, "website": 0.9}),
+                ],
+                seen,
+            ),
+            convergence_config=ConvergenceConfig(max_passes=3),
+        )
+        # Pass 1 is cold start; pass 2 plans on U_action = 10 * (1 - 0.3) = 7,
+        # not on U_mean = 3.75, so it gets the 5-variation budget.
+        assert seen_u[:2] == pytest.approx([10.0, 7.0])
+        assert seen[1].max_variations == 5
+        assert response.inferences[1]["mode"] == "targeted"
+
+    @pytest.mark.asyncio
+    async def test_planned_variations_never_exceed_the_request_cap(self) -> None:
+        """T29: a high U_action is a plan, not permission to exceed max_variations."""
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen: list = []
+        await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"industry": "string", "website": "string"},
+                max_variations=2,
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher(
+                [
+                    _fields_pass({"industry": 0.95, "website": 0.3}),
+                    _fields_pass({"industry": 0.95, "website": 0.9}),
+                ],
+                seen,
+            ),
+            convergence_config=ConvergenceConfig(max_passes=3),
+        )
+        assert all(r.max_variations <= 2 for r in seen)
+
+    @pytest.mark.asyncio
+    async def test_public_uncertainty_stays_the_diagnostic_mean(self) -> None:
+        """T25/T26: uncertainty_score and inferences[*].uncertainty carry U_mean only."""
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"industry": "string", "website": "string"},
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_fields_pass({"industry": 0.95, "website": 0.3})]),
+            convergence_config=ConvergenceConfig(max_passes=1),
+        )
+        assert response.uncertainty_score == pytest.approx(3.75)
+        assert response.inferences[0]["uncertainty"] == pytest.approx(3.75)
+        assert "action_uncertainty" not in response.inferences[0]
+        assert "action_uncertainty" not in response.model_dump()
+
+    @pytest.mark.asyncio
+    async def test_serialized_convergence_respects_consumer_thresholds(self) -> None:
+        """T30/T04: 0.90 against a 0.95 consumer bar is not converged in the metadata."""
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"street": "string"},
+                field_thresholds={"street": 0.95},
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher(
+                [_fields_pass({"street": 0.9}), _fields_pass({"street": 0.9})]
+            ),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        tracking = _tracking(response)
+        assert tracking["converged"] is False
+        assert tracking["summary"]["fields_below_threshold"] == 1
+        assert response.convergence_reason != "requested_fields_meet_field_thresholds"
+        # U_action is 1 (< 2), yet the unmet consumer bar keeps pass 2 targeted.
+        assert response.inferences[1]["mode"] == "targeted"
+
+    @pytest.mark.asyncio
+    async def test_consumer_threshold_met_converges(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"street": "string"},
+                field_thresholds={"street": 0.95},
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_fields_pass({"street": 0.97})]),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        assert response.convergence_reason == "requested_fields_meet_field_thresholds"
+        assert _tracking(response)["converged"] is True
+
+
+def _spy_planner(monkeypatch: pytest.MonkeyPatch, seen_u: list[float]) -> None:
+    """Record the U the real planner is given on each pass."""
+    from app.engines.meta_prompt_planner import MetaPromptPlanner
+
+    original = MetaPromptPlanner.plan_pass
+
+    def spy(self, *args, **kwargs):
+        seen_u.append(kwargs["uncertainty_score"])
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(MetaPromptPlanner, "plan_pass", spy)
