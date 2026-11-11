@@ -1,0 +1,46 @@
+# Managed by Quantum-L9/.github. Both reusable-workflow calls below pin one
+# full commit SHA on main, so main can move without retargeting any consumer.
+#
+# Governance logic lives in Quantum-L9/.github/.github/workflows/governance-*.yml.
+# Shipping a change there: merge it, then (an operator decision) set both
+# `uses:` SHAs below to that merge commit, record the same SHA in
+# ops/governance-v1-pin.txt, and set GOVERNANCE_CALLER_PIN in
+# ops/test-distribution-triggers.js (it fails unless all three agree). Consumers that
+# already carry a caller are re-pinned by a manual continuous-sync dispatch
+# (docs/DISTRIBUTION.md). No tag is involved: moving one retargets nothing.
+#
+# Current pin: 02ea092a, the merge of #176 (PR-body refresh `body` job and the
+# `gates` input in governance-pr.yml).
+#
+# SECRETS: a called workflow does NOT inherit caller secrets automatically.
+# Both callees use only GITHUB_TOKEN. Do not add blank `secrets: inherit`.
+# If a callee later needs a real secret, add a named `secrets:` entry.
+#
+# Permission validation runs BEFORE `if:` skip. Both jobs must declare
+# job-level permissions or a partial grant startup_fails on the unused job.
+#
+# ACCESS: if this caller fails before any step runs, check the Actions policy on
+# THIS repo. `gh api repos/OWNER/REPO/actions/permissions`
+
+name: Governance
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  issues:
+    types: [opened, edited, reopened]
+
+jobs:
+  pr:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: Quantum-L9/.github/.github/workflows/governance-pr.yml@02ea092a098563b27970d21416fabc47dd005fb0  # merge of #176
+
+  issue:
+    if: github.event_name == 'issues'
+    permissions:
+      contents: read
+      issues: write
+    uses: Quantum-L9/.github/.github/workflows/governance-issue.yml@02ea092a098563b27970d21416fabc47dd005fb0  # merge of #176

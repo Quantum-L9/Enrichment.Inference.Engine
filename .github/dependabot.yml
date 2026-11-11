@@ -1,91 +1,75 @@
-# --- L9_META ---
-# l9_schema: 1
-# origin: l9-template
-# engine: enrichment
-# layer: [ci]
-# tags: [L9_TEMPLATE, dependabot]
-# owner: platform
-# status: active
-# --- /L9_META ---
+# Rendered by Quantum-L9/.github ops/render-dependabot.js; managed — local edits
+# are restored; opt out with .l9/no-sync. ADR: docs/adr/0019-dependabot-managed-rendered.md
 #
-# Dependabot configuration — automated dependency updates
-# Sibling parity: Cognitive.Engine.Graphs/.github/dependabot.yml
-
+# Ecosystems follow this repository's root: github-actions always; uv when
+# uv.lock exists, else pip when a root requirements*.txt or a PEP 621
+# pyproject.toml exists; npm when package.json exists; pre-commit when
+# .pre-commit-config.yaml exists.
+# Tools Core selects (Quantum-L9/l9-ci-core core-owned-tools.json) and the
+# Core, SDK and .github action pins are ignored: they are not bumped here.
+# Safe-only: no semver-major bump is proposed in any ecosystem; a fix that
+# exists only in a new major arrives as a Dependabot alert, not a PR.
+# ADVISORY POSTURE: this opens PRs only. No auto-merge, no major groups.
 version: 2
-
 updates:
-  # ── Python dependencies ──────────────────────────────────────────────
-  - package-ecosystem: "pip"
+  - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
     commit-message:
-      prefix: "chore(deps):"
-    labels:
-      - "dependencies"
-      - "python"
-    reviewers:
-      - "cryptoxdog"
-    # ruff, mypy and pytest are pinned by Quantum-L9/l9-ci-core's toolchain lock
-    # (.github/actions/install-consumer-ci/toolchain-lock.json). A Dependabot
-    # bump moves EIE off that lock -- 0.17.3 / 2.4.1 / 9.2.0 was the drift --
-    # so the versions change only when Core's lock does.
+      prefix: "chore(deps)"
+    cooldown:
+      default-days: 7
     ignore:
-      - dependency-name: "ruff"
-      - dependency-name: "mypy"
-      - dependency-name: "pytest"
+      - dependency-name: "Quantum-L9/.github*"
+      - dependency-name: "Quantum-L9/l9-ci-core*"
+      - dependency-name: "Quantum-L9/l9-ci-sdk*"
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
-      web-framework:
-        patterns:
-          - "fastapi*"
-          - "uvicorn*"
-          - "httpx*"
-          - "starlette*"
-      data-validation:
-        patterns:
-          - "pydantic*"
-      testing:
-        patterns:
-          - "pytest*"
-          - "respx*"
-          - "coverage*"
-      dev-tools:
-        patterns:
-          - "ruff*"
-          - "mypy*"
-          - "pre-commit*"
-      security:
-        patterns:
-          - "bandit*"
-          - "pip-audit*"
-      observability:
-        patterns:
-          - "structlog*"
-
-  # ── GitHub Actions ───────────────────────────────────────────────────
-  - package-ecosystem: "github-actions"
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: pip
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
     commit-message:
-      prefix: "chore(ci):"
-    labels:
-      - "dependencies"
-      - "github-actions"
-
-  # ── Docker ───────────────────────────────────────────────────────────
-  - package-ecosystem: "docker"
+      prefix: "chore(deps)"
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "mypy"
+      - dependency-name: "pre-commit"
+      - dependency-name: "pytest"
+      - dependency-name: "ruff"
+      - dependency-name: "semgrep"
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: pre-commit
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 3
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
     commit-message:
-      prefix: "chore(docker):"
-    labels:
-      - "dependencies"
-      - "docker"
+      prefix: "chore(deps)"
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "https://github.com/astral-sh/ruff-pre-commit"
+      - dependency-name: "https://github.com/pre-commit/mirrors-mypy"
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      pre-commit-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
