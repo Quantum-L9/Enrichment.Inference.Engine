@@ -2,10 +2,12 @@
 Consensus Engine — Weighted multi-variation synthesis.
 
 Synthesizes N variations into single consensus output:
-  - Agreement-based weighting (5/5 agree = high confidence)
-  - Per-field confidence scoring (NEW)
-  - Consensus threshold gating
   - Type-aware value selection (mode for strings, median for numbers)
+  - Agreement gating: the share of replies carrying the selected value must
+    clear the consensus (agreement) threshold
+  - Per-field score: a bounded, uncalibrated heuristic (see _field_score).
+    Agreement never raises it above the provider's own assertion, duplication
+    never raises it, and dissent among distinct values lowers it.
 
 Input: list[dict[str, Any]] — validated responses from N Sonar variations
 Output: dict with "fields", "confidence", "per_field_confidence"
@@ -21,7 +23,7 @@ from typing import Any
 
 import structlog
 
-from app.utils.safe_convert import safe_float
+from app.utils.safe_convert import normalize_confidence, safe_float
 
 logger = structlog.get_logger("consensus")
 
@@ -44,17 +46,12 @@ def apply_field_confidence_thresholds(
     requested = frozenset(requested_fields)
     filtered: list[dict[str, Any]] = []
     for variation in variations:
-        try:
-            confidence = float(variation.get("confidence") or 0.0)
-        except (TypeError, ValueError):
-            confidence = 0.0
+        confidence = normalize_confidence(variation.get("confidence"))
         kept: dict[str, Any] = {"confidence": variation.get("confidence")}
         for key, value in variation.items():
             if key == "confidence":
                 continue
-            required = field_thresholds.get(key)
-            if required is None and key in requested:
-                required = default_threshold
+            required = _resolved_threshold(key, field_thresholds, requested, default_threshold)
             if required is None or confidence < required:
                 continue
             if value in (None, "", [], {}):
@@ -62,6 +59,52 @@ def apply_field_confidence_thresholds(
             kept[key] = value
         filtered.append(kept)
     return filtered
+
+
+def apply_field_score_thresholds(
+    synthesis: dict[str, Any],
+    field_thresholds: Mapping[str, float],
+    *,
+    requested_fields: Iterable[str] = (),
+    default_threshold: float | None = None,
+) -> dict[str, Any]:
+    """Drop a synthesized field whose final score is below that field's bar.
+
+    The per-reply filter above judges each reply's raw confidence; this judges
+    the score the response will carry, so agreement or a synthetic value can
+    never deliver a field below its consumer bar. Bars resolve exactly as in
+    ``apply_field_confidence_thresholds``.
+    """
+    requested = frozenset(requested_fields)
+    fields: dict[str, Any] = {}
+    scores: dict[str, float] = {}
+    for name, value in synthesis.get("fields", {}).items():
+        score = float(synthesis.get("per_field_confidence", {}).get(name, 0.0))
+        required = _resolved_threshold(name, field_thresholds, requested, default_threshold)
+        if required is None or score < required:
+            logger.debug("field_below_field_threshold", field=name, score=score, threshold=required)
+            continue
+        fields[name] = value
+        scores[name] = score
+    return {
+        **synthesis,
+        "fields": fields,
+        "per_field_confidence": scores,
+        "confidence": sum(scores.values()) / len(scores) if scores else 0.0,
+    }
+
+
+def _resolved_threshold(
+    name: str,
+    field_thresholds: Mapping[str, float],
+    requested: frozenset[str],
+    default_threshold: float | None,
+) -> float | None:
+    """A field's bar: its map entry, else the default when it was requested."""
+    required = field_thresholds.get(name)
+    if required is None and name in requested:
+        return default_threshold
+    return required
 
 
 def synthesize(
@@ -79,14 +122,16 @@ def synthesize(
     threshold : float
         Minimum agreement ratio to include field (default 0.6)
     total_attempted : int
-        Total variations attempted (for confidence calculation)
+        Replies the agreement ratio is measured over (the caller passes the
+        valid replies, so a failed call is never a dissenting vote)
 
     Returns
     -------
     dict with:
         - fields: dict[str, Any] — consensus values
-        - confidence: float — aggregate confidence (0.0-1.0)
-        - per_field_confidence: dict[str, float] — confidence per field (NEW)
+        - confidence: float — mean of the per-field scores
+        - per_field_confidence: dict[str, float] — bounded uncalibrated
+          per-field score (``_field_score``), never a calibrated probability
     """
     if not variations:
         return {
@@ -107,23 +152,25 @@ def synthesize(
         if not values:
             continue
 
-        # Calculate field-level agreement
-        field_confidence = _calculate_field_confidence(values, total_attempted)
-
-        # Apply threshold gate
-        if field_confidence < threshold:
+        # Agreement among the replies is the admission gate only.
+        agreement = _calculate_field_confidence(values, total_attempted)
+        if agreement < threshold:
             logger.debug(
                 "field_below_threshold",
                 field=field,
-                confidence=field_confidence,
+                confidence=agreement,
                 threshold=threshold,
             )
             continue
 
-        # Select winning value
         winning_value = _select_value(values)
+        observations = [
+            (v.get(field), normalize_confidence(v.get("confidence")))
+            for v in variations
+            if field in v and not _is_empty(v.get(field))
+        ]
         consensus_fields[field] = winning_value
-        per_field_confidence[field] = field_confidence
+        per_field_confidence[field] = _field_score(winning_value, observations)
 
     # Calculate aggregate confidence
     aggregate_confidence = (
@@ -146,33 +193,64 @@ def synthesize(
     }
 
 
-def _calculate_field_confidence(values: list[Any], total_attempted: int) -> float:
+def _value_key(value: Any) -> str:
+    """The comparison key that decides whether two replies gave the same value."""
+    return str(value).strip().lower()
+
+
+def _field_score(selected: Any, observations: list[tuple[Any, float]]) -> float:
+    """Bounded, uncalibrated score for the selected value of one field.
+
+    ``observations`` are the (value, normalized provider confidence) pairs of
+    the replies that answered this field.
+
+    support: the strongest provider assertion made for exactly the selected
+        value. A numeric median no reply stated is supported only as strongly
+        as the weaker of the observations it was computed from.
+    distinct_share: 1 / (number of distinct values answered). Repeated replies
+        of one provider are not independent evidence (no reply carries
+        per-field provenance), so identical values count once: duplicating a
+        reply cannot raise the score, and dissent lowers it.
+
+    score = min(support, distinct_share). One reply scores its own assertion,
+    never the 1/1 self-agreement of 1.0, and a raw 0 stays 0.
     """
-    Calculate confidence score for a single field based on variation agreement.
+    if not observations:
+        return 0.0
+    selected_key = _value_key(selected)
+    supporting = [conf for value, conf in observations if _value_key(value) == selected_key]
+    support = max(supporting) if supporting else _median_support(observations)
+    distinct = {_value_key(value) for value, _ in observations}
+    return min(support, 1.0 / len(distinct))
+
+
+def _median_support(observations: list[tuple[Any, float]]) -> float:
+    """Support for a median no reply stated: the weaker of its middle values."""
+    ordered = sorted(observations, key=lambda o: safe_float(o[0]))
+    n = len(ordered)
+    middle = ordered[n // 2 - 1 : n // 2 + 1] if n % 2 == 0 else [ordered[n // 2]]
+    return min(conf for _, conf in middle)
+
+
+def _calculate_field_confidence(values: list[Any], total_attempted: int) -> float:
+    """Agreement ratio for a single field: replies carrying the modal value.
 
     Logic:
       - 5/5 agree → 1.0
       - 4/5 agree → 0.8
       - 3/5 agree → 0.6
-      - 2/5 agree → 0.4
-      - All different → 0.2 (floor)
+      - All different → 1/5
+
+    This is the admission gate only, not the field's score. The former 0.2
+    floor is gone: it let total disagreement pass any threshold at or below
+    0.2.
     """
-    if not values:
+    if not values or total_attempted <= 0:
         return 0.0
 
-    # Normalize values for comparison
-    value_counts: dict[str, int] = {}
-    for v in values:
-        v_normalized = str(v).strip().lower()
-        value_counts[v_normalized] = value_counts.get(v_normalized, 0) + 1
-
+    value_counts = Counter(_value_key(v) for v in values)
     max_agreement = max(value_counts.values())
-
-    # Agreement ratio
-    confidence = max_agreement / total_attempted
-
-    # Floor at 0.2 (some data is better than none)
-    return max(0.2, confidence)
+    return max_agreement / total_attempted
 
 
 # Keys `validate_response` attaches to every normalized variation that are

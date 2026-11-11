@@ -29,7 +29,11 @@ from ..models.schemas import (
     EnrichResponse,
 )
 from ..services.circuit_breaker import CircuitBreaker
-from ..services.consensus_engine import apply_field_confidence_thresholds, synthesize
+from ..services.consensus_engine import (
+    apply_field_confidence_thresholds,
+    apply_field_score_thresholds,
+    synthesize,
+)
 from ..services.deterministic_provider import PROVIDER_NAME as DETERMINISTIC_PROVIDER
 from ..services.deterministic_provider import query_deterministic
 from ..services.idempotency import (
@@ -42,8 +46,12 @@ from ..services.prompt_builder import build_prompt, build_schema_hash
 from ..services.request_deadline import current_deadline, provider_attempt_timeout
 from ..services.uncertainty_engine import compute_uncertainty
 from ..services.validation_engine import ValidationError, validate_response
+from ..utils.safe_convert import normalize_confidence
 
 logger = structlog.get_logger("orchestrator")
+
+# failure_reason when the count owner authorized no provider variation.
+NO_VARIATIONS_AUTHORIZED = "no_variations_authorized"
 
 # CB_FAILURE_THRESHOLD / CB_COOLDOWN_SECONDS (F-023). Settings() rather than the
 # cached get_settings(): building the breaker at import must not freeze the
@@ -86,6 +94,7 @@ async def enrich_entity(
     sonar_config=None,
     *,
     idempotency_scope: str | None = None,
+    authorized_variations: int | None = None,
 ) -> EnrichResponse:
     """Full enrichment pipeline for a single entity.
 
@@ -99,6 +108,11 @@ async def enrich_entity(
         The authenticated identity that owns `request.idempotency_key`
         (app.services.idempotency.tenant_scope / api_key_scope). Without it
         the key is not replayed or recorded.
+    authorized_variations : int | None
+        The convergence loop's D-9 v2 pass budget. When given it is the
+        target variation count; neither the optimizer's recommendation nor
+        the single-pass heuristic re-decides it. Direct enrich omits it and
+        keeps ``compute_uncertainty`` as the count owner.
     """
     start = time.monotonic()
 
@@ -140,19 +154,41 @@ async def enrich_entity(
             max_fragments=3,
         )
 
-        uncertainty = compute_uncertainty(
-            entity=request.entity,
-            target_schema=target_schema,
-            max_variations=request.max_variations,
-        )
-
-        # Use sonar_config.variations if provided, else fall back to uncertainty.
-        # request.max_variations is the authorization (the caller's cap, and in
-        # the convergence loop also the pass budget): no config exceeds it.
-        if sonar_config and sonar_config.variations > 0:
-            variation_count = min(sonar_config.variations, request.max_variations)
+        # One target owner per path (post-#320 F2): the convergence planner
+        # when it authorized a count, else a resolved SonarConfig, else the
+        # single-pass heuristic. A zero from either owner is a real zero, never
+        # a cue to fall back to the heuristic. The hard caps are mechanical:
+        # request.max_variations (the caller's cap, and in the loop also the
+        # pass budget) and the resolved config's count.
+        if authorized_variations is not None:
+            target = authorized_variations
+        elif sonar_config is not None:
+            target = sonar_config.variations
         else:
-            variation_count = min(uncertainty, request.max_variations)
+            target = compute_uncertainty(
+                entity=request.entity,
+                target_schema=target_schema,
+                max_variations=request.max_variations,
+            )
+        variation_count = max(min(target, request.max_variations), 0)
+        if sonar_config is not None:
+            variation_count = min(variation_count, sonar_config.variations)
+        if variation_count == 0:
+            elapsed = int((time.monotonic() - start) * 1000)
+            logger.info("pipeline_skipped_no_variations_authorized", elapsed_ms=elapsed)
+            return EnrichResponse(
+                state="failed",
+                failure_reason=NO_VARIATIONS_AUTHORIZED,
+                variation_count=0,
+                consensus_threshold=request.consensus_threshold,
+                uncertainty_score=0.0,
+                pass_count=1,
+                kb_content_hash=kb_data["content_hash"],
+                kb_fragment_ids=kb_data["fragment_ids"],
+                kb_files_consulted=kb_data["kb_files"],
+                tokens_used=0,
+                processing_time_ms=elapsed,
+            )
 
         # Determine model — sonar_config overrides settings default
         model = sonar_config.model.value if sonar_config else settings.perplexity_model
@@ -291,7 +327,10 @@ async def enrich_entity(
         # A consumer map may be partial: a requested field it omits is held to
         # the default field confidence threshold, never to consensus_threshold.
         # An empty map on a schema-free request names no field and stays a no-op.
-        if request.field_thresholds is not None and (target_schema or request.field_thresholds):
+        field_bars = request.field_thresholds is not None and bool(
+            target_schema or request.field_thresholds
+        )
+        if field_bars and request.field_thresholds is not None:
             valid = apply_field_confidence_thresholds(
                 valid,
                 request.field_thresholds,
@@ -303,6 +342,15 @@ async def enrich_entity(
             request.consensus_threshold,
             total_attempted=len(valid),
         )
+        # The bar applies to the score the response carries as well, so dissent
+        # or a synthetic median never delivers a field below it (post-#320 F1).
+        if field_bars and request.field_thresholds is not None:
+            synthesis = apply_field_score_thresholds(
+                synthesis,
+                request.field_thresholds,
+                requested_fields=target_schema or {},
+                default_threshold=DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
+            )
 
         if not synthesis["fields"]:
             return EnrichResponse(
@@ -416,10 +464,10 @@ def _reply_is_sufficient(
         validated = validate_response(result.data, target_schema)
     except ValidationError:
         return False
-    try:
-        confidence = float(validated.get("confidence") or 0.0)
-    except (TypeError, ValueError):
-        return False
+    # validate_response already normalized it; a single reply's field score
+    # is exactly this assertion (consensus_engine._field_score), so early stop
+    # and the downstream score agree.
+    confidence = normalize_confidence(validated.get("confidence"))
     if not target_schema:
         if field_thresholds:
             return False

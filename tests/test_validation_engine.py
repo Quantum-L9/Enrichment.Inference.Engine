@@ -118,3 +118,46 @@ class TestValidationRules:
         result = validate_payload(payload, {"x": "string", "y": "string"})
         assert "x" not in result
         assert result["y"] == "valid"
+
+
+# ---------------------------------------------------------------------------
+# Post-#320 F1: provider confidence is an uncalibrated claim, normalized once.
+# Missing or malformed confidence is 0.0, never the old 0.5 default and never a
+# NaN/Inf that slips past a threshold comparison.
+# ---------------------------------------------------------------------------
+
+
+class TestProviderConfidenceNormalization:
+    def test_f1_01_valid_confidence_is_unchanged(self) -> None:
+        assert validate_response({"confidence": 0.60, "x": "a"})["confidence"] == 0.60
+
+    def test_f1_02_missing_confidence_is_zero_not_half(self) -> None:
+        assert validate_response({"x": "a"})["confidence"] == 0.0
+
+    @pytest.mark.parametrize("raw", [float("nan"), "nan", "NaN"])
+    def test_f1_03_nan_is_zero_and_cannot_clear_a_bar(self, raw) -> None:
+        confidence = validate_response({"confidence": raw, "x": "a"})["confidence"]
+        assert confidence == 0.0
+        assert not confidence >= 0.95
+
+    @pytest.mark.parametrize("raw", [float("inf"), float("-inf"), "inf", True, False])
+    def test_f1_04_inf_and_bool_are_zero(self, raw) -> None:
+        assert validate_response({"confidence": raw, "x": "a"})["confidence"] == 0.0
+
+    @pytest.mark.parametrize("raw", ["high", "", [], {}, object()])
+    def test_f1_05_unparseable_is_zero_without_raising(self, raw) -> None:
+        assert validate_response({"confidence": raw, "x": "a"})["confidence"] == 0.0
+
+    def test_f1_06_numeric_string_is_still_accepted(self) -> None:
+        assert validate_response({"confidence": "0.75", "x": "a"})["confidence"] == 0.75
+
+    @pytest.mark.parametrize(("raw", "expected"), [(-0.4, 0.0), (1.7, 1.0), ("2", 1.0)])
+    def test_f1_07_out_of_range_is_clamped(self, raw, expected) -> None:
+        assert validate_response({"confidence": raw, "x": "a"})["confidence"] == expected
+
+    def test_one_normalizer_owns_the_policy(self) -> None:
+        """The tracker, validation and consensus all use the same rule."""
+        from app.engines.convergence import confidence_tracker
+        from app.utils import safe_convert
+
+        assert confidence_tracker.normalize_confidence is safe_convert.normalize_confidence
