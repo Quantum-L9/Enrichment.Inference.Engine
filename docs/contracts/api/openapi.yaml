@@ -1,7 +1,7 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: Unified OpenAPI Specification
 # Source:   app/main.py, app/api/v1/*, app/score/score_api.py, app/models/schemas.py
-# Version:  2.4.0
+# Version:  2.4.1
 # Updated:  2026-11-11
 # ═══════════════════════════════════════════════════════════════
 
@@ -9,7 +9,7 @@ openapi: "3.1.0"
 
 info:
   title: L9 ENRICH — Domain Enrichment API
-  version: "2.4.0"
+  version: "2.4.1"
   description: |
     Universal domain-aware entity enrichment. Layer 2 of the L9 three-layer
     intelligence stack. Serves Salesforce Apex callouts, Odoo async_executor,
@@ -952,6 +952,16 @@ components:
         exists). Every authenticated, permitted /score request therefore answers
         500 today, before body validation. The 200 schemas below describe what
         the handlers return once the providers are wired.
+
+        Wiring them needs implementations that do not exist in this repository:
+        a `ProfileStore` and a `ScoreStore` (with `get_score_by_id`, which
+        /score/compare reads), a `DecayScoreStore`, and an `EntityDataProvider`
+        (app/score/score_engine.py, app/score/score_decay.py). No table, model
+        or class backs scoring profiles or score records, and the score
+        protocols are synchronous and tenant-free where the persistence layer
+        (`app/services/pg_store.py`, `ResultStore(tenant_id)`) is asynchronous
+        and tenant-scoped. `ScoreExplainer` is the only provider with a real
+        implementation, and no route uses it without a store.
       content:
         text/plain:
           schema:
@@ -1948,7 +1958,7 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/ScoreDependenciesNotConfigured"
-      x-source-file: app/score/score_api.py:214
+      x-source-file: app/score/score_api.py:216
 
   /score/batch:
     post:
@@ -2015,7 +2025,7 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/ScoreDependenciesNotConfigured"
-      x-source-file: app/score/score_api.py:267
+      x-source-file: app/score/score_api.py:269
 
   /score/rescore/{entity_id}:
     post:
@@ -2070,7 +2080,7 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/ScoreDependenciesNotConfigured"
-      x-source-file: app/score/score_api.py:304
+      x-source-file: app/score/score_api.py:306
 
   /score/explain:
     post:
@@ -2182,18 +2192,19 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/ScoreDependenciesNotConfigured"
-      x-source-file: app/score/score_api.py:335
+      x-source-file: app/score/score_api.py:337
 
   /score/compare:
     post:
       operationId: compareScores
       summary: Compare before/after scores for an entity
       description: |
-        As implemented, the handler reads both records with
-        `score_store.get_score(entity_id, entity_id)` — the second argument is
-        the domain slot — and does not read `before_score_id` /
-        `after_score_id`. The contract documents the request the route accepts,
-        not a guarantee that those ids select the records compared.
+        Reads each side by its own id — `score_store.get_score_by_id(before_score_id)`
+        and `score_store.get_score_by_id(after_score_id)` — and compares them in
+        that order, whichever is newer. A record that does not exist, or that
+        belongs to an entity other than `entity_id`, is 404 for that side
+        (checked before, then after). Before 2.4.1 the handler read both sides
+        with `get_score(entity_id, entity_id)` and ignored both ids.
       tags: [score]
       requestBody:
         required: true
@@ -2248,12 +2259,15 @@ paths:
         "403":
           $ref: "#/components/responses/ScoreForbidden"
         "404":
-          description: Score records or scoring profile not found
+          description: |
+            `Before score record not found for entity`,
+            `After score record not found for entity`, or
+            `Scoring profile not found`.
         "422":
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/ScoreDependenciesNotConfigured"
-      x-source-file: app/score/score_api.py:361
+      x-source-file: app/score/score_api.py:363
 
   /score/decay/preview:
     post:
@@ -2309,7 +2323,7 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/ScoreDependenciesNotConfigured"
-      x-source-file: app/score/score_api.py:390
+      x-source-file: app/score/score_api.py:399
 
   /score/decay/apply:
     post:
@@ -2373,7 +2387,7 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/ScoreDependenciesNotConfigured"
-      x-source-file: app/score/score_api.py:429
+      x-source-file: app/score/score_api.py:438
 
   /score/profile:
     post:
@@ -2424,7 +2438,7 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/ScoreDependenciesNotConfigured"
-      x-source-file: app/score/score_api.py:476
+      x-source-file: app/score/score_api.py:485
 
   /score/profile/{profile_id}:
     get:
@@ -2496,7 +2510,7 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/ScoreDependenciesNotConfigured"
-      x-source-file: app/score/score_api.py:528
+      x-source-file: app/score/score_api.py:537
 
   /score/distribution/{domain}:
     get:
@@ -2545,7 +2559,7 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/ScoreDependenciesNotConfigured"
-      x-source-file: app/score/score_api.py:548
+      x-source-file: app/score/score_api.py:557
 
 tags:
   - name: enrichment
