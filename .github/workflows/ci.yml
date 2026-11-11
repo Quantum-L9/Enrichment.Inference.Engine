@@ -244,7 +244,7 @@ jobs:
       contents: read
     env:
       # Peer subjects, pinned. Bump deliberately; each step verifies HEAD.
-      CEG_SUBJECT_SHA: 3379309971f9defa40c393b2292f2f1784aa90ac
+      CEG_SUBJECT_SHA: e9e6ceb669d37bd75dc9bded206105b5875a9c60
       GATE_SUBJECT_SHA: ab8fb674e65f2cafe4172178c1ce6de18b4bb0f4
     services:
       redis:
