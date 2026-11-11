@@ -189,3 +189,17 @@ def test_existing_coverage_gate_and_no_new_service_are_preserved() -> None:
     assert 'pytest "${{ env.TEST_DIR }}"' in coverage["run"]
     assert "|| true" not in coverage["run"]
     assert job["steps"].index(coverage) < job["steps"].index(_scan())
+
+
+def test_every_declared_sonar_source_directory_exists() -> None:
+    """SonarScanner aborts on a missing ``sonar.sources`` entry (``engine`` did)."""
+    properties = {}
+    for line in (ROOT / "sonar-project.properties").read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.partition("=")
+        if sep and not key.lstrip().startswith("#"):
+            properties[key.strip()] = value.strip()
+    for name in ("sonar.sources", "sonar.tests"):
+        entries = [entry.strip() for entry in properties[name].split(",") if entry.strip()]
+        assert entries, f"{name} must name at least one directory"
+        missing = [entry for entry in entries if not (ROOT / entry).is_dir()]
+        assert missing == [], f"{name} names directories that do not exist: {missing}"
