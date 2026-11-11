@@ -103,7 +103,7 @@ class FeatureEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     contract_version: Literal["1.0.0-draft"] = "1.0.0-draft"
-    domain: Literal["plasticos"] = "plasticos"
+    domain: str  # an admitted domain spec id (domain_admission), never a literal
     feature_id: str = Field(pattern=FEATURE_ID_PATTERN)
     subject_ref: str = Field(pattern=ENTITY_REF_PATTERN)
     value: TypedValue
@@ -119,6 +119,14 @@ class FeatureEvidence(BaseModel):
     supersedes_ref: str | None = None
     conflicts_with_refs: list[str] = Field(default_factory=list)
     execution_version: str = Field(min_length=1)
+
+    @field_validator("domain")
+    @classmethod
+    def domain_is_admitted(cls, value: str) -> str:
+        """Any domain whose spec the effective reader admits; no spec is hard-coded."""
+        from app.models.domain_admission import admitted_domain
+
+        return admitted_domain(value)
 
     @field_validator("conflicts_with_refs")
     @classmethod
@@ -161,6 +169,7 @@ def _source_from_field(source: FieldSource) -> EvidenceSource:
 
 def feature_evidence_from_field_confidence(
     *,
+    domain: str,
     field: FieldConfidence,
     subject_ref: str,
     feature_id: str | None = None,
@@ -196,6 +205,7 @@ def feature_evidence_from_field_confidence(
     if state == ValueState.INFERRED and not version and field.kb_fragment_ids:
         version = field.kb_fragment_ids[0]
     return FeatureEvidence(
+        domain=domain,
         feature_id=fid,
         subject_ref=subject_ref,
         value=_typed_value_from_raw(field.value),
@@ -219,6 +229,7 @@ def feature_evidence_from_field_confidence(
 def compile_field_confidence_map(
     confidence_map: FieldConfidenceMap,
     *,
+    domain: str,
     subject_ref: str,
     execution_version: str,
     source_ref: str,
@@ -240,6 +251,7 @@ def compile_field_confidence_map(
         unit = units.get(fid) if fid else units.get(name)
         out.append(
             feature_evidence_from_field_confidence(
+                domain=domain,
                 field=field,
                 subject_ref=subject_ref,
                 feature_id=fid,

@@ -24,7 +24,9 @@ properties:
     const: 1.0.0-draft
   domain:
     type: string
-    const: plasticos
+    # Any admitted domain spec id (tenant id == domain spec id); the model
+    # checks it against the loaded specs (app/models/domain_admission.py).
+    pattern: ^[a-z][a-z0-9.-]{2,62}$
   feature_id:
     type: string
     pattern: ^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)+$

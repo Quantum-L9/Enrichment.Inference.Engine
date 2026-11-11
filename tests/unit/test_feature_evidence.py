@@ -56,6 +56,7 @@ def test_adapter_from_field_confidence_inferred_requires_version() -> None:
     )
     with pytest.raises(ValidationError):
         feature_evidence_from_field_confidence(
+            domain="plasticos",
             field=fc,
             subject_ref="res.partner:1",
             feature_id="material.contamination_pct",
@@ -73,6 +74,7 @@ def test_adapter_observed_ok() -> None:
         source=FieldSource.CRM,
     )
     ev = feature_evidence_from_field_confidence(
+        domain="plasticos",
         field=fc,
         subject_ref="res.partner:102",
         feature_id="material.polymer_type",
@@ -108,6 +110,7 @@ def test_adapter_preserves_integer_numeric_type() -> None:
         source=FieldSource.CRM,
     )
     ev = feature_evidence_from_field_confidence(
+        domain="plasticos",
         field=fc,
         subject_ref="res.partner:102",
         feature_id="ops.lot_count",
