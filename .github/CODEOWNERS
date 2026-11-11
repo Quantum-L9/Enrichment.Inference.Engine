@@ -1,37 +1,18 @@
-# --- L9_META ---
-# l9_schema: 1
-# origin: l9-template
-# engine: enrichment
-# layer: [governance]
-# tags: [L9_TEMPLATE, codeowners]
-# owner: platform
-# status: active
-# --- /L9_META ---
+# Managed by Quantum-L9/.github — do not edit here.
+# Edit policies/CODEOWNERS in the .github repo; changes are re-seeded by PR.
+# CODEOWNERS is not inheritable, so this file is physically copied per repo.
 #
-# CODEOWNERS — Enrichment.Inference.Engine
-# Sibling parity: Cognitive.Engine.Graphs/.github/CODEOWNERS
+# Path-scoped only. Do not seed `* @Quantum-L9/platform` — that makes every
+# file a required review and the whole rule goes inert if the team slug
+# cannot resolve. Team slugs verified against the live org
+# (gh api orgs/Quantum-L9/teams): only `platform` exists.
+#
+# Seeded as .github/CODEOWNERS into every repository the seeders reach,
+# replacing an older copy; GitHub reads .github/CODEOWNERS before a root file.
 
-# Default owner for everything
-* @cryptoxdog
-
-# Baseline-ratchet debt ledgers — human-reviewed only.
-# CI never writes these files; every entry is owned, expiring debt.
-# Any PR that touches a ledger requires explicit owner review.
-/.l9/baselines/             @cryptoxdog
-
-# Infrastructure & Configuration
-/.github/                   @cryptoxdog
-/docker-compose*.yml        @cryptoxdog
-/Dockerfile                 @cryptoxdog
-
-# CI/CD Workflows (protected)
-/.github/workflows/         @cryptoxdog
-
-# Package Configuration (protected)
-/pyproject.toml             @cryptoxdog
-/requirements*.txt          @cryptoxdog
-
-# Documentation
-/docs/                      @cryptoxdog
-/readme/                    @cryptoxdog
-/README.md                  @cryptoxdog
+/.github/                 @Quantum-L9/platform @cryptoxdog
+/.github/workflows/       @Quantum-L9/platform @cryptoxdog
+/infra/                   @Quantum-L9/platform @cryptoxdog
+/terraform/               @Quantum-L9/platform @cryptoxdog
+SECURITY.md               @Quantum-L9/platform @cryptoxdog
+CODEOWNERS                @Quantum-L9/platform @cryptoxdog
