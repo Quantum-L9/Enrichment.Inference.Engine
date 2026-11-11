@@ -75,11 +75,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
-          if ! pip install -e ".[dev]" 2>/dev/null && ! pip install -e . 2>/dev/null; then
-            echo "editable install unavailable; proceeding with explicit deps" >&2
-          fi
-          pip install pip-licenses
+          bash tools/deps/install_locked.sh full
 
       - name: Check License Compliance
         run: |
@@ -147,7 +143,38 @@ jobs:
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
-          deny-licenses: ${{ vars.PIP_LICENSES_DENY || 'GPL-3.0, AGPL-3.0' }}
+          # Policy lives here, not in vars.PIP_LICENSES_DENY (operator decision
+          # 2026-11-11, same policy as Cognitive.Engine.Graphs supply-chain.yml):
+          # permissive licences only. allow-licenses and deny-licenses are
+          # mutually exclusive, and deny-licenses is deprecated upstream; the
+          # allow-list is the stricter of the two. uv.lock is a manifest
+          # GitHub's dependency graph reads, so the whole locked set is checked.
+          allow-licenses: >-
+            MIT, Apache-2.0, BSD-3-Clause, BSD-2-Clause, ISC, MPL-2.0, PSF-2.0,
+            Python-2.0, MIT-0, 0BSD, Zlib, CC0-1.0, HPND-Markus-Kuhn
+          # Exempted by name, each reviewed 2026-11-11:
+          # - AND-compounds of allowed licences, which this action does not
+          #   match: colorama, httpcore, nodeenv (BSD-2 AND BSD-3); sniffio,
+          #   types-pyyaml, pip-requirements-parser (Apache-2.0 AND MIT);
+          #   pip-audit (Apache-2.0 AND ISC); cyclonedx-python-lib (Apache-2.0
+          #   AND Python-2.0); wcwidth (HPND AND MIT); greenlet (MIT AND
+          #   PSF-2.0); mypy (MIT AND Python-2.0 AND BSD-2-Clause, Core-owned
+          #   dev tool).
+          # - typing-extensions: PSF-2.0; the detected "GPL-1.0-or-later" comes
+          #   from the PSF licence history text, not a GPL grant.
+          # - protobuf: BSD-3-Clause AND LicenseRef-scancode-protobuf (Google's
+          #   BSD-3-style protobuf notice); flagged on #307's first run.
+          # - structlog (MIT OR Apache-2.0), prometheus-client (Apache-2.0 AND
+          #   BSD-2-Clause): the exemptions Cognitive.Engine.Graphs carries for
+          #   the same packages.
+          allow-dependencies-licenses: >-
+            pkg:pypi/structlog, pkg:pypi/prometheus-client, pkg:pypi/mypy,
+            pkg:pypi/colorama, pkg:pypi/httpcore, pkg:pypi/nodeenv,
+            pkg:pypi/sniffio, pkg:pypi/types-pyyaml, pkg:pypi/pip-requirements-parser,
+            pkg:pypi/pip-audit, pkg:pypi/cyclonedx-python-lib, pkg:pypi/wcwidth,
+            pkg:pypi/greenlet, pkg:pypi/typing-extensions,
+            pkg:pypi/protobuf
+          comment-summary-in-pr: on-failure
 
 # ────────────────────────────────────────────────────────────────────────
 # CycloneDX SBOM Generation (SOC 2 CC9.2)
@@ -180,8 +207,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]" || pip install -e .
+          bash tools/deps/install_locked.sh full
           # Pinned for reproducible SBOMs (matches current CI default; bump deliberately)
           pip install 'cyclonedx-bom==7.3.0'
 

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **One manifest, one lock (2026-11-11).** `pyproject.toml` (`[project]` +
+  `[dependency-groups]` dev, ci, licenses) and `uv.lock` replace
+  `requirements.lock`, `requirements-ci.txt` and `tools/lock_requirements.sh`.
+  Gate_SDK is a uv git source on tag `v1`; `uv.lock` records the commit
+  (`scripts/validate_sdk_pin.py`). CI, the devcontainers, `make setup` and both
+  Dockerfiles install with `tools/deps/install_locked.sh` (`uv sync --locked`,
+  hash-verified); `Dockerfile` moves to the digest-pinned python:3.12-slim base.
+  No runtime package version changed. `.github/dependabot.yml` is the org
+  render (uv ecosystem, safe-only).
+
 ### Fixed
 - **Graph-sync acknowledgment (RV-DOMAIN-RD-07).** `SideEffectReport.graph_synced`
   is set only when CEG acknowledges the `sync` operation (`status: success`,

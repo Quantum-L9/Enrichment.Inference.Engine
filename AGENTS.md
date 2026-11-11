@@ -353,3 +353,28 @@ Durable, non-obvious notes for running this service in the Cursor Cloud VM. The 
 - MyPy is a strict gate: `make type-check` and both GitHub MyPy steps fail on every finding. Do not record, suppress, or hide a finding to make the gate pass. `ruff format --check .` currently flags two pre-existing files on `main` (`app/agents/deal_risk.py`, `app/score/score_models.py`) — not introduced by env setup; do not "fix" `score_models.py` (T5-protected).
 - Do not run the whole suite blindly: `tests/services/test_outcome_delegator.py` fails at **collection** on `main` (references `OutcomeVerdict.GRAPH_REJECTED`, which does not exist). The canonical gate suites (`tests/unit`, `tests/compliance`, `tests/ci`) pass — run those.
 - `pytest.ini` hard-codes `--cov-fail-under=71`, computed against all of `app`. Running a narrow subset will report low coverage and exit non-zero even when every test passes; that is a coverage-gate artifact, not a test failure. Running tests regenerates the gitignored `coverage.xml`/`htmlcov` — discard those.
+
+> **2026-11-11 correction (additive; this file is append-only):** the Cursor
+> Cloud note above that the startup script installs `pip install -e ".[dev]"` is
+> superseded. `pyproject.toml` (`[project]` + `[dependency-groups]` dev, ci,
+> licenses) and `uv.lock` are the only dependency manifest and lock;
+> `requirements.lock`, `requirements-ci.txt` and `tools/lock_requirements.sh`
+> are retired, and the `dev` extra is now a dependency group. `make setup`
+> syncs the full profile from `uv.lock` into `.venv`; CI and the images use
+> `tools/deps/install_locked.sh full|runtime|uv`. Gate_SDK is declared in
+> `[tool.uv.sources]` on tag `v1` and `uv.lock` records its commit. Change a
+> dependency with `uv add` / edit + `uv lock`, and commit `uv.lock`.
+> `tests/unit/test_uv_lock.py` fails on a stale lock or a second manifest.
+
+> **2026-11-11 correction (additive; append-only):** Core-owned tools (pip,
+> pre-commit, ruff, mypy, pytest, semgrep) are declared nowhere in this
+> repository. `pyproject.toml` names none of them, `[tool.uv]
+> exclude-dependencies` keeps them (and transitive copies via pytest plugins or
+> pip-audit) out of `uv.lock`, no workflow pins or upgrades pip or installs a
+> Core tool itself, the ruff and mypy pre-commit hooks are `repo: local` /
+> `language: system` (the mypy hook runs the CI command, `mypy app
+> --show-error-codes --ignore-missing-imports`), and `tools/deps/install_locked.sh
+> full` installs Quantum-L9/l9-ci-core's installer pins from the `v2` tag
+> (`L9_CI_CORE_REF` overrides it). A Core version bump needs no edit here.
+> A plain `uv sync` without `--inexact` removes them.
+> `tests/unit/test_core_toolchain_pins.py` fails on any declaration.
