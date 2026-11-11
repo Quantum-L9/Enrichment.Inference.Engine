@@ -127,9 +127,12 @@ components:
             minimum: 0.0
             maximum: 1.0
           description: >
-            Consumer minimum model confidence for each requested field.
-            A schema field with no entry is not filled; consensus_threshold
-            does not substitute for a missing entry.
+            Consumer minimum model confidence for requested fields. The map
+            may be partial: a schema field with no entry inherits the field
+            confidence threshold (0.85, or the convergence loop's configured
+            confidence_threshold). consensus_threshold is the agreement bar
+            and never substitutes for a missing entry. Omit the map to apply
+            no per-field confidence bar.
         max_variations:
           type: integer
           minimum: 1
