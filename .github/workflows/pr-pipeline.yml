@@ -195,7 +195,7 @@ jobs:
       # Semgrep is Core-owned: its version is Quantum-L9/l9-ci-core
       # toolchain-lock.json's, installed hash-locked by Core's installer (on by
       # default). The lock is built for CPython 3.12.
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
 
