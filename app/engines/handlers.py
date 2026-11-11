@@ -8,8 +8,8 @@ Handler signature (L9 contract):
 handle_converge serves the canonical converge contract: an EnrichRequest in,
 an EnrichResponse out, with no translation. That is what the live Odoo producer
 emits (IB-Odoo_19 build_converge_request) and what its mapper reads. The
-pre-canonical `entity_snapshot` dialect survives only behind
-`is_odoo_compat_converge_payload`; see app/services/odoo_gate_converge.py.
+pre-canonical `entity_snapshot` / top-level `entity_id` dialect is retired: such
+a payload is not a valid EnrichRequest and fails closed as an invalid request.
 
 Integration fixes applied (PR#21/PR#22 merge pass):
     GAP-5: ResultStore.persist_enrich_response called after handle_enrich and handle_converge
@@ -47,17 +47,8 @@ from ..models.schemas import (
 )
 from ..services.idempotency import IdempotencyStore, tenant_scope
 from ..services.kb_resolver import KBResolver
-from ..services.odoo_gate_converge import (
-    DEFAULT_CONVERGE_TIMEOUT_SECONDS,
-    ODOO_COMPLETED_STATE,
-    build_enrich_request,
-    build_odoo_converge_error,
-    build_odoo_converge_response,
-    is_odoo_compat_converge_payload,
-    new_run_id,
-    parse_odoo_converge_request,
-)
 from ..services.request_deadline import (
+    CANONICAL_CONVERGE_BUDGET_SECONDS,
     Deadline,
     deadline_scope,
     effective_budget_seconds,
@@ -72,6 +63,10 @@ from ..services.simulation_bridge import (
 )
 
 logger = structlog.get_logger("handlers")
+
+# One operation budget for converge: Odoo waits 30 s on the Gate hop.
+DEFAULT_CONVERGE_TIMEOUT_SECONDS = CANONICAL_CONVERGE_BUDGET_SECONDS
+_COMPLETED_STATE = "completed"
 
 _kb: KBResolver | None = None
 _idem: IdempotencyStore | None = None
@@ -214,8 +209,9 @@ async def handle_converge(
 
     The canonical contract is EnrichRequest in, EnrichResponse out — the shape
     the live Odoo producer emits and its mapper reads, carried untranslated.
-    Only the pre-canonical `entity_snapshot` / top-level `entity_id` dialect
-    takes the compatibility branch.
+    The pre-canonical `entity_snapshot` / top-level `entity_id` dialect is
+    retired; such a payload fails EnrichRequest validation and is answered as
+    an invalid request (state="failed"), never translated.
 
     The third parameter is the SDK's own invocation contract, not a transport
     surface EIE implements: a handler declaring more than two parameters is
@@ -228,8 +224,6 @@ async def handle_converge(
         ceiling_seconds=DEFAULT_CONVERGE_TIMEOUT_SECONDS,
     )
     operation_id = _operation_id(packet)
-    if is_odoo_compat_converge_payload(payload):
-        return await _handle_odoo_compat_converge(tenant, payload, budget, operation_id)
     return await _handle_canonical_converge(tenant, payload, budget, operation_id)
 
 
@@ -351,7 +345,7 @@ async def _run_canonical_converge(
     )
     result = response.model_dump()
 
-    if response.state == ODOO_COMPLETED_STATE:
+    if response.state == _COMPLETED_STATE:
         # The top-level `entity_id` is the first key of the SEAM-02 order that
         # `_persist_and_sync` applies, so writing the once-resolved id there is
         # what makes persistence key on the same id the loop used, rather than
@@ -410,141 +404,6 @@ async def _run_canonical_converge(
 def _canonical_failure(reason: str) -> dict[str, Any]:
     """A non-completed EnrichResponse — the canonical way to report failure."""
     return EnrichResponse(state="failed", failure_reason=reason).model_dump()
-
-
-async def _handle_odoo_compat_converge(
-    tenant: str,
-    payload: dict[str, Any],
-    budget_seconds: float | None = None,
-    operation_id: str | None = None,
-) -> dict[str, Any]:
-    """Compatibility branch for the pre-canonical `entity_snapshot` dialect.
-
-    Reached only for payloads the canonical branch cannot serve: identity at the
-    top level, or an `entity_snapshot` block. The live Odoo producer emits
-    neither. Same 25 s budget and same Graph exclusion as the canonical branch —
-    a compatibility caller is not a reason to drop the launch invariants.
-    """
-    import asyncio
-
-    run_id = new_run_id()
-    if budget_seconds is None:
-        budget_seconds = DEFAULT_CONVERGE_TIMEOUT_SECONDS
-    deadline = Deadline.start(budget_seconds)
-
-    try:
-        parsed = parse_odoo_converge_request(payload)
-    except ValueError as exc:
-        logger.warning("handlers.converge_compat_parse_failed", tenant=tenant, error=str(exc))
-        return build_odoo_converge_error(error=str(exc), run_id=run_id)
-
-    try:
-        with deadline_scope(deadline):
-            return await asyncio.wait_for(
-                _run_odoo_compat_converge(tenant, payload, parsed, run_id, operation_id),
-                timeout=max(deadline.remaining(), 0.0),
-            )
-    except TimeoutError:
-        logger.warning(
-            "handlers.converge_compat_timeout",
-            tenant=tenant,
-            entity_id=parsed["entity_id"],
-            timeout_s=budget_seconds,
-            run_id=run_id,
-        )
-        # Raise so the hub returns an error packet and Odoo falls back to local.
-        raise TimeoutError(
-            f"converge exceeded {budget_seconds:.0f}s budget for {parsed['entity_id']}"
-        ) from None
-    except Exception as exc:
-        logger.exception(
-            "handlers.converge_compat_failed",
-            tenant=tenant,
-            entity_id=parsed["entity_id"],
-            run_id=run_id,
-            error=str(exc),
-        )
-        raise
-
-
-async def _run_odoo_compat_converge(
-    tenant: str,
-    payload: dict[str, Any],
-    parsed: dict[str, Any],
-    run_id: str,
-    operation_id: str | None = None,
-) -> dict[str, Any]:
-    """Complete compatibility converge operation, run under the outer deadline."""
-    settings = get_settings()
-    request = build_enrich_request(parsed)
-    domain_hints, inference_rules = await _load_domain_convergence_context(
-        domain_id=parsed["domain"],
-        node_label=payload.get("node_label"),
-    )
-    convergence_config = ConvergenceConfig(max_passes=parsed["max_passes"])
-
-    response = await run_convergence_loop(
-        request=request,
-        settings=settings,
-        kb_resolver=_kb,
-        idem_store=_idem,
-        inference_rules=inference_rules,
-        domain_hints=domain_hints,
-        convergence_config=convergence_config,
-        tenant_id=tenant,
-        entity_id=parsed["entity_id"],
-    )
-
-    result = build_odoo_converge_response(
-        enrich_response=response,
-        parsed=parsed,
-        run_id=run_id,
-    )
-
-    if result.get("state") != ODOO_COMPLETED_STATE:
-        raise RuntimeError(result.get("failure_reason") or "converge did not complete")
-
-    if result.get("fields"):
-        persist_payload = {
-            **payload,
-            "entity_id": parsed["entity_id"],
-            "domain": parsed["domain"],
-            "entity": request.entity,
-            "idempotency_key": request.idempotency_key,
-        }
-        # F-048: the canonical launch invariants, including durability. An
-        # un-persisted result is not reported as completed; the raise makes the
-        # hub return an error packet and Odoo fall back to local, the same
-        # convention as a non-completed converge above.
-        try:
-            await _persist_and_sync(
-                tenant,
-                persist_payload,
-                {
-                    "fields": result["fields"],
-                    "confidence": response.confidence,
-                    "tokens_used": response.tokens_used,
-                    "pass_count": response.pass_count,
-                    "state": response.state,
-                },
-                request.object_type,
-                graph_sync=False,
-                require_persistence=True,
-                operation_id=operation_id,
-            )
-        except PersistenceRequiredError as exc:
-            raise RuntimeError(f"result not durable: {exc}") from exc
-
-    logger.info(
-        "handlers.converge_compat_ok",
-        tenant=tenant,
-        entity_id=parsed["entity_id"],
-        run_id=run_id,
-        fields=sorted(result.get("fields", {}).keys()),
-        pass_count=result.get("pass_count"),
-        state=result.get("state"),
-    )
-    return result
 
 
 async def _load_domain_convergence_context(

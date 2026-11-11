@@ -1,5 +1,5 @@
 {
-  "_comment": "Exact shape IB-Odoo_19 plasticos_gate/services/gate_builders.py::build_converge_request emits (ConvergeRequest.to_dict). Parsed by app/services/odoo_gate_converge.py ::parse_odoo_converge_request. Enforced by tests/contracts/test_converge_request_fixture.py.",
+  "_comment": "Exact shape IB-Odoo_19 plasticos_gate/services/gate_builders.py::build_converge_request emits (ConvergeRequest.to_dict). Validated directly as the canonical app.models.schemas.EnrichRequest by app/engines/handlers.py::handle_converge; the pre-canonical compatibility dialect is retired and fails closed. Enforced by tests/contracts/test_converge_request_fixture.py.",
   "entity": {
     "name": "Acme Recycling",
     "city": "Charlotte",

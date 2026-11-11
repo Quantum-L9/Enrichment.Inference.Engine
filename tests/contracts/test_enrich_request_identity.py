@@ -13,8 +13,8 @@ the consumer (EIE `handle_enrich`, E4b). It pins:
 4. that the converge consumer resolves identity exactly once — the SEAM-02
    order plus the live Odoo builder's ``entity._odoo_entity_id`` as the
    documented last fallback (``CONVERGE_IDENTITY_ORDER``) — and keys the
-   convergence loop and persistence on that one id; the compatibility dialect
-   refuses an identity-less body before any provider call;
+   convergence loop and persistence on that one id; the retired compatibility
+   dialect is refused as an invalid request before any provider call;
 5. that the published OpenAPI contract for EnrichRequest names every model
    field, so the body this fixture pins is also the body the contract admits.
 
@@ -358,12 +358,25 @@ async def test_canonical_converge_keys_loop_and_persistence_on_one_identity(
 
 @requires_app_runtime
 @pytest.mark.asyncio
-async def test_compat_converge_refuses_body_without_identity_before_provider() -> None:
-    """The `entity_snapshot` dialect is held to the same bar: no identity, no provider call."""
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(
+            {"entity_snapshot": {"name": "Acme Recycling"}, "domain": "plasticos"},
+            id="snapshot-without-identity",
+        ),
+        pytest.param({"entity_id": ENTITY, "domain": "plasticos"}, id="top-level-identity-only"),
+    ],
+)
+async def test_retired_compat_dialect_is_refused_before_provider(body: dict[str, Any]) -> None:
+    """The pre-canonical `entity_snapshot` dialect is retired: refused, never translated.
+
+    Whether or not it names an identity, a body without the canonical `entity`
+    is an invalid converge request. No provider call, no persistence.
+    """
     handlers = _handlers()
     loop = AsyncMock(return_value=_completed())
     persist = AsyncMock()
-    body = {"entity_snapshot": {"name": "Acme Recycling"}, "domain": "plasticos"}
     with (
         patch.object(handlers, "run_convergence_loop", loop),
         patch.object(handlers, "_persist_and_sync", persist),
@@ -371,32 +384,9 @@ async def test_compat_converge_refuses_body_without_identity_before_provider() -
         result = await handlers.handle_converge(TENANT, body)
 
     assert result["state"] == "failed"
-    assert "entity_id is required" in result["failure_reason"]
+    assert result["failure_reason"].startswith("invalid converge request")
     loop.assert_not_awaited()
     persist.assert_not_awaited()
-
-
-@requires_app_runtime
-@pytest.mark.asyncio
-async def test_compat_converge_keys_loop_and_persistence_on_one_identity() -> None:
-    handlers = _handlers()
-    loop = AsyncMock(return_value=_completed())
-    coordinator = AsyncMock()
-    body = {"entity_id": ENTITY, "domain": "plasticos"}
-    with (
-        patch.object(handlers, "run_convergence_loop", loop),
-        patch(
-            "app.services.side_effect_coordinator.get_side_effect_coordinator",
-            return_value=coordinator,
-        ),
-    ):
-        result = await handlers.handle_converge(TENANT, body)
-
-    assert result["state"] == "completed"
-    loop.assert_awaited_once()
-    assert loop.await_args.kwargs["entity_id"] == ENTITY
-    coordinator.commit_after_enrich.assert_awaited_once()
-    assert coordinator.commit_after_enrich.await_args.kwargs["entity_id"] == ENTITY
 
 
 # ── 5. Contract doc: OpenAPI EnrichRequest names every model field ───────────
