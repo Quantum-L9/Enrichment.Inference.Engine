@@ -61,4 +61,3 @@ Every MAJOR or MINOR bump must be recorded in `CHANGELOG.md` at the repo root:
 3. Update `CHANGELOG.md`
 4. Notify all registered consumers (Salesforce package, Odoo bridge, any L9 nodes)
 5. Keep old endpoint live for ≥ 30 days after `x-sunset-date`
-

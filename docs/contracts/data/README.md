@@ -25,4 +25,3 @@
 convergence_runs (1) ──── (0..1) enrichment_results
 enrichment_results (1) ── (0..*) field_confidence_history
 ```
-
