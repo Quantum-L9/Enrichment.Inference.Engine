@@ -1,6 +1,14 @@
-"""CRM integration package with a single provider registry owner."""
+"""CRM integration package.
+
+Provider selection is a registry keyed by provider string: ``base.CLIENT_REGISTRY``
+through ``register_crm_client`` / ``resolve_crm_client``. Each shipped adapter
+module registers itself when imported, and this package imports them so their
+registrations run at package import. Adding a provider is one adapter module
+that calls ``register_crm_client`` plus one mapping file under ``config/crm/``.
+"""
 
 from .base import (
+    CLIENT_REGISTRY,
     CRMClientBase,
     CRMCredentials,
     CRMErrorCode,
@@ -19,6 +27,11 @@ from .base import (
     CRMWriteReceipt,
     CRMWriteState,
     WriteResult,
+    crm_provider_key,
+    register_crm_client,
+    registered_crm_providers,
+    resolve_crm_client,
+    unregister_crm_client,
 )
 from .field_mapper import FieldMapper
 from .hubspot_client import HubSpotClient
@@ -32,14 +45,6 @@ from .writeback import (
     TrustedWritebackApproval,
     WriteBackOrchestrator,
 )
-
-# This package is the sole owner of provider selection. The orchestrator obtains
-# this mapping lazily after package initialization to avoid a circular import.
-CLIENT_REGISTRY: dict[CRMType, type[CRMClientBase]] = {
-    CRMType.ODOO: OdooClient,
-    CRMType.SALESFORCE: SalesforceClient,
-    CRMType.HUBSPOT: HubSpotClient,
-}
 
 __all__ = [
     "CLIENT_REGISTRY",
@@ -71,4 +76,9 @@ __all__ = [
     "TrustedWritebackApproval",
     "WriteBackOrchestrator",
     "WriteResult",
+    "crm_provider_key",
+    "register_crm_client",
+    "registered_crm_providers",
+    "resolve_crm_client",
+    "unregister_crm_client",
 ]

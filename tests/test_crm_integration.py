@@ -191,18 +191,19 @@ class TestFieldMapper:
         content = """
 crm: odoo
 version: 2.0
+protected_fields:
+  - user_id
 objects:
   company:
-    odoo_model: res.partner
+    object: res.partner
     mappings:
       company_name: name
       company_domain: website
       company_phone: phone
+      company_owner: user_id
       enrichment_quality_score: data_quality_score
   contact:
-    odoo_model: res.partner
-    extra_domain:
-      - [is_company, "=", false]
+    object: res.partner
     mappings:
       contact_email: email
       contact_first_name: firstname
@@ -215,9 +216,11 @@ custom_fields:
         p.write_text(content)
         return str(p)
 
-    def test_to_crm_company(self, mapping_yaml):
+    ALLOWED = frozenset({"name", "website", "phone", "data_quality_score", "email", "user_id"})
+
+    def test_to_approved_crm_company(self, mapping_yaml):
         mapper = FieldMapper(mapping_yaml)
-        obj, payload = mapper.to_crm(
+        obj, payload, skipped = mapper.to_approved_crm(
             "company",
             {
                 "company_name": "Acme Corp",
@@ -225,40 +228,54 @@ custom_fields:
                 "company_phone": "+1-555-0100",
                 "enrichment_quality_score": 0.85,
             },
+            self.ALLOWED,
         )
         assert obj == "res.partner"
         assert payload["name"] == "Acme Corp"
         assert payload["website"] == "acme.com"
         assert payload["data_quality_score"] == 0.85
+        assert skipped == {}
 
-    def test_to_crm_contact(self, mapping_yaml):
+    def test_to_approved_crm_contact(self, mapping_yaml):
         mapper = FieldMapper(mapping_yaml)
-        obj, payload = mapper.to_crm(
+        obj, payload, _ = mapper.to_approved_crm(
             "contact",
             {"contact_email": "john@acme.com", "contact_first_name": "John"},
+            self.ALLOWED,
         )
         assert obj == "res.partner"
         assert payload["email"] == "john@acme.com"
+        assert "firstname" not in payload  # not allowlisted by the connector
 
-    def test_to_crm_skips_empty(self, mapping_yaml):
+    def test_to_approved_crm_skips_empty(self, mapping_yaml):
         mapper = FieldMapper(mapping_yaml)
-        _, payload = mapper.to_crm(
+        _, payload, _ = mapper.to_approved_crm(
             "company",
             {"company_name": "Acme", "company_domain": "", "company_phone": None},
+            self.ALLOWED,
         )
         assert "website" not in payload
         assert "phone" not in payload
 
-    def test_to_crm_unknown_domain_raises(self, mapping_yaml):
+    def test_to_approved_crm_unknown_domain_raises(self, mapping_yaml):
         mapper = FieldMapper(mapping_yaml)
         with pytest.raises(ValueError, match="No CRM mapping"):
-            mapper.to_crm("unknown_domain", {})
+            mapper.to_approved_crm("unknown_domain", {}, self.ALLOWED)
 
-    def test_extra_domain(self, mapping_yaml):
+    def test_protected_fields_from_mapping_are_never_written(self, mapping_yaml):
         mapper = FieldMapper(mapping_yaml)
-        extra = mapper.get_extra_domain("contact")
-        assert extra is not None
-        assert extra[0] == ["is_company", "=", False]
+        _, payload, skipped = mapper.to_approved_crm(
+            "company",
+            {"company_name": "Acme", "company_owner": "7"},
+            self.ALLOWED,
+        )
+        assert payload == {"name": "Acme"}
+        assert skipped == {"company_owner": "identity_or_ownership_field"}
+
+    def test_expected_provider_must_match_mapping(self, mapping_yaml):
+        assert FieldMapper(mapping_yaml, expected_crm="ODOO").crm_type == "odoo"
+        with pytest.raises(ValueError, match="does not match trusted connector"):
+            FieldMapper(mapping_yaml, expected_crm="hubspot")
 
     def test_custom_fields(self, mapping_yaml):
         mapper = FieldMapper(mapping_yaml)

@@ -1,7 +1,7 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: Odoo CRM Dependency
 # Source:   app/services/crm/odoo_client.py, app/services/crm/writeback.py,
-#           app/services/crm/__init__.py (CLIENT_REGISTRY), config/crm/odoo_mapping.yaml
+#           app/services/crm/base.py (CLIENT_REGISTRY), config/crm/odoo_mapping.yaml
 # Version:  2.0.0
 # Updated:  2026-11-08 (the live Odoo relationship is Gate-routed `converge`, not
 #           HTTP /api/v1/enrich; this file now covers only EIE's optional XML-RPC
@@ -15,20 +15,21 @@ protocol: xmlrpc  # /xmlrpc/2/common and /xmlrpc/2/object (defusedxml-patched)
 auth_method: Odoo username + password, supplied per connector in CRMCredentials (url, db, username, password)
 required: false
 
-# ODOO_URL, ODOO_DB, ODOO_USERNAME and ODOO_PASSWORD are declared in
-# app/core/config.py Settings and docs/contracts/config/env-contract.yaml, but
-# no app code reads them: OdooClient takes its connection only from the
-# CRMCredentials of a TrustedCRMConnector.
-declared_env: [ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD]
+# No Settings field or env var names an Odoo connection. OdooClient takes its
+# connection only from the CRMCredentials of a TrustedCRMConnector that the
+# connector owner supplies; app/core/config.py declares nothing per provider.
+declared_env: []
 declared_env_consumed: false
 
 role: |
-  Optional CRM writeback target. EIE selects OdooClient from
-  app.services.crm.CLIENT_REGISTRY (CRMType.ODOO) when WriteBackOrchestrator
-  writes enriched fields back to a CRM. A TrustedCRMConnector carries the
-  credentials and an activation level, and the default level is
-  CRMActivationLevel.DISABLED: nothing is written to Odoo until the trusted
-  owner sets local_test, gate_sandbox or production_enabled.
+  Optional CRM writeback target. EIE resolves OdooClient from the provider
+  registry (app.services.crm.base.CLIENT_REGISTRY, key "odoo", registered by
+  odoo_client.py at import) when WriteBackOrchestrator writes enriched fields
+  back to a CRM. The orchestrator never names a provider: a TrustedCRMConnector
+  carries the provider key, credentials, mapping path and an activation level,
+  and the default level is CRMActivationLevel.DISABLED: nothing is written to
+  Odoo until the trusted owner sets local_test, gate_sandbox or
+  production_enabled.
 
   This is NOT how the live PlasticOS Odoo talks to EIE. IB-Odoo_19
   (plasticos_gate / plasticos_enrichment) sends the Gate action `converge` as a
@@ -48,7 +49,7 @@ usages:
     pattern: OdooClient(credentials).update_record / query_records over XML-RPC
   - purpose: EIE field name -> Odoo model/field mapping for that writeback
     source_file: config/crm/odoo_mapping.yaml
-    pattern: Settings.crm_mapping_path (app/core/config.py)
+    pattern: TrustedCRMConnector.mapping_path (app/services/crm/writeback.py)
 
 failure_semantics: |
   A query timeout is not reported as not-found, and a false write

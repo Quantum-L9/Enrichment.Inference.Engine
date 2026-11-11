@@ -32,3 +32,44 @@ An independent review was performed before final validation. It found the delibe
 This receipt establishes **SOURCE_PRESENT** evidence only. It is not provider-sandbox, production, Gate-route, approval, persistence, or deployment evidence. The safe runtime disposition is **DISABLED**; no external CRM write path was activated or exercised.
 
 Live activation remains blocked pending all of the following: an authoritative tenant-to-connector/secret/field-allowlist owner; an actor-, record-, and exact-payload-bound approval authority; a reviewed durable CRM operation journal with atomic multi-worker claim/recovery semantics; the separately owned Gate signed caller/action/tenant policy and capability route; real HubSpot sandbox update-by-ID acknowledgement plus independent readback/audit receipt; and required protected-file reviews. The companion [U00 evidence record](EIE-CRM-001-U00-evidence.json) enumerates these boundaries and consumer dispositions.
+
+## Amendment 2026-11-11: provider-agnostic writeback layer
+
+The orchestration layer above the adapters no longer names a provider. This
+amendment records what changed and what it does not change.
+
+- **Activation gate.** `WriteBackOrchestrator.write_update_by_id` refuses only on
+  `CRMActivationLevel.DISABLED`. The former `provider_not_enabled_for_r1` guard,
+  which hard-coded HubSpot as the one enabled provider, is gone; which
+  connectors may write is the connector owner's per-connector decision.
+- **Open provider registry.** `app/services/crm/base.py` owns
+  `CLIENT_REGISTRY`, keyed by a normalized string (`crm_provider_key`), with
+  `register_crm_client` / `resolve_crm_client`. Each shipped adapter registers
+  itself at import; the package `__init__` imports them. `CRMType` survives in
+  `app/services/crm/providers.py` as a convenience enum for the shipped keys and
+  is consulted by nothing on the write path. `CRMCredentials.crm_type` and
+  `CRMRecordRef.crm_type` are plain strings; digests and permit checks compare
+  normalized keys.
+- **One mapping shape.** Every `config/crm/*.yaml` declares its object under
+  `object`; the per-provider keys (`odoo_model`, `salesforce_object`,
+  `hubspot_object`) are rejected with an error naming the domain. Provider
+  identity/ownership exclusions live in each file's `protected_fields`; the
+  mapper keeps only the generic `*_id` / owner / parent / `id` rules.
+- **No per-provider settings.** `Settings.odoo_*`, `salesforce_*`,
+  `hubspot_access_token` and `crm_mapping_path` are removed, with their
+  `env-contract.yaml` and `.env.example` entries. The `TrustedCRMConnector` is
+  the sole owner of credentials, mapping path and activation.
+- **Legacy mapper surface removed.** `FieldMapper.to_crm` and
+  `get_extra_domain` (Odoo-style lookup clauses) are gone; nothing on the write
+  path called them.
+- **Proof.** `tests/test_crm_writeback_orchestrator.py` registers a fourth,
+  test-only provider through the public registry and drives an update-by-ID
+  through the orchestrator with no edit outside that adapter and its mapping;
+  it also proves the legacy object key is rejected and that a mapping file's
+  `protected_fields` are honoured.
+
+Unchanged: the SDK handler `handle_writeback` still refuses every packet, the
+MCP bridge still refuses before dispatch, adapters still refuse create / upsert
+/ bulk, permits stay digest-bound, and the runtime disposition is still
+**DISABLED**. Adding a CRM is now one adapter module that calls
+`register_crm_client` plus one mapping file.

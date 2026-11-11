@@ -25,12 +25,13 @@ from .base import (
     CRMOperation,
     CRMOperationConflictError,
     CRMRecordRef,
-    CRMType,
     CRMWriteIntent,
     CRMWriteReceipt,
     CRMWriteState,
     WriteResult,
     _issue_write_permit,
+    crm_provider_key,
+    resolve_crm_client,
 )
 from .field_mapper import FieldMapper
 
@@ -48,12 +49,17 @@ class CRMActivationLevel(StrEnum):
 
 @dataclass(frozen=True)
 class TrustedCRMConnector:
-    """Resolved per-tenant connector binding; never construct it from request JSON."""
+    """Resolved per-tenant connector binding; never construct it from request JSON.
+
+    ``crm_type`` is the provider key the adapter registered under (see
+    ``register_crm_client``); the orchestrator resolves it through the registry
+    and never compares it against a provider name of its own.
+    """
 
     tenant_id: str
     connector_id: str
     provider_account_id: str
-    crm_type: CRMType
+    crm_type: str
     credentials: dict[str, str]
     mapping_path: str
     allowed_objects: frozenset[str]
@@ -69,6 +75,12 @@ class TrustedCRMConnector:
         ):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"TrustedCRMConnector.{name} must be a non-empty string")
+        try:
+            crm_provider_key(self.crm_type)
+        except ValueError as exc:
+            raise ValueError(
+                "TrustedCRMConnector.crm_type must be a non-empty provider key"
+            ) from exc
         if not self.allowed_objects:
             raise ValueError("TrustedCRMConnector.allowed_objects must not be empty")
 
@@ -173,19 +185,13 @@ class WriteBackOrchestrator:
         approval decision. Any unavailable, disabled, malformed, conflict, or
         journal condition returns a non-success receipt before provider mutation.
         """
+        # Activation is the connector owner's decision per connector. The
+        # orchestrator never gates on which provider the connector names.
         if self.connector.activation == CRMActivationLevel.DISABLED:
             return self._rejected_receipt(
                 None,
                 CRMWriteState.DISABLED,
                 "connector_writeback_disabled",
-                operation_id,
-                correlation_id,
-            )
-        if self.connector.crm_type != CRMType.HUBSPOT:
-            return self._rejected_receipt(
-                None,
-                CRMWriteState.DISABLED,
-                "provider_not_enabled_for_r1",
                 operation_id,
                 correlation_id,
             )
@@ -220,7 +226,16 @@ class WriteBackOrchestrator:
             _, payload, skipped = self.mapper.to_approved_crm(domain, canonical, allowed_fields)
             client = self._new_client()
             normalized_record_id = client.normalize_record_id(record_id)
-        except (ValueError, KeyError) as exc:
+        except LookupError as exc:
+            logger.warning("writeback_preflight_rejected", reason=type(exc).__name__)
+            return self._rejected_receipt(
+                None,
+                CRMWriteState.REJECTED,
+                "provider_not_registered",
+                operation_id,
+                correlation_id,
+            )
+        except ValueError as exc:
             logger.warning("writeback_preflight_rejected", reason=type(exc).__name__)
             return self._rejected_receipt(
                 None,
@@ -437,30 +452,19 @@ class WriteBackOrchestrator:
         return self.write_back(domain, canonical)
 
     def _new_client(self) -> CRMClientBase:
-        """Instantiate the selected registered provider only after trusted preflight."""
-        if self._client_factory is not None:
-            return self._client_factory(
-                CRMCredentials(
-                    crm_type=self.connector.crm_type,
-                    credentials=self.connector.credentials,
-                    provider_account_id=self.connector.provider_account_id,
-                )
-            )
-        # Import lazily so app.services.crm remains the registry's sole owner and
-        # package initialization cannot form a circular import.
-        from . import CLIENT_REGISTRY
+        """Instantiate the registered provider only after trusted preflight.
 
-        try:
-            client_class = CLIENT_REGISTRY[self.connector.crm_type]
-        except KeyError as exc:
-            raise ValueError("trusted connector names an unsupported CRM provider") from exc
-        return client_class(
-            CRMCredentials(
-                crm_type=self.connector.crm_type,
-                credentials=self.connector.credentials,
-                provider_account_id=self.connector.provider_account_id,
-            )
+        Raises ``LookupError`` when no adapter is registered for the connector's
+        provider key; the caller reports that as ``provider_not_registered``.
+        """
+        credentials = CRMCredentials(
+            crm_type=self.connector.crm_type,
+            credentials=self.connector.credentials,
+            provider_account_id=self.connector.provider_account_id,
         )
+        if self._client_factory is not None:
+            return self._client_factory(credentials)
+        return resolve_crm_client(self.connector.crm_type)(credentials)
 
     def _rejected_receipt(
         self,
@@ -495,7 +499,7 @@ def _payload_hash(
         "tenant_id": record_ref.tenant_id,
         "connector_id": record_ref.connector_id,
         "provider_account_id": record_ref.provider_account_id,
-        "crm_type": record_ref.crm_type.value,
+        "crm_type": crm_provider_key(record_ref.crm_type),
         "object_type": record_ref.object_type,
         "record_id": record_ref.record_id,
         "operation": CRMOperation.UPDATE_BY_ID.value,

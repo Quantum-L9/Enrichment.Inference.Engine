@@ -248,98 +248,6 @@ variables:
     sensitive: false
     source: env
 
-  # ── Odoo CRM ─────────────────────────────────────────────────
-  - name: ODOO_URL
-    type: url
-    required: false
-    default: ""
-    description: Odoo base URL.
-    sensitive: false
-    source: env
-    example: https://your-instance.odoo.com
-
-  - name: ODOO_DB
-    type: string
-    required: false
-    default: ""
-    description: Odoo database name.
-    sensitive: false
-    source: env
-
-  - name: ODOO_USERNAME
-    type: string
-    required: false
-    default: ""
-    description: Odoo login username.
-    sensitive: false
-    source: env
-
-  - name: ODOO_PASSWORD
-    type: secret
-    required: false
-    default: ""
-    description: Odoo password.
-    sensitive: true
-    source: env
-
-  - name: CRM_MAPPING_PATH
-    type: string
-    required: false
-    default: config/crm/odoo_mapping.yaml
-    description: Path to CRM field mapping YAML.
-    sensitive: false
-    source: env
-
-  # ── Salesforce CRM (legacy/transitional direct integration) ──
-  - name: SALESFORCE_CLIENT_ID
-    type: secret
-    required: false
-    default: ""
-    description: Salesforce connected-app OAuth client ID.
-    sensitive: true
-    source: env
-
-  - name: SALESFORCE_CLIENT_SECRET
-    type: secret
-    required: false
-    default: ""
-    description: Salesforce connected-app OAuth client secret.
-    sensitive: true
-    source: env
-
-  - name: SALESFORCE_USERNAME
-    type: string
-    required: false
-    default: ""
-    description: Salesforce API login username.
-    sensitive: false
-    source: env
-
-  - name: SALESFORCE_PASSWORD
-    type: secret
-    required: false
-    default: ""
-    description: Salesforce API login password.
-    sensitive: true
-    source: env
-
-  - name: SALESFORCE_SECURITY_TOKEN
-    type: secret
-    required: false
-    default: ""
-    description: Salesforce security token appended to the password for API auth.
-    sensitive: true
-    source: env
-
-  # ── HubSpot CRM (legacy/transitional direct integration) ─────
-  - name: HUBSPOT_ACCESS_TOKEN
-    type: secret
-    required: false
-    default: ""
-    description: HubSpot private-app access token.
-    sensitive: true
-    source: env
-
   # ── Enrichment sources (waterfall) ─────────────────────────
   - name: CLEARBIT_API_KEY
     type: secret
@@ -603,12 +511,6 @@ required_for_caching:
 
 required_for_persistence:
   - DATABASE_URL
-
-required_for_odoo_integration:
-  - ODOO_URL
-  - ODOO_DB
-  - ODOO_USERNAME
-  - ODOO_PASSWORD
 
 # ═══════════════════════════════════════════════════════════════
 # Env read outside Settings (documentary only)

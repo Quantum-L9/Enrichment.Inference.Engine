@@ -25,17 +25,6 @@ REQUIRED_ENV_VARS = {
     "MAX_ENTITIES_PER_BATCH": {"type": "integer", "required": False, "sensitive": False},
     "CB_FAILURE_THRESHOLD": {"type": "integer", "required": False, "sensitive": False},
     "CB_COOLDOWN_SECONDS": {"type": "integer", "required": False, "sensitive": False},
-    "ODOO_URL": {"type": "url", "required": False, "sensitive": False},
-    "ODOO_DB": {"type": "string", "required": False, "sensitive": False},
-    "ODOO_USERNAME": {"type": "string", "required": False, "sensitive": False},
-    "ODOO_PASSWORD": {"type": "secret", "required": False, "sensitive": True},
-    "CRM_MAPPING_PATH": {"type": "string", "required": False, "sensitive": False},
-    "SALESFORCE_CLIENT_ID": {"type": "secret", "required": False, "sensitive": True},
-    "SALESFORCE_CLIENT_SECRET": {"type": "secret", "required": False, "sensitive": True},
-    "SALESFORCE_USERNAME": {"type": "string", "required": False, "sensitive": False},
-    "SALESFORCE_PASSWORD": {"type": "secret", "required": False, "sensitive": True},
-    "SALESFORCE_SECURITY_TOKEN": {"type": "secret", "required": False, "sensitive": True},
-    "HUBSPOT_ACCESS_TOKEN": {"type": "secret", "required": False, "sensitive": True},
     "CLEARBIT_API_KEY": {"type": "secret", "required": False, "sensitive": True},
     "ZOOMINFO_API_KEY": {"type": "secret", "required": False, "sensitive": True},
     "APOLLO_API_KEY": {"type": "secret", "required": False, "sensitive": True},
@@ -147,6 +136,37 @@ def test_retired_peer_variables_are_gone_from_settings_and_examples() -> None:
         text = (REPO_ROOT / rel).read_text()
         for var in RETIRED_SIDE_DOOR_VARS:
             assert f"{var}=" not in text and f"{var}:" not in text, f"{rel} still sets {var}"
+
+
+# CRM connectors are provider-agnostic: credentials, mapping path and activation
+# live on the TrustedCRMConnector a connector owner supplies, never in Settings.
+# A per-provider settings field would re-couple configuration to one CRM.
+RETIRED_CRM_CONNECTOR_VARS = {
+    "ODOO_URL",
+    "ODOO_DB",
+    "ODOO_USERNAME",
+    "ODOO_PASSWORD",
+    "CRM_MAPPING_PATH",
+    "SALESFORCE_CLIENT_ID",
+    "SALESFORCE_CLIENT_SECRET",
+    "SALESFORCE_USERNAME",
+    "SALESFORCE_PASSWORD",
+    "SALESFORCE_SECURITY_TOKEN",
+    "HUBSPOT_ACCESS_TOKEN",
+}
+
+
+@pytest.mark.unit
+def test_crm_connector_settings_are_not_provider_specific(env_contract: dict) -> None:
+    from app.core.config import Settings
+
+    fields = {name.upper() for name in Settings.model_fields}
+    assert not (fields & RETIRED_CRM_CONNECTOR_VARS), fields & RETIRED_CRM_CONNECTOR_VARS
+    declared = {item.get("name") for item in env_contract.get("variables", [])}
+    assert not (declared & RETIRED_CRM_CONNECTOR_VARS), declared & RETIRED_CRM_CONNECTOR_VARS
+    text = (REPO_ROOT / ".env.example").read_text()
+    for var in RETIRED_CRM_CONNECTOR_VARS:
+        assert f"{var}=" not in text, f".env.example still sets {var}"
 
 
 # C-09 (AGENTS.md): new application env vars carry the L9_ prefix. The

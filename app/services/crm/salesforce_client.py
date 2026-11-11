@@ -19,7 +19,10 @@ from .base import (
     CRMWritePermit,
     CRMWriteState,
     WriteResult,
+    register_crm_client,
 )
+
+PROVIDER_KEY = "salesforce"
 
 logger = structlog.get_logger("salesforce_client")
 
@@ -409,3 +412,7 @@ class SalesforceClient(CRMClientBase):
             status=CRMWriteState.INDETERMINATE,
             reconciliation_state="required",
         )
+
+
+# Self-registration: importing this module makes the provider resolvable by key.
+register_crm_client(PROVIDER_KEY, SalesforceClient)
