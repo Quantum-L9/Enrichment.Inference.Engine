@@ -1,110 +1,208 @@
 # ═══════════════════════════════════════════════════════════════
-# Contract: Graph Schema (Neo4j)
-# Source:   engine/kge/neuro_symbolic_engine.py,
-#           engine/kge/hyper_relational_encoder.py,
-#           engine/kge/rotate3d.py,
-#           app/engines/graph_sync_client.py,
-#           app/services/pg_models.py (graph_coverage field),
-#           config/inference_rules.yaml
-# Version:  1.0.0
-# Updated:  2026-04-05
+# Contract: Graph Schema (Neo4j) — the subgraph EIE writes
+# Source:   app/engines/packet_router.py (notify_graph_sync,
+#           _graph_sync_row, resolve_graph_sync_contract,
+#           resolve_relationship_sync_contract),
+#           domains/<tenant>/spec.yaml `sync.endpoints[]`,
+#           Cognitive.Engine.Graphs engine/handlers.py handle_sync +
+#           engine/sync/generator.py SyncGenerator (the executor)
+# Version:  2.0.0
+# Updated:  2026-11-11
 # ═══════════════════════════════════════════════════════════════
 
-connection:
-  protocol: bolt
-  uri_env: NEO4J_URI
-  user_env: NEO4J_USER
-  password_env: NEO4J_PASSWORD
-  default_uri: bolt://localhost:7687
-  default_user: neo4j
+owner: Cognitive.Engine.Graphs (CEG)
 
 description: |
-  Neo4j graph used by the Knowledge Graph Engine (KGE) for:
-  - Hyper-relational entity encoding (engine/kge/hyper_relational_encoder.py)
-  - Neuro-symbolic inference (engine/kge/neuro_symbolic_engine.py)
-  - 3D rotation embeddings (engine/kge/rotate3d.py)
-  - Graph sync of enriched entities (app/engines/graph_sync_client.py)
+  EIE never opens a Neo4j connection: app/ has no Neo4j driver, URI or
+  credential. Enriched entity rows leave EIE as a Gate `sync` action
+  (PacketRouter.notify_graph_sync), Gate routes the action to CEG, and CEG's
+  handle_sync runs SyncGenerator's UNWIND MERGE against the tenant's own
+  database (`database = domain.id`).
 
-  The EIE never opens a Neo4j connection. Enriched entity rows are sent as
-  TransportPacket `sync` actions to Constellation Gate (GATE_URL), which
-  routes them to the Cognitive Engine Graphs (CEG) node that owns the graph.
+  This contract covers what EIE's writes put in that graph. It is not the
+  whole CEG graph: other producers (CRM sync, GDS jobs, outcome feedback)
+  write labels and relationship types that CEG's own domain specs own.
 
-nodes:
-  - label: Entity
-    description: Enriched CRM entity (Account, Contact, Lead, Opportunity)
-    properties:
-      - name: entity_id
-        type: string
-        indexed: true
-        description: CRM record ID
-      - name: tenant_id
-        type: string
-        indexed: true
-      - name: object_type
-        type: string
-      - name: domain
-        type: string
-      - name: last_enriched_at
-        type: datetime
-    # TODO: Verify exact node property set from app/engines/graph_sync_client.py
+write_path:
+  action: sync
+  transport: Gate (TransportPacket), never a direct Neo4j session
+  endpoint_selection: |
+    The tenant's spec (tenant id == domain spec id) is read from EIE's
+    domains/<tenant>/spec.yaml. resolve_graph_sync_contract picks one
+    sync.endpoints[] entry: the one whose targetnode equals the caller's
+    node_label; else the only usable endpoint; else, with no node_label, the
+    only endpoint whose targetnode is in the spec's ontology. Anything else is
+    skipped (graph_sync_skipped_ambiguous_contract / _no_contract), never
+    guessed.
+  node_label: the selected endpoint's `targetnode`
+  merge_key: the selected endpoint's `idproperty`, set to the EIE entity_id
+  cypher: |
+    UNWIND $batch AS row
+    MERGE (n:<targetnode> {<idproperty>: row.<idproperty>})
+    SET n += row, n._tenant = $tenant
+  cypher_executor_spec: |
+    CEG executes the row against CEG's OWN copy of the tenant spec
+    (Cognitive.Engine.Graphs domains/<tenant>/spec.yaml). That copy can add
+    graph structure to an EIE row: an endpoint's `taxonomyedges` MERGE an edge
+    from the synced node to an existing node named by a row field, and its
+    `childsync` MERGEs child nodes from a row field holding a list of maps.
+  relationships: |
+    Two ways a relationship comes from EIE:
+    1. A taxonomy edge CEG derives from a field of an EIE node row (above).
+    2. An explicit assertion through notify_relationship_sync, only to an
+       endpoint the tenant's EIE spec declares with targetedge / fromnode /
+       tonode and a matching DIRECTED, sync-managed ontology edge
+       (resolve_relationship_sync_contract). A spec that declares none gets no
+       asserted relationship from EIE.
 
-  - label: Polymer
-    description: Polymer/material grade from KB (kb/plastics_recycling.yaml)
-    properties:
-      - name: name
-        type: string
-        description: e.g., HDPE, PP, PET, LDPE
-      - name: grade
-        type: string
-      - name: category
-        type: string
-    # TODO: Verify exact label and properties from engine/kge or KB sync logic
+node_properties_written_by_eie:
+  - name: <idproperty>
+    description: Endpoint id property (e.g. facility_id), value = EIE entity_id
+  - name: entity_id
+    type: string
+  - name: domain
+    type: string
+    description: Present when the caller passed a domain
+  - name: enriched_by
+    type: string
+    value: enrichment-engine   # EIE_NODE_NAME, app/services/gate_client.py
+  - name: _tenant
+    type: string
+    description: Set by CEG's SyncGenerator from the packet tenant, not by EIE
+  - name: <enriched field>
+    description: |
+      One property per enriched field. Primitives and lists of primitives are
+      written as-is; any other value is written as a JSON string
+      (`_graph_sync_row`), because CEG's `SET n += row` accepts only Neo4j
+      property primitives.
 
-  - label: EnrichmentResult
-    description: Graph representation of an enrichment outcome
-    properties:
-      - name: run_id
-        type: string
-      - name: confidence
-        type: float
-      - name: quality_tier
-        type: string
-    # TODO: Verify from app/engines/graph_sync_client.py
+# Per-tenant inventory. Only tenants whose spec ships in this repo are listed.
+tenants:
+  plasticos:
+    eie_spec: domains/plasticos/spec.yaml
+    ceg_spec: Cognitive.Engine.Graphs domains/plasticos/spec.yaml
+    nodes:
+      - label: Facility
+        entity_type: facilities
+        idproperty: facility_id
+        selected_when: node_label Facility, or no node_label (Facility is the only EIE ontology node)
+      - label: PolymerFamily
+        entity_type: polymerfamilies
+        idproperty: code
+        selected_when: node_label PolymerFamily
+      - label: MaterialForm
+        entity_type: materialforms
+        idproperty: form_id
+        selected_when: node_label MaterialForm
+      - label: SupplyOpportunity
+        entity_type: supply-opportunities
+        idproperty: opportunity_id
+        selected_when: node_label SupplyOpportunity
+      - label: BuyerDemand
+        entity_type: buyer-demands
+        idproperty: demand_id
+        selected_when: node_label BuyerDemand
+    relationships:
+      - type: FULFILLS_POLYMER
+        from: SupplyOpportunity
+        to: PolymerFamily
+        origin: >-
+          CEG taxonomyedges on /v1/sync/supply-opportunities: MERGEd when the
+          EIE row's `polymer_type` equals an existing PolymerFamily.code;
+          no edge when no such node exists.
+    asserted_relationships: []   # the EIE plasticos spec declares no targetedge endpoint and no ontology edges
+    skipped:
+      - node_label: Account (or any label no endpoint targets)
+        outcome: graph_sync_skipped_ambiguous_contract; five endpoints, none targets the label; nothing is sent
+    known_failure:
+      field: processed_polymers
+      on: Facility rows
+      outcome: >-
+        CEG's childsync on /v1/sync/facilities expects a list of maps. EIE sends
+        a list of maps as a JSON string and a list of strings as-is; CEG rejects
+        both (Neo.ClientError.Statement.TypeError "expected a map but was
+        String"), so the whole sync fails and EIE records graph_synced false.
+        Not part of the EIE plasticos ontology, so ordinary enrichment does not
+        produce it.
 
-relationships:
-  - type: HAS_ENRICHMENT
-    from: Entity
-    to: EnrichmentResult
-    description: Entity → enrichment result linkage
-    # TODO: Verify relationship type from graph_sync_client.py
+verified_against_live_db: true
+live_verification:
+  date: "2026-11-11"
+  scope: >-
+    The EIE to CEG write path for tenant plasticos, executed end to end by the
+    real code on both sides against a live Neo4j. Not a production database:
+    EIE holds no Neo4j access, and no production graph was read.
+  database:
+    image: neo4j:5.18-enterprise
+    kernel: "5.18.1 enterprise"
+    instance: disposable container, removed after the run
+    graph_database: plasticos   # CREATE DATABASE plasticos WAIT; CEG's driver leaves database creation to the operator
+  population:
+    - step: EIE emits
+      code: >-
+        PacketRouter.notify_graph_sync from this repository at origin/main
+        7c36ccb, DomainYamlReader over domains/, tenant plasticos. Calls:
+        node_label Facility, Account and none (one Facility entity), then
+        PolymerFamily HDPE, MaterialForm regrind, SupplyOpportunity opp-001
+        (polymer_type HDPE) and BuyerDemand dem-001 (polymer_type PP). Only
+        Gate's hop was replaced, by a recorder answering CEG's success shape.
+      result: 6 sync packets; the Account call was skipped as ambiguous
+    - step: CEG applies, in emission order
+      code: >-
+        Cognitive.Engine.Graphs origin/main 3379309 engine.handlers.handle_sync
+        with its own GraphDriver and DomainPackLoader over its own domains/
+        (L9_ENV=dev).
+      result: 6 acks, each {status success, synced_count 1}
+  observed:
+    show_labels: >-
+      SHOW LABELS and SHOW RELATIONSHIP TYPES are not Cypher commands in
+      Neo4j 5.18 (both answer "Invalid input"); their 5.x equivalents
+      CALL db.labels() and CALL db.relationshipTypes() were run instead.
+    labels: [BuyerDemand, Facility, MaterialForm, PolymerFamily, SupplyOpportunity]   # CALL db.labels()
+    relationship_types: [FULFILLS_POLYMER]                                             # CALL db.relationshipTypes()
+    node_count: {BuyerDemand: 1, Facility: 1, MaterialForm: 1, PolymerFamily: 1, SupplyOpportunity: 1}   # two Facility packets MERGEd one node
+    relationships:
+      - "(:SupplyOpportunity {opportunity_id: opp-001})-[:FULFILLS_POLYMER]->(:PolymerFamily {code: HDPE})"
+    node_properties:   # CALL db.schema.nodeTypeProperties()
+      Facility:
+        _tenant: String
+        annual_capacity_mt: Double
+        certifications: StringArray
+        city: String
+        contamination_tolerance: Double
+        density_max: Double
+        density_min: Double
+        domain: String
+        enriched_by: String
+        entity_id: String
+        facility_id: String
+        facility_tier: String
+        field_sources: String   # a nested map, carried as a JSON string
+        material_grade: String
+        mfi_max: Double
+        mfi_min: Double
+        name: String
+        polymer_types: StringArray
+        state: String
+        zip_code: String
+      PolymerFamily: {_tenant: String, code: String, domain: String, enriched_by: String, entity_id: String, name: String}
+      MaterialForm: {_tenant: String, domain: String, enriched_by: String, entity_id: String, form_id: String, name: String}
+      SupplyOpportunity: {_tenant: String, domain: String, enriched_by: String, entity_id: String, opportunity_id: String, polymer_type: String, quantity_mt: Double}
+      BuyerDemand: {_tenant: String, demand_id: String, domain: String, enriched_by: String, entity_id: String, polymer_type: String, quantity_mt: Double}
+    childsync_probe: >-
+      Afterwards, two Facility rows carrying processed_polymers (as a JSON
+      string, and as a list of strings) were applied the same way; both
+      failed with Neo.ClientError.Statement.TypeError. See known_failure.
 
-  - type: HANDLES_POLYMER
-    from: Entity
-    to: Polymer
-    description: Company handles a specific polymer type
-    # TODO: Verify from KGE or KB sync logic
-
-  - type: SIMILAR_TO
-    from: Entity
-    to: Entity
-    description: Graph affinity relationship (community scoring)
-    properties:
-      - name: affinity_score
-        type: float
-    # TODO: Verify from engine/kge/neuro_symbolic_engine.py
-
-kge_models:
-  - name: HyperRelationalEncoder
-    source_file: engine/kge/hyper_relational_encoder.py
-    description: Encodes entity + relation + context triplets as hyper-relational embeddings
-
-  - name: NeuroSymbolicEngine
-    source_file: engine/kge/neuro_symbolic_engine.py
-    description: Combines neural KGE embeddings with symbolic inference rules
-
-  - name: RotatE3D
-    source_file: engine/kge/rotate3d.py
-    description: 3D rotation-based link prediction for knowledge graph completion
-
-# TODO: Run `CALL db.schema.visualization()` on the Neo4j instance to extract
-# the exact label and relationship type inventory from live data.
+retired_entries:
+  note: >-
+    Version 1.0.0 listed these from inference, each with a "TODO: verify".
+    No code in EIE, and none in CEG origin/main 3379309, writes them, and the
+    live run did not produce them. engine/kge/* named as their source does
+    not exist in this repository, and the connection block (NEO4J_URI etc.)
+    named settings EIE does not read.
+  nodes: [Entity, Polymer, EnrichmentResult]
+  relationships: [HAS_ENRICHMENT, HANDLES_POLYMER]
+  moved_out_of_scope:
+    - type: SIMILAR_TO
+      reason: CEG GDS job writeedge in CEG's plasticos spec; written by CEG, not by EIE

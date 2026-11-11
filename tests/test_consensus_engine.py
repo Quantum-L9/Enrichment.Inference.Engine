@@ -193,3 +193,65 @@ class TestEmptyValuesAreNotEnriched:
             [{"x": "HDPE"}, {"x": None}, {"x": None}], threshold=0.6, total_attempted=3
         )
         assert "x" not in result["fields"]
+
+
+# ── #320 F4 (revised): partial field_thresholds maps ─────────────────────────
+
+
+class TestPartialFieldThresholds:
+    """A requested field the map omits inherits the explicit default bar."""
+
+    @staticmethod
+    def _filter(variations, field_thresholds, default_threshold=0.85):
+        from app.services.consensus_engine import apply_field_confidence_thresholds
+
+        return apply_field_confidence_thresholds(
+            variations,
+            field_thresholds,
+            requested_fields=["street", "city", "website"],
+            default_threshold=default_threshold,
+        )
+
+    def test_explicit_override_is_enforced_and_omitted_field_inherits_default(self) -> None:
+        kept = self._filter(
+            [{"confidence": 0.90, "street": "1 Main", "city": "Austin", "website": "a.io"}],
+            {"street": 0.95},
+        )
+        # street must clear its own 0.95; city and website clear the 0.85 default.
+        assert kept == [{"confidence": 0.90, "city": "Austin", "website": "a.io"}]
+
+    @pytest.mark.parametrize(("confidence", "kept"), [(0.84, False), (0.85, True)])
+    def test_omitted_field_cannot_pass_below_the_default(self, confidence, kept) -> None:
+        result = self._filter([{"confidence": confidence, "city": "Austin"}], {"street": 0.95})
+        assert ("city" in result[0]) is kept
+
+    def test_explicit_field_cannot_pass_below_its_override(self) -> None:
+        result = self._filter([{"confidence": 0.949, "street": "1 Main"}], {"street": 0.95})
+        assert "street" not in result[0]
+
+    def test_unsolicited_field_is_still_dropped(self) -> None:
+        result = self._filter([{"confidence": 0.99, "revenue": 10, "city": "Austin"}], {})
+        assert result == [{"confidence": 0.99, "city": "Austin"}]
+
+    def test_no_default_keeps_the_strict_named_only_filter(self) -> None:
+        from app.services.consensus_engine import apply_field_confidence_thresholds
+
+        result = apply_field_confidence_thresholds(
+            [{"confidence": 0.99, "street": "1 Main", "city": "Austin"}],
+            {"street": 0.95},
+        )
+        assert result == [{"confidence": 0.99, "street": "1 Main"}]
+
+    def test_agreement_gate_still_applies_after_the_field_bar(self) -> None:
+        """consensus_threshold stays an independent gate, not the fallback."""
+        filtered = self._filter(
+            [
+                {"confidence": 0.95, "city": "Austin"},
+                {"confidence": 0.95, "city": "Dallas"},
+                {"confidence": 0.95, "city": "Houston"},
+            ],
+            {"street": 0.95},
+        )
+        assert all("city" in v for v in filtered)  # every reply clears 0.85
+        result = synthesize(filtered, threshold=0.65, total_attempted=len(filtered))
+        assert "city" not in result["fields"]  # 1/3 agreement < 0.65

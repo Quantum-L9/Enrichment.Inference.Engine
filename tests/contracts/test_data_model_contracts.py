@@ -166,6 +166,42 @@ def test_graph_schema_has_relationship_types() -> None:
 
 
 @pytest.mark.unit
+def test_graph_schema_inventory_matches_live_verification() -> None:
+    """TODO-04: the documented inventory is exactly what the live run observed."""
+    schema = load_yaml(DATA_DIR / "graph-schema.yaml")
+    assert schema.get("verified_against_live_db") is True
+    observed = schema["live_verification"]["observed"]
+    labels: set[str] = set()
+    relationship_types: set[str] = set()
+    for tenant in schema["tenants"].values():
+        labels |= {n["label"] for n in tenant["nodes"]}
+        relationship_types |= {r["type"] for r in tenant["relationships"]}
+        relationship_types |= {r["type"] for r in tenant["asserted_relationships"]}
+    assert labels == set(observed["labels"])
+    assert relationship_types == set(observed["relationship_types"])
+    assert set(observed["node_properties"]) == labels
+
+
+@pytest.mark.unit
+def test_graph_schema_nodes_match_eie_tenant_sync_endpoints() -> None:
+    """TODO-04: a node EIE can write is a sync endpoint its tenant spec declares.
+
+    EIE selects the endpoint from its own domains/<tenant>/spec.yaml
+    (app/engines/packet_router.py resolve_graph_sync_contract), so an
+    endpoint added, removed or re-keyed there must be reflected here.
+    """
+    from app.engines.packet_router import _usable_sync_endpoints
+
+    schema = load_yaml(DATA_DIR / "graph-schema.yaml")
+    repo_root = DATA_DIR.parent.parent.parent
+    for tenant_id, tenant in schema["tenants"].items():
+        spec = load_yaml(repo_root / tenant["eie_spec"])
+        declared = {(t, e, i) for e, i, t in _usable_sync_endpoints(spec)}
+        documented = {(n["label"], n["entity_type"], n["idproperty"]) for n in tenant["nodes"]}
+        assert documented == declared, tenant_id
+
+
+@pytest.mark.unit
 def test_migration_policy_exists_and_non_empty() -> None:
     path = DATA_DIR / "migrations" / "migration-policy.md"
     if not path.exists():

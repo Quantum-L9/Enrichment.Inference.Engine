@@ -23,7 +23,11 @@ from typing import Any
 import structlog
 
 from ..core.config import Settings
-from ..models.schemas import EnrichRequest, EnrichResponse
+from ..models.schemas import (
+    DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
+    EnrichRequest,
+    EnrichResponse,
+)
 from ..services.circuit_breaker import CircuitBreaker
 from ..services.consensus_engine import apply_field_confidence_thresholds, synthesize
 from ..services.deterministic_provider import PROVIDER_NAME as DETERMINISTIC_PROVIDER
@@ -256,6 +260,7 @@ async def enrich_entity(
             target_schema=target_schema,
             threshold=request.consensus_threshold,
             field_thresholds=request.field_thresholds,
+            default_field_threshold=DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
         )
         calls_made = len(results)
 
@@ -283,8 +288,16 @@ async def enrich_entity(
         # Timeouts are not dissenting votes. Agreement is measured across
         # replies that actually came back, so one good `street` is not
         # discarded because the sibling call never answered.
-        if request.field_thresholds:
-            valid = apply_field_confidence_thresholds(valid, request.field_thresholds)
+        # A consumer map may be partial: a requested field it omits is held to
+        # the default field confidence threshold, never to consensus_threshold.
+        # An empty map on a schema-free request names no field and stays a no-op.
+        if request.field_thresholds is not None and (target_schema or request.field_thresholds):
+            valid = apply_field_confidence_thresholds(
+                valid,
+                request.field_thresholds,
+                requested_fields=target_schema or {},
+                default_threshold=DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
+            )
         synthesis = synthesize(
             valid,
             request.consensus_threshold,
@@ -387,13 +400,15 @@ def _reply_is_sufficient(
     target_schema: dict[str, str] | None,
     threshold: float,
     field_thresholds: dict[str, float] | None = None,
+    default_field_threshold: float = DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
 ) -> bool:
     """True when this reply already fills the requested schema at high confidence.
 
     A later variation must not be sent once this is true. When the consumer
-    sent per-field thresholds, each field is judged by its own number. A
-    requested field with no number does not borrow ``threshold``. A schema-less
-    reply is sufficient only when it also contains a non-metadata field.
+    sent per-field thresholds, each field is judged by its own number, and a
+    requested field the map omits by ``default_field_threshold``. It never
+    borrows ``threshold``, the agreement bar. A schema-less reply is sufficient
+    only when it also contains a non-metadata field.
     """
     if not isinstance(result, SonarResponse):
         return False
@@ -415,8 +430,7 @@ def _reply_is_sufficient(
         if validated.get(name) in (None, "", [], {}):
             return False
         if field_thresholds is not None:
-            required = field_thresholds.get(name)
-            if required is None or confidence < required:
+            if confidence < field_thresholds.get(name, default_field_threshold):
                 return False
         elif confidence < threshold:
             return False
@@ -430,6 +444,7 @@ async def _collect_variations(
     target_schema: dict[str, str] | None,
     threshold: float,
     field_thresholds: dict[str, float] | None = None,
+    default_field_threshold: float = DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
 ) -> list[Any]:
     """Stop after a sufficient reply. Later variations run together.
 
@@ -449,7 +464,9 @@ async def _collect_variations(
 
     first = await _one()
     results: list[Any] = [first]
-    if _reply_is_sufficient(first, target_schema, threshold, field_thresholds):
+    if _reply_is_sufficient(
+        first, target_schema, threshold, field_thresholds, default_field_threshold
+    ):
         logger.info(
             "variation_short_circuit",
             calls_made=len(results),

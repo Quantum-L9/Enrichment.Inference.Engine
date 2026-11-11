@@ -16,6 +16,7 @@ Called by: enrichment_orchestrator.py after variation validation
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import structlog
@@ -27,13 +28,20 @@ logger = structlog.get_logger("consensus")
 
 def apply_field_confidence_thresholds(
     variations: list[dict[str, Any]],
-    field_thresholds: dict[str, float],
+    field_thresholds: Mapping[str, float],
+    *,
+    requested_fields: Iterable[str] = (),
+    default_threshold: float | None = None,
 ) -> list[dict[str, Any]]:
     """Keep a field only when this reply's confidence clears that field's bar.
 
-    A field the consumer did not name in ``field_thresholds`` is dropped.
-    There is no fallback to the packet-wide agreement threshold.
+    A field's bar is its ``field_thresholds`` entry. A requested field the map
+    omits inherits ``default_threshold`` (the field confidence threshold, never
+    the agreement threshold). A field that is neither named in the map nor
+    requested is unsolicited and dropped, as is any requested field when no
+    ``default_threshold`` is given.
     """
+    requested = frozenset(requested_fields)
     filtered: list[dict[str, Any]] = []
     for variation in variations:
         try:
@@ -45,6 +53,8 @@ def apply_field_confidence_thresholds(
             if key == "confidence":
                 continue
             required = field_thresholds.get(key)
+            if required is None and key in requested:
+                required = default_threshold
             if required is None or confidence < required:
                 continue
             if value in (None, "", [], {}):

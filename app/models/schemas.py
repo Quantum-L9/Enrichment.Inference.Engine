@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.engines.domain_yaml_reader import TENANT_ID_PATTERN, TENANT_ID_RESERVED_PREFIX
 
@@ -109,6 +109,38 @@ def resolve_converge_identity(payload: Mapping[str, Any]) -> str | None:
 # ── Request ──────────────────────────────────────────────────
 
 
+# The field confidence threshold a requested field inherits when the
+# consumer's field_thresholds map does not name it. ConvergenceConfig's
+# confidence_threshold defaults to this value, so the standalone enrich path
+# and the convergence loop share one default. It is a confidence bar, never
+# the agreement bar (consensus_threshold, 0.65).
+DEFAULT_FIELD_CONFIDENCE_THRESHOLD = 0.85
+
+# Reserved response key; never a requested field.
+_RESERVED_CONFIDENCE_KEY = "confidence"
+
+
+def resolve_field_thresholds(
+    requested_fields: Iterable[str],
+    field_thresholds: Mapping[str, float] | None,
+    default_threshold: float,
+) -> dict[str, float] | None:
+    """Resolve t_i for every requested field.
+
+    t_i = field_thresholds[i] when the consumer named i, else ``default_threshold``.
+    Returns None when the consumer sent no map: the absent-map contract is
+    unchanged. Entries naming fields outside ``requested_fields`` are kept as
+    sent, and the reserved ``confidence`` key is never given a bar.
+    """
+    if field_thresholds is None:
+        return None
+    resolved = {
+        name: default_threshold for name in requested_fields if name != _RESERVED_CONFIDENCE_KEY
+    }
+    resolved.update(field_thresholds)
+    return resolved
+
+
 class EnrichRequest(BaseModel):
     """Single entity enrichment request.
 
@@ -162,8 +194,11 @@ class EnrichRequest(BaseModel):
     )
 
     # Tuning knobs. consensus_threshold is the agreement bar. field_thresholds
-    # is the consumer's minimum model confidence for each requested field.
-    # A schema field with no entry is not filled; nothing substitutes 0.65.
+    # is the consumer's minimum model confidence for named requested fields; a
+    # map may name only some of them. A requested field the map omits inherits
+    # the field confidence threshold (DEFAULT_FIELD_CONFIDENCE_THRESHOLD, or the
+    # convergence loop's configured confidence_threshold). consensus_threshold
+    # never substitutes for a field confidence threshold.
     consensus_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
     field_thresholds: dict[str, float] | None = Field(default=None)
     max_variations: int = Field(default=5, ge=1, le=10)
@@ -206,17 +241,6 @@ class EnrichRequest(BaseModel):
                 raise ValueError(msg)
             cleaned[str(key)] = number
         return cleaned
-
-    @model_validator(mode="after")
-    def requested_fields_name_their_threshold(self) -> EnrichRequest:
-        """A requested field with no consumer threshold is not given one here."""
-        if self.field_thresholds is None or not self.schema_:
-            return self
-        missing = [name for name in self.schema_ if name not in self.field_thresholds]
-        if missing:
-            msg = f"field_thresholds missing for requested fields: {', '.join(sorted(missing))}"
-            raise ValueError(msg)
-        return self
 
 
 class BatchEnrichRequest(BaseModel):
