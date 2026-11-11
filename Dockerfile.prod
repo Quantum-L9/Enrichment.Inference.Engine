@@ -3,12 +3,17 @@
 # PEP 621 / setuptools, see pyproject.toml), and had no `git` for the
 # git+https constellation-node-sdk dependency, so the build could not succeed.
 #
-# Supply chain: the base image is pinned by digest (python:3.12-slim at the
-# time of pinning); every dependency, the SDK included (as the GitHub source
-# archive of its release commit), is installed from requirements.lock with
-# `--require-hashes`. Regenerate the lock with `bash tools/lock_requirements.sh`.
+# Supply chain: the base image is python:3.12-slim pinned by digest (the same
+# digest Cognitive.Engine.Graphs pins). The previous pin was an untagged
+# `python@sha256:8edbf9e…` that a Dependabot docker bump (#204) had moved to
+# Python 3.14.7 while this comment still said 3.12; the tag now names the
+# version, and uv refuses any interpreter outside requires-python. uv.lock is the single lock: in the `deps` stage
+# tools/deps/install_locked.sh bootstraps a hash-pinned uv and syncs the
+# runtime profile into /opt/venv, verifying every distribution against the
+# sha256 uv.lock records and the Gate SDK at the commit it records. Only
+# /opt/venv reaches the final stage: uv and git stay behind.
 # The app runs from /app on PYTHONPATH; nothing is pip-installed from the tree.
-FROM python@sha256:8edbf9e42c7fb168b9c523718ed907117e6d2e60f5889c0c499bbda3a787da53 AS base
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159 AS base
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -16,14 +21,24 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl git \
+    && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base AS deps
-COPY requirements.lock ./
-RUN python -m pip install --require-hashes --no-deps -r requirements.lock
+# git: uv fetches the Gate SDK from its git source.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /deps
+COPY pyproject.toml uv.lock ./
+COPY tools/deps/install_locked.sh tools/deps/uv-bootstrap.txt tools/deps/
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv bash tools/deps/install_locked.sh runtime
 
-FROM deps AS prod
+FROM base AS prod
+# The venv's interpreter links to /usr/local/bin/python3.12, which this stage
+# shares (same base digest).
+COPY --from=deps /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 COPY . .
 RUN adduser --disabled-password --gecos "" appuser \
     && chown -R appuser /app

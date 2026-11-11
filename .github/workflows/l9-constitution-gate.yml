@@ -45,7 +45,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
-            requirements-ci.txt
+            uv.lock
             pyproject.toml
 
       - name: Install test dependencies
@@ -53,23 +53,13 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
           if [ -n "${SDK_TOKEN:-}" ]; then
             git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
-          # Pinned wheels only — satisfy Sonar githubactions S8541/S8544 on this gate.
-          python -m pip install --only-binary=:all: \
-            "aiofiles==25.1.0" \
-            "fastapi==0.141.1" \
-            "httpx==0.28.1" \
-            "pydantic==2.13.4" \
-            "pydantic-settings==2.14.2" \
-            "pytest==9.1.1" \
-            "pytest-asyncio==1.4.0" \
-            "pytest-cov==7.1.0" \
-            "pyyaml==6.0.3" \
-            "redis==8.1.0" \
-            "structlog==26.1.0"
+          # Locked, hash-verified install from uv.lock (replaces a hand-pinned
+          # wheel list that had drifted from the lock: fastapi 0.141.1 and
+          # pydantic 2.13.4 against the lock's 0.161.0 and 2.14.1).
+          bash tools/deps/install_locked.sh full
       - name: Verify required imports
         run: |
           python - <<'PY'

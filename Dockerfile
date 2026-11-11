@@ -1,13 +1,18 @@
-FROM python:3.14-slim AS base
+# Dev image. Same digest-pinned python:3.12-slim base as Dockerfile.prod (the
+# project requires Python 3.12, which uv.lock is resolved for).
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159 AS base
 
 WORKDIR /app
 
+# git: uv fetches the Gate SDK from its git source at the commit uv.lock records.
 RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
-RUN pip install --no-cache-dir ".[dev]"
-
+# uv.lock is the single lock: install_locked.sh bootstraps a hash-pinned uv and
+# syncs the full profile (the project, editable, plus every dependency group)
+# into /opt/venv. The editable install points at /app, so the tree is copied first.
 COPY . .
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv PIP_NO_CACHE_DIR=1 bash tools/deps/install_locked.sh full
+ENV PATH="/opt/venv/bin:$PATH"
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/health || exit 1

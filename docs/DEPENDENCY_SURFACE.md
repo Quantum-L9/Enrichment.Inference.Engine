@@ -64,12 +64,15 @@ Track: GitHub issue label `docs-gap`.
 
 Agents asked to upgrade a dependency MUST follow this sequence:
 
-1. Update version constraint in `pyproject.toml` only.
-2. Run `pip install -e ".[dev]"` to resolve.
+1. Update version constraint in `pyproject.toml` only (`[project]` for runtime,
+   `[dependency-groups]` for dev/CI tools).
+2. Run `uv lock` (or `uv lock --upgrade-package <name>`) and commit `uv.lock`;
+   then `make setup` installs the locked set into `.venv`.
 3. Check dep changelog for breaking changes against codebase usage.
 4. Special case — Pydantic: verify `model_fields` (v2) not `.fields` (v1) in any touched code.
 5. Special case — ruff: do NOT upgrade without creating an ADR (ruff version is exactly pinned at 0.8.6).
-6. If CI dev deps affected: update `requirements-ci.txt` manually.
+6. CI installs from `uv.lock` too (`tools/deps/install_locked.sh`); there is no
+   second requirements file to edit.
 7. Run `make agent-check` — all 7 gates must pass.
 8. PR description must include: old version, new version, changelog highlights, breaking change assessment.
 

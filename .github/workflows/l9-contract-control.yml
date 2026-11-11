@@ -43,14 +43,7 @@ jobs:
             exit 1
           fi
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
-          python -m pip install pyyaml pytest pytest-cov fastapi
-          if [ -f requirements-ci.txt ]; then
-            python -m pip install -r requirements-ci.txt
-          fi
-          if [ -f "pyproject.toml" ]; then
-            python -m pip install -e . --no-deps
-          fi
+          bash tools/deps/install_locked.sh full
 
       - name: Verify constitution
         if: env.DEPENDABOT_SKIP != '1'
@@ -117,14 +110,7 @@ jobs:
             exit 1
           fi
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
-          python -m pip install pyyaml pytest pytest-cov fastapi
-          if [ -f requirements-ci.txt ]; then
-            python -m pip install -r requirements-ci.txt
-          fi
-          if [ -f "pyproject.toml" ]; then
-            python -m pip install -e . --no-deps
-          fi
+          bash tools/deps/install_locked.sh full
 
       - name: Compute changed files
         id: changed

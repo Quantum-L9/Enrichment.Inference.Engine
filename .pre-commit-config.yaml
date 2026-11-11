@@ -54,12 +54,14 @@ repos:
     hooks:
       - id: mypy
         args: [--ignore-missing-imports, "--exclude=app/engines/field_classifier\\.py", "--exclude=app/engines/inference_bridge_v2\\.py"]
-        # Pinned to the versions the CI type-check environment resolves
-        # (requirements-ci.txt + mypy --install-types), so the hook and the
-        # required job type-check against the same stubs. CI installs no
-        # types-aiofiles, so the hook does not either.
+        # Pinned to the versions uv.lock records, which is what the CI
+        # type-check environment installs (tools/deps/install_locked.sh full +
+        # mypy --install-types), so the hook and the required job type-check
+        # against the same packages and stubs; tests/unit/test_uv_lock.py fails
+        # when they diverge. CI installs no types-aiofiles, so the hook does not
+        # either.
         additional_dependencies:
-          [pydantic==2.14.3, pydantic-settings==2.16.2, types-PyYAML==6.0.12.20261103, structlog==26.1.0, httpx==0.28.1]
+          [pydantic==2.14.1, pydantic-settings==2.16.1, types-PyYAML==6.0.12.20261103, structlog==26.1.0, httpx==0.28.1]
         language_version: python3.12
         exclude: ^(tests/|tools/|docs/|kb/|readme/|LEAD ENRICHMENT|Enrichment-Deployment-pack/|Current Work/|app/engines/field_classifier\.py|app/engines/inference_bridge_v2\.py|engine/kge/rotate3d\.py|app/engines/search_optimizer\.py|app/agents/data_hygiene\.py|plastics_enrichment_client\.py|app/models/schemas\.py|app/services/score/|app/services/perplexity_client\.py|app/services/crm/odoo_client\.py|app/services/crm/salesforce_client\.py|app/services/crm/hubspot_client\.py|app/core/config\.py|app/services/enrichment/sources/apollo\.py|app/engines/graph_sync_client\.py)
 

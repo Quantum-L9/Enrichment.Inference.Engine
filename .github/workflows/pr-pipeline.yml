@@ -89,7 +89,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
           cache-dependency-path: |
-            requirements-ci.txt
+            uv.lock
             pyproject.toml
 
       - name: Install validation tools
@@ -152,7 +152,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
           cache-dependency-path: |
-            requirements-ci.txt
+            uv.lock
             pyproject.toml
 
       - name: Install linting tools
@@ -160,8 +160,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --only-binary=:all: "pip==26.2.1"
-          pip install -r requirements-ci.txt
+          bash tools/deps/install_locked.sh full
 
       - name: Run Ruff linter
         run: |
@@ -248,7 +247,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
           cache-dependency-path: |
-            requirements-ci.txt
+            uv.lock
             pyproject.toml
 
       - name: Install dependencies
@@ -256,14 +255,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --only-binary=:all: "pip==26.2.1"
-          pip install -r requirements-ci.txt
-          if ! pip install -e ".[dev]" 2>/dev/null && ! pip install -e . 2>/dev/null; then
-            echo "editable install unavailable; proceeding with requirements-ci.txt deps" >&2
-          fi
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
+          bash tools/deps/install_locked.sh full
 
       - name: Checkout pinned native CEG subject
         uses: actions/checkout@v7
@@ -342,8 +334,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --only-binary=:all: "pip==26.2.1"
-          pip install -r requirements-ci.txt
+          bash tools/deps/install_locked.sh full
 
       - name: Install gitleaks (binary — no org license required)
         env:
@@ -409,8 +400,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --only-binary=:all: "pip==26.2.1"
-          pip install -r requirements-ci.txt
+          bash tools/deps/install_locked.sh full
 
       - name: Terminology Guard
         run: |
@@ -481,46 +471,18 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           set -euo pipefail
-          python -m pip install --only-binary=:all: "pip==26.2.1"
           if [ -n "${SDK_TOKEN:-}" ]; then
             git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
-          # Pinned wheels only — satisfy Sonar githubactions S8541/S8544 on this gate.
-          # defusedxml: app/services/crm/odoo_client.py imports it at module load,
-          # and tests/contracts/test_crm_identity_failure_contract.py imports that.
-          # sqlalchemy + greenlet and perplexityai: the contract gate selected for
-          # app/ changes (pytest tests/contracts -m "unit and not enforcement")
-          # imports app.engines.handlers / app.api.v1.converge, which load
-          # app/services/pg_store.py (sqlalchemy.ext.asyncio) and
-          # app/services/perplexity_client.py (perplexity). Versions are the
-          # requirements.lock pins.
-          python -m pip install --only-binary=:all: \
-            "aiofiles==25.1.0" \
-            "defusedxml==0.7.1" \
-            "fastapi==0.141.1" \
-            "greenlet==3.5.6" \
-            "httpx==0.28.1" \
-            "perplexityai==0.45.0" \
-            "pydantic==2.13.4" \
-            "pydantic-settings==2.14.2" \
-            "pytest==9.1.1" \
-            "pytest-asyncio==1.4.0" \
-            "pytest-cov==7.1.0" \
-            "pyyaml==6.0.3" \
-            "redis==8.1.0" \
-            "sqlalchemy==2.1.6" \
-            "structlog==26.1.0"
-          # Effective-domain contracts import pg_store and the handlers' provider.
-          # Read their declared dependencies; import does not invoke a provider.
-          mapfile -t consumer_requirements < <(python - <<'PY'
-          from pathlib import Path
-          lines = Path('requirements-ci.txt').read_text().splitlines()
-          for prefix in ('sqlalchemy[', 'perplexityai'):
-              print(next(line.strip() for line in lines if line.strip().startswith(prefix)))
-          PY
-          )
-          test "${#consumer_requirements[@]}" -eq 2
-          python -m pip install --only-binary=:all: "${consumer_requirements[@]}"
+          # The full locked profile: every package at the version uv.lock records,
+          # hash-verified, plus the project itself and the Gate SDK at the commit
+          # uv.lock resolved `v1` to. This replaces a hand-pinned wheel list that
+          # had drifted from the lock (fastapi 0.141.1, pydantic 2.13.4 while the
+          # lock carried 0.161.0 and 2.14.1). The contract gates selected for app/
+          # changes import app.engines.handlers / app.api.v1.converge, which load
+          # sqlalchemy.ext.asyncio (+ greenlet), perplexity and defusedxml; all are
+          # [project] dependencies, so the locked install always carries them.
+          bash tools/deps/install_locked.sh full
 
       - name: Checkout pinned native CEG subject
         uses: actions/checkout@v7
@@ -576,33 +538,13 @@ jobs:
           if [ -n "${SDK_TOKEN:-}" ]; then
             git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
-          # Packet/envelope gates need the SDK transport types. This job installs a
-          # pinned wheel list rather than the repository dependency, so the SDK has
-          # to be named here — but it must name the same thing pyproject.toml and
-          # requirements-ci.txt do. It did not: this step ran ead0f48 while both
-          # manifests declared 69c6c67, so the gates validated packets against an
-          # SDK no other job used. It is a governed Gate_SDK consumer like the
-          # manifests, and scripts/validate_sdk_pin.py now reads this file, so the
-          # declaration can no longer drift here unnoticed.
-          # Sonar flags this line twice and neither is suppressible from here: the
-          # trailing `# NOSONAR` does not apply to githubactions rules (S8541 and
-          # S8544 are still reported against this line with the marker present, and
-          # were before it moved to @v1 too). Recorded here rather than left looking
-          # handled, because a marker that reads as a suppression and is not one is
-          # worse than no marker:
-          #   S8541 --only-binary=:all: cannot apply. This is a git source
-          #     dependency; pip aborts with "Building source distributions is
-          #     disabled" under that flag. Pre-existing on this line.
-          #   S8544 "without locking resolved versions" is the contract, not a
-          #     defect. @v1 is Gate_SDK's moving major channel; pinning this gate to
-          #     a resolved sha is what put three different SDKs in this repository.
-          #     Reproducibility lives in requirements.lock, which carries the
-          #     hash-verified archive production installs, and
-          #     scripts/validate_sdk_pin.py --verify-tag fails closed the moment that
-          #     lock stops matching the channel.
-          # Clearing these two needs a SonarCloud policy decision (accept the issues
-          # on this line, or scope the rules), not a code change here.
-          python -m pip install "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@v1"
+          # Packet/envelope gates need the SDK transport types. "Install L9
+          # dependencies" installed the SDK from uv.lock with everything else, so
+          # these gates validate packets against the same SDK object every other
+          # job and the image use. This step used to install `@v1` live — a third
+          # Gate_SDK identity beside the manifests (ead0f48 vs 69c6c67 once, EIE-001);
+          # scripts/validate_sdk_pin.py now fails any workflow that installs the
+          # SDK directly instead of from the lock.
           python scripts/l9_contract_control.py select-gates --base "$BASE_REF" --head "$HEAD_REF" > gates.json
           python3 local_pr_pipeline/run_pr_select_gates.py gates.json
 

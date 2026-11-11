@@ -75,11 +75,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
-          if ! pip install -e ".[dev]" 2>/dev/null && ! pip install -e . 2>/dev/null; then
-            echo "editable install unavailable; proceeding with explicit deps" >&2
-          fi
-          pip install pip-licenses
+          bash tools/deps/install_locked.sh full
 
       - name: Check License Compliance
         run: |
@@ -180,8 +176,7 @@ jobs:
           SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]" || pip install -e .
+          bash tools/deps/install_locked.sh full
           # Pinned for reproducible SBOMs (matches current CI default; bump deliberately)
           pip install 'cyclonedx-bom==7.3.0'
 
