@@ -161,7 +161,7 @@ def check_critical_files() -> list[str]:
         "app/engines/orchestration_layer.py",
         "app/engines/graph_sync_client.py",
         "pyproject.toml",
-        "requirements-ci.txt",
+        "uv.lock",
     ]
     fails: list[str] = []
 

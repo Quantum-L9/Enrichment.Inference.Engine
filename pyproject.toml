@@ -7,20 +7,19 @@ name = "domain-enrichment-api"
 license = { text = "Proprietary" }
 version = "2.3.0"
 description = "Universal domain-aware entity enrichment API — Salesforce + Odoo single ingress"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "aiofiles>=23.0.0",
     "asyncpg",
     # Gate_SDK owns release identity; the consumer contract is its moving
     # major channel `v1`, not a commit sha (contracts/RELEASE_IDENTITY_LEDGER
-    # .json, schema v2). Gate and CEG declare the same channel.
-    # Reproducibility lives in the generated requirements.lock, which records
-    # the concrete object the channel resolved to plus that archive's sha256;
-    # `python scripts/validate_sdk_pin.py --verify-tag` proves it is current.
-    # EIE-001 is what that split looks like when it goes unchecked: pyproject
-    # named 69c6c67 while the lock carried 2b2f53a2, and the two differ by the
-    # GateClientConfig fix that loads L9_VERIFYING_KEYS_JSON.
-    "constellation-node-sdk @ git+https://github.com/Quantum-L9/Gate_SDK.git@v1",
+    # .json, schema v2). Gate and CEG declare the same channel. The source is
+    # [tool.uv.sources] below; uv.lock records the commit the channel resolved
+    # to, and `python scripts/validate_sdk_pin.py --verify-tag` proves it is
+    # current. EIE-001 is what that split looks like when it goes unchecked:
+    # pyproject named 69c6c67 while the lock carried 2b2f53a2, and the two
+    # differ by the GateClientConfig fix that loads L9_VERIFYING_KEYS_JSON.
+    "constellation-node-sdk",
     "defusedxml>=0.7.1,<0.8",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -45,18 +44,50 @@ dependencies = [
     "opentelemetry-instrumentation-redis>=0.48b0",
 ]
 
-[project.optional-dependencies]
+# One lock (uv.lock) resolves the project and every group together; install
+# profiles select groups (tools/deps/install_locked.sh). Core-owned tools (pip,
+# pre-commit, ruff, mypy, pytest, semgrep) are declared nowhere here: they are
+# excluded from the lock ([tool.uv] below) and installed from
+# Quantum-L9/l9-ci-core's installer pins, so a Core bump needs no edit in this
+# repository (tests/unit/test_core_toolchain_pins.py).
+[dependency-groups]
 dev = [
-    "pytest==9.1.1",
     "pytest-asyncio>=0.24",
     "pytest-httpx>=0.34",
     "pytest-cov==7.1.0",
     "respx>=0.22",
-    "ruff==0.16.1",
-    "mypy==2.3.0",
     "coverage==7.17.0",
     "jsonschema>=4.23.0",
 ]
+# CI-only tools the workflows run beyond the dev set.
+ci = [
+    # No types-redis: redis>=5 ships its own inline types (py.typed). The
+    # typeshed stubs stop at redis 4 and shadow them (e.g. no Redis.aclose).
+    "types-PyYAML>=6.0.12.20261030",
+    "pytest-xdist>=3.8.0",
+    "pytest-timeout>=2.4.0",
+    "bandit>=1.9.4",
+    # `safety` was removed (ADR-003, 2026-10-23): it duplicated pip-audit and
+    # its filelock<4.0 pin kept a vulnerable filelock in this environment.
+    "pip-audit>=2.10.1",
+]
+licenses = [
+    "pip-licenses==5.5.5",
+]
+
+[tool.uv]
+# Core-owned tools never enter uv.lock, even transitively (pytest plugins require
+# pytest, pip-audit requires pip): a locked copy would drift the next time Core
+# moves. tools/deps/install_locked.sh installs them from Core's installer pins
+# (exact versions, so tools/mypy_ratchet.py still sees one mypy). Names only,
+# never versions. Core list: l9-ci-core
+# .github/actions/install-consumer-ci/core-owned-tools.json.
+exclude-dependencies = ["mypy", "pip", "pre-commit", "pytest", "ruff", "semgrep"]
+
+[tool.uv.sources]
+# Policy (EIE-001, CEG#266): the manifest names Gate_SDK's moving major tag;
+# uv.lock records the commit it resolved to (scripts/validate_sdk_pin.py).
+constellation-node-sdk = { git = "https://github.com/Quantum-L9/Gate_SDK.git", tag = "v1" }
 
 [tool.setuptools.packages.find]
 where = ["."]

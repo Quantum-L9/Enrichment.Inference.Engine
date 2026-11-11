@@ -15,6 +15,8 @@ spec:
       labels:
         app: redis
     spec:
+      # Redis never calls the Kubernetes API: mount no service-account token.
+      automountServiceAccountToken: false
       containers:
         - name: redis
           image: redis:7-alpine
