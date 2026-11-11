@@ -192,13 +192,28 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v7
 
-      - name: Install Semgrep
-        run: pip install semgrep
+      # Semgrep is Core-owned: its version is Quantum-L9/l9-ci-core
+      # toolchain-lock.json's, installed hash-locked by Core's installer (on by
+      # default). The lock is built for CPython 3.12.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Core toolchain (Semgrep included)
+        id: core
+        uses: Quantum-L9/l9-ci-core/.github/actions/install-consumer-ci@v2
 
       - name: Run Semgrep
+        env:
+          SEMGREP: ${{ steps.core.outputs.semgrep-executable }}
         run: |
+          set -euo pipefail
+          if [[ -z "${SEMGREP}" ]]; then
+            echo "::error::install-consumer-ci@v2 did not install Semgrep (v2 predates Quantum-L9/l9-ci-core#248)"
+            exit 1
+          fi
           echo "Running Semgrep policy checks..."
-          semgrep --config .semgrep/ --error --quiet
+          "${SEMGREP}" --config .semgrep/ --error --quiet --metrics=off --disable-version-check
           echo "✅ Semgrep checks passed"
 
   # ────────────────────────────────────────────────────────────────────────
