@@ -244,8 +244,8 @@ async def test_list_of_maps_is_sent_as_a_list_of_maps() -> None:
         ("processed_polymers", ["HDPE", "PET"], "map{code}", "string"),
         ("processed_polymers", [{"name": "HDPE"}], "string", "missing"),
         ("min_density", "high", "float", "string"),
-        ("food_grade_certified", "yes", "bool", "string"),
-        ("community_id", 1.5, "int", "float"),
+        ("capacity_tons_month", True, "float", "bool"),
+        ("tier", 5, "string", "int"),
     ],
 )
 async def test_a_value_that_does_not_match_its_declaration_refuses_the_row(

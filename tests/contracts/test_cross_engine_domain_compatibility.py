@@ -87,7 +87,11 @@ def test_row_contract_carries_the_typed_childsync_field() -> None:
     assert summary["min_density"] == "float"
     # EIE-only evidence never rides a sync row.
     assert "city" not in summary and "material_grade" not in summary
-    assert summary == row_contract_summary(_ceg(), "Facility", eie=False)
+    ceg = row_contract_summary(_ceg(), "Facility", eie=False)
+    # Subset: every row property EIE sends is CEG's, with CEG's typed shape.
+    assert summary.items() <= ceg.items()
+    # CEG-owned properties EIE never produces are not declared, so never sent.
+    assert "community_id" in ceg and "community_id" not in summary
 
 
 def _rename(spec: dict[str, Any], old: str, new: str) -> None:
@@ -112,14 +116,17 @@ DRIFTS = {
     "items_property_required": lambda eie, ceg: _prop(eie, "processed_polymers")["items"][
         "properties"
     ][0].pop("required"),
-    "scalar_type": lambda eie, ceg: _prop(eie, "lat").update({"type": "string"}),
-    "alias_spelling": lambda eie, ceg: _prop(eie, "community_id").update({"type": "integer"}),
+    "scalar_type": lambda eie, ceg: _prop(eie, "min_density").update({"type": "string"}),
+    "alias_spelling": lambda eie, ceg: _prop(eie, "capacity_tons_month").update({"type": "number"}),
+    "ceg_retyped": lambda eie, ceg: _prop(ceg, "tier").update({"type": "int"}),
     "required_flag": lambda eie, ceg: _prop(eie, "name").pop("required"),
     "undeclared_by_ceg": lambda eie, ceg: _facility(eie).append(
         {"name": "city_raw", "type": "string"}
     ),
     "evidence_promoted": lambda eie, ceg: _prop(eie, "city").pop("evidenceonly"),
-    "missing_ceg_property": lambda eie, ceg: _facility(eie).remove(_prop(eie, "credit_score")),
+    "ceg_owned_property_sent": lambda eie, ceg: _facility(eie).append(
+        {"name": "community_id", "type": "string"}
+    ),
     "childsync_missing": lambda eie, ceg: eie["sync"]["endpoints"][0].pop("childsync"),
     "childsync_edge": lambda eie, ceg: eie["sync"]["endpoints"][0]["childsync"][0].update(
         {"edgetype": "HANDLES"}
@@ -172,12 +179,33 @@ def test_defects_name_the_field_and_both_shapes() -> None:
     _rename(eie, "min_density", "density_min")
     _prop(eie, "processed_polymers")["items"]["properties"][0]["type"] = "int"
     defects = check_compatibility(eie, _ceg())["defects"]
-    assert "/v1/sync/facilities: Facility.density_min: declared by EIE, not by CEG" in defects
-    assert "/v1/sync/facilities: Facility.min_density: declared by CEG, not by EIE" in defects
+    assert "/v1/sync/facilities: Facility.density_min: sent by EIE, not declared by CEG" in defects
+    # Subset semantics: CEG's min_density, now unsent by EIE, is not a defect.
+    assert not any("Facility.min_density" in d for d in defects)
     assert (
         "/v1/sync/facilities: Facility.processed_polymers[].code: type EIE 'int' != CEG 'string'"
         in defects
     )
+
+
+def test_a_ceg_only_property_absent_from_eie_passes() -> None:
+    """Subset: EIE need not declare CEG properties it never sends (CEG computes them)."""
+    eie = _eie()
+    _facility(eie).remove(_prop(eie, "tier"))
+    result = check_compatibility(eie, _ceg())
+    assert result["verdict"] == "pass", result["defects"]
+    not_produced = result["ceg_properties_not_produced"]["/v1/sync/facilities"]
+    assert {"tier", "community_id", "lat", "rate_per_ton"} <= set(not_produced)
+
+
+def test_an_eie_property_ceg_does_not_declare_fails() -> None:
+    eie = _eie()
+    _facility(eie).append({"name": "plant_area_m2", "type": "float"})
+    result = check_compatibility(eie, _ceg())
+    assert result["verdict"] == "fail"
+    assert result["defects"] == [
+        "/v1/sync/facilities: Facility.plant_area_m2: sent by EIE, not declared by CEG"
+    ]
 
 
 def test_field_mappings_are_refused_not_honoured() -> None:

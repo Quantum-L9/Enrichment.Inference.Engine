@@ -21,28 +21,25 @@ ontology:
   - label: Facility
     description: Plastics recycling or processing facility
     # Row contract of /v1/sync/facilities (eie-ceg-sync/v2): every property
-    # below that is not `evidenceonly` is CEG's Facility declaration, name for
-    # name and typed shape for typed shape (Cognitive.Engine.Graphs
-    # domains/plasticos/spec.yaml). packet_router builds each sync row from
-    # exactly these declarations and refuses a value that does not match one.
+    # below that is not `evidenceonly` is one EIE produces, declared exactly as
+    # CEG's Facility declares it (Cognitive.Engine.Graphs
+    # domains/plasticos/spec.yaml), name for name and typed shape for typed
+    # shape. CEG-owned properties EIE never produces (lat, lon, credit_score,
+    # food_grade_certified, community_id -- written by CEG's GDS job --
+    # rate_per_ton, rate_confidence, last_transaction_date) are deliberately
+    # not declared, so EIE can never send or overwrite them. packet_router
+    # builds each sync row from exactly these declarations and refuses a value
+    # that does not match one.
     properties:
     - {name: facility_id, type: string, required: true}
     - {name: name, type: string, required: true}
-    - {name: lat, type: float}
-    - {name: lon, type: float}
-    - {name: credit_score, type: float}
     - {name: min_density, type: float}
     - {name: max_density, type: float}
     - {name: min_mfi, type: float}
     - {name: max_mfi, type: float}
     - {name: contamination_tolerance, type: float}
-    - {name: food_grade_certified, type: bool}
     - {name: capacity_tons_month, type: float}
     - {name: tier, type: string}
-    - {name: community_id, type: int}
-    - {name: rate_per_ton, type: float}
-    - {name: rate_confidence, type: float}
-    - {name: last_transaction_date, type: datetime}
     # Wire-only shape: the childsync field below (PROCESSES -> PolymerFamily).
     - name: processed_polymers
       type: list
