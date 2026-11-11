@@ -39,9 +39,21 @@ FROM base AS prod
 # shares (same base digest).
 COPY --from=deps /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-COPY . .
-RUN adduser --disabled-password --gecos "" appuser \
-    && chown -R appuser /app
+RUN adduser --disabled-password --gecos "" appuser
+# Copy only what the runtime reads (no recursive copy of the build context) —
+# see the matching list in ./Dockerfile. The entrypoint script is dev-only.
+# Root-owned, so the runtime user cannot modify its code; only config/ (the
+# schema-promotion worker writes config/domain_kb) belongs to appuser.
+COPY app/ ./app/
+COPY config/ ./config/
+COPY domains/ ./domains/
+COPY kb/ ./kb/
+COPY contracts/ ./contracts/
+COPY docs/contracts/ ./docs/contracts/
+COPY migrations/ ./migrations/
+COPY alembic.ini ./
+COPY scripts/l9_contract_control.py ./scripts/
+RUN chown -R appuser /app/config
 USER appuser
 
 EXPOSE 8000
