@@ -124,34 +124,25 @@ def resolve_remote_tag(remote: str, tag: str) -> str | None:
     return peeled or direct
 
 
-def check_manifest(rel: str, text: str) -> list[str]:
-    """pyproject.toml names the SDK and sources it from the canonical tag v1."""
-    if FORBIDDEN_FORK in text:
-        return [f"{rel}: forbidden fork {FORBIDDEN_FORK}"]
-    try:
-        data = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
-        return [f"{rel}: not valid TOML ({exc})"]
-
-    errors: list[str] = []
+def _declaration_errors(rel: str, data: dict) -> list[str]:
+    """[project] names the SDK bare; its source lives in [tool.uv.sources]."""
     declared = [
         spec
         for spec in data.get("project", {}).get("dependencies", [])
         if re.match(rf"{re.escape(SDK)}\b", spec.strip())
     ]
     if not declared:
-        errors.append(f"{rel}: {SDK} is not a [project] dependency")
-    for spec in declared:
-        if spec.strip() != SDK:
-            errors.append(
-                f"{rel}: {SDK} declared as {spec!r}; name it bare and source it "
-                "through [tool.uv.sources]"
-            )
+        return [f"{rel}: {SDK} is not a [project] dependency"]
+    return [
+        f"{rel}: {SDK} declared as {spec!r}; name it bare and source it through [tool.uv.sources]"
+        for spec in declared
+        if spec.strip() != SDK
+    ]
 
-    source = data.get("tool", {}).get("uv", {}).get("sources", {}).get(SDK)
-    if source is None:
-        errors.append(f"{rel}: no [tool.uv.sources] entry for {SDK}")
-        return errors
+
+def _source_errors(rel: str, source: dict) -> list[str]:
+    """The [tool.uv.sources] entry is the canonical repository on tag v1."""
+    errors: list[str] = []
     if source.get("git") != CANONICAL_REMOTE:
         errors.append(f"{rel}: {SDK} source is {source.get('git')!r}, not {CANONICAL_REMOTE}")
     if "rev" in source:
@@ -170,6 +161,23 @@ def check_manifest(rel: str, text: str) -> list[str]:
     elif tag != MAJOR_TAG:
         errors.append(f"{rel}: Gate_SDK ref {tag!r} is not {MAJOR_TAG!r}")
     return errors
+
+
+def check_manifest(rel: str, text: str) -> list[str]:
+    """pyproject.toml names the SDK and sources it from the canonical tag v1."""
+    if FORBIDDEN_FORK in text:
+        return [f"{rel}: forbidden fork {FORBIDDEN_FORK}"]
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        return [f"{rel}: not valid TOML ({exc})"]
+
+    errors = _declaration_errors(rel, data)
+    source = data.get("tool", {}).get("uv", {}).get("sources", {}).get(SDK)
+    if source is None:
+        errors.append(f"{rel}: no [tool.uv.sources] entry for {SDK}")
+        return errors
+    return errors + _source_errors(rel, source)
 
 
 def lock_resolution(text: str) -> str | None:

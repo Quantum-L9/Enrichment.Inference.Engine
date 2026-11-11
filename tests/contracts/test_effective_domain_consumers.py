@@ -47,7 +47,8 @@ def test_lightweight_contract_job_installs_declared_sqlalchemy_dependency() -> N
     assert declared == ["sqlalchemy[asyncio]"]
     # The asyncio extra is what brings greenlet, which sqlalchemy.ext.asyncio needs.
     locked = _locked_versions(root)
-    assert "sqlalchemy" in locked and "greenlet" in locked
+    assert "sqlalchemy" in locked
+    assert "greenlet" in locked
     install = _l9_install_step(root)
     assert "bash tools/deps/install_locked.sh full" in install["run"]
     assert not install.get("continue-on-error", False)
