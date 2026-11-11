@@ -23,10 +23,11 @@ All contracts use **SemVer 2.0.0** (`MAJOR.MINOR.PATCH`):
 
 | Contract File | Version | Last Changed |
 |---------------|---------|-------------|
-| `api/openapi.yaml` | 2.3.0 | 2026-04-05 |
+| `api/openapi.yaml` | 2.4.0 | 2026-11-11 |
 | `agents/tool-schemas/*` | 1.0.0 | 2026-04-05 |
 | `agents/protocols/packet-envelope.yaml` | 1.0.0 | 2026-04-05 |
 | `data/models/*` | 1.0.0 | 2026-04-05 |
+| `data/graph-schema.yaml` | 2.0.0 | 2026-11-11 |
 | `events/asyncapi.yaml` | 1.0.0 | 2026-04-05 |
 | `config/env-contract.yaml` | 2.3.0 | 2026-04-05 |
 

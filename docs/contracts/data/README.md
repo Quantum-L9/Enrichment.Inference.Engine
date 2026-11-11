@@ -7,7 +7,7 @@
 | System | Purpose | Connection Env Var |
 |--------|---------|-------------------|
 | PostgreSQL | Enrichment results, convergence runs, field history, schema proposals | `DATABASE_URL` |
-| Neo4j | Knowledge graph, entity relationships, KGE embeddings | `NEO4J_URI` |
+| Neo4j (owned by CEG) | EIE holds no Neo4j connection; enriched rows reach CEG's graph as Gate `sync` packets. What they write: `graph-schema.yaml` | — (none in EIE) |
 | Redis | Idempotency keys, event streams (`enrich:events:{tenant}`) | `REDIS_URL` |
 
 ## Contracts Index

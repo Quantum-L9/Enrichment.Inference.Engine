@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Contract gaps TODO-01, TODO-04, TODO-05 closed (2026-11-11).**
+  - `docs/contracts/api/openapi.yaml` 2.4.0: the ten `/score/*` routes of
+    `app/score/score_api.py` (router prefix `/score`, no `/v1`), with request
+    schemas from their Pydantic models, the `ScoreEnvelope` wrapper and each
+    operation's payload. Their 500 is documented as what it is today: no code
+    configures the five score providers, so every permitted call answers 500.
+    `GET /v1/converge/{run_id}` now documents the dict its handler returns.
+  - `docs/contracts/data/graph-schema.yaml` 2.0.0: the subgraph EIE's `sync`
+    packets produce in CEG's Neo4j, verified live (disposable Neo4j 5.18,
+    EIE `notify_graph_sync` → CEG `handle_sync`, tenant `plasticos`). Retires
+    the unverified `Entity` / `Polymer` / `EnrichmentResult` /
+    `HAS_ENRICHMENT` / `HANDLES_POLYMER` entries, which nothing writes.
+  - `docs/contracts/dependencies/_index.yaml`: the enrichment waterfall's
+    provider order per domain, as `WaterfallEngine` runs it from
+    `config/waterfall_config.yaml` (Perplexity runs last, not first).
+  - Drift tests pin each to the code: `test_score_paths_match_score_router`,
+    `test_graph_schema_*`, `test_waterfall_order_contract.py`. The three gap
+    trackers are strict (`pytest.fail`) once resolved.
+
 ### Changed
 - **One manifest, one lock (2026-11-11).** `pyproject.toml` (`[project]` +
   `[dependency-groups]` dev, ci, licenses) and `uv.lock` replace

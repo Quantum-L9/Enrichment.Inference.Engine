@@ -25,6 +25,24 @@ TODO List (from audit report Gaps & TODOs section):
 Markers: unit
 All tests use pytest.xfail with strict=False — they fail softly when gap is
 unresolved but do not block CI. Change strict=True once the gap is resolved.
+
+These xfails are imperative (``pytest.xfail(...)``), which takes no ``strict``
+argument; the strict form of a resolved gap is ``pytest.fail(...)`` on the same
+condition, so a regression fails CI instead of xfailing.
+
+Resolved (strict) on 2026-11-11:
+  TODO-01: /score/* documented in openapi.yaml; paths in REQUIRED_PATHS
+           (the router prefix is /score, not /v1/score).
+  TODO-04: graph-schema.yaml verified against a live Neo4j populated by EIE's
+           notify_graph_sync -> CEG handle_sync (see live_verification).
+  TODO-05: waterfall order in dependencies/_index.yaml, checked against the
+           engine by test_waterfall_order_contract.py. The audit's assumed
+           order (Perplexity first) was wrong: the engine is
+           app/services/enrichment/waterfall_engine.py and, per
+           config/waterfall_config.yaml, perplexity_sonar runs last.
+Open: TODO-10 expects `state` / `pass_count`, but GET /v1/converge/{run_id}
+returns `status` / `current_pass` (app/api/v1/converge.py
+get_convergence_status, built from LoopState, not ConvergeResponse).
 """
 
 from __future__ import annotations
@@ -83,10 +101,11 @@ def test_todo_01_score_api_schema_resolved() -> None:
     score_paths = [p for p in paths if "/score" in p]
 
     if not score_paths:
-        pytest.xfail(
-            "TODO-01 UNRESOLVED: No /v1/score/* paths found in openapi.yaml.\n"
-            "Action: Inspect app/api/v1/score.py and add missing endpoints.\n"
-            "Mark resolved by removing this xfail and adding paths to REQUIRED_PATHS."
+        pytest.fail(
+            "TODO-01 REGRESSED (resolved 2026-11-11, strict): No /score/* paths found "
+            "in openapi.yaml.\n"
+            "Source: app/score/score_api.py (router prefix /score); paths are in "
+            "test_openapi_contract.REQUIRED_PATHS."
         )
 
     # If score paths exist, verify they have schemas
@@ -225,8 +244,9 @@ def test_todo_04_graph_schema_has_live_node_labels() -> None:
     )
 
     if not verified:
-        pytest.xfail(
-            "TODO-04 UNRESOLVED: graph-schema.yaml was not verified against live Neo4j.\n"
+        pytest.fail(
+            "TODO-04 REGRESSED (resolved 2026-11-11, strict): graph-schema.yaml "
+            "was not verified against live Neo4j.\n"
             "Action: Run SHOW LABELS; SHOW RELATIONSHIP TYPES against live DB and "
             "update graph-schema.yaml with confirmed node_labels and relationship_types.\n"
             "Add: verified_against_live_db: true once confirmed."
@@ -263,12 +283,14 @@ def test_todo_05_waterfall_order_documented() -> None:
     )
 
     if not waterfall_ordered:
-        pytest.xfail(
-            "TODO-05 UNRESOLVED: Waterfall chain ordering not explicitly documented.\n"
-            "Action: Inspect app/services/waterfall.py and document the exact provider "
-            "order with sequence numbers in dependencies/_index.yaml or a new "
-            "docs/contracts/dependencies/waterfall-order.yaml.\n"
-            "Expected: perplexity-sonar(1) → clearbit(2) → zoominfo(3) → apollo/hunter(4)"
+        pytest.fail(
+            "TODO-05 REGRESSED (resolved 2026-11-11, strict): Waterfall chain "
+            "ordering not explicitly documented.\n"
+            "Action: Read app/services/enrichment/waterfall_engine.py and "
+            "config/waterfall_config.yaml and document the exact provider order with "
+            "sequence numbers in dependencies/_index.yaml `waterfall`.\n"
+            "Shipped order (company): clearbit(1) → zoominfo(2) → apollo(3) → "
+            "perplexity_sonar(4)"
         )
 
 
