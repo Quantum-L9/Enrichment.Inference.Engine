@@ -219,7 +219,7 @@ async def test_generated_candidate_revalidated_before_applied_keys(
 
 
 def test_installed_revision_has_no_write_permissions(tmp_path: Path) -> None:
-    """0o555 is the immutable directory contract, not an unsafe writable mode."""
+    """0o550 is the immutable directory contract: no write bit, no access for others."""
     root_fd = os.open(tmp_path, workflow._DIRECTORY_FLAGS)
     try:
         # Exercise only a disposable install helper, not actual approval/promotion.
@@ -229,7 +229,7 @@ def test_installed_revision_has_no_write_permissions(tmp_path: Path) -> None:
     finally:
         os.close(root_fd)
     revision = tmp_path / "test-only-revision"
-    assert stat.S_IMODE(revision.stat().st_mode) == 0o555
+    assert stat.S_IMODE(revision.stat().st_mode) == 0o550
     children = (revision, revision / "spec.yaml", revision / "receipt.json")
     for child in children:
         assert child.stat().st_mode & 0o222 == 0

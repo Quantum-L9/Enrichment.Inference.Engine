@@ -28,7 +28,6 @@ the review signal passes (or no contract-bound files changed), 1 otherwise.
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from pathlib import Path
 
@@ -36,16 +35,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.l9_contract_control import build_review_signal  # noqa: E402
-
-
-def _git_changed_files(base: str, head: str) -> list[str]:
-    output = subprocess.check_output(
-        ["git", "diff", "--name-only", base, head],
-        cwd=REPO_ROOT,
-        text=True,
-    )
-    return [line.strip() for line in output.splitlines() if line.strip()]
+# git_changed_files validates both revisions before they reach git argv.
+from scripts.l9_contract_control import build_review_signal, git_changed_files  # noqa: E402
 
 
 def main() -> int:
@@ -58,7 +49,7 @@ def main() -> int:
     if args.files:
         changed = [f for f in args.files if f]
     elif args.base and args.head:
-        changed = _git_changed_files(args.base, args.head)
+        changed = git_changed_files(args.base, args.head)
     else:
         print("⚠️  No --files and no --base/--head provided; nothing to evaluate")
         return 0
