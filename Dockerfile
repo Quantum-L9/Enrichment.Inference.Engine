@@ -14,6 +14,11 @@ COPY . .
 RUN UV_PROJECT_ENVIRONMENT=/opt/venv PIP_NO_CACHE_DIR=1 bash tools/deps/install_locked.sh full
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Run as a non-root user, as Dockerfile.prod does (SonarCloud docker:S6471).
+RUN adduser --disabled-password --gecos "" appuser \
+    && chown -R appuser /app
+USER appuser
+
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/health || exit 1
 

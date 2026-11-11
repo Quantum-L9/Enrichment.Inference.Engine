@@ -162,6 +162,8 @@ jobs:
           #   dev tool).
           # - typing-extensions: PSF-2.0; the detected "GPL-1.0-or-later" comes
           #   from the PSF licence history text, not a GPL grant.
+          # - protobuf: BSD-3-Clause AND LicenseRef-scancode-protobuf (Google's
+          #   BSD-3-style protobuf notice); flagged on #307's first run.
           # - structlog (MIT OR Apache-2.0), prometheus-client (Apache-2.0 AND
           #   BSD-2-Clause): the exemptions Cognitive.Engine.Graphs carries for
           #   the same packages.
@@ -170,7 +172,8 @@ jobs:
             pkg:pypi/colorama, pkg:pypi/httpcore, pkg:pypi/nodeenv,
             pkg:pypi/sniffio, pkg:pypi/types-pyyaml, pkg:pypi/pip-requirements-parser,
             pkg:pypi/pip-audit, pkg:pypi/cyclonedx-python-lib, pkg:pypi/wcwidth,
-            pkg:pypi/greenlet, pkg:pypi/typing-extensions
+            pkg:pypi/greenlet, pkg:pypi/typing-extensions,
+            pkg:pypi/protobuf
           comment-summary-in-pr: on-failure
 
 # ────────────────────────────────────────────────────────────────────────
