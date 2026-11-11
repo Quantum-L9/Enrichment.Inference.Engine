@@ -37,6 +37,9 @@ coverage.xml
 
 # Docs / misc
 docs/
+# ...except the contract corpus the runtime reads and hashes at startup
+# (app/services/runtime_attestation.py, scripts/l9_contract_control.py).
+!docs/contracts/
 readme/
 *.md
 LICENSE
