@@ -1,28 +1,112 @@
-"""Narrow EIE/CEG intersection checks; each native owner still validates its spec.
+"""EIE/CEG typed row-contract checks; each native owner still validates its spec.
 
 This module never compiles schemas, ranking, gates, or inference. A pass proves
-only the declared sync intersection. Artifact approval and native admission are
-separate release obligations.
+that every sync row EIE can send is exactly the row CEG declares for that
+endpoint (rule set ``eie-ceg-sync/v2``). Artifact approval and native admission
+are separate release obligations.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from app.engines.domain_yaml_reader import declared_spec_identity
+from app.engines.spec_types import describe, node_properties, row_properties, shape
 
-RULE_SET = "eie-ceg-sync/v1"
+RULE_SET = "eie-ceg-sync/v2"
 _HASH = re.compile(r"[0-9a-f]{64}")
+_ENDPOINT_KEYS = ("method", "targetnode", "idproperty", "batchstrategy")
+_CHILDSYNC_KEYS = ("field", "targetnode", "targetid", "edgetype", "edgedirection")
+_TAXONOMY_KEYS = ("field", "edgetype", "targetlabel", "targetid")
 
 
-def _nodes(spec: dict[str, Any]) -> dict[str, dict[str, str]]:
-    result: dict[str, dict[str, str]] = {}
-    for node in spec.get("ontology", {}).get("nodes", []):
-        result[node["label"]] = {
-            prop["name"]: prop.get("type", "string") for prop in node.get("properties", [])
-        }
-    return result
+def _entries(endpoint: Mapping[str, Any], key: str, fields: tuple[str, ...]) -> list[tuple]:
+    raw = endpoint.get(key) or []
+    if not isinstance(raw, list):
+        return [("<malformed>",)]
+    return sorted(
+        tuple(str(entry.get(f)) for f in fields) if isinstance(entry, Mapping) else ("<malformed>",)
+        for entry in raw
+    )
+
+
+def _shape_defects(path: str, eie: dict[str, Any], ceg: dict[str, Any]) -> list[str]:
+    """Every difference between two typed shapes, named by its property path."""
+    defects: list[str] = []
+    for key in ("type", "required", "values"):
+        if eie.get(key) != ceg.get(key):
+            defects.append(f"{path}: {key} EIE {eie.get(key)!r} != CEG {ceg.get(key)!r}")
+    if ("items" in eie) != ("items" in ceg):
+        defects.append(f"{path}: items declared on one side only")
+    elif "items" in eie:
+        defects.extend(_shape_defects(f"{path}[]", eie["items"], ceg["items"]))
+    eie_props, ceg_props = eie.get("properties"), ceg.get("properties")
+    if (eie_props is None) != (ceg_props is None):
+        defects.append(f"{path}: properties declared on one side only")
+    elif eie_props is not None and ceg_props is not None:
+        for name in sorted(eie_props.keys() - ceg_props.keys()):
+            defects.append(f"{path}.{name}: declared by EIE, not by CEG")
+        for name in sorted(ceg_props.keys() - eie_props.keys()):
+            defects.append(f"{path}.{name}: declared by CEG, not by EIE")
+        for name in sorted(eie_props.keys() & ceg_props.keys()):
+            defects.extend(_shape_defects(f"{path}.{name}", eie_props[name], ceg_props[name]))
+    return defects
+
+
+def _row_contract(spec: Mapping[str, Any], label: str | None, *, eie: bool) -> dict | None:
+    if not label:
+        return None
+    props = row_properties(spec, label) if eie else _all_properties(spec, label)
+    if props is None:
+        return None
+    return {name: shape(decl) for name, decl in props.items()}
+
+
+def _all_properties(spec: Mapping[str, Any], label: str) -> dict[str, dict[str, Any]] | None:
+    props = node_properties(spec, label)
+    return None if props is None else {p["name"]: p for p in props}
+
+
+def _endpoint_defects(path: str, endpoint: dict, owner: dict, eie: dict, ceg: dict) -> list[str]:
+    defects: list[str] = []
+    for key in _ENDPOINT_KEYS:
+        default = "POST" if key == "method" else None
+        if endpoint.get(key, default) != owner.get(key, default):
+            defects.append(
+                f"{path}: {key} EIE {endpoint.get(key, default)!r} != "
+                f"CEG {owner.get(key, default)!r}"
+            )
+    for key, fields in (("childsync", _CHILDSYNC_KEYS), ("taxonomyedges", _TAXONOMY_KEYS)):
+        ours, theirs = _entries(endpoint, key, fields), _entries(owner, key, fields)
+        if ours != theirs:
+            defects.append(f"{path}: {key} EIE {ours} != CEG {theirs}")
+    target = owner.get("targetnode")
+    graph_row = _row_contract(ceg, target, eie=False)
+    if graph_row is None:
+        defects.append(f"{path}: CEG target node {target} is not declared")
+        return defects
+    identifier = owner.get("idproperty")
+    if not identifier or identifier not in graph_row:
+        defects.append(f"{path}: CEG id property is not declared on target node")
+    evidence_row = _row_contract(eie, endpoint.get("targetnode"), eie=True)
+    if evidence_row is None:
+        defects.append(
+            f"{path}: EIE declares no row for target node {endpoint.get('targetnode')} "
+            "(declare the node's properties, or do not declare the endpoint)"
+        )
+        return defects
+    defects.extend(
+        _shape_defects(f"{path}: {target}", {"properties": evidence_row}, {"properties": graph_row})
+    )
+    return defects
+
+
+def row_contract_summary(spec: Mapping[str, Any], label: str, *, eie: bool) -> dict[str, str]:
+    """Human-readable typed row contract of one node (diagnostics and reports)."""
+    props = row_properties(spec, label) if eie else _all_properties(spec, label)
+    return {name: describe(decl) for name, decl in (props or {}).items()}
 
 
 def check_compatibility(
@@ -31,20 +115,33 @@ def check_compatibility(
     *,
     field_mappings: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """Check validated native specs at outgoing sync references, never synonyms.
+    """Compare the FULL typed row contract of every sync endpoint EIE declares.
 
-    Field mappings are operator-supplied assertions of meaning, checked against
-    declared fields/types; this checker does not implement row transformation.
-    Fields not declared by CEG are EIE-only evidence, not silently renamed into
-    graph-owned fields. Endpoint id properties are injected by packet_router.
+    For each EIE endpoint, CEG must declare exactly one endpoint at the same
+    path with the same method, target node, id property, batch strategy,
+    childsync (field, targetnode, targetid, edgetype, edgedirection) and
+    taxonomyedges (field, edgetype, targetlabel, targetid); and the target
+    node's row properties -- EIE's declarations that are not ``evidenceonly``
+    against all of CEG's -- must match name for name and typed shape for
+    typed shape (type spelling, required, enum values, list ``items``, map
+    ``properties``, recursively). Any difference fails.
+
+    There are no synonyms: ``field_mappings`` (a v1 notion) is refused when
+    supplied, because no row is ever renamed between the engines. CEG
+    endpoints EIE does not declare are listed in ``ceg_endpoints_not_produced``:
+    EIE sends nothing to them, so they carry no EIE row contract.
     """
     defects: list[str] = []
+    if field_mappings:
+        defects.append(
+            f"{RULE_SET} admits no field mappings: a sync row carries CEG's declared "
+            "names, never a synonym"
+        )
     eie_id, eie_version = declared_spec_identity(eie_spec)
     domain = ceg_spec.get("domain", {})
     ceg_id, ceg_version = domain.get("id"), domain.get("version")
     if not eie_id or eie_id != ceg_id:
         defects.append("tenant identity mismatch")
-    eie_nodes, ceg_nodes = _nodes(eie_spec), _nodes(ceg_spec)
     outgoing = eie_spec.get("sync", {}).get("endpoints", [])
     incoming = ceg_spec.get("sync", {}).get("endpoints", [])
     if not outgoing:
@@ -56,32 +153,9 @@ def check_compatibility(
         if len(candidates) != 1:
             defects.append(f"{path}: expected exactly one CEG endpoint")
             continue
-        owner = candidates[0]
-        for field in ("method", "targetnode", "idproperty"):
-            default = "POST" if field == "method" else None
-            if endpoint.get(field, default) != owner.get(field, default):
-                defects.append(f"{path}: {field} mismatch")
-        target, identifier = owner.get("targetnode"), owner.get("idproperty")
-        graph_fields = ceg_nodes.get(target)
-        if graph_fields is None:
-            defects.append(f"{path}: CEG target node is not declared")
-            continue
-        if not identifier or identifier not in graph_fields:
-            defects.append(f"{path}: CEG id property is not declared on target node")
-        evidence_fields = eie_nodes.get(target, {})
-        for name in evidence_fields.keys() & graph_fields.keys():
-            if evidence_fields[name] != graph_fields[name]:
-                defects.append(f"{path}: shared field {target}.{name} type mismatch")
+        defects.extend(_endpoint_defects(path, endpoint, candidates[0], eie_spec, ceg_spec))
         checked += 1
-    for label, mappings in (field_mappings or {}).items():
-        if label not in eie_nodes or label not in ceg_nodes:
-            defects.append(f"{label}: mapping label absent from one native ontology")
-            continue
-        for source, target in mappings.items():
-            if source not in eie_nodes[label] or target not in ceg_nodes[label]:
-                defects.append(f"{label}: mapping {source}->{target} references undeclared field")
-            elif eie_nodes[label][source] != ceg_nodes[label][target]:
-                defects.append(f"{label}: mapping {source}->{target} type mismatch")
+    produced = {e.get("path") for e in outgoing}
     return {
         "rule_set": RULE_SET,
         "verdict": "fail" if defects else "pass",
@@ -89,6 +163,9 @@ def check_compatibility(
         "eie_version": eie_version,
         "ceg_version": ceg_version,
         "endpoints_checked": checked,
+        "ceg_endpoints_not_produced": sorted(
+            str(e.get("path")) for e in incoming if e.get("path") not in produced
+        ),
         "defects": sorted(set(defects)),
         "field_mappings": field_mappings or {},
     }

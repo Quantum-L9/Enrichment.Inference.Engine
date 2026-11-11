@@ -1,6 +1,6 @@
 # Native EIE + CEG pair release — local rehearsal only
 
-This candidate keeps two native schemas and two independent artifacts. EIE owns enrichment fields, hints, inline inference/provenance and resolution. CEG owns graph nodes, matching, gates, traversal and scoring. The shared boundary is tenant identity and declared sync method/path/target/idproperty, with field-type checks only at the used intersection. The checker does not rename row fields, infer synonymy, merge YAML or create a new compiler.
+This candidate keeps two native schemas and two independent artifacts. EIE owns enrichment fields, hints, inline inference/provenance and resolution. CEG owns graph nodes, matching, gates, traversal and scoring. The shared boundary is tenant identity and the full typed row contract of every sync endpoint EIE declares (rule set `eie-ceg-sync/v2`): endpoint method/path/target/idproperty/batch strategy, childsync, taxonomyedges, and every target-node row property's name and typed shape (list `items`, map `properties`, recursively), compared exactly. The checker does not rename row fields, infer synonymy, merge YAML or create a new compiler.
 
 ## Required inputs and trust
 
@@ -25,7 +25,7 @@ Run in the explicit EIE source environment against the explicit CEG native owner
 
 The tool runs EIE's native schema validator and CEG's native CLI against an isolated snapshot of the exact hashed input. It requests complete CEG traversal/scoring admission and reviewed-stage admission when both approval sidecars are supplied. Both native owners must pass before the narrow pair check. A release proof binds the two hashes and native versions, review references, the compatibility rule set and proof reference. The proof records code byte hashes separately from checkout HEAD, which may identify a dirty local candidate rather than a committed release.
 
-Exit **0** means native admission, supplied review evidence and compatibility pass. Exit **1** refuses a validation, approval-evidence or compatibility defect. Exit **2** means diagnostic native compatibility passes but real approval evidence is **Unknown**; it is not release-ready. Omitting sidecars is useful for source-fixture diagnostics, never for promotion. An optional `--field-mappings` JSON file supplies explicit per-node source-to-target field-meaning assertions. Their declarations/types are checked, but no transport transformation is implemented by the checker.
+Exit **0** means native admission, supplied review evidence and compatibility pass. Exit **1** refuses a validation, approval-evidence or compatibility defect. Exit **2** means diagnostic native compatibility passes but real approval evidence is **Unknown**; it is not release-ready. Omitting sidecars is useful for source-fixture diagnostics, never for promotion. `eie-ceg-sync/v2` admits no field mappings: a sync row carries CEG's declared names, so a supplied `--field-mappings` file fails the check instead of asserting a synonym.
 
 ## Release and rollback barrier
 

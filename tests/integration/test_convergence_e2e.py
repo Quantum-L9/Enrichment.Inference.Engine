@@ -232,10 +232,10 @@ class TestConvergenceLoopE2E:
 # `inference_rules`. Only the provider boundary (enrich_entity) and the
 # post-enrich side effects (persistence store, Gate router, event emitter) are
 # replaced. The rules exercised are the production PlasticOS rules:
-#   grade-assignment-hdpe-a  polymer_types CONTAINS HDPE, contamination < 0.03
+#   grade-assignment-hdpe-a  processed_polymers CONTAINS {code: HDPE}, contamination < 0.03
 #                            -> material_grade = "A"            (0.92)
-#   tier-1-high-capacity     annual_capacity_mt >= 5000, material_grade IN [A, A+]
-#                            -> facility_tier = "tier_1"        (0.90)
+#   tier-1-high-capacity     capacity_tons_month >= 416.67, material_grade IN [A, A+]
+#                            -> tier = "tier_1"                 (0.90)
 
 _ENTITY_REF = "res.partner:55"
 _REPO_DOMAINS = Path(__file__).resolve().parents[2] / "domains"
@@ -244,9 +244,9 @@ _REPO_DOMAINS = Path(__file__).resolve().parents[2] / "domains"
 def _evidence(**overrides: Any) -> dict[str, tuple[Any, float]]:
     """Provider evidence for one pass: field -> (value, per-field confidence)."""
     evidence: dict[str, tuple[Any, float]] = {
-        "polymer_types": (["HDPE", "PP"], 0.95),
+        "processed_polymers": ([{"code": "HDPE"}, {"code": "PP"}], 0.95),
         "contamination_tolerance": (0.02, 0.90),
-        "annual_capacity_mt": (6000.0, 0.90),
+        "capacity_tons_month": (500.0, 0.90),
     }
     for name, value in overrides.items():
         if value is None:
@@ -365,18 +365,21 @@ class TestLiveDomainInference:
         assert response["state"] == "completed"
         assert provider.await_count == 1  # no extra provider pass
         assert response["fields"]["material_grade"] == "A"
-        assert response["fields"]["facility_tier"] == "tier_1"
+        assert response["fields"]["tier"] == "tier_1"
 
         provenance = _inferred(response)
         grade = provenance["material_grade"]
         assert grade["rule_id"] == "grade-assignment-hdpe-a"
-        assert grade["rule_version"] == "plasticos-inference-0.3.0"
+        assert grade["rule_version"] == "plasticos-inference-0.4.0"
         assert grade["cascade_level"] == 0
-        assert grade["inputs"] == {"polymer_types": ["HDPE", "PP"], "contamination_tolerance": 0.02}
+        assert grade["inputs"] == {
+            "processed_polymers": [{"code": "HDPE"}, {"code": "PP"}],
+            "contamination_tolerance": 0.02,
+        }
         # Bounded by the weakest evidence it consumed (0.90), never the rule's 0.92.
         assert grade["confidence"] == pytest.approx(0.90)
 
-        tier = provenance["facility_tier"]
+        tier = provenance["tier"]
         assert tier["rule_id"] == "tier-1-high-capacity"
         assert tier["cascade_level"] == 1
         assert tier["inputs"]["material_grade"] == "A"  # consumes the first derivation
@@ -393,7 +396,9 @@ class TestLiveDomainInference:
         [
             pytest.param({"contamination_tolerance": None}, id="missing-input"),
             pytest.param({"contamination_tolerance": (0.12, 0.9)}, id="unmet-condition"),
-            pytest.param({"polymer_types": (["PET"], 0.95)}, id="non-matching-polymer"),
+            pytest.param(
+                {"processed_polymers": ([{"code": "PET"}], 0.95)}, id="non-matching-polymer"
+            ),
         ],
     )
     async def test_unsupported_derivation_does_not_fire(self, sdk_converge, overrides) -> None:
@@ -403,7 +408,7 @@ class TestLiveDomainInference:
 
         assert response["state"] == "completed"
         assert "material_grade" not in response["fields"]
-        assert "facility_tier" not in response["fields"]  # second hop needs the first
+        assert "tier" not in response["fields"]  # second hop needs the first
         assert _inferred(response) == {}
 
     async def test_existing_fact_is_never_overwritten(self, sdk_converge) -> None:
@@ -416,16 +421,16 @@ class TestLiveDomainInference:
         assert "material_grade" not in provenance
         assert "material_grade" not in response["fields"]
         # The record's "C" is what the second hop sees, so tier-1 cannot fire.
-        assert "facility_tier" not in provenance
+        assert "tier" not in provenance
 
     async def test_low_confidence_evidence_bounds_derived_confidence(self, sdk_converge) -> None:
         state, run, _router = sdk_converge
-        state["evidence"] = _evidence(polymer_types=(["HDPE"], 0.40))
+        state["evidence"] = _evidence(processed_polymers=([{"code": "HDPE"}], 0.40))
         response, _provider_mock = await run(_canonical_payload(max_passes=1))
 
         provenance = _inferred(response)
         assert provenance["material_grade"]["confidence"] == pytest.approx(0.40)
-        assert provenance["facility_tier"]["confidence"] <= 0.40
+        assert provenance["tier"]["confidence"] <= 0.40
 
     async def test_missing_domain_runs_without_inference(self, sdk_converge) -> None:
         _state, run, _router = sdk_converge
@@ -454,7 +459,7 @@ class TestLiveDomainInference:
         assert any("grade-assignment-hdpe-a" in err for err in inference["errors"])
         # The whole rule set is refused: no partial chain from the rules that parsed.
         assert _inferred(response) == {}
-        assert "facility_tier" not in response["fields"]
+        assert "tier" not in response["fields"]
 
     async def test_low_confidence_rule_does_not_buy_another_provider_pass(
         self, sdk_converge, tmp_path: Path
@@ -468,7 +473,7 @@ class TestLiveDomainInference:
 
         response, provider = await run(_canonical_payload())
 
-        assert _inferred(response)["facility_tier"]["confidence"] == pytest.approx(0.50)
+        assert _inferred(response)["tier"]["confidence"] == pytest.approx(0.50)
         # Research evidence already clears the bar; a rule-bounded 0.50 cannot
         # be raised by researching again, so it must not trigger pass 2.
         assert provider.await_count == 1
@@ -477,11 +482,15 @@ class TestLiveDomainInference:
         assert response["feature_vector"]["confidence_tracking"]["converged"] is True
 
     @pytest.mark.parametrize(
-        "polymer_types",
-        [pytest.param(5, id="numeric"), pytest.param([{"name": "HDPE"}], id="list-of-dict")],
+        "processed_polymers",
+        [
+            pytest.param(5, id="numeric"),
+            pytest.param([{"name": "HDPE"}], id="map-without-code"),
+            pytest.param(["HDPE"], id="list-of-strings"),
+        ],
     )
     async def test_malformed_provider_value_fails_the_rule_not_the_converge(
-        self, sdk_converge, polymer_types: Any
+        self, sdk_converge, processed_polymers: Any
     ) -> None:
         """Provider values are untrusted shapes; a rule that cannot read one is False.
 
@@ -489,14 +498,14 @@ class TestLiveDomainInference:
         with nothing persisted, where main completed and persisted the same answer.
         """
         state, run, _router = sdk_converge
-        state["evidence"] = _evidence(polymer_types=(polymer_types, 0.95))
+        state["evidence"] = _evidence(processed_polymers=(processed_polymers, 0.95))
         response, _provider_mock = await run(_canonical_payload())
 
         assert response["state"] == "completed"
         assert state["persist"].call_count == 1
-        assert response["fields"]["polymer_types"] == polymer_types  # the evidence is kept
+        assert response["fields"]["processed_polymers"] == processed_polymers  # evidence kept
         assert "material_grade" not in response["fields"]
-        assert "facility_tier" not in response["fields"]
+        assert "tier" not in response["fields"]
         assert _inferred(response) == {}
         inference = response["feature_vector"]["inference"]
         assert inference["status"] == "active"  # the rule set is fine; this value is not
@@ -543,13 +552,13 @@ class TestLiveDomainInference:
         assert provider.await_count == 2
         assert response["fields"]["contamination_tolerance"] == 0.05
         assert response["fields"]["material_grade"] == "B"
-        assert "facility_tier" not in response["fields"]  # retracted: B is not A/A+
+        assert "tier" not in response["fields"]  # retracted: B is not A/A+
 
         per_pass = {entry["pass"]: entry for entry in response["inferences"]}
         pass1 = per_pass[1]["inference_provenance"]
         assert pass1["material_grade"]["rule_id"] == "grade-assignment-hdpe-a"
         assert pass1["material_grade"]["inputs"]["contamination_tolerance"] == 0.02
-        assert "facility_tier" in pass1
+        assert "tier" in pass1
         pass2 = per_pass[2]["inference_provenance"]
         assert set(pass2) == {"material_grade"}
         assert pass2["material_grade"]["rule_id"] == "grade-assignment-hdpe-b"
@@ -560,7 +569,7 @@ class TestLiveDomainInference:
         tracked = response["feature_vector"]["confidence_tracking"]["fields"]
         assert tracked["material_grade"]["value"] == "B"
         assert tracked["material_grade"]["confidence"] == pytest.approx(0.85)
-        assert "facility_tier" not in tracked
+        assert "tier" not in tracked
 
     async def test_provider_evidence_for_a_derived_field_becomes_the_fact(
         self, sdk_converge
@@ -575,7 +584,7 @@ class TestLiveDomainInference:
 
         assert provider.await_count == 2
         assert response["fields"]["material_grade"] == "C"  # the evidence, not the rule
-        assert "facility_tier" not in response["fields"]  # C is not A/A+: retracted
+        assert "tier" not in response["fields"]  # C is not A/A+: retracted
         assert "material_grade" not in response["inferences"][1]["inference_provenance"]
         tracked = response["feature_vector"]["confidence_tracking"]["fields"]
         assert tracked["material_grade"]["value"] == "C"
@@ -619,7 +628,7 @@ class TestLiveDomainInference:
         response, _provider_mock = await run(_canonical_payload())
 
         assert response["feature_vector"]["inference"]["status"] == "active"
-        assert _inferred(response)["facility_tier"]["rule_id"] == "tier-1-high-capacity"
+        assert _inferred(response)["tier"]["rule_id"] == "tier-1-high-capacity"
 
     async def test_replay_is_deterministic(self, sdk_converge) -> None:
         _state, run, _router = sdk_converge
@@ -652,10 +661,10 @@ class TestLiveDomainInference:
         response, _provider_mock = await run(payload)
 
         assert response["state"] == "completed"
-        assert _inferred(response)["facility_tier"]["rule_id"] == "tier-1-high-capacity"
+        assert _inferred(response)["tier"]["rule_id"] == "tier-1-high-capacity"
         # Odoo's partner contract is unchanged: derived plastics fields stay out.
         assert "material_grade" not in response["fields"]
-        assert "facility_tier" not in response["fields"]
+        assert "tier" not in response["fields"]
 
     async def test_planner_receives_the_condition_rule_registry(self, sdk_converge) -> None:
         """#237: the domain's condition rules and their unlock index reach the planner."""

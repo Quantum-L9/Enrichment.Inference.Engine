@@ -1,0 +1,723 @@
+# --- EIE TEST SNAPSHOT of a Cognitive.Engine.Graphs tenant spec ---
+# source:   Quantum-L9/Cognitive.Engine.Graphs domains/plasticos/spec.yaml
+# commit:   92513336d4d9bae81cce21977c0e46ddaa805511 (origin/main, 2026-11-11)
+# source sha256: 855fbf8e894392b951c294582a7b518db8b8cbf702bd617748037e3ecb44e435
+# overlay:  ontology Facility.processed_polymers declared list<map{code: string, required}>
+#           -- the declaration the parallel CEG typed-contract change
+#           (branch agent/claude-code/ceg-typed-spec-contract) adds; marked inline.
+# REFRESH REQUIRED: replace this file with the merged CEG commit's bytes (keep this
+# header, drop the overlay once upstream carries it) and update
+# plasticos.spec.provenance.json, which pins this file's sha256 (checked by
+# tests/contracts/test_cross_engine_domain_compatibility.py).
+# --- end header ---
+# --- L9_META ---
+# l9_schema: 1
+# origin: domain-specific
+# engine: graph
+# layer: [config]
+# tags: [domains, plasticos]
+# owner: domain-team
+# status: active
+# --- /L9_META ---
+#
+# PlasticOS Domain Specification — Plastics Recycling Marketplace
+# Primary test domain for the L9 Graph Cognitive Engine
+#
+# Entity Model: MaterialIntake (RFQ) → Facility (Supplier)
+# Match Directions:
+#   - supply_opportunity_to_buyer_facility (MaterialIntake → Facility capability)
+#   - buyer_demand_to_supply_opportunity (BuyerDemand → active SupplyOpportunity)
+# Facility capability must not be conflated with active supply.
+
+domain:
+  id: plasticos
+  name: PlasticOS Recycling Marketplace
+  version: 1.3.0
+  description: 'Domain specification for matching material intake requests (RFQs)
+    from buyers to recycling facilities (suppliers) based on polymer compatibility,
+    geographic proximity, capacity, certifications, and historical transaction success.
+
+    '
+ontology:
+  nodes:
+  - label: Facility
+    managedby: sync
+    candidate: true
+    matchdirection: supply_opportunity_to_buyer_facility
+    description: Recycling facility that processes plastic materials
+    properties:
+    - name: facility_id
+      type: string
+      required: true
+      description: Unique facility identifier
+    - name: name
+      type: string
+      required: true
+    - name: lat
+      type: float
+      description: Latitude for geo-proximity scoring
+    - name: lon
+      type: float
+      description: Longitude for geo-proximity scoring
+    - name: credit_score
+      type: float
+      description: Financial creditworthiness score (0-100)
+    - name: min_density
+      type: float
+      description: Minimum acceptable material density (g/cm³)
+    - name: max_density
+      type: float
+      description: Maximum acceptable material density (g/cm³)
+    - name: min_mfi
+      type: float
+      description: Minimum acceptable melt flow index
+    - name: max_mfi
+      type: float
+      description: Maximum acceptable melt flow index
+    - name: contamination_tolerance
+      type: float
+      description: Maximum contamination percentage accepted (0-100)
+    - name: food_grade_certified
+      type: bool
+      description: FDA food-grade certification status
+    - name: capacity_tons_month
+      type: float
+      description: Monthly processing capacity in tons
+    - name: tier
+      type: string
+      description: Facility tier (premium, standard, economy)
+    - name: community_id
+      type: int
+      description: Louvain community assignment for network effects
+    - name: rate_per_ton
+      type: float
+      description: Current rate per ton
+    - name: rate_confidence
+      type: float
+      description: Confidence in rate accuracy (0-1)
+    - name: last_transaction_date
+      type: datetime
+      description: Date of most recent transaction
+    # SNAPSHOT OVERLAY (not in the source commit): the declaration the
+    # Cognitive.Engine.Graphs typed-contract change adds.
+    - name: processed_polymers
+      type: list
+      items:
+        type: map
+        properties:
+        - name: code
+          type: string
+          required: true
+      description: Polymer families the facility processes (childsync PROCESSES)
+  - label: MaterialIntake
+    managedby: api
+    queryentity: true
+    matchdirection: supply_opportunity_to_buyer_facility
+    description: Material intake request (RFQ) from a buyer
+    properties:
+    - name: intake_id
+      type: string
+      required: true
+    - name: polymer_type
+      type: string
+      description: Primary polymer type (HDPE, PP, PET, LDPE)
+    - name: density
+      type: float
+      description: Material density (g/cm³)
+    - name: mfi
+      type: float
+      description: Melt flow index
+    - name: contamination_pct
+      type: float
+      description: Contamination percentage
+    - name: requires_food_grade
+      type: bool
+      description: Whether food-grade certification is required
+    - name: volume_tons
+      type: float
+      description: Requested volume in tons
+    - name: lat
+      type: float
+      description: Buyer location latitude
+    - name: lon
+      type: float
+      description: Buyer location longitude
+    - name: target_price
+      type: float
+      description: Target price per ton
+  - label: PolymerFamily
+    managedby: static
+    taxonomy: true
+    description: Polymer type taxonomy
+    properties:
+    - name: code
+      type: string
+      required: true
+    - name: name
+      type: string
+    - name: resin_code
+      type: int
+  - label: MaterialForm
+    managedby: static
+    taxonomy: true
+    description: Physical form of material (pellet, flake, regrind)
+    properties:
+    - name: form_id
+      type: string
+      required: true
+    - name: name
+      type: string
+  - label: SupplyOpportunity
+    managedby: sync
+    candidate: true
+    matchdirection: buyer_demand_to_supply_opportunity
+    description: Active supply lot/opportunity available now (not merely Facility
+      capability)
+    properties:
+    - name: opportunity_id
+      type: string
+      required: true
+    - name: facility_id
+      type: string
+      required: true
+      description: Owning facility capability identity
+    - name: polymer_type
+      type: string
+    - name: available_tons
+      type: float
+      description: Currently available active supply tons
+    - name: lat
+      type: float
+    - name: lon
+      type: float
+    - name: rate_per_ton
+      type: float
+    - name: active
+      type: bool
+      description: True only when opportunity is currently offerable
+  - label: BuyerDemand
+    managedby: api
+    queryentity: true
+    matchdirection: buyer_demand_to_supply_opportunity
+    description: Buyer demand seeking active supply opportunities
+    properties:
+    - name: demand_id
+      type: string
+      required: true
+    - name: polymer_type
+      type: string
+    - name: volume_tons
+      type: float
+    - name: lat
+      type: float
+    - name: lon
+      type: float
+    - name: target_price
+      type: float
+  edges:
+  - type: PROCESSES
+    from: Facility
+    to: PolymerFamily
+    direction: DIRECTED
+    category: capability
+    managedby: sync
+    description: Facility can process this polymer type
+  - type: ACCEPTS_FORM
+    from: Facility
+    to: MaterialForm
+    direction: DIRECTED
+    category: capability
+    managedby: sync
+  - type: EXCLUDED_FROM
+    from: Facility
+    to: Facility
+    direction: DIRECTED
+    category: exclusion
+    managedby: sync
+    description: Facility A is excluded from matching with Facility B
+  - type: TRANSACTED_WITH
+    from: Facility
+    to: Facility
+    direction: DIRECTED
+    category: transaction
+    managedby: sync
+    properties:
+    - name: transaction_date
+      type: datetime
+    - name: outcome
+      type: string
+    - name: volume_tons
+      type: float
+  - type: OFFERS
+    from: Facility
+    to: SupplyOpportunity
+    description: Facility capability may host zero-or-more active supply opportunities
+    direction: DIRECTED
+    category: transaction
+    managedby: sync
+  - type: FULFILLS_POLYMER
+    from: SupplyOpportunity
+    to: PolymerFamily
+    description: Active supply opportunity fulfills a polymer family
+    direction: DIRECTED
+    category: capability
+    managedby: sync
+matchentities:
+  candidate:
+  - label: Facility
+    matchdirection: supply_opportunity_to_buyer_facility
+  - label: SupplyOpportunity
+    matchdirection: buyer_demand_to_supply_opportunity
+  queryentity:
+  - label: MaterialIntake
+    matchdirection: supply_opportunity_to_buyer_facility
+  - label: BuyerDemand
+    matchdirection: buyer_demand_to_supply_opportunity
+queryschema:
+  matchdirections:
+  - supply_opportunity_to_buyer_facility
+  - buyer_demand_to_supply_opportunity
+  fields:
+  - name: polymer_type
+    type: string
+    required: true
+  - name: density
+    type: float
+  - name: mfi
+    type: float
+  - name: contamination_pct
+    type: float
+  - name: requires_food_grade
+    type: bool
+  - name: volume_tons
+    type: float
+  - name: lat
+    type: float
+  - name: lon
+    type: float
+  - name: target_price
+    type: float
+  # The requesting buyer's Facility community (CEG-COR-070, DEC-18 option A):
+  # the louvain_community GDS job writes community_id on every Facility from
+  # TRANSACTED_WITH, so a buyer that is itself a Facility can supply its own.
+  # Omitted, community_match scores the neutral 0.5 as before.
+  - name: community_id
+    type: int
+    description: Louvain community_id of the requesting buyer's Facility
+  - name: requires_active_supply
+    type: bool
+    # Declared default true (CEG-COR-004, DEC-12 option A'): omitted, the field
+    # bound NULL and the gate's FAIL null policy rejected every candidate.
+    default: true
+    description: When true (the default), only active SupplyOpportunity candidates
+      pass; when false, active and inactive candidates pass
+# No traversal steps (CEG-COR-013): a required `MATCH (candidate)-[:PROCESSES]->
+# (polymer)` step neither tested the requested polymer nor kept one row per
+# candidate — a facility processing three polymers came back three times. The
+# polymer constraint is the two `type: traversal` gates below, which compile to
+# `EXISTS { MATCH (candidate)-[:E]->(t:PolymerFamily) WHERE t.code = $polymer_type }`.
+traversal:
+  steps: []
+gates:
+- name: density_range
+  type: range
+  candidateprop_min: min_density
+  candidateprop_max: max_density
+  queryparam: density
+  nullbehavior: pass
+  matchdirections:
+  - supply_opportunity_to_buyer_facility
+  description: Material density must fall within facility's acceptable range
+- name: mfi_range
+  type: range
+  candidateprop_min: min_mfi
+  candidateprop_max: max_mfi
+  queryparam: mfi
+  nullbehavior: pass
+  matchdirections:
+  - supply_opportunity_to_buyer_facility
+- name: contamination_threshold
+  type: threshold
+  candidateprop: contamination_tolerance
+  queryparam: contamination_pct
+  operator: '>='
+  nullbehavior: fail
+  matchdirections:
+  - supply_opportunity_to_buyer_facility
+  description: Facility must tolerate the material's contamination level
+- name: food_grade_check
+  # An implication, not an equality (CEG-COR-005): Cypher orders false < true,
+  # so `certified >= required` admits every facility when certification is not
+  # required (false / NULL) and only certified ones when it is (true).
+  type: threshold
+  candidateprop: food_grade_certified
+  queryparam: requires_food_grade
+  operator: '>='
+  nullbehavior: pass
+  matchdirections:
+  - supply_opportunity_to_buyer_facility
+  description: If food-grade required, facility must be certified
+- name: capacity_check
+  type: threshold
+  candidateprop: capacity_tons_month
+  queryparam: volume_tons
+  operator: '>='
+  nullbehavior: pass
+  matchdirections:
+  - supply_opportunity_to_buyer_facility
+  description: Facility must have capacity for requested volume
+- name: exclusion_check
+  type: exclusion
+  edgetype: EXCLUDED_FROM
+  matchdirections:
+  - supply_opportunity_to_buyer_facility
+  description: Exclude facilities on buyer's blacklist
+- name: active_supply_available
+  # An implication, not an equality (CEG-COR-004): Cypher orders false < true,
+  # so `active >= requires_active_supply` admits only active supply when the
+  # requirement is true (the default) and active or inactive supply when it is
+  # false. FAIL keeps candidates with no `active` value out: they are not
+  # SupplyOpportunity records.
+  type: threshold
+  candidateprop: active
+  queryparam: requires_active_supply
+  operator: '>='
+  nullbehavior: fail
+  matchdirections:
+  - buyer_demand_to_supply_opportunity
+  description: When active supply is required (the default), the candidate must be
+    an active SupplyOpportunity (not an inactive capability projection)
+- name: active_supply_volume
+  type: threshold
+  candidateprop: available_tons
+  queryparam: volume_tons
+  operator: '>='
+  nullbehavior: fail
+  matchdirections:
+  - buyer_demand_to_supply_opportunity
+  description: Active available tons must cover demand; Facility capacity_tons_month
+    is not used here
+- name: active_supply_polymer
+  type: boolean
+  candidateprop: polymer_type
+  queryparam: polymer_type
+  nullbehavior: fail
+  matchdirections:
+  - buyer_demand_to_supply_opportunity
+  description: Active supply polymer_type must equal demand polymer_type (PACK-026
+    hard-gate harvest)
+- name: polymer_capability_gate
+  type: traversal
+  edgetype: PROCESSES
+  tonode: PolymerFamily
+  candidateprop: code
+  queryparam: polymer_type
+  nullbehavior: fail
+  matchdirections:
+  - supply_opportunity_to_buyer_facility
+  description: Facility must PROCESS the requested polymer family
+- name: fulfills_polymer_gate
+  type: traversal
+  edgetype: FULFILLS_POLYMER
+  tonode: PolymerFamily
+  candidateprop: code
+  queryparam: polymer_type
+  nullbehavior: fail
+  matchdirections:
+  - buyer_demand_to_supply_opportunity
+  description: Active supply must FULFILL the requested polymer family; distinct
+    from Facility PROCESSES capability
+scoring:
+  dimensions:
+  - name: geo_proximity
+    source: candidateproperty
+    computation: geodecay
+    candidateprop: lat
+    queryprop: lat
+    decayconstant: 800000.0
+    weightkey: w_geo
+    defaultweight: 0.25
+    matchdirections:
+    - supply_opportunity_to_buyer_facility
+  - name: credit_score
+    source: candidateproperty
+    computation: lognormalized
+    candidateprop: credit_score
+    maxvalue: 100.0
+    weightkey: w_credit
+    defaultweight: 0.15
+    matchdirections:
+    - supply_opportunity_to_buyer_facility
+  - name: contamination_tolerance_score
+    source: candidateproperty
+    computation: inverselinear
+    candidateprop: contamination_tolerance
+    minvalue: 0.0
+    maxvalue: 100.0
+    weightkey: w_contamination
+    defaultweight: 0.1
+    matchdirections:
+    - supply_opportunity_to_buyer_facility
+    description: Lower contamination tolerance = more selective = higher quality
+  - name: community_match
+    source: candidateproperty
+    computation: communitymatch
+    candidateprop: community_id
+    queryprop: community_id
+    bias: 0.92
+    weightkey: w_community
+    defaultweight: 0.1
+    matchdirections:
+    - supply_opportunity_to_buyer_facility
+  - name: rate_score
+    # Normalised into [0, 1] (CEG-COR-151): `weightedrate` multiplied the raw
+    # rate by rate_confidence, so any realistic rate per ton clamped to 1.0 and
+    # the dimension could not rank. log(1 + rate) / log(1 + maxvalue) keeps the
+    # order; rates at or above maxvalue saturate.
+    source: candidateproperty
+    computation: lognormalized
+    candidateprop: rate_per_ton
+    maxvalue: 1000.0
+    weightkey: w_rate
+    defaultweight: 0.15
+    matchdirections:
+    - supply_opportunity_to_buyer_facility
+  - name: price_alignment
+    source: candidateproperty
+    computation: pricealignment
+    candidateprop: rate_per_ton
+    queryprop: target_price
+    weightkey: w_price
+    defaultweight: 0.15
+    matchdirections:
+    - supply_opportunity_to_buyer_facility
+  - name: recency
+    # temporalproximity reads its horizon in days from maxvalue (CEG-COR-151);
+    # decayconstant is the geodecay distance constant and was ignored here,
+    # leaving the 90-day default instead of the intended 180 days.
+    source: candidateproperty
+    computation: temporalproximity
+    candidateprop: last_transaction_date
+    maxvalue: 180.0
+    weightkey: w_recency
+    defaultweight: 0.1
+    matchdirections:
+    - supply_opportunity_to_buyer_facility
+  - name: active_supply_geo
+    source: candidateproperty
+    computation: geodecay
+    candidateprop: lat
+    queryprop: lat
+    decayconstant: 800000.0
+    weightkey: w_active_geo
+    defaultweight: 0.5
+    matchdirections:
+    - buyer_demand_to_supply_opportunity
+    description: Proximity using SupplyOpportunity location, not Facility-only capability
+  - name: active_supply_price
+    source: candidateproperty
+    computation: pricealignment
+    candidateprop: rate_per_ton
+    queryprop: target_price
+    weightkey: w_active_price
+    defaultweight: 0.5
+    matchdirections:
+    - buyer_demand_to_supply_opportunity
+sync:
+  endpoints:
+  # Polymer edges are ingested with the nodes (CEG-COR-071): the polymer gates
+  # require PROCESSES / FULFILLS_POLYMER, so engine-synced nodes without them
+  # could never match.
+  # facilities: `processed_polymers` is a list of {code: <PolymerFamily.code>}
+  # maps. childsync SETs each map onto the PolymerFamily node (c += child_row),
+  # so the maps must carry the code only.
+  - path: /v1/sync/facilities
+    targetnode: Facility
+    idproperty: facility_id
+    batchstrategy: UNWINDMERGE
+    childsync:
+    - field: processed_polymers
+      targetnode: PolymerFamily
+      targetid: code
+      edgetype: PROCESSES
+      edgedirection: parenttochild
+  - path: /v1/sync/polymerfamilies
+    targetnode: PolymerFamily
+    idproperty: code
+    batchstrategy: UNWINDMERGE
+  - path: /v1/sync/materialforms
+    targetnode: MaterialForm
+    idproperty: form_id
+    batchstrategy: UNWINDMERGE
+  # supply-opportunities: the scalar polymer_type links to an existing
+  # PolymerFamily by code (sync the polymerfamilies taxonomy first).
+  - path: /v1/sync/supply-opportunities
+    targetnode: SupplyOpportunity
+    idproperty: opportunity_id
+    batchstrategy: UNWINDMERGE
+    taxonomyedges:
+    - field: polymer_type
+      edgetype: FULFILLS_POLYMER
+      targetlabel: PolymerFamily
+      targetid: code
+  - path: /v1/sync/buyer-demands
+    targetnode: BuyerDemand
+    idproperty: demand_id
+    batchstrategy: UNWINDMERGE
+gdsjobs:
+- name: louvain_community
+  algorithm: louvain
+  schedule:
+    type: cron
+    cron: 0 2 * * *
+  projection:
+    nodelabels:
+    - Facility
+    edgetypes:
+    - TRANSACTED_WITH
+  writeproperty: community_id
+- name: facility_similarity
+  algorithm: node_similarity
+  schedule:
+    type: manual
+  projection:
+    nodelabels:
+    - Facility
+    - PolymerFamily
+    edgetypes:
+    - PROCESSES
+  writeedge: SIMILAR_TO
+compliance:
+  regimes: []
+  prohibitedfactors:
+    enabled: true
+    blockedfields: []
+  audit:
+    enabled: true
+  pii:
+    fields: []
+    handling: redact
+decision_policy:
+  version: 1.0.0
+  hard_constraints:
+  - metric: compliance_pass
+    operator: eq
+    value: true
+  - metric: risk
+    operator: lte
+    value: 0.7
+  weights:
+    revenue: 0.4
+    margin: 0.3
+    risk: 0.2
+    capacity: 0.1
+  thresholds:
+    approve_threshold: 0.5
+    reject_threshold: 0.2
+    conflict_tolerance: 0.35
+feedbackloop:
+  enabled: true
+  signal_weights:
+    enabled: true
+    recalculation_cadence_days: 30
+    min_outcomes_for_recalculation: 50
+    baseline_weight: 1.0
+    max_weight: 3.0
+    min_weight: 0.1
+    frequency_adjustment: true
+    confidence_dampening: true
+    penalty_threshold: 0.5
+    penalty_factor: 0.3
+  propagation_boost_factor: 1.15
+  propagation_similarity_threshold: 0.4
+  outcome_edge_type: RESULTED_IN
+  outcome_node_label: TransactionOutcome
+  drift_threshold: 0.15
+  drift_window_days: 30
+feature_catalog:
+- feature_id: geo_proximity
+  owner: ceg
+  scoring_dimension: geo_proximity
+  evidence_required: false
+- feature_id: credit_score
+  owner: ceg
+  scoring_dimension: credit_score
+  evidence_required: false
+- feature_id: contamination_tolerance_score
+  owner: ceg
+  scoring_dimension: contamination_tolerance_score
+  evidence_required: true
+- feature_id: community_match
+  owner: ceg
+  scoring_dimension: community_match
+  evidence_required: false
+- feature_id: rate_score
+  owner: ceg
+  scoring_dimension: rate_score
+  evidence_required: false
+- feature_id: price_alignment
+  owner: ceg
+  scoring_dimension: price_alignment
+  evidence_required: false
+- feature_id: recency
+  owner: ceg
+  scoring_dimension: recency
+  evidence_required: false
+- feature_id: active_supply_geo
+  owner: ceg
+  scoring_dimension: active_supply_geo
+  evidence_required: false
+- feature_id: material.contamination_pct
+  owner: eie
+  scoring_dimension: null
+  evidence_required: true
+  description: EIE-produced evidence feature consumed as match query input
+- feature_id: facility.capacity.available_lbs_month
+  owner: odoo
+  scoring_dimension: null
+  evidence_required: true
+  description: Operational capacity evidence; missing => recommended enrichment
+explanations:
+  version: 1.0.0
+  contribution_ordering: deterministic_feature_id
+  missing_evidence_codes:
+  - facility.capacity.available_lbs_month
+  - material.contamination_pct
+  - facility.food_grade_certified
+  - supply.available_tons
+  recommended_actions:
+  - action_id: request_capacity_evidence
+    when: missing_evidence
+    message: Request facility monthly available capacity evidence before ranking.
+  - action_id: request_contamination_evidence
+    when: missing_evidence
+    message: Request observed contamination evidence from EIE before hard-gate evaluation.
+  - action_id: relax_or_reroute
+    when: failed_gate
+    message: Candidate failed a hard gate; do not rank; capture failed_gates reasons.
+  - action_id: review_low_score
+    when: low_score
+    message: Eligible but low score; review feature_contributions before operator
+      commit.
+  - action_id: exclude_ineligible
+    when: ineligible
+    message: Ineligible candidates must not receive rank.
+outcome_signals:
+- signal: reviewed
+  calibration_label: true
+- signal: contacted
+  calibration_label: true
+- signal: quoted
+  calibration_label: true
+- signal: accepted
+  calibration_label: true
+- signal: rejected
+  calibration_label: true
+- signal: completed
+  calibration_label: true
+- signal: claim_raised
+  calibration_label: true
+- signal: paid
+  calibration_label: true
+- signal: repeat_business
+  calibration_label: true

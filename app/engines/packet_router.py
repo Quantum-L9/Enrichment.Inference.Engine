@@ -13,6 +13,14 @@ Seam contract (seam audit 2026-09-02):
   contract -- ``{"entity_type": <sync endpoint>, "batch": [row, ...]}`` where
   each row carries the endpoint's id property -- instead of the retired
   ``graph-sync`` dialect that no node owned and no Gate route resolved.
+* Typed rows (owner decision 2026-11-11): the row schema an endpoint accepts is
+  the tenant spec's declared types -- the target node's properties that are not
+  ``evidenceonly``, its childsync fields included (``app.engines.spec_types``).
+  :func:`project_graph_sync_row` builds every row from that declaration and
+  encodes each value by its declared type (a ``list<map>`` is a list of maps,
+  never a JSON string); a value that does not match its declaration refuses the
+  row before anything is sent; an undeclared field is dropped and counted. CEG
+  validates the same rows against its own tenant spec at ingress.
 * GRAPH-IDENT-02: the endpoint and its id property are read per tenant from
   the tenant's own spec (tenant id == domain spec id: ``domains/<tenant>/spec.yaml``
   ``sync.endpoints[]``, CEG's owner-native ``path`` / ``targetnode`` /
@@ -35,7 +43,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -49,10 +57,16 @@ from constellation_node_sdk.gate import (
 )
 
 from app.engines.domain_yaml_reader import DomainPublicationError, DomainYamlReader
+from app.engines.spec_types import (
+    TypeDefect,
+    encode_value,
+    row_properties,
+    value_defects,
+)
 
 if TYPE_CHECKING:
     from app.engines.observed_association_contract import ObservedRelationshipContract
-from app.services.gate_client import EIE_NODE_NAME, build_gate_client
+from app.services.gate_client import build_gate_client
 
 logger = structlog.get_logger("packet_router")
 
@@ -62,8 +76,6 @@ logger = structlog.get_logger("packet_router")
 _ROUTE_TIMEOUT = 10.0
 _MAX_ATTEMPTS = 2
 _BACKOFF_BASE_SECONDS = 1.0
-
-_PRIMITIVE = (str, int, float, bool, type(None))
 
 # Where a resolved graph-sync contract came from. Logged on every resolution so
 # a fallback never passes for a spec-declared endpoint.
@@ -80,12 +92,32 @@ class GraphSyncContract:
     """The CEG ``sync`` endpoint one domain's enriched rows are addressed to.
 
     ``entity_type`` is the endpoint's path suffix (what CEG's sync handler keys
-    on) and ``id_property`` the row key that endpoint merges on.
+    on) and ``id_property`` the row key that endpoint merges on. ``row_schema``
+    is the endpoint's typed row contract read from the tenant spec: the target
+    node's declarations that ride a sync row (``spec_types.row_properties``).
+    None means the spec declares no row for this endpoint -- the settings
+    fallback, or a target node the spec's ontology does not declare -- and no
+    row can be sent to it.
     """
 
     entity_type: str
     id_property: str
     source: str
+    row_schema: dict[str, dict[str, Any]] | None = field(default=None, compare=False, repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class GraphSyncRowProjection:
+    """One enriched entity projected onto its endpoint's typed row contract.
+
+    ``row`` is None when the row is refused; ``defects`` then names every field,
+    its declared type and the actual type. ``dropped`` lists the fields that are
+    not declared for the row (never sent).
+    """
+
+    row: dict[str, Any] | None
+    defects: tuple[TypeDefect, ...] = ()
+    dropped: tuple[str, ...] = ()
 
 
 def _ontology_labels(domain_spec: dict[str, Any]) -> set[str]:
@@ -167,11 +199,12 @@ def resolve_graph_sync_contract(
             chosen = [c for c in usable if c[2] in labels]
     if len(chosen) != 1:
         return None
-    entity_type, id_property, _target = chosen[0]
+    entity_type, id_property, target = chosen[0]
     return GraphSyncContract(
         entity_type=entity_type,
         id_property=id_property,
         source=GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
+        row_schema=row_properties(domain_spec, target) if target else None,
     )
 
 
@@ -270,35 +303,65 @@ def _retry_allowed(exc: BaseException, *, has_idempotency_key: bool) -> bool:
     return False
 
 
-def _graph_sync_row(
+def project_graph_sync_row(
     *,
     entity_id: str,
     fields: dict[str, Any],
-    domain: str | None,
-    id_property: str,
-) -> dict[str, Any]:
-    """Project enriched fields onto one CEG sync row.
+    contract: GraphSyncContract,
+) -> GraphSyncRowProjection:
+    """Project enriched fields onto one CEG sync row, by the endpoint's declared types.
 
-    CEG applies ``SET n += row`` in Cypher, so every value must be a Neo4j
-    property primitive. Nested structures are carried as JSON strings rather
-    than dropped, so nothing the enrichment produced is silently lost.
+    The row is the endpoint's id property (the entity id) plus every declared
+    row property present in ``fields``, each encoded by its declaration
+    (``spec_types.encode_value``): a ``list<map>`` is a list of mappings that
+    keep only their declared keys, never a JSON string. Fails closed:
+
+    * a contract with no ``row_schema`` refuses every row (nothing typed can be
+      built for an endpoint the spec does not declare);
+    * any value that does not match its declaration -- a JSON string or a list
+      of strings for a ``list<map>``, ``"high"`` for a ``float`` -- refuses the
+      whole row, with one defect per field naming the declared and actual type.
+
+    A field the declaration does not name is dropped and listed in ``dropped``;
+    so are EIE's own ``evidenceonly`` properties. A ``None`` value of a
+    non-required property is sent as a clear (CEG applies ``SET n += row``).
+    Presence of other required properties is not enforced here: a row is a
+    partial ``MERGE`` update and CEG's ingress validation owns presence.
     """
-    row: dict[str, Any] = {id_property: entity_id, "entity_id": entity_id}
-    if domain:
-        row["domain"] = domain
+    schema = contract.row_schema
+    if schema is None:
+        return GraphSyncRowProjection(
+            row=None,
+            defects=(
+                TypeDefect(
+                    contract.id_property,
+                    "declared row schema",
+                    "none",
+                    f"endpoint {contract.entity_type!r} has no row declared in the tenant spec",
+                ),
+            ),
+        )
+    defects: list[TypeDefect] = []
+    id_decl = schema.get(contract.id_property, {"type": "string"})
+    defects.extend(value_defects(entity_id, id_decl, contract.id_property))
+    row: dict[str, Any] = {contract.id_property: entity_id}
+    dropped: list[str] = []
     for key, value in fields.items():
-        if key in {id_property, "entity_id"}:
+        if key == contract.id_property:
             continue
-        if (
-            isinstance(value, _PRIMITIVE)
-            or isinstance(value, list)
-            and all(isinstance(v, _PRIMITIVE) for v in value)
-        ):
-            row[key] = value
-        else:
-            row[key] = json.dumps(value, sort_keys=True, default=str)
-    row["enriched_by"] = EIE_NODE_NAME
-    return row
+        decl = schema.get(key)
+        if decl is None:
+            dropped.append(key)
+            continue
+        found = value_defects(value, decl, key)
+        if found:
+            defects.extend(found)
+            continue
+        row[key] = encode_value(value, decl)
+    if defects:
+        return GraphSyncRowProjection(row=None, defects=tuple(defects), dropped=tuple(dropped))
+    row[contract.id_property] = encode_value(entity_id, id_decl)
+    return GraphSyncRowProjection(row=row, dropped=tuple(dropped))
 
 
 def _sync_idempotency_key(tenant_id: str, entity_id: str, row: dict[str, Any]) -> str:
@@ -899,9 +962,13 @@ class PacketRouter:
         The endpoint and id property come from the TENANT's own spec
         (:meth:`graph_sync_contract` keyed by ``tenant_id``, GRAPH-IDENT-02):
         tenant id == domain spec id, and CEG validates the sync against the
-        spec it loads for the same tenant. ``domain`` does not select the spec;
-        it is carried on the row, and a ``domain`` other than the tenant is
-        logged as ``graph_sync_domain_is_not_tenant``. A tenant that resolves
+        spec it loads for the same tenant. ``domain`` does not select the spec
+        and is not a row property (the row carries only the endpoint's declared
+        properties); a ``domain`` other than the tenant is logged as
+        ``graph_sync_domain_is_not_tenant``. The row is projected onto the
+        endpoint's typed declaration (:func:`project_graph_sync_row`): a type
+        mismatch is ``graph_sync_refused_row_type`` -- nothing is sent, None is
+        returned -- and undeclared fields are dropped and counted. A tenant that resolves
         no contract is skipped -- nothing is sent and
         ``graph_sync_skipped_no_contract`` names it -- rather than addressed
         to an endpoint another tenant owns.
@@ -931,12 +998,36 @@ class PacketRouter:
                 fix=_NO_CONTRACT_FIX,
             )
             return None
-        row = _graph_sync_row(
-            entity_id=entity_id,
-            fields=fields,
-            domain=domain,
-            id_property=contract.id_property,
-        )
+        projection = project_graph_sync_row(entity_id=entity_id, fields=fields, contract=contract)
+        if projection.dropped:
+            logger.info(
+                "graph_sync_undeclared_fields_dropped",
+                tenant_id=tenant_id,
+                entity_id=entity_id,
+                entity_type=contract.entity_type,
+                dropped_count=len(projection.dropped),
+                dropped=list(projection.dropped),
+            )
+        row = projection.row
+        if row is None:
+            logger.warning(
+                "graph_sync_refused_row_type",
+                tenant_id=tenant_id,
+                entity_id=entity_id,
+                entity_type=contract.entity_type,
+                defects=[
+                    {
+                        "field": d.field,
+                        "declared": d.declared,
+                        "actual": d.actual,
+                        "reason": d.reason,
+                    }
+                    for d in projection.defects
+                ],
+                fix="send values of each property's declared type (domains/<tenant>/spec.yaml); "
+                "nothing was sent and nothing is recorded as synced",
+            )
+            return None
         batch = [row]
         try:
             ack = await self.route(

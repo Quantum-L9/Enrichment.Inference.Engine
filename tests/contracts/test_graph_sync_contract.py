@@ -62,7 +62,11 @@ requires_db_runtime = pytest.mark.skipif(
 PLASTICS_SPEC: dict[str, Any] = {
     "name": "plastics",
     "version": "0.3.0",
-    "ontology": {"nodes": [{"label": "Facility", "properties": [{"name": "id"}]}]},
+    # Typed row contracts (owner decision 2026-11-11): each endpoint's target
+    # node declares the row it accepts; packet_router builds rows from it.
+    "ontology": {
+        "nodes": [{"label": "Facility", "properties": [{"name": "facility_id", "type": "string"}]}]
+    },
     "sync": {
         "endpoints": [
             {
@@ -115,7 +119,9 @@ ALPHA_SPEC: dict[str, Any] = {
 
 BETA_SPEC: dict[str, Any] = {
     "name": "beta",
-    "ontology": {"nodes": [{"label": "Facility"}]},
+    "ontology": {
+        "nodes": [{"label": "Facility", "properties": [{"name": "facility_id", "type": "string"}]}]
+    },
     "sync": {
         "endpoints": [
             {"path": "/v1/sync/facilities", "targetnode": "Facility", "idproperty": "facility_id"}
@@ -191,10 +197,48 @@ def test_resolution_order_label_then_single_then_ontology() -> None:
 @pytest.mark.asyncio
 async def test_ack_is_checked_against_the_domains_resolved_endpoint(specs_reader) -> None:
     router = PacketRouter(gate_url=GATE, domain_reader=specs_reader)
-    other = {"status": "success", "entity_type": "facilities", "synced_count": 1}
+    other = {"status": "success", "entity_type": "polymerfamilies", "synced_count": 1}
     with patch.object(
         router._client, "execute", new_callable=AsyncMock, return_value=_ack(other)
     ) as execute:
+        result = await router.notify_graph_sync(
+            tenant_id="plastics",
+            entity_id="fac-1",
+            fields={},
+            domain="plastics",
+            node_label="Facility",
+        )
+    sent = execute.await_args.kwargs["payload"]
+    assert sent["entity_type"] == "facilities"
+    assert sent["batch"][0]["facility_id"] == "fac-1"
+    assert result is None, "an ack for another endpoint does not confirm this sync"
+
+    matching = {"status": "success", "entity_type": "facilities", "synced_count": 1}
+    with patch.object(
+        router._client, "execute", new_callable=AsyncMock, return_value=_ack(matching)
+    ):
+        confirmed = await router.notify_graph_sync(
+            tenant_id="plastics",
+            entity_id="fac-1",
+            fields={},
+            domain="plastics",
+            node_label="Facility",
+        )
+    assert confirmed is not None
+    assert confirmed["synced_count"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_endpoint_whose_target_node_the_spec_does_not_declare_sends_nothing(
+    specs_reader,
+) -> None:
+    """PolymerFamily has an endpoint but no declared node: no typed row can be built."""
+    router = PacketRouter(gate_url=GATE, domain_reader=specs_reader)
+    contract = router.graph_sync_contract("plastics", node_label="PolymerFamily")
+    assert contract is not None
+    assert (contract.entity_type, contract.row_schema) == ("polymerfamilies", None)
+    with patch.object(router._client, "execute", new_callable=AsyncMock) as execute:
         result = await router.notify_graph_sync(
             tenant_id="plastics",
             entity_id="pf-1",
@@ -202,24 +246,8 @@ async def test_ack_is_checked_against_the_domains_resolved_endpoint(specs_reader
             domain="plastics",
             node_label="PolymerFamily",
         )
-    sent = execute.await_args.kwargs["payload"]
-    assert sent["entity_type"] == "polymerfamilies"
-    assert sent["batch"][0]["code"] == "pf-1"
-    assert result is None, "an ack for another endpoint does not confirm this sync"
-
-    matching = {"status": "success", "entity_type": "polymerfamilies", "synced_count": 1}
-    with patch.object(
-        router._client, "execute", new_callable=AsyncMock, return_value=_ack(matching)
-    ):
-        confirmed = await router.notify_graph_sync(
-            tenant_id="plastics",
-            entity_id="pf-1",
-            fields={},
-            domain="plastics",
-            node_label="PolymerFamily",
-        )
-    assert confirmed is not None
-    assert confirmed["synced_count"] == 1
+    assert result is None
+    execute.assert_not_awaited()
 
 
 # ── Ambiguous: skipped, never defaulted ──────────────────────────────────────
@@ -250,7 +278,16 @@ async def test_ambiguous_declaration_is_skipped_and_the_fallback_is_not_consulte
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_no_declared_endpoint_uses_the_labeled_fallback(specs_reader) -> None:
+async def test_no_declared_endpoint_resolves_the_labeled_fallback_but_sends_no_untyped_row(
+    specs_reader,
+) -> None:
+    """The fallback names an endpoint; it declares no row, so nothing typed can be sent.
+
+    Typed rows (owner decision 2026-11-11): the row schema an endpoint accepts
+    is the tenant spec's declared types. A tenant whose spec declares no
+    endpoint declares no row either, so the settings fallback still resolves
+    (and is logged as such) but every row is refused before sending.
+    """
     router = PacketRouter(
         gate_url=GATE,
         domain_reader=specs_reader,
@@ -262,17 +299,14 @@ async def test_no_declared_endpoint_uses_the_labeled_fallback(specs_reader) -> N
         assert contract is not None, domain
         assert contract.source == GRAPH_SYNC_SOURCE_SETTINGS_FALLBACK
         assert (contract.entity_type, contract.id_property) == ("facilities", "facility_id")
+        assert contract.row_schema is None
 
-    ok = {"status": "success", "entity_type": "facilities", "synced_count": 1}
-    with patch.object(
-        router._client, "execute", new_callable=AsyncMock, return_value=_ack(ok)
-    ) as execute:
+    with patch.object(router._client, "execute", new_callable=AsyncMock) as execute:
         result = await router.notify_graph_sync(
-            tenant_id="plain", entity_id="t-1", fields={}, domain="plain"
+            tenant_id="plain", entity_id="t-1", fields={"name": "x"}, domain="plain"
         )
-    assert execute.await_args.kwargs["payload"]["entity_type"] == "facilities"
-    assert result is not None
-    assert result["status"] == "success"
+    assert result is None
+    execute.assert_not_awaited()
 
 
 @pytest.mark.unit
@@ -385,26 +419,24 @@ async def test_a_tenant_without_a_spec_is_not_synced_by_another_domains_spec(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    ("node_label", "expected"),
-    [
-        (None, ("facilities", "facility_id")),
-        ("Facility", ("facilities", "facility_id")),
-        ("PolymerFamily", ("polymerfamilies", "code")),
-        ("MaterialForm", ("materialforms", "form_id")),
-        ("SupplyOpportunity", ("supply-opportunities", "opportunity_id")),
-        ("BuyerDemand", ("buyer-demands", "demand_id")),
-    ],
-)
-def test_shipped_plasticos_spec_declares_cegs_sync_endpoints(
-    node_label: str | None, expected: tuple[str, str]
+@pytest.mark.parametrize("node_label", [None, "Facility", "Account"])
+def test_shipped_plasticos_spec_declares_the_facilities_endpoint_with_its_typed_row(
+    node_label: str | None,
 ) -> None:
+    """EIE enriches Facility only, so its spec declares CEG's facilities endpoint alone.
+
+    A single declared endpoint is the tenant's sync target whatever the
+    caller's label (an Odoo/CRM object type is not a node label). The contract
+    carries the typed row the spec declares, childsync field included.
+    """
     router = PacketRouter(gate_url=GATE, domain_reader=DomainYamlReader(REPO_DOMAINS))
     contract = router.graph_sync_contract("plasticos", node_label=node_label)
     assert contract is not None
     assert contract.source == GRAPH_SYNC_SOURCE_DOMAIN_SPEC
-    actual = (contract.entity_type, contract.id_property)
-    assert actual == expected
+    assert (contract.entity_type, contract.id_property) == ("facilities", "facility_id")
+    assert contract.row_schema is not None
+    assert contract.row_schema["processed_polymers"]["items"]["type"] == "map"
+    assert "city" not in contract.row_schema  # evidenceonly: never on a row
 
 
 @pytest.mark.unit

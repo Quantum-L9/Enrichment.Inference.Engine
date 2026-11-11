@@ -30,12 +30,19 @@ CEG_REVISION = "93cf1a83bdb88656a627b442a6d114c3a3502cde"
 GOOD = (ROOT / "domains/plasticos/spec.yaml").read_bytes()
 DUPLICATES = {
     "name": GOOD.replace(b"name: plasticos", b"name: other\nname: plasticos", 1),
-    "version": GOOD.replace(b'version: "0.3.0"', b'version: "9.0.0"\nversion: "0.3.0"', 1),
+    "version": GOOD.replace(b'version: "0.4.0"', b'version: "9.0.0"\nversion: "0.4.0"', 1),
     "sync": GOOD.replace(b"sync:\n", b"sync: {}\nsync:\n", 1),
     "properties": GOOD.replace(b"    properties:\n", b"    properties: []\n    properties:\n", 1),
-    "type": GOOD.replace(b"name: id, type: string", b"name: id, type: float, type: string", 1),
+    "type": GOOD.replace(
+        b"name: facility_id, type: string",
+        b"name: facility_id, type: float, type: string",
+        1,
+    ),
     "condition": GOOD.replace(b"operator: CONTAINS", b"operator: LT, operator: CONTAINS", 1),
 }
+# Every variant must really inject its duplicate: an anchor that no longer
+# matches the specimen would make the variant the valid spec itself.
+assert all(variant != GOOD for variant in DUPLICATES.values())
 
 
 def _parse(content: bytes | str):
@@ -53,7 +60,7 @@ def _publish(root: Path, content: bytes) -> Path:
     receipt = {
         "schema": "eie.domain-approval/v1",
         "tenant_id": "plasticos",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "sha256": digest,
         "reviewed_input_sha256": digest,
         "reviewed_by": "test-only-reviewer",
@@ -86,7 +93,7 @@ def test_reader_refuses_duplicate_without_cache_or_legacy_fallback(
     else:
         (tmp_path / "plasticos.yaml").write_bytes(GOOD)
     reader = DomainYamlReader(tmp_path)
-    assert reader.load("plasticos").version == "0.3.0"
+    assert reader.load("plasticos").version == "0.4.0"
     if published:
         # Hash and receipt correctly bind the ambiguous bytes: hashing is not parsing.
         _publish(tmp_path, content)
@@ -280,23 +287,12 @@ def test_hosted_native_jobs_provision_pinned_real_ceg_subject(workflow_name, job
 
 
 def _compatible_ceg_bytes() -> bytes:
-    """CEG intersection derived from the in-repo EIE specimen, not a sibling checkout."""
-    eie = _parse(GOOD)
-    eie_nodes = {node["label"]: node for node in eie["ontology"]["nodes"]}
-    nodes: dict[str, dict] = {}
-    for endpoint in eie["sync"]["endpoints"]:
-        label = endpoint["targetnode"]
-        source = eie_nodes.get(label)
-        properties = [dict(prop) for prop in source["properties"]] if source else []
-        if endpoint["idproperty"] not in {prop["name"] for prop in properties}:
-            properties.append({"name": endpoint["idproperty"], "type": "string"})
-        nodes[label] = {"label": label, "properties": properties}
-    spec = {
-        "domain": {"id": eie["name"], "version": "1.3.0-reviewed"},
-        "ontology": {"nodes": list(nodes.values())},
-        "sync": {"endpoints": [dict(endpoint) for endpoint in eie["sync"]["endpoints"]]},
-    }
-    return yaml.safe_dump(spec, sort_keys=False).encode()
+    """CEG's tenant spec as vendored in-repo (tests/fixtures/ceg), not a sibling checkout.
+
+    Never derived from the EIE specimen: a CEG spec built from EIE's own
+    declarations would make the typed row-contract comparison circular.
+    """
+    return (ROOT / "tests/fixtures/ceg/plasticos.spec.yaml").read_bytes()
 
 
 def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkeypatch) -> None:

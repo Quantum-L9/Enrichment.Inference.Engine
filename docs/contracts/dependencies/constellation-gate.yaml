@@ -5,8 +5,17 @@
 #           app/services/graph_return_channel.py,
 #           app/engines/convergence_controller.py,
 #           app/engines/observed_association_contract.py
-# Version:  1.9.0
-# Updated:  2026-11-08 (D-9, Cognitive.Engine.Graphs#386: an observed row may carry
+# Version:  2.0.0
+# Updated:  2026-11-11 (typed row contract, owner decision: the row schema a CEG sync endpoint
+#           accepts is the tenant spec's declared types. packet_router projects every row
+#           onto the endpoint's target-node declaration -- a list<map> travels as a list of
+#           maps, never a JSON string; a mismatched value refuses the row before sending; an
+#           undeclared field is dropped. BREAKING row shape: `entity_id`, `domain` and
+#           `enriched_by` are no longer row keys, and nested values are no longer JSON
+#           strings. CEG validates rows against its own tenant spec at ingress
+#           (sync_row_type_validation_enabled, Cognitive.Engine.Graphs typed-contract
+#           change); the two declarations are kept identical by eie-ceg-sync/v2)
+#           2026-11-08 (D-9, Cognitive.Engine.Graphs#386: an observed row may carry
 #           `observed_association`, the provider association EIE's mirror mapped, so
 #           CEG cross-checks it against its own observedfrom. Sent only while
 #           observed_association_send_enabled is on (default off until the deployed CEG
@@ -45,7 +54,7 @@ default_url: http://localhost:8080
 usages:
   - purpose: Gate-only egress — post-enrichment graph sync (CEG action `sync`)
     source_file: app/engines/packet_router.py
-    pattern: GateClient.execute(action="sync", payload={entity_type, batch})
+    pattern: GateClient.execute(action="sync", payload={entity_type, batch:[typed row]}) -- see `sync`
 
   - purpose: Gate-only egress — relationship evidence sync (CEG action `sync`, targetedge endpoint)
     source_file: app/engines/packet_router.py
@@ -66,6 +75,61 @@ usages:
   - purpose: Node registration (control plane)
     source_file: app/main.py
     pattern: register_node(gate_url, NodeRegistration) -> POST /v1/admin/register
+
+# The node-sync batch (C-13 transport lockstep with app/engines/packet_router.py
+# `project_graph_sync_row` and app/engines/spec_types.py).
+sync:
+  action: sync
+  payload: "{entity_type: <last segment of sync.endpoints[].path>, batch: [row]}"
+  row_schema_authority: >-
+    The tenant spec (tenant id == domain spec id, domains/<tenant>/spec.yaml). The
+    row an endpoint accepts is its `targetnode`'s declared properties that are not
+    `evidenceonly`, the endpoint's childsync fields included. Each property's type
+    is a declaration in the shared typed syntax -- string, int, float, bool,
+    datetime, date, duration, enum (with optional `values`); `list` with required
+    `items` (a scalar, enum or map; never a list of lists); `map` with required
+    `properties` (each a declaration, optionally `required: true`). `type: list`
+    without `items` is refused by the spec reader.
+  row:
+    keys: the endpoint's `idproperty` (the entity id) plus every declared row property present in the enriched fields
+    encoding: >-
+      by declared type -- a list stays a list, a map stays a mapping restricted to
+      its declared properties, a datetime/date travels as an ISO-8601 string, an int
+      declared float is sent as a float. Nothing is JSON-encoded into a string.
+    wire_only_shapes: >-
+      map and list<map> are valid only as the `field` of one of the endpoint's
+      `childsync` entries (CEG creates/links the child node from each map, keyed by
+      the entry's `targetid`, which the map items must declare); a `taxonomyedges`
+      field is a scalar or a list of scalars.
+    example: >-
+      /v1/sync/facilities: {facility_id: "fac-1", name: "Acme", min_density: 0.94,
+      processed_polymers: [{code: "HDPE"}, {code: "PET"}]}
+  refusal:
+    - A value that does not match its declaration (a JSON string or a list of strings
+      for a list<map>, "high" for a float, a map item missing a required property)
+      refuses the row before anything is sent -- `graph_sync_refused_row_type` lists
+      every defect as {field, declared, actual, reason}; notify_graph_sync returns None
+      and nothing is recorded as synced.
+    - An endpoint with no declared row (the settings fallback, or a `targetnode` the
+      spec's ontology does not declare) sends nothing.
+    - A field the declaration does not name, including EIE's own `evidenceonly`
+      properties, is dropped and counted (`graph_sync_undeclared_fields_dropped`).
+    - Presence of required properties other than the id is not enforced by EIE (a
+      row is a partial MERGE update); CEG's ingress validation owns presence.
+  ceg_validation: >-
+    CEG validates every sync row against the declared types of its own tenant spec at
+    ingress and refuses the whole batch listing all defects (flag
+    sync_row_type_validation_enabled, default true; undeclared keys are dropped unless
+    sync_undeclared_property_refusal_enabled), landing in the Cognitive.Engine.Graphs
+    typed-contract change. Until that change is deployed, CEG main does not type-check
+    rows: EIE's projection is the only enforcement.
+  cross_engine_check: >-
+    eie-ceg-sync/v2 (app/engines/domain_spec_compatibility.py) compares, for every
+    endpoint EIE declares, the full typed row contract with CEG's spec -- endpoint
+    keys, childsync, taxonomyedges, and every target-node property's name and typed
+    shape -- and fails on any difference. The unit test runs it against
+    tests/fixtures/ceg/plasticos.spec.yaml (pinned source commit + sha256); the
+    integration test runs it against a live CEG checkout when CEG_REPO is set.
 
 invariants:
   - EIE never addresses a peer node; every outbound packet targets Gate.
@@ -94,9 +158,9 @@ invariants:
     `sync.endpoints[]`, CEG's owner-native `path` / `targetnode` / `idproperty`;
     `entity_type` is the path's last segment), by `PacketRouter.graph_sync_contract`
     keyed by the packet's `tenant_id` — the spec CEG loads (`load_domain(tenant)`)
-    to validate the same sync. The payload `domain` never selects the spec; it is
-    carried on the row, and a `domain` other than the tenant is logged as
-    `graph_sync_domain_is_not_tenant`. Selection order — the caller's `node_label`
+    to validate the same sync. The payload `domain` never selects the spec and is
+    not a row key (rows carry only declared properties); a `domain` other than the
+    tenant is logged as `graph_sync_domain_is_not_tenant`. Selection order — the caller's `node_label`
     matching exactly one `targetnode`; else the single declared endpoint; else, only
     when the caller supplied NO `node_label`, the single endpoint whose `targetnode`
     is a label of the spec's own ontology. `notify_graph_sync` checks CEG's
@@ -118,8 +182,11 @@ invariants:
     unknown tenant, an illegal id, an unreadable, malformed or wrong-shaped file);
     every use is logged as `graph_sync_contract_resolved` with `source="settings_fallback"`.
     Both default to empty, so such a tenant fails closed — nothing is sent and
-    `graph_sync_skipped_no_contract` names it. The plasticos spec declares CEG's
-    endpoints itself (`domains/plasticos/spec.yaml` `sync`, in lockstep with CEG's).
+    `graph_sync_skipped_no_contract` names it. A fallback endpoint declares no row,
+    so even a configured fallback sends nothing (`graph_sync_refused_row_type`). The
+    plasticos spec declares the one endpoint EIE produces rows for
+    (`/v1/sync/facilities`, with CEG's childsync); eie-ceg-sync/v2 proves its typed
+    row identical to CEG's declaration -- the spec is not otherwise a copy of CEG's.
   - The entity's node label travels from the handler (`payload["node_label"]`, else
     `object_type`) through `SideEffectCoordinator.commit_after_enrich(node_label=)` to
     `notify_graph_sync(node_label=)`; a graph-leg retry re-sends the label of the
