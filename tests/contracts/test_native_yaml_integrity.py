@@ -307,6 +307,10 @@ def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkey
     (ceg_repo / "tools/validate_domain.py").write_bytes(
         b"# fixture validator; subprocess is patched\n"
     )
+    # The pair check refuses a non-executable interpreter before any subprocess.
+    ceg_python = tmp_path / "python"
+    ceg_python.write_bytes(b"#!/bin/sh\nexit 99\n")
+    ceg_python.chmod(0o700)
     ceg_bytes = _compatible_ceg_bytes()
     eie = tmp_path / "eie.yaml"
     ceg = tmp_path / "ceg.yaml"
@@ -318,7 +322,7 @@ def test_pair_ceg_native_cli_gets_exact_original_snapshot(tmp_path: Path, monkey
         eie_receipt=None,
         ceg_receipt=None,
         ceg_repo=ceg_repo,
-        ceg_python=tmp_path / "python",
+        ceg_python=ceg_python,
         field_mappings=None,
         output=tmp_path / "report.json",
     )

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -37,9 +38,23 @@ def _read_constitution() -> dict[str, Any]:
     return _load_yaml(CONSTITUTION_PATH)
 
 
-def _git_changed_files(base: str, head: str) -> list[str]:
+# A revision is a SHA, a ref name, or a ref with ~N / ^N suffixes. It never starts
+# with "-" (it would be parsed as an option) and carries no shell or range syntax.
+_GIT_REVISION_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./~^-]{0,254}")
+
+
+def validate_git_revision(value: str) -> str:
+    """Return ``value`` when it is a plain git revision; raise ``ValueError`` otherwise."""
+    if not isinstance(value, str) or not _GIT_REVISION_RE.fullmatch(value) or ".." in value:
+        raise ValueError(f"invalid git revision: {value!r}")
+    return value
+
+
+def git_changed_files(base: str, head: str) -> list[str]:
+    """Files changed between two validated revisions (no option or range injection)."""
+    revisions = [validate_git_revision(base), validate_git_revision(head)]
     output = subprocess.check_output(
-        ["git", "diff", "--name-only", base, head],
+        ["git", "diff", "--name-only", "--end-of-options", *revisions, "--"],
         cwd=REPO_ROOT,
         text=True,
     )
@@ -165,6 +180,12 @@ def verify_attestation() -> tuple[bool, list[str]]:
         errors.append("attestation event_inventory mismatch")
 
     return len(errors) == 0, errors
+
+
+def declared_gate_commands() -> frozenset[str]:
+    """Every command declared by the CI gate contract; the only commands a runner may run."""
+    spec = _load_yaml(CI_GATE_PATH)
+    return frozenset(command for gate in spec["gates"].values() for command in gate["commands"])
 
 
 def select_gates(changed_files: list[str]) -> GateSelection:
@@ -294,7 +315,7 @@ def _resolve_changed_files(args: argparse.Namespace) -> list[str]:
     if getattr(args, "files", None):
         return [path for path in args.files if path]
     if getattr(args, "base", None) and getattr(args, "head", None):
-        return _git_changed_files(args.base, args.head)
+        return git_changed_files(args.base, args.head)
     return []
 
 

@@ -262,36 +262,32 @@ def get_staged_diff() -> str:
     return result.stdout
 
 
+def confined_path(raw: str, base: Path = PROJECT_ROOT) -> Path:
+    """Resolve ``raw`` (relative to ``base``) and refuse anything outside the project root."""
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(PROJECT_ROOT.resolve()):
+        raise ValueError(f"path is outside the repository: {raw}")
+    return resolved
+
+
 def get_file_contents(paths: list[str]) -> str:
-    """Read contents of specified files."""
+    """Read contents of specified files; paths outside the project root are refused."""
     chunks = []
     for p in paths:
-        path = Path(p) if Path(p).is_absolute() else PROJECT_ROOT / p
+        path = confined_path(p)
         if path.exists() and path.stat().st_size < 80_000:
             chunks.append(f"# FILE: {p}\n{path.read_text()}")
     return "\n\n".join(chunks)
 
 
-def print_results(result: dict) -> bool:
-    """Print findings, return True if should block."""
-    issues = result.get("issues", [])
-    summary = result.get("summary", "")
-    block = review_verdict(result) == "block"
-
-    if not issues:
-        if block:
-            print("\n❌ AI Review: no usable review — blocking (fail-closed).")
-            print(f"   {summary}")
-        else:
-            print("\n✅ AI Review: No issues found.")
-            print(f"   {summary}")
-        print(f"{VERDICT_PREFIX} {'block' if block else 'pass'}")
-        return block
-
+def _print_issues(issues: list, summary: str) -> None:
     print(f"\n⚠️  AI Review: {len(issues)} issue(s) found")
     print(f"   {summary}\n")
 
-    for i, issue in enumerate(issues, 1):
+    for issue in issues:
         sev = issue.get("severity", "?").upper()
         cat = issue.get("category", "")
         icon = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡"}.get(sev, "⚪")
@@ -312,8 +308,24 @@ def print_results(result: dict) -> bool:
             print(f"     Fix: {issue['suggestion']}")
         print()
 
-    if block:
-        print("❌ BLOCKING — critical/high severity issues must be fixed.\n")
+
+def print_results(result: dict) -> bool:
+    """Print findings and the verdict line; return True when the verdict is block."""
+    issues = result.get("issues", [])
+    summary = result.get("summary", "")
+    block = review_verdict(result) == "block"
+
+    if issues:
+        _print_issues(issues, summary)
+        if block:
+            print("❌ BLOCKING — critical/high severity issues must be fixed.\n")
+    elif block:
+        print("\n❌ AI Review: no usable review — blocking (fail-closed).")
+        print(f"   {summary}")
+    else:
+        print("\n✅ AI Review: No issues found.")
+        print(f"   {summary}")
+
     print(f"{VERDICT_PREFIX} {'block' if block else 'pass'}")
     return block
 
@@ -360,7 +372,11 @@ Examples:
         if not args.diff_path:
             print("ERROR: --diff-path required for mode=file", file=sys.stderr)
             sys.exit(1)
-        diff_path = Path(args.diff_path)
+        try:
+            diff_path = confined_path(args.diff_path, base=Path.cwd())
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
         if not diff_path.exists():
             print(f"ERROR: Diff file not found: {args.diff_path}", file=sys.stderr)
             sys.exit(1)
@@ -369,7 +385,11 @@ Examples:
         if not args.paths:
             print("ERROR: --paths required for mode=files", file=sys.stderr)
             sys.exit(1)
-        code = get_file_contents(args.paths)
+        try:
+            code = get_file_contents(args.paths)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
         if not code.strip():
             print("ERROR: No valid files found to review", file=sys.stderr)
             sys.exit(1)

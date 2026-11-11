@@ -23,6 +23,10 @@ This script reads that file and runs each selected command in order. It runs
 ALL commands (fail-open reporting) and exits non-zero if any command failed, so
 one run surfaces every failing selected gate.
 
+The gates file must live inside the repository, and every command in it must be
+declared in docs/contracts/enforcement/ci-gate.yaml; anything else exits 2 before
+any command runs.
+
 Usage:
     python local_pr_pipeline/run_pr_select_gates.py gates.json
 """
@@ -37,6 +41,28 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.l9_contract_control import declared_gate_commands  # noqa: E402
+
+
+def _confined_gates_path(raw: str) -> Path:
+    """Resolve the gates file and refuse any location outside the repository root."""
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = REPO_ROOT / candidate
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(REPO_ROOT):
+        print(f"❌ gates file must be inside the repository: {raw}")
+        raise SystemExit(2)
+    return resolved
+
+
+def _undeclared_commands(commands: list[str]) -> list[str]:
+    """Commands not declared in docs/contracts/enforcement/ci-gate.yaml."""
+    declared = declared_gate_commands()
+    return [command for command in commands if command not in declared]
 
 
 def _load_gates(path: Path) -> tuple[list[str], list[str]]:
@@ -62,7 +88,13 @@ def main() -> int:
     parser.add_argument("gates_file", help="Path to gates.json from select-gates")
     args = parser.parse_args()
 
-    gate_ids, commands = _load_gates(Path(args.gates_file))
+    gate_ids, commands = _load_gates(_confined_gates_path(args.gates_file))
+    undeclared = _undeclared_commands(commands)
+    if undeclared:
+        print("❌ gates file lists commands not declared in the CI gate contract:")
+        for command in undeclared:
+            print(f"  - {command}")
+        return 2
 
     print(f"Selected gates: {gate_ids or '(none)'}")
     if not commands:

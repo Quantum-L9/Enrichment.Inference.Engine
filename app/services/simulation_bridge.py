@@ -772,6 +772,7 @@ def generate_synthetic_entities(
 
     All values are seeded — identical inputs always produce identical outputs.
     """
+    # Non-cryptographic: seeded PRNG for reproducible synthetic fixtures, not secrets.
     rng = random.Random(seed)
     ref = _PLASTICS_REFERENCE
     entities: list[dict[str, Any]] = []
