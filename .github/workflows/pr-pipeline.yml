@@ -93,8 +93,10 @@ jobs:
             pyproject.toml
 
       - name: Install validation tools
+        # Hash-verified from uv.lock (pyyaml is a runtime dependency): never an
+        # unhashed install (Scorecard Pinned-Dependencies, #215).
         run: |
-          pip install pyyaml
+          bash tools/deps/install_locked.sh runtime
 
       - name: Check Python syntax
         run: |

@@ -74,6 +74,13 @@ ci = [
 licenses = [
     "pip-licenses==5.5.5",
 ]
+# Single-purpose group, installed only by the workflow that needs it
+# (tools/deps/install_locked.sh group <name>) and kept out of the `full` profile.
+# It lives here so the install is hash-verified from uv.lock like every other
+# package, rather than an unhashed `pip install` in a workflow.
+release = [
+    "build>=1.2.2",
+]
 
 [tool.uv]
 # Core-owned tools never enter uv.lock, even transitively (pytest plugins require

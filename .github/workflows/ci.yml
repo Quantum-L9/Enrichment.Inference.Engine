@@ -43,8 +43,9 @@ jobs:
             uv.lock
             pyproject.toml
       - name: Install Validation Tools
+        # Hash-verified from uv.lock (pyyaml is a runtime dependency).
         run: |
-          pip install pyyaml
+          bash tools/deps/install_locked.sh runtime
       - name: Check Python Syntax
         run: |
           find . -name "*.py" \

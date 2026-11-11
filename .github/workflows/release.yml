@@ -29,7 +29,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tools
-        run: pip install build
+        # The `release` dependency group, hash-verified from uv.lock.
+        run: bash tools/deps/install_locked.sh group release
 
       - name: Build distribution
         run: python -m build
