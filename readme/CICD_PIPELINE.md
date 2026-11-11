@@ -188,7 +188,7 @@ This pipeline is structurally identical to `Cognitive.Engine.Graphs` with engine
 | Compliance checks | Cypher injection guard | Chassis isolation guard |
 | KB validation | N/A | YAML rule schema validation |
 | L9_META engine tag | `graph` | `enrichment` |
-| Tool versions | Shared via `requirements-ci.txt` | Same pinned versions |
+| Tool versions | `pyproject.toml` + `uv.lock` (Core toolchain lock) | Same: `pyproject.toml` + `uv.lock` |
 
 ---
 
