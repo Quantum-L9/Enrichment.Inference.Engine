@@ -1,6 +1,6 @@
 # Native EIE + CEG pair release — local rehearsal only
 
-This candidate keeps two native schemas and two independent artifacts. EIE owns enrichment fields, hints, inline inference/provenance and resolution. CEG owns graph nodes, matching, gates, traversal and scoring. The shared boundary is tenant identity and the full typed row contract of every sync endpoint EIE declares (rule set `eie-ceg-sync/v2`): endpoint method/path/target/idproperty/batch strategy, childsync, taxonomyedges, and every target-node row property's name and typed shape (list `items`, map `properties`, recursively), compared exactly. The checker does not rename row fields, infer synonymy, merge YAML or create a new compiler.
+This candidate keeps two native schemas and two independent artifacts. EIE owns enrichment fields, hints, inline inference/provenance and resolution. CEG owns graph nodes, matching, gates, traversal and scoring. The shared boundary is tenant identity and the full typed row contract of every sync endpoint EIE declares (rule set `eie-ceg-sync/v2`): endpoint method/path/target/idproperty/batch strategy, childsync and taxonomyedges compared exactly, and every row property EIE sends declared by CEG's target node with the identical typed shape (list `items`, map `properties`, recursively); CEG properties EIE never sends are not required. The checker does not rename row fields, infer synonymy, merge YAML or create a new compiler.
 
 ## Required inputs and trust
 

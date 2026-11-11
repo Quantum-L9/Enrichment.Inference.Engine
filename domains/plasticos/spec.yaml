@@ -98,8 +98,9 @@ chassisbinding:
 # an undeclared field is dropped). CEG validates the same rows against its own
 # tenant spec at ingress (flag sync_row_type_validation_enabled, landing in the
 # Cognitive.Engine.Graphs typed-contract change) and refuses the whole batch on
-# any defect. The two declarations are kept identical by the compatibility
-# contract eie-ceg-sync/v2 (app/engines/domain_spec_compatibility.py), checked
+# any defect. The compatibility contract eie-ceg-sync/v2
+# (app/engines/domain_spec_compatibility.py) proves every property EIE sends is
+# declared by CEG with the identical typed shape, checked
 # against tests/fixtures/ceg/plasticos.spec.yaml; CEG's other endpoints
 # (polymerfamilies, materialforms, supply-opportunities, buyer-demands) target
 # nodes EIE does not enrich, so EIE declares and sends none of them.

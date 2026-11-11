@@ -14,7 +14,8 @@
 #           `enriched_by` are no longer row keys, and nested values are no longer JSON
 #           strings. CEG validates rows against its own tenant spec at ingress
 #           (sync_row_type_validation_enabled, Cognitive.Engine.Graphs typed-contract
-#           change); the two declarations are kept identical by eie-ceg-sync/v2)
+#           change); eie-ceg-sync/v2 proves every property EIE sends is declared
+#           by CEG with the identical typed shape)
 #           2026-11-08 (D-9, Cognitive.Engine.Graphs#386: an observed row may carry
 #           `observed_association`, the provider association EIE's mirror mapped, so
 #           CEG cross-checks it against its own observedfrom. Sent only while
@@ -124,10 +125,13 @@ sync:
     typed-contract change. Until that change is deployed, CEG main does not type-check
     rows: EIE's projection is the only enforcement.
   cross_engine_check: >-
-    eie-ceg-sync/v2 (app/engines/domain_spec_compatibility.py) compares, for every
-    endpoint EIE declares, the full typed row contract with CEG's spec -- endpoint
-    keys, childsync, taxonomyedges, and every target-node property's name and typed
-    shape -- and fails on any difference. The unit test runs it against
+    eie-ceg-sync/v2 (app/engines/domain_spec_compatibility.py) checks, for every
+    endpoint EIE declares, that endpoint keys, childsync and taxonomyedges are
+    identical to CEG's, and -- subset semantics -- that every property EIE can send
+    is declared by CEG's target node with the identical typed shape. An EIE-sent
+    property CEG does not declare or types differently fails; a CEG property EIE
+    never sends (e.g. the GDS-written community_id) passes, and EIE's spec does not
+    declare it, so EIE can never overwrite it. The unit test runs it against
     tests/fixtures/ceg/plasticos.spec.yaml (pinned source commit + sha256); the
     integration test runs it against a live CEG checkout when CEG_REPO is set.
 
