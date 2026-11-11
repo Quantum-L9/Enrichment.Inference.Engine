@@ -42,7 +42,8 @@ def _load_classify_pr():
     spec = importlib.util.spec_from_file_location(
         "classify_pr_under_test", ROOT / ".github/scripts/classify_pr.py"
     )
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -231,16 +232,18 @@ def test_ceg_python_option_like_or_metachar_is_refused(
     name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    args = _ceg_args(tmp_path, python=Path(name))
     with pytest.raises(ValueError, match="--ceg-python"):
-        pair._trusted_ceg_inputs(_ceg_args(tmp_path, python=Path(name)))
+        pair._trusted_ceg_inputs(args)
 
 
 def test_ceg_python_must_be_executable(tmp_path: Path) -> None:
     stub = tmp_path / "python"
     stub.write_bytes(b"#!/bin/sh\n")
     stub.chmod(0o600)
+    args = _ceg_args(tmp_path, python=stub)
     with pytest.raises(ValueError, match="executable"):
-        pair._trusted_ceg_inputs(_ceg_args(tmp_path, python=stub))
+        pair._trusted_ceg_inputs(args)
 
 
 def test_ceg_inputs_with_control_characters_are_refused(tmp_path: Path) -> None:

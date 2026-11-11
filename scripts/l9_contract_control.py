@@ -40,7 +40,7 @@ def _read_constitution() -> dict[str, Any]:
 
 # A revision is a SHA, a ref name, or a ref with ~N / ^N suffixes. It never starts
 # with "-" (it would be parsed as an option) and carries no shell or range syntax.
-_GIT_REVISION_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./~^-]{0,254}")
+_GIT_REVISION_RE = re.compile(r"\w[\w./~^-]{0,254}", re.ASCII)
 
 
 def validate_git_revision(value: str) -> str:
@@ -205,10 +205,7 @@ def select_gates(changed_files: list[str]) -> GateSelection:
 def build_review_signal(changed_files: list[str]) -> tuple[bool, str]:
     policy = _load_yaml(REVIEW_POLICY_PATH)
     fail = False
-    lines: list[str] = []
-    lines.append("## L9 Contract Control Review Signal")
-    lines.append("")
-    lines.append("### Changed files")
+    lines: list[str] = ["## L9 Contract Control Review Signal", "", "### Changed files"]
     for path in changed_files:
         lines.append(f"- `{path}`")
 
@@ -241,10 +238,12 @@ def build_review_signal(changed_files: list[str]) -> tuple[bool, str]:
         and not companion_changed
     ):
         fail = True
-        lines.append("")
-        lines.append("### Blocking finding")
-        lines.append(
-            "- contract-bound files changed without companion contract/test/control updates"
+        lines.extend(
+            [
+                "",
+                "### Blocking finding",
+                "- contract-bound files changed without companion contract/test/control updates",
+            ]
         )
 
     if policy["review_signal"]["fail_if_required_companion_missing"] and contract_bound:
