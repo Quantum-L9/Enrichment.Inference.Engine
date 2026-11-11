@@ -1,8 +1,10 @@
 # Baseline ledger: quarantined pre-existing test failures (fail-closed debt).
-# Enforced by l9-ci-sdk baseline ratchet — see .github/workflows/baseline-ratchet-caller.yml.
+# The baseline ratchet that enforced it was retired (#289). It is now kept empty by
+# tests/compliance/test_retired_ratchet_invariants.py, and still read by
+# tools/pytest_quarantine_deselects.py in CI.
 # Burned down against issue Quantum-L9/Enrichment.Inference.Engine#139.
 # All 112 previously quarantined nodeids now pass; this ledger is empty.
-# Any new failure not fingerprinted here fails CI (shrink-only).
+# Shrink-only from zero: a failing test is fixed, not quarantined (#253).
 # Changes to this file require CODEOWNERS review (.github/CODEOWNERS).
 schema_version: 1.0.0
 gate: tests/pytest
