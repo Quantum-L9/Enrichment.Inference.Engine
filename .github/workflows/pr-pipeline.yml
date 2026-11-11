@@ -59,10 +59,11 @@ concurrency:
   group: pr-pipeline-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only default. The gate job, which comments on the PR, declares its own
+# pull-requests: write; no job uploads SARIF, so security-events is not granted
+# (SonarCloud githubactions:S8233).
 permissions:
   contents: read
-  pull-requests: write
-  security-events: write
 
 env:
   PYTHON_VERSION: ${{ vars.PYTHON_VERSION || '3.12' }}
@@ -303,7 +304,7 @@ jobs:
           echo "✅ All tests passed with coverage >=${{ env.COVERAGE_THRESHOLD }}%"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ./coverage.xml
           flags: unittests
@@ -590,6 +591,10 @@ jobs:
     name: PR Pipeline Gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Upserts the pipeline summary comment (issues.listComments /
+    # createComment / updateComment on the pull request).
+    permissions:
+      pull-requests: write
     if: always()
     needs:
       - validate
