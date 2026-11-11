@@ -193,9 +193,17 @@ def synthesize(
     }
 
 
-def _value_key(value: Any) -> str:
-    """The comparison key that decides whether two replies gave the same value."""
-    return str(value).strip().lower()
+def _value_key(value: Any) -> tuple[str, Any]:
+    """The one key that decides whether two replies gave the same value.
+
+    Selection, the agreement gate and score support all use it, so the score
+    can never borrow confidence from a spelling or type that lost the pick.
+    A genuine number compares by numeric value (3 and 3.0 agree); anything
+    else by its exact text ("Boston" and "boston", True and "true", differ).
+    """
+    if _is_number(value):
+        return ("number", float(value))
+    return ("text", str(value))
 
 
 def _field_score(selected: Any, observations: list[tuple[Any, float]]) -> float:
@@ -301,16 +309,10 @@ def _select_value(values: list[Any]) -> Any:
             return int(median)
         return median
 
-    # Fall back to mode (most common)
-    counter = Counter(str(v) for v in values)
-    most_common = counter.most_common(1)[0][0]
-
-    # Return original type if possible
-    for v in values:
-        if str(v) == most_common:
-            return v
-
-    return most_common
+    # Mode over the shared value key; the first reply carrying the modal key
+    # supplies the returned value, so its original type is kept.
+    most_common = Counter(_value_key(v) for v in values).most_common(1)[0][0]
+    return next(v for v in values if _value_key(v) == most_common)
 
 
 def _median(numbers: list[float]) -> float:

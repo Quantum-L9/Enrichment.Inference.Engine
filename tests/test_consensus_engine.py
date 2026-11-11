@@ -393,3 +393,47 @@ class TestSelectedValueScore:
             [{"confidence": raw, "city": "Austin"}], {"city": 0.5}
         )
         assert "city" not in kept[0]
+
+
+class TestOneValueKey:
+    """Selection, the agreement gate and score support compare values one way."""
+
+    def test_score_does_not_borrow_from_a_different_spelling(self) -> None:
+        result = synthesize(
+            [{"confidence": 0.3, "city": "Boston"}, {"confidence": 0.95, "city": "boston"}],
+            threshold=0.0,
+            total_attempted=2,
+        )
+        assert result["fields"]["city"] == "Boston"
+        assert result["per_field_confidence"]["city"] <= 0.3
+
+    def test_score_does_not_borrow_across_types(self) -> None:
+        result = synthesize(
+            [{"confidence": 0.4, "f": True}, {"confidence": 0.9, "f": "true"}],
+            threshold=0.0,
+            total_attempted=2,
+        )
+        assert result["fields"]["f"] is True
+        assert result["per_field_confidence"]["f"] <= 0.4
+
+    def test_gate_measures_the_selected_values_own_share(self) -> None:
+        variations = [
+            {"confidence": 0.9, "city": c} for c in ("Boston", "boston", "BOSTON", "NYC", "NYC")
+        ]
+        result = synthesize(variations, threshold=0.6, total_attempted=5)
+        # NYC is the mode at 2/5 = 0.4; spelling variants of another value
+        # do not lend it agreement.
+        assert "city" not in result["fields"]
+
+    def test_equal_numbers_in_different_types_agree(self) -> None:
+        result = synthesize(
+            [
+                {"confidence": 0.9, "n": 3},
+                {"confidence": 0.9, "n": 3.0},
+                {"confidence": 0.9, "n": 3},
+            ],
+            threshold=0.6,
+            total_attempted=3,
+        )
+        assert result["fields"]["n"] == 3
+        assert result["per_field_confidence"]["n"] == pytest.approx(0.9)
