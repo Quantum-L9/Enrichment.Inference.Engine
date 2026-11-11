@@ -660,7 +660,7 @@ def _infer_map_items(members: list[dict[str, Any]]) -> dict[str, Any]:
     properties = []
     for key in sorted({k for m in members for k in m}):
         scalar = _infer_scalar([m[key] for m in members if m.get(key) is not None])
-        if scalar is None or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+        if scalar is None or not re.fullmatch(r"[A-Za-z_]\w*", key, re.ASCII):
             return {"type": "string"}
         properties.append({"name": key, "type": scalar})
     return {"type": "map", "properties": properties}

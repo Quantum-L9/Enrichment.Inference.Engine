@@ -52,7 +52,7 @@ _RETIRED = {
     "dict": "declare `type: map` with `properties`",
     "object": "declare `type: map` with `properties`",
 }
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$", re.ASCII)
 # One ISO-8601 duration component, e.g. ``12D`` or ``1.5S``; see _is_iso_duration.
 _DURATION_UNIT = re.compile(r"(\d+(?:\.\d+)?)([A-Z])")
 
