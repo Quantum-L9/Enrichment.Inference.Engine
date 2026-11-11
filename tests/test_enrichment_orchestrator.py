@@ -207,3 +207,38 @@ class TestEmptyConsensusIsNotCompleted:
         assert response.fields == {}
         assert response.state != "completed"
         assert response.failure_reason
+
+
+# ── #320 review F1: the provider never runs more calls than authorized ───────
+
+
+@pytest.mark.asyncio
+async def test_sonar_config_cannot_exceed_request_max_variations() -> None:
+    """An optimizer recommending six calls runs only the request's two."""
+    from app.engines.search_optimizer import SonarConfig
+
+    settings = MagicMock()
+    settings.perplexity_api_key = "test-key"
+    settings.perplexity_model = "sonar"
+    settings.max_concurrent_variations = 3
+    settings.default_timeout_seconds = 30
+    resolver = MagicMock()
+    resolver.resolve = MagicMock(
+        return_value={"context_text": "", "content_hash": "h", "fragment_ids": [], "kb_files": []}
+    )
+    request = EnrichRequest(
+        entity={"Name": "Acme"},
+        object_type="Account",
+        objective="Find the street",
+        schema={"street": "string"},
+        max_variations=2,
+    )
+    # A reply that never fills the schema, so no early stop hides the count.
+    reply = SonarResponse(data={"confidence": 0.9}, tokens_used=10, citations=[], model="sonar")
+    with patch(
+        "app.engines.enrichment_orchestrator.query_perplexity",
+        new_callable=AsyncMock,
+        return_value=reply,
+    ) as provider:
+        await enrich_entity(request, settings, resolver, sonar_config=SonarConfig(variations=6))
+    assert provider.await_count == 2

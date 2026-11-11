@@ -154,7 +154,13 @@ class ConfidenceTracker:
         pass_num: int,
         source: str,
     ) -> None:
-        """Update or create field confidence state."""
+        """Update or create field confidence state.
+
+        Confidence is normalized here, where it enters the tracker, so every
+        later reading (scores, readiness, improvement, the serialized summary)
+        sees a finite value in [0, 1] and malformed input can never raise.
+        """
+        confidence = normalize_confidence(confidence)
         if name in self.fields:
             prior = self.fields[name]
             prior.prior_attempts.append(
@@ -225,19 +231,27 @@ class ConfidenceTracker:
     def had_meaningful_improvement(self, min_delta: float) -> bool:
         """Check whether the latest pass improved confidence meaningfully (F-058).
 
-        Only fields updated on ``current_pass`` count, so a gain made on an
-        earlier pass is not credited again. A field first resolved on this pass
-        improves from unknown (confidence 0). Sources in ``exclude_sources`` do
-        not count, as in :meth:`has_converged`.
+        Measured over the fields that decide readiness (:meth:`deciding_fields`:
+        the explicit schema when one was named), in effective confidence c*. An
+        optional field's gain therefore never buys another pass while every
+        required field is stuck, and a field that goes from a missing value to
+        a present one improves from 0 even if its reported confidence did not
+        move. Only fields updated on ``current_pass`` count, so a gain made on
+        an earlier pass is not credited again; a field first resolved on this
+        pass improves from unknown (0).
         """
         improvements = []
-        for state in self._deciding_states():
-            if state.pass_number != self.current_pass:
+        for name in self.deciding_fields():
+            state = self.fields.get(name)
+            if state is None or state.pass_number != self.current_pass:
                 continue
-            prior_confidence = (
-                state.prior_attempts[-1]["confidence"] if state.prior_attempts else 0.0
+            prior = state.prior_attempts[-1] if state.prior_attempts else None
+            prior_effective = (
+                normalize_confidence(prior["confidence"])
+                if prior is not None and value_present(prior["value"])
+                else 0.0
             )
-            improvements.append(state.confidence - prior_confidence)
+            improvements.append(self.effective_confidence(name) - prior_effective)
 
         return bool(improvements) and max(improvements) >= min_delta
 

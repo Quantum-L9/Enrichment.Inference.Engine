@@ -37,6 +37,7 @@ from .convergence.confidence_tracker import (
     UNCERTAINTY_POLICY,
     UNCERTAINTY_SCALE,
     ConfidenceTracker,
+    normalize_confidence,
 )
 from .convergence.convergence_config import ConvergenceConfig  # NEW
 from .convergence.cost_tracker import CostTracker
@@ -48,6 +49,7 @@ from .meta_prompt_planner import MetaPromptPlanner, PromptPlan
 from .search_optimizer import (
     EntitySignals,
     SonarConfig,
+    cap_variations,
     resolve_from_classification,
 )
 
@@ -355,6 +357,9 @@ async def run_convergence_loop(
                 classification=domain_classification,
                 budget_tokens=cost_tracker.budget_remaining(),
             )
+            # The optimizer only recommends a count. The pass budget (from
+            # U_action) and the caller's max_variations bound what runs.
+            sonar_config = cap_variations(sonar_config, _pass_variation_cap(request, search_plan))
             logger.info(
                 "sonar_config_resolved",
                 pass_number=pass_num,
@@ -390,9 +395,22 @@ async def run_convergence_loop(
             search_plan.variation_count = pass_response.variation_count
 
         # --- COLLECT ENRICHED FIELDS ---
+        # A failed pass is not evidence. Whatever fields its response carries
+        # (an injected enricher may return some) are dropped here, before they
+        # can reach state, the tracker, inference or the convergence check.
+        # Its tokens are still accounted and its failure still recorded.
+        provider_fields = pass_response.fields or {}
+        if pass_response.state == "failed" and provider_fields:
+            logger.warning(
+                "failed_pass_fields_discarded",
+                pass_number=pass_num,
+                fields=sorted(provider_fields),
+                failure_reason=pass_response.failure_reason,
+            )
+            provider_fields = {}
         pass_result = PassResult(
             pass_number=pass_num,
-            enriched_fields=pass_response.fields or {},
+            enriched_fields=provider_fields,
             confidence=pass_response.confidence,
             tokens_used=pass_response.tokens_used,
             search_plan=search_plan,
@@ -410,7 +428,9 @@ async def run_convergence_loop(
 
         # Merge into accumulated state with per-field confidence
         for field_name, value in pass_result.enriched_fields.items():
-            field_conf = per_field_conf.get(field_name, pass_response.confidence)
+            field_conf = normalize_confidence(
+                per_field_conf.get(field_name, pass_response.confidence)
+            )
             state.known_fields[field_name] = value
             state.confidence_map[field_name] = field_conf
             # Provider evidence for a field this loop had inferred makes it a
@@ -453,7 +473,9 @@ async def run_convergence_loop(
         for field_name, value in inference_result.derived_fields.items():
             state.inferred_fields[field_name] = value
             state.known_fields[field_name] = value
-            inferred_conf = inference_result.confidence_map.get(field_name, 0.7)
+            inferred_conf = normalize_confidence(
+                inference_result.confidence_map.get(field_name, 0.7)
+            )
             state.confidence_map[field_name] = inferred_conf
 
             # NEW: Update confidence tracker for inferred fields
@@ -753,6 +775,16 @@ def _build_pass_request(
     # only the fallback for a request that did not name its targets.
     if original.schema_:
         pass_schema = original.schema_
+        # The full schema stays the output contract, so a targeted pass tells
+        # the provider which of its fields are still unresolved through the
+        # objective, the one prompt input build_prompt() puts in front of it.
+        focus = [name for name in plan.priority_fields if name in pass_schema]
+        if plan.mode == "targeted" and focus:
+            pass_objective = (
+                f"{original.objective}\n\n"
+                f"PRIORITY THIS PASS: these requested fields are still unresolved; "
+                f"research them first: {', '.join(focus)}"
+            )
     elif plan.priority_fields:
         pass_schema = dict.fromkeys(plan.priority_fields, "string")
     else:
@@ -767,10 +799,12 @@ def _build_pass_request(
             "kb_context": original.kb_context,
             "consensus_threshold": original.consensus_threshold,
             "field_thresholds": original.field_thresholds,
-            "max_variations": min(
-                plan.variation_count or original.max_variations,
-                original.max_variations,
-            ),
+            "max_variations": _pass_variation_cap(original, plan),
             "idempotency_key": None,
         }
     )
+
+
+def _pass_variation_cap(original: EnrichRequest, plan: PromptPlan) -> int:
+    """Variations this pass may run: the plan's budget, never above the caller's."""
+    return min(plan.variation_count or original.max_variations, original.max_variations)

@@ -1711,3 +1711,262 @@ def _spy_planner(monkeypatch: pytest.MonkeyPatch, seen_u: list[float]) -> None:
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(MetaPromptPlanner, "plan_pass", spy)
+
+
+# ── #320 review: the D-9 v2 seams where a plan becomes a provider call ───────
+
+
+def _kb_resolver() -> MagicMock:
+    resolver = MagicMock()
+    resolver.resolve = MagicMock(
+        return_value={"context_text": "", "content_hash": "h", "fragment_ids": [], "kb_files": []}
+    )
+    return resolver
+
+
+def _real_provider_enricher(seen_configs: list):
+    """The real enrich_entity, recording the SonarConfig the loop hands it."""
+    from app.engines.enrichment_orchestrator import enrich_entity
+
+    async def enricher(pass_request, settings, kb_resolver, idem_store, sonar_config=None):
+        seen_configs.append(sonar_config)
+        return await enrich_entity(
+            pass_request, settings, kb_resolver, idem_store, sonar_config=sonar_config
+        )
+
+    return enricher
+
+
+class TestReviewVariationCap:
+    """F1: the optimizer's count never exceeds the pass budget or the caller's cap."""
+
+    @pytest.mark.asyncio
+    async def test_provider_calls_bounded_by_caller_max_with_domain_spec(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+        from app.engines.search_optimizer import estimate_call_cost
+        from app.services.perplexity_client import SonarResponse
+
+        _classification_cache.clear()
+        request = EnrichRequest(
+            entity={"Name": "Acme"},
+            object_type="Account",
+            objective="Find the street",
+            schema={"street": "string"},
+            max_variations=2,
+        )
+        reply = SonarResponse(data={"confidence": 0.9}, tokens_used=10, citations=[], model="sonar")
+        configs: list = []
+        with patch(
+            "app.engines.enrichment_orchestrator.query_perplexity",
+            new_callable=AsyncMock,
+            return_value=reply,
+        ) as provider:
+            await run_convergence_loop(
+                request=request,
+                settings=_settings(),
+                kb_resolver=_kb_resolver(),
+                enricher=_real_provider_enricher(configs),
+                inference_rules=[],
+                domain_spec=SAMPLE_DOMAIN_SPEC,
+                convergence_config=ConvergenceConfig(max_passes=1),
+            )
+        config = configs[0]
+        assert config is not None
+        assert config.variations == 2
+        assert config.estimated_cost_per_call == estimate_call_cost(
+            config.model, config.search_context_size, config.max_tokens, 2
+        )
+        assert provider.await_count == 2
+
+
+class TestReviewTargetPropagation:
+    """F2: a targeted pass names its unresolved fields in the provider prompt."""
+
+    def _plan(self, mode: str, fields: list[str]):
+        from app.engines.meta_prompt_planner import PromptPlan
+
+        return PromptPlan(
+            mode=mode, priority_fields=fields, kb_fragment_ids=[], variation_count=3, pass_number=2
+        )
+
+    def _request(self) -> EnrichRequest:
+        return EnrichRequest(
+            entity={"name": "Acme", "industry": None},
+            object_type="Account",
+            objective="Return the address.",
+            schema={"street": "string", "city": "string"},
+        )
+
+    def test_targeted_pass_names_schema_gaps_and_keeps_full_schema(self) -> None:
+        from app.engines.convergence_controller import ConvergenceState, _build_pass_request
+
+        built = _build_pass_request(
+            self._request(), self._plan("targeted", ["street", "industry"]), ConvergenceState(), 2
+        )
+        assert built.schema_ == {"street": "string", "city": "string"}
+        assert built.objective.startswith("Return the address.")
+        assert "research them first: street" in built.objective
+        # A gap outside the requested schema is not pushed at the provider.
+        assert "industry" not in built.objective
+
+    @pytest.mark.parametrize("mode", ["discovery", "verification"])
+    def test_other_modes_keep_the_objective(self, mode: str) -> None:
+        from app.engines.convergence_controller import ConvergenceState, _build_pass_request
+
+        built = _build_pass_request(
+            self._request(), self._plan(mode, ["street"]), ConvergenceState(), 2
+        )
+        assert built.objective == "Return the address."
+
+    @pytest.mark.asyncio
+    async def test_provider_payload_of_targeted_pass_names_the_gap(self) -> None:
+        """Verified at the provider: the payload, not just PromptPlan."""
+        from unittest.mock import AsyncMock, patch
+
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+        from app.services.perplexity_client import SonarResponse
+
+        payloads: list[dict] = []
+
+        async def provider(payload, **_kwargs):
+            payloads.append(payload)
+            return SonarResponse(
+                data={"confidence": 0.9, "city": "Charlotte"},
+                tokens_used=10,
+                citations=[],
+                model="sonar",
+            )
+
+        with patch(
+            "app.engines.enrichment_orchestrator.query_perplexity",
+            new=AsyncMock(side_effect=provider),
+        ):
+            await run_convergence_loop(
+                request=self._request(),
+                settings=_settings(),
+                kb_resolver=_kb_resolver(),
+                enricher=_real_provider_enricher([]),
+                inference_rules=[],
+                convergence_config=ConvergenceConfig(max_passes=2),
+            )
+
+        def user(payload: dict) -> str:
+            return next(m["content"] for m in payload["messages"] if m["role"] == "user")
+
+        def system(payload: dict) -> str:
+            return next(m["content"] for m in payload["messages"] if m["role"] == "system")
+
+        first, last = payloads[0], payloads[-1]
+        assert "PRIORITY THIS PASS" not in user(first)
+        assert "research them first: street" in user(last)
+        priority_line = user(last).split("research them first:")[1].splitlines()[0]
+        assert priority_line.strip() == "street"
+        # The full writeback schema still reaches the provider.
+        assert "street (string)" in system(last)
+        assert "city (string)" in system(last)
+
+
+class TestReviewImprovementDetection:
+    """F3: improvement is measured in c* over the fields that decide readiness."""
+
+    def test_optional_gain_does_not_count_while_required_fields_stall(self) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker(required_fields=["street"])
+        tracker.update_field("street", "1 Main", 0.5, 1, "consensus")
+        tracker.update_field("industry", "Plastics", 0.2, 1, "consensus")
+        tracker.update_field("street", "1 Main", 0.5, 2, "consensus")
+        tracker.update_field("industry", "Plastics", 0.9, 2, "consensus")
+        assert tracker.had_meaningful_improvement(0.05) is False
+
+    def test_missing_value_becoming_present_is_an_improvement(self) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker(required_fields=["street"])
+        tracker.update_field("street", None, 0.9, 1, "consensus")
+        tracker.update_field("street", "1 Main", 0.9, 2, "consensus")
+        assert tracker.had_meaningful_improvement(0.05) is True
+
+    @pytest.mark.parametrize("bad", ["abc", float("nan"), None, True])
+    def test_malformed_confidence_is_normalized_at_ingestion(self, bad) -> None:
+        from app.engines.convergence.confidence_tracker import ConfidenceTracker
+
+        tracker = ConfidenceTracker()
+        tracker.update_field("street", "1 Main", bad, 1, "consensus")
+        tracker.update_field("street", "1 Main", 0.6, 2, "consensus")
+        assert tracker.get_field_confidence("street") == 0.6
+        assert tracker.fields["street"].prior_attempts[-1]["confidence"] == 0.0
+        assert tracker.had_meaningful_improvement(0.05) is True
+
+
+class TestReviewThresholdFallback:
+    """F4: a field_thresholds map covers the schema or is absent; absent means 0.85."""
+
+    def test_partial_threshold_map_is_rejected_at_the_request(self) -> None:
+        # The consensus engine drops any field the map does not name
+        # (apply_field_confidence_thresholds), so a partial map would make an
+        # unnamed requested field unfillable. The request refuses it instead.
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="field_thresholds missing"):
+            EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"street": "string", "city": "string"},
+                field_thresholds={"street": 0.9},
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("confidence", "converged"), [(0.84, False), (0.86, True)])
+    async def test_absent_map_falls_back_to_loop_threshold(self, confidence, converged) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"street": "string", "city": "string"},
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_fields_pass({"street": confidence, "city": 0.99})]),
+            convergence_config=ConvergenceConfig(max_passes=1),
+        )
+        assert _tracking(response)["converged"] is converged
+
+
+class TestReviewFailedPassIsolation:
+    """F5: a failed pass's fields never become evidence or convergence."""
+
+    @pytest.mark.asyncio
+    async def test_fields_on_a_failed_pass_are_discarded(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        failed_with_fields = EnrichResponse(
+            state="failed",
+            failure_reason="no_fields_above_consensus_threshold",
+            fields={"street": "bogus"},
+            confidence=0.99,
+            tokens_used=70,
+            feature_vector={"per_field_confidence": {"street": 0.99}},
+        )
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"street": "string"},
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_fields_pass({"street": 0.5}), failed_with_fields]),
+            convergence_config=ConvergenceConfig(max_passes=2),
+        )
+        assert _tracking(response)["converged"] is False
+        assert response.fields["street"] == "v-street"
+        assert response.convergence_reason == "insufficient_improvement_delta_0.05"
+        assert response.tokens_used == 170
