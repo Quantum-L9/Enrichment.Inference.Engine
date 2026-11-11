@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **D-9 verified label for observed relationships (2026-11-11).** CEG's
+  cross-check has merged (Cognitive.Engine.Graphs #422, closing #386): CEG
+  refuses an observed row whose `observed_association` its own `observedfrom`
+  does not declare. A `SYNCED` result whose row carried the association is now
+  `mapping_verification = ceg_verified_observedfrom`
+  (`MAPPING_VERIFIED_BY_CEG`); every other result stays
+  `eie_mirror_unverified_by_ceg`. Reachable only with
+  `observed_association_send_enabled` on, which still defaults off.
+  `docs/contracts/dependencies/constellation-gate.yaml` 2.1.0 records it and
+  now states that CEG's typed row validation shipped in
+  Cognitive.Engine.Graphs #454 (it previously said the change was still
+  landing); the plasticos spec comment, `spec_types` and the observed-producer
+  docstrings say the same.
 - **Contract gaps TODO-01, TODO-04, TODO-05 closed (2026-11-11).**
   - `docs/contracts/api/openapi.yaml` 2.4.0: the ten `/score/*` routes of
     `app/score/score_api.py` (router prefix `/score`, no `/v1`), with request
