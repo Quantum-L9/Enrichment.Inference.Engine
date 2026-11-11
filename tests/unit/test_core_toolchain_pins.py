@@ -129,6 +129,21 @@ def test_no_workflow_chooses_a_core_tool_version() -> None:
     assert not found, f"Core tools come from tools/deps/install_locked.sh: {found}"
 
 
+def test_semgrep_comes_only_from_cores_installer() -> None:
+    # Semgrep's version is Core's (toolchain-lock.json); a workflow that pulls a
+    # Semgrep image, action or package by itself floats or copies it.
+    text = "\n".join(
+        w.read_text(encoding="utf-8")
+        for w in sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+    )
+    forbidden = re.findall(
+        r"(?:returntocorp|semgrep)/semgrep[\w-]*(?:@|:)\S+|pip\s+install\b[^\n]*\bsemgrep\b", text
+    )
+    assert not forbidden, f"Semgrep must come from install-consumer-ci@v2: {forbidden}"
+    if "semgrep" in text:
+        assert "Quantum-L9/l9-ci-core/.github/actions/install-consumer-ci@v2" in text
+
+
 def test_dependabot_ignores_core_owned_tools() -> None:
     config = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
     # uv when uv.lock exists (the org render's rule), which is the case here.

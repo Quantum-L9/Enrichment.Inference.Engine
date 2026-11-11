@@ -242,3 +242,80 @@ async def test_sonar_config_cannot_exceed_request_max_variations() -> None:
     ) as provider:
         await enrich_entity(request, settings, resolver, sonar_config=SonarConfig(variations=6))
     assert provider.await_count == 2
+
+
+# ── #320 F4 (revised): partial field_thresholds on the standalone path ───────
+
+
+def _standalone_settings() -> MagicMock:
+    settings = MagicMock()
+    settings.perplexity_api_key = "test-key"
+    settings.perplexity_model = "sonar"
+    settings.max_concurrent_variations = 3
+    settings.default_timeout_seconds = 30
+    return settings
+
+
+def _standalone_resolver() -> MagicMock:
+    resolver = MagicMock()
+    resolver.resolve = MagicMock(
+        return_value={"context_text": "", "content_hash": "h", "fragment_ids": [], "kb_files": []}
+    )
+    return resolver
+
+
+async def _standalone(field_thresholds, confidence: float, max_variations: int = 2):
+    request = EnrichRequest(
+        entity={"Name": "Acme"},
+        object_type="Account",
+        objective="Find the address",
+        schema={"street": "string", "city": "string"},
+        field_thresholds=field_thresholds,
+        max_variations=max_variations,
+    )
+    reply = SonarResponse(
+        data={"confidence": confidence, "street": "1 Main", "city": "Austin"},
+        tokens_used=10,
+        citations=[],
+        model="sonar",
+    )
+    with patch(
+        "app.engines.enrichment_orchestrator.query_perplexity",
+        new_callable=AsyncMock,
+        return_value=reply,
+    ) as provider:
+        response = await enrich_entity(request, _standalone_settings(), _standalone_resolver())
+    return response, provider.await_count
+
+
+class TestPartialFieldThresholdsStandalone:
+    @pytest.mark.asyncio
+    async def test_explicit_field_below_its_override_is_not_filled(self) -> None:
+        response, calls = await _standalone({"street": 0.95}, confidence=0.90)
+        assert response.state == "completed"
+        assert response.fields == {"city": "Austin"}
+        # street is unresolved, so the first reply did not short-circuit.
+        assert calls == 2
+
+    @pytest.mark.asyncio
+    async def test_omitted_field_is_held_to_085_not_consensus_threshold(self) -> None:
+        response, _ = await _standalone({"street": 0.5}, confidence=0.80)
+        # 0.80 clears consensus_threshold (0.65) but not city's resolved 0.85.
+        assert response.fields == {"street": "1 Main"}
+
+    @pytest.mark.asyncio
+    async def test_partial_map_met_everywhere_short_circuits(self) -> None:
+        response, calls = await _standalone({"street": 0.95}, confidence=0.96)
+        assert response.fields == {"street": "1 Main", "city": "Austin"}
+        assert calls == 1
+
+    @pytest.mark.asyncio
+    async def test_complete_map_is_unchanged(self) -> None:
+        response, _ = await _standalone({"street": 0.95, "city": 0.5}, confidence=0.90)
+        assert response.fields == {"city": "Austin"}
+
+    @pytest.mark.asyncio
+    async def test_absent_map_is_unchanged(self) -> None:
+        # Without a map there is no per-field confidence bar; only agreement gates.
+        response, _ = await _standalone(None, confidence=0.80)
+        assert response.fields == {"street": "1 Main", "city": "Austin"}

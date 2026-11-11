@@ -25,6 +25,26 @@ TODO List (from audit report Gaps & TODOs section):
 Markers: unit
 All tests use pytest.xfail with strict=False — they fail softly when gap is
 unresolved but do not block CI. Change strict=True once the gap is resolved.
+
+These xfails are imperative (``pytest.xfail(...)``), which takes no ``strict``
+argument; the strict form of a resolved gap is ``pytest.fail(...)`` on the same
+condition, so a regression fails CI instead of xfailing.
+
+Resolved (strict) on 2026-11-11:
+  TODO-01: /score/* documented in openapi.yaml; paths in REQUIRED_PATHS
+           (the router prefix is /score, not /v1/score).
+  TODO-04: graph-schema.yaml verified against a live Neo4j populated by EIE's
+           notify_graph_sync -> CEG handle_sync (see live_verification).
+  TODO-05: waterfall order in dependencies/_index.yaml, checked against the
+           engine by test_waterfall_order_contract.py. The audit's assumed
+           order (Perplexity first) was wrong: the engine is
+           app/services/enrichment/waterfall_engine.py and, per
+           config/waterfall_config.yaml, perplexity_sonar runs last.
+  TODO-10: GET /v1/converge/{run_id} schema documented. The audit expected
+           ConvergeResponse fields (`state` / `pass_count`); the route actually
+           returns a LoopState summary (`status` / `current_pass`, ...) built in
+           app/api/v1/converge.py get_convergence_status. The tracker now checks
+           the documented properties against that handler's returned keys.
 """
 
 from __future__ import annotations
@@ -39,6 +59,7 @@ from tests.contracts.conftest_contracts import (
     CONTRACTS_DIR,
     DATA_DIR,
     EVENTS_DIR,
+    REPO_ROOT,
     load_json,
     load_yaml,
 )
@@ -83,10 +104,11 @@ def test_todo_01_score_api_schema_resolved() -> None:
     score_paths = [p for p in paths if "/score" in p]
 
     if not score_paths:
-        pytest.xfail(
-            "TODO-01 UNRESOLVED: No /v1/score/* paths found in openapi.yaml.\n"
-            "Action: Inspect app/api/v1/score.py and add missing endpoints.\n"
-            "Mark resolved by removing this xfail and adding paths to REQUIRED_PATHS."
+        pytest.fail(
+            "TODO-01 REGRESSED (resolved 2026-11-11, strict): No /score/* paths found "
+            "in openapi.yaml.\n"
+            "Source: app/score/score_api.py (router prefix /score); paths are in "
+            "test_openapi_contract.REQUIRED_PATHS."
         )
 
     # If score paths exist, verify they have schemas
@@ -225,8 +247,9 @@ def test_todo_04_graph_schema_has_live_node_labels() -> None:
     )
 
     if not verified:
-        pytest.xfail(
-            "TODO-04 UNRESOLVED: graph-schema.yaml was not verified against live Neo4j.\n"
+        pytest.fail(
+            "TODO-04 REGRESSED (resolved 2026-11-11, strict): graph-schema.yaml "
+            "was not verified against live Neo4j.\n"
             "Action: Run SHOW LABELS; SHOW RELATIONSHIP TYPES against live DB and "
             "update graph-schema.yaml with confirmed node_labels and relationship_types.\n"
             "Add: verified_against_live_db: true once confirmed."
@@ -263,12 +286,14 @@ def test_todo_05_waterfall_order_documented() -> None:
     )
 
     if not waterfall_ordered:
-        pytest.xfail(
-            "TODO-05 UNRESOLVED: Waterfall chain ordering not explicitly documented.\n"
-            "Action: Inspect app/services/waterfall.py and document the exact provider "
-            "order with sequence numbers in dependencies/_index.yaml or a new "
-            "docs/contracts/dependencies/waterfall-order.yaml.\n"
-            "Expected: perplexity-sonar(1) → clearbit(2) → zoominfo(3) → apollo/hunter(4)"
+        pytest.fail(
+            "TODO-05 REGRESSED (resolved 2026-11-11, strict): Waterfall chain "
+            "ordering not explicitly documented.\n"
+            "Action: Read app/services/enrichment/waterfall_engine.py and "
+            "config/waterfall_config.yaml and document the exact provider order with "
+            "sequence numbers in dependencies/_index.yaml `waterfall`.\n"
+            "Shipped order (company): clearbit(1) → zoominfo(2) → apollo(3) → "
+            "perplexity_sonar(4)"
         )
 
 
@@ -442,13 +467,32 @@ def test_todo_09_prompt_registry_not_empty() -> None:
 
 
 @pytest.mark.unit
+def _converge_status_response_keys() -> list[str]:
+    """Keys of the dict literal returned by get_convergence_status, read from source."""
+    import ast
+
+    source = (REPO_ROOT / "app" / "api" / "v1" / "converge.py").read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and (
+            node.name == "get_convergence_status"
+        ):
+            for stmt in ast.walk(node):
+                if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Dict):
+                    return [k.value for k in stmt.value.keys if isinstance(k, ast.Constant)]
+    msg = "get_convergence_status return dict not found in app/api/v1/converge.py"
+    raise AssertionError(msg)
+
+
 def test_todo_10_converge_run_id_response_schema() -> None:
     """
-    TODO-10: GET /v1/converge/{run_id} response schema must document the
-    full ConvergeResponse including field_confidence_map, pass_count, state.
+    TODO-10: GET /v1/converge/{run_id} response schema must document exactly
+    what the route returns.
 
-    Resolved when: openapi.yaml has a complete response schema for this endpoint.
-    Source gap: app/models/loop_schemas.py ConvergeResponse not fully inspected.
+    The route returns a LoopState summary built in app/api/v1/converge.py
+    get_convergence_status (``status`` / ``current_pass``), not ConvergeResponse
+    (``state`` / ``pass_count``) as the audit assumed. The expected fields are
+    read from that handler, so the contract and the code cannot drift apart.
+    Resolved (strict) 2026-11-11.
     """
     spec = _load_yaml_safe(API_DIR / "openapi.yaml")
     if spec is None:
@@ -457,29 +501,25 @@ def test_todo_10_converge_run_id_response_schema() -> None:
     paths = spec.get("paths", {})
     path_key = "/v1/converge/{run_id}"
     if path_key not in paths:
-        pytest.skip(f"{path_key} not in spec")
+        pytest.fail(f"TODO-10 REGRESSED: {path_key} missing from openapi.yaml")
 
     get_op = paths[path_key].get("get", {})
     response_200 = get_op.get("responses", {}).get("200", {})
     schema = response_200.get("content", {}).get("application/json", {}).get("schema", {})
-
     if not schema:
-        pytest.xfail(
-            f"TODO-10 UNRESOLVED: {path_key} has no response schema.\n"
-            "Action: Inspect app/models/loop_schemas.py ConvergeResponse and "
-            "document all fields in openapi.yaml.\n"
-            "Expected fields include: run_id, state, pass_count, entity_final, "
-            "field_confidence_map, convergence_delta, total_tokens_used"
+        pytest.fail(f"TODO-10 REGRESSED: {path_key} has no 200 response schema.")
+
+    documented = set(schema.get("properties", {}))
+    returned = set(_converge_status_response_keys())
+    missing = sorted(returned - documented)
+    extra = sorted(documented - returned)
+    if missing or extra:
+        pytest.fail(
+            f"TODO-10 REGRESSED: {path_key} schema differs from get_convergence_status.\n"
+            f"Returned but undocumented: {missing}. Documented but not returned: {extra}."
         )
-
-    props = schema.get("properties", {})
-    if schema.get("$ref"):
-        return  # Resolved
-
-    converge_fields = ["state", "pass_count"]
-    missing = [f for f in converge_fields if f not in props]
-    if missing:
-        pytest.xfail(
-            f"TODO-10 PARTIALLY RESOLVED: {path_key} response missing fields: {missing}.\n"
-            "Source: app/models/loop_schemas.py"
+    undeclared_required = sorted(returned - set(schema.get("required", [])))
+    if undeclared_required:
+        pytest.fail(
+            f"TODO-10 REGRESSED: always-returned fields not required: {undeclared_required}"
         )

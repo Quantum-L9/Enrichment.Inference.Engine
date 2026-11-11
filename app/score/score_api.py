@@ -192,6 +192,8 @@ def _envelope(
 # ── Router ────────────────────────────────────────────────────
 
 SCORING_PROFILE_NOT_FOUND = "Scoring profile not found"
+BEFORE_SCORE_NOT_FOUND = "Before score record not found for entity"
+AFTER_SCORE_NOT_FOUND = "After score record not found for entity"
 
 # EIE-SEC-02: the guard lives on the router, not on the mount, so every mount
 # of these routes is guarded. `verify_api_key` authenticates the caller;
@@ -348,7 +350,7 @@ async def explain_score(
     if profile is None:
         raise HTTPException(status_code=404, detail=SCORING_PROFILE_NOT_FOUND)
 
-    explanation = explainer.explain(record, profile)
+    explanation = explainer.explain(record)
 
     return _envelope(
         payload=explanation.to_dict(),
@@ -365,17 +367,24 @@ async def compare_scores(
     score_store=Depends(get_score_store),
     profile_store=Depends(get_profile_store),
 ):
-    """Compare before/after scores for an entity."""
-    before = score_store.get_score(req.entity_id, req.entity_id)
-    after = score_store.get_score(req.entity_id, req.entity_id)
-    if before is None or after is None:
-        raise HTTPException(status_code=404, detail="Score records not found")
+    """Compare two stored scores of one entity, each named by its own score id.
+
+    `get_score(entity_id, domain)` answers the latest record for an entity, so
+    it cannot name a "before". Each side is read by its `score_id`, and a record
+    that belongs to another entity is treated as not found for this one.
+    """
+    before = score_store.get_score_by_id(req.before_score_id)
+    if before is None or before.entity_id != req.entity_id:
+        raise HTTPException(status_code=404, detail=BEFORE_SCORE_NOT_FOUND)
+    after = score_store.get_score_by_id(req.after_score_id)
+    if after is None or after.entity_id != req.entity_id:
+        raise HTTPException(status_code=404, detail=AFTER_SCORE_NOT_FOUND)
 
     profile = profile_store.get_profile(req.scoring_profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail=SCORING_PROFILE_NOT_FOUND)
 
-    comparison = explainer.compare_scores(before, after, profile)
+    comparison = explainer.compare_scores(before, after)
 
     return _envelope(
         payload=comparison,

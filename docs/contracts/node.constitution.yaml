@@ -21,6 +21,7 @@ ingress:
     base_paths:
       - /api/v1
       - /v1
+      - /score
   packet:
     enabled: true
     endpoint: /v1/execute

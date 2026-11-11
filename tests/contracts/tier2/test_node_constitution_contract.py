@@ -137,3 +137,51 @@ def test_policy_mode_is_enforced(
     constitution: dict[str, Any],
 ) -> None:
     assert constitution["runtime_attestation"]["policy_mode"] == "enforced"
+
+
+# SDK-owned operational routes that are not REST ingress: `/metrics` is the
+# Prometheus scrape route constellation_node_sdk's `create_node_app` mounts.
+_NON_INGRESS_PATHS = frozenset({"/metrics"})
+
+
+def _under(path: str, base_path: str) -> bool:
+    base = base_path.rstrip("/")
+    return path == base or path.startswith(base + "/")
+
+
+def _mounted_paths() -> list[str]:
+    """Every documented route of the running app, `app.main:app`.
+
+    Read from the app's own OpenAPI document, which lists each mounted route
+    that is not `include_in_schema=False`; no route under `app/` sets that.
+    """
+    from app.main import app
+
+    return sorted(app.openapi()["paths"])
+
+
+def test_every_mounted_route_is_under_a_declared_rest_base_path(
+    constitution: dict[str, Any],
+) -> None:
+    base_paths = constitution["ingress"]["rest"]["base_paths"]
+    undeclared = [
+        path
+        for path in _mounted_paths()
+        if path not in _NON_INGRESS_PATHS and not any(_under(path, bp) for bp in base_paths)
+    ]
+    assert not undeclared, (
+        f"Mounted routes outside ingress.rest.base_paths {base_paths}: {undeclared}. "
+        "Declare the router's prefix in docs/contracts/node.constitution.yaml."
+    )
+
+
+def test_every_declared_rest_base_path_is_mounted(
+    constitution: dict[str, Any],
+) -> None:
+    mounted = _mounted_paths()
+    unmounted = [
+        bp
+        for bp in constitution["ingress"]["rest"]["base_paths"]
+        if not any(_under(path, bp) for path in mounted)
+    ]
+    assert not unmounted, f"Declared REST base paths with no mounted route: {unmounted}"

@@ -63,3 +63,59 @@ dependencies:
     file: constellation-gate.yaml
     type: internal
     required: true
+
+# ── Enrichment waterfall: provider order ─────────────────────────
+# Source of order: config/waterfall_config.yaml `waterfall_strategies`.
+# Executor:        app/services/enrichment/waterfall_engine.py
+#                  (`WaterfallEngine._get_source_order` + `enrich`).
+# Verified against: tests/contracts/test_waterfall_order_contract.py, which
+# rebuilds this order from the config through the engine and fails on drift.
+waterfall:
+  executor: app/services/enrichment/waterfall_engine.py
+  order_source: config/waterfall_config.yaml
+  ordering_rule: >-
+    Sources run in the list order of waterfall_strategies.<domain>.sources;
+    `_get_source_order` reads only each entry's `name`. The per-source
+    `priority`, `timeout`, `retry`, `cost`, `quality_threshold` and `fields`
+    keys are not read by the engine; `sequence` below is the list position,
+    which equals `priority` in the shipped config.
+  default_order: >-
+    A domain with no strategy runs every registered source in registration
+    order: `perplexity_sonar` first when the engine is built with a Perplexity
+    key, then `auto_register_sources` providers in config order.
+  stop_conditions:
+    - quality_threshold_met   # strategy quality_threshold (default 0.8) reached after a merge
+    - max_attempts_reached    # strategy max_attempts (default 3)
+    - sources_exhausted
+  attempt_accounting: >-
+    The attempt counter advances before the registration check, so a source
+    that is listed but not registered (or disabled, or not supporting the
+    domain unless its quality_tier is ai_inference) still consumes an attempt.
+  reachability: >-
+    STAGED. No production code constructs WaterfallEngine (every construction
+    site is under tests/); the live enrich path calls the Perplexity client
+    through app/engines/enrichment_orchestrator.py. See TODO.md, waterfall
+    activation blockers.
+  strategies:
+    company:
+      max_attempts: 4
+      quality_threshold: 0.85
+      order:
+        - {sequence: 1, source: clearbit, dependency: Clearbit}
+        - {sequence: 2, source: zoominfo, dependency: ZoomInfo}
+        - {sequence: 3, source: apollo, dependency: Apollo}
+        - {sequence: 4, source: perplexity_sonar, dependency: PerplexitySONAR}
+    contact:
+      max_attempts: 4
+      quality_threshold: 0.80
+      order:
+        - {sequence: 1, source: clearbit, dependency: Clearbit}
+        - {sequence: 2, source: apollo, dependency: Apollo}
+        - {sequence: 3, source: hunter, dependency: Hunter}
+        - {sequence: 4, source: perplexity_sonar, dependency: PerplexitySONAR}
+    opportunity:
+      max_attempts: 2
+      quality_threshold: 0.75
+      order:
+        - {sequence: 1, source: gong_ai, dependency: null, note: "not in SOURCE_REGISTRY; never registered, still consumes attempt 1"}
+        - {sequence: 2, source: perplexity_sonar, dependency: PerplexitySONAR}

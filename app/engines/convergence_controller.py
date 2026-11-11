@@ -29,7 +29,12 @@ import structlog
 
 from ..core.config import Settings
 from ..models.loop_schemas import PassContext
-from ..models.schemas import EnrichRequest, EnrichResponse
+from ..models.schemas import (
+    DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
+    EnrichRequest,
+    EnrichResponse,
+    resolve_field_thresholds,
+)
 from ..services.graph_return_channel import EnrichmentTarget, GraphReturnChannel
 from ..services.idempotency import IdempotencyStore
 from ..services.request_deadline import current_deadline
@@ -376,7 +381,13 @@ async def run_convergence_loop(
                 cost_tracker._rate_per_1k = _rate_from_sonar_config(sonar_config)
 
         # --- BUILD PASS-SPECIFIC REQUEST ---
-        pass_request = _build_pass_request(request, search_plan, state, pass_num)
+        pass_request = _build_pass_request(
+            request,
+            search_plan,
+            state,
+            pass_num,
+            confidence_threshold=config.confidence_threshold,
+        )
 
         # --- SINGLE-PASS ENRICHMENT ---
         if enricher is None:
@@ -765,8 +776,15 @@ def _build_pass_request(
     plan: PromptPlan,
     state: ConvergenceState,
     pass_num: int = 1,
+    *,
+    confidence_threshold: float = DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
 ) -> EnrichRequest:
-    """Build a pass-specific EnrichRequest from the search plan."""
+    """Build a pass-specific EnrichRequest from the search plan.
+
+    A partial consumer threshold map is resolved here against the loop's own
+    ``confidence_threshold``, so each pass is filtered by the same per-field
+    bars the tracker judges readiness by, not by the standalone default.
+    """
     enriched_entity = {**original.entity, **state.known_fields, **state.inferred_fields}
 
     pass_objective = original.objective
@@ -798,7 +816,9 @@ def _build_pass_request(
             "objective": pass_objective,
             "kb_context": original.kb_context,
             "consensus_threshold": original.consensus_threshold,
-            "field_thresholds": original.field_thresholds,
+            "field_thresholds": resolve_field_thresholds(
+                pass_schema or {}, original.field_thresholds, confidence_threshold
+            ),
             "max_variations": _pass_variation_cap(original, plan),
             "idempotency_key": None,
         }
