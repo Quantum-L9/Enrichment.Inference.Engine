@@ -12,29 +12,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm 
 # as the GitHub source archive of the commit the `v1` channel resolved to (with
 # that archive's sha256), and a source archive has no wheel to choose.
 # Regenerate the lock with `bash tools/lock_requirements.sh`.
+# Unprivileged runtime user (created in the same layer as the install).
 COPY requirements.lock .
 RUN pip install --no-cache-dir --require-hashes --only-binary=:all: \
-        --no-binary=constellation-node-sdk --no-deps -r requirements.lock
-
-# Unprivileged runtime user. /app is owned by it because the schema-promotion
-# worker writes under config/domain_kb.
-RUN adduser --disabled-password --gecos "" appuser \
-    && chown appuser:appuser /app
+        --no-binary=constellation-node-sdk --no-deps -r requirements.lock \
+    && adduser --disabled-password --gecos "" appuser
 
 # Copy only what the runtime reads (no recursive copy of the build context):
 # the app package; scripts/l9_contract_control.py (imported by
 # app/bootstrap/l9_contract_runtime.py) and the entrypoint; the contract corpus
 # the startup validation hashes (docs/contracts, contracts); configuration,
 # domain specs and KB; and the alembic schema step the entrypoint runs.
-COPY --chown=appuser:appuser app/ ./app/
-COPY --chown=appuser:appuser config/ ./config/
-COPY --chown=appuser:appuser domains/ ./domains/
-COPY --chown=appuser:appuser kb/ ./kb/
-COPY --chown=appuser:appuser contracts/ ./contracts/
-COPY --chown=appuser:appuser docs/contracts/ ./docs/contracts/
-COPY --chown=appuser:appuser migrations/ ./migrations/
-COPY --chown=appuser:appuser alembic.ini ./
-COPY --chown=appuser:appuser scripts/l9_contract_control.py scripts/docker-entrypoint.sh ./scripts/
+# Everything is copied root-owned so the runtime user cannot modify its own
+# code; only config/ (the schema-promotion worker writes config/domain_kb) is
+# handed to appuser.
+COPY app/ ./app/
+COPY config/ ./config/
+COPY domains/ ./domains/
+COPY kb/ ./kb/
+COPY contracts/ ./contracts/
+COPY docs/contracts/ ./docs/contracts/
+COPY migrations/ ./migrations/
+COPY alembic.ini ./
+COPY scripts/l9_contract_control.py scripts/docker-entrypoint.sh ./scripts/
+RUN chown -R appuser:appuser /app/config
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
