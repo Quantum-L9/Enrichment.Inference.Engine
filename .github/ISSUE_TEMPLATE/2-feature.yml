@@ -1,0 +1,58 @@
+name: ✨ Feature
+description: Propose a capability that does not exist yet.
+title: "feat: "
+labels: ["type:feature", "needs:triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: The pain, not the solution. Who is blocked, and on what?
+    validations:
+      required: true
+
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today
+      description: Current workaround and its cost.
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should exist. Include the interface if you know it.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: owner
+    attributes:
+      label: Which component should own this?
+      description: Prevents governance from absorbing CI concerns.
+      options:
+        - this repo (org governance / community health)
+        - l9-ci-sdk or l9-ci-core (test, lint, build execution)
+        - l9-ci-debt-resolver (CI failure diagnosis or remediation)
+        - l9-ci-debt-intelligence (CI debt measurement)
+        - unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Options you rejected and why.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - S — under a day
+        - M — a few days, one repo
+        - L — multi-repo or migration
+        - XL — needs a design doc first
+    validations:
+      required: true

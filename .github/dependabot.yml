@@ -44,6 +44,7 @@ updates:
       default-days: 7
     ignore:
       - dependency-name: "mypy"
+      - dependency-name: "pip"
       - dependency-name: "pre-commit"
       - dependency-name: "pytest"
       - dependency-name: "ruff"
