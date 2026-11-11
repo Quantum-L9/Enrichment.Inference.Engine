@@ -79,7 +79,7 @@ def apply_field_score_thresholds(
     fields: dict[str, Any] = {}
     scores: dict[str, float] = {}
     for name, value in synthesis.get("fields", {}).items():
-        score = float(synthesis.get("per_field_confidence", {}).get(name, 0.0))
+        score = normalize_confidence(synthesis.get("per_field_confidence", {}).get(name))
         required = _resolved_threshold(name, field_thresholds, requested, default_threshold)
         if required is None or score < required:
             logger.debug("field_below_field_threshold", field=name, score=score, threshold=required)
@@ -202,7 +202,7 @@ def _value_key(value: Any) -> tuple[str, Any]:
     else by its exact text ("Boston" and "boston", True and "true", differ).
     """
     if _is_number(value):
-        return ("number", float(value))
+        return ("number", safe_float(value))
     return ("text", str(value))
 
 
