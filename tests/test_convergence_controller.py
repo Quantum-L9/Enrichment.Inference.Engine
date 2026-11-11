@@ -1902,22 +1902,145 @@ class TestReviewImprovementDetection:
 
 
 class TestReviewThresholdFallback:
-    """F4: a field_thresholds map covers the schema or is absent; absent means 0.85."""
+    """F4 (revised): a field_thresholds map may be partial.
 
-    def test_partial_threshold_map_is_rejected_at_the_request(self) -> None:
-        # The consensus engine drops any field the map does not name
-        # (apply_field_confidence_thresholds), so a partial map would make an
-        # unnamed requested field unfillable. The request refuses it instead.
+    t_i is the consumer's entry for a named field, else the field confidence
+    threshold: the loop's configured confidence_threshold, or 0.85 standalone.
+    consensus_threshold (the agreement bar) is never that fallback.
+    """
+
+    def test_partial_threshold_map_is_accepted_and_resolved(self) -> None:
+        from app.models.schemas import (
+            DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
+            resolve_field_thresholds,
+        )
+
+        request = EnrichRequest(
+            entity={"name": "Acme"},
+            object_type="Account",
+            objective="x",
+            schema={"street": "string", "city": "string", "website": "string"},
+            field_thresholds={"street": 0.95},
+        )
+        assert request.field_thresholds == {"street": 0.95}
+        assert DEFAULT_FIELD_CONFIDENCE_THRESHOLD == 0.85
+        assert resolve_field_thresholds(
+            request.schema_ or {}, request.field_thresholds, DEFAULT_FIELD_CONFIDENCE_THRESHOLD
+        ) == {"street": 0.95, "city": 0.85, "website": 0.85}
+
+    def test_resolution_keeps_complete_and_absent_maps(self) -> None:
+        from app.models.schemas import resolve_field_thresholds
+
+        schema = {"street": "string", "city": "string", "confidence": "number"}
+        complete = {"street": 0.95, "city": 0.5}
+        assert resolve_field_thresholds(schema, complete, 0.85) == complete
+        assert resolve_field_thresholds(schema, None, 0.85) is None
+        # The reserved confidence key never gets a bar; an entry the schema does
+        # not request is kept as sent.
+        assert resolve_field_thresholds(schema, {"extra": 0.7}, 0.9) == {
+            "street": 0.9,
+            "city": 0.9,
+            "extra": 0.7,
+        }
+
+    def test_consensus_threshold_is_not_the_field_fallback(self) -> None:
+        from app.models.schemas import DEFAULT_FIELD_CONFIDENCE_THRESHOLD
+
+        request = EnrichRequest(
+            entity={"name": "Acme"},
+            object_type="Account",
+            objective="x",
+            schema={"street": "string"},
+            field_thresholds={},
+        )
+        assert request.consensus_threshold == 0.65
+        assert request.consensus_threshold != DEFAULT_FIELD_CONFIDENCE_THRESHOLD
+
+    @pytest.mark.parametrize("bad", ["abc", float("nan"), float("inf"), 1.5, -0.1, None])
+    def test_malformed_thresholds_are_still_rejected(self, bad) -> None:
         from pydantic import ValidationError
 
-        with pytest.raises(ValidationError, match="field_thresholds missing"):
+        with pytest.raises(ValidationError, match="field_thresholds"):
             EnrichRequest(
                 entity={"name": "Acme"},
                 object_type="Account",
                 objective="x",
                 schema={"street": "string", "city": "string"},
-                field_thresholds={"street": 0.9},
+                field_thresholds={"street": bad},
             )
+
+    def test_convergence_default_is_the_shared_constant(self) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+        from app.models.schemas import DEFAULT_FIELD_CONFIDENCE_THRESHOLD
+
+        assert ConvergenceConfig().confidence_threshold == DEFAULT_FIELD_CONFIDENCE_THRESHOLD
+        assert ConvergenceConfig.from_dict({}).confidence_threshold == (
+            DEFAULT_FIELD_CONFIDENCE_THRESHOLD
+        )
+
+    def test_pass_request_carries_the_map_resolved_at_the_loop_threshold(self) -> None:
+        from app.engines.convergence_controller import _build_pass_request
+        from app.engines.meta_prompt_planner import PromptPlan
+
+        request = EnrichRequest(
+            entity={"name": "Acme"},
+            object_type="Account",
+            objective="x",
+            schema={"street": "string", "city": "string"},
+            field_thresholds={"street": 0.95},
+        )
+        plan = PromptPlan(
+            mode="targeted",
+            priority_fields=["city"],
+            kb_fragment_ids=[],
+            variation_count=2,
+            pass_number=2,
+        )
+        built = _build_pass_request(
+            request, plan, ConvergenceState(), pass_num=2, confidence_threshold=0.9
+        )
+        assert built.field_thresholds == {"street": 0.95, "city": 0.9}
+        unmapped = _build_pass_request(
+            request.model_copy(update={"field_thresholds": None}),
+            plan,
+            ConvergenceState(),
+            pass_num=2,
+            confidence_threshold=0.9,
+        )
+        assert unmapped.field_thresholds is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("street", "city", "converged"),
+        [
+            (0.96, 0.91, True),  # both clear their resolved bars
+            (0.94, 0.99, False),  # explicit override 0.95 not met
+            (0.96, 0.88, False),  # omitted field held to the loop's 0.90, not 0.85
+            (0.96, 0.90, True),  # boundary: >= the resolved bar
+        ],
+    )
+    async def test_partial_map_converges_only_on_resolved_bars(
+        self, street, city, converged
+    ) -> None:
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        seen: list = []
+        response = await run_convergence_loop(
+            request=EnrichRequest(
+                entity={"name": "Acme"},
+                object_type="Account",
+                objective="x",
+                schema={"street": "string", "city": "string"},
+                field_thresholds={"street": 0.95},
+            ),
+            settings=_settings(),
+            kb_resolver=MagicMock(),
+            enricher=_scripted_enricher([_fields_pass({"street": street, "city": city})], seen),
+            convergence_config=ConvergenceConfig(max_passes=1, confidence_threshold=0.9),
+        )
+        assert _tracking(response)["converged"] is converged
+        # The enricher was handed the same resolved bars readiness is judged by.
+        assert seen[0].field_thresholds == {"street": 0.95, "city": 0.9}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("confidence", "converged"), [(0.84, False), (0.86, True)])

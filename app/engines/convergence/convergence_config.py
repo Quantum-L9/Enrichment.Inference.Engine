@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.engines.native_yaml import parse_native_yaml
+from app.models.schemas import DEFAULT_FIELD_CONFIDENCE_THRESHOLD
 
 
 @dataclass
@@ -25,7 +26,8 @@ class ConvergenceConfig:
     """Configuration for convergence loop behavior."""
 
     max_passes: int = 3
-    confidence_threshold: float = 0.85
+    # The one field confidence default, shared with the standalone enrich path.
+    confidence_threshold: float = DEFAULT_FIELD_CONFIDENCE_THRESHOLD
     min_improvement_delta: float = 0.05
     priority_fields: list[str] = field(default_factory=list)
     domain_constraints: dict[str, Any] = field(default_factory=dict)
@@ -57,7 +59,9 @@ class ConvergenceConfig:
 
         return cls(
             max_passes=convergence_settings.get("max_passes", 3),
-            confidence_threshold=convergence_settings.get("confidence_threshold", 0.85),
+            confidence_threshold=convergence_settings.get(
+                "confidence_threshold", DEFAULT_FIELD_CONFIDENCE_THRESHOLD
+            ),
             min_improvement_delta=convergence_settings.get("min_improvement_delta", 0.05),
             priority_fields=convergence_settings.get("priority_fields", []),
             domain_constraints=convergence_settings.get("domain_constraints", {}),
@@ -72,7 +76,9 @@ class ConvergenceConfig:
         """Create from API request payload."""
         return cls(
             max_passes=config_dict.get("max_passes", 3),
-            confidence_threshold=config_dict.get("confidence_threshold", 0.85),
+            confidence_threshold=config_dict.get(
+                "confidence_threshold", DEFAULT_FIELD_CONFIDENCE_THRESHOLD
+            ),
             min_improvement_delta=config_dict.get("min_improvement_delta", 0.05),
             priority_fields=config_dict.get("priority_fields", []),
             domain_constraints=config_dict.get("domain_constraints", {}),
