@@ -11,7 +11,8 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-MAKEFILE = REPO_ROOT / "Makefile"
+# Target recipes live in Repo.mk; the root Makefile is Core's make-v1 facade.
+MAKEFILE = REPO_ROOT / "Repo.mk"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 
@@ -22,7 +23,7 @@ def _make_target_recipe(target: str) -> str:
         source,
         flags=re.MULTILINE,
     )
-    assert match, f"missing Makefile target {target!r}"
+    assert match, f"missing Repo.mk target {target!r}"
     return match.group("recipe")
 
 

@@ -112,11 +112,18 @@ Honor the frozen ignore list instead.
 ## Key Commands
 
 ```bash
+make setup        # .venv + the full uv.lock profile (Core V2 phase)
+make validate     # Contract manifest, payload compiler, Gate_SDK channel, audit --strict (Core V2 phase)
+make check        # ruff check, ruff format --check, strict mypy (Core V2 phase)
+make test         # Full suite with the 71% coverage floor (Core V2 phase; was quick: now make test-quick)
 make agent-check  # Full 8-gate validation (lint, format, types, unit, ci, audit, contracts, payload compiler)
 make agent-fix    # Auto-fix lint/format
-make test         # Run tests
 make verify       # Contract verification
 ```
+
+`Makefile` is Core's generated `make-v1` facade (never edit it); every recipe lives
+in `Repo.mk`. "Analyze (central Core)" runs `make setup -> validate -> check -> test`
+on every PR.
 
 ---
 
