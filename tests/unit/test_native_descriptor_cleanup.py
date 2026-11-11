@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import errno
 import os
+import stat
 
 import pytest
 
@@ -18,16 +19,25 @@ from scripts import domain_spec_operator as operator
 
 
 def _fd_snapshot() -> set[int]:
-    """Ignore the transient descriptor used to enumerate procfs itself."""
+    """Open directory and regular-file descriptors of this process.
+
+    The native owners under test open only directories and regular files, so
+    those are the only kinds a leak can take. Sockets, pipes and anonymous
+    descriptors are excluded: background threads (the OpenTelemetry gRPC
+    exporter retrying its collector, for one) open and close them on their own
+    schedule, which made a whole-process comparison fail at random. The
+    transient descriptor used to enumerate procfs itself is ignored too.
+    """
     descriptors: set[int] = set()
     for name in os.listdir("/proc/self/fd"):
         descriptor = int(name)
         try:
-            os.fstat(descriptor)
+            mode = os.fstat(descriptor).st_mode
         except OSError as exc:
             assert exc.errno == errno.EBADF
         else:
-            descriptors.add(descriptor)
+            if stat.S_ISDIR(mode) or stat.S_ISREG(mode):
+                descriptors.add(descriptor)
     return descriptors
 
 
