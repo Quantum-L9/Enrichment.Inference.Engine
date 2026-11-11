@@ -203,7 +203,7 @@ def main() -> int:
             "**/schemas.py",
             "**/transport*.py",
             "**/handlers.py",
-            "requirements-ci.txt",
+            "uv.lock",
             "pyproject.toml",
         ],
     )

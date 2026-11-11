@@ -11,9 +11,10 @@ PYTEST := $(PYTHON) -m pytest
 # ============================================================
 # SETUP
 # ============================================================
-setup:
-	pip install -e ".[dev]"
-	pre-commit install
+setup:  ## Create .venv if absent; install the full profile (project + every group) from uv.lock
+	@test -x "$(CURDIR)/.venv/bin/python" || python3 -m venv "$(CURDIR)/.venv"
+	UV_PROJECT_ENVIRONMENT="$(CURDIR)/.venv" PYTHON="$(CURDIR)/.venv/bin/python" bash tools/deps/install_locked.sh full
+	"$(CURDIR)/.venv/bin/pre-commit" install
 
 # ============================================================
 # TESTING — TIERED

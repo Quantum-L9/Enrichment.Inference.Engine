@@ -54,6 +54,6 @@
     "16686": {"label": "Jaeger UI"}
   },
 
-  "postCreateCommand": "pip install -e '.[dev]' && pre-commit install",
+  "postCreateCommand": "bash tools/deps/install_locked.sh full && pre-commit install",
   "remoteUser": "vscode"
 }

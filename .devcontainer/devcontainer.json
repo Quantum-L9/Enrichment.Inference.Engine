@@ -8,7 +8,7 @@
     }
   },
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
-  "postCreateCommand": "python --version && pdm --version && pdm install -G dev",
+  "postCreateCommand": "python --version && bash tools/deps/install_locked.sh full",
   "customizations": {
     "vscode": {
       "extensions": [

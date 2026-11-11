@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
-"""Fail closed unless every active Gate_SDK declaration is the moving major tag.
+"""Fail closed unless Gate_SDK is declared on the moving major tag and locked.
 
 Gate_SDK owns release identity (``contracts/RELEASE_IDENTITY_LEDGER.json``,
 schema v2). The consumer compatibility contract is the moving major channel
 ``v1`` — not a commit sha.
 
-EIE declared the SDK in three executable places and they disagreed:
-``pyproject.toml`` and ``requirements-ci.txt`` named 69c6c67 while the
+EIE once declared the SDK in three executable places and they disagreed:
+``pyproject.toml`` and the CI requirements file named 69c6c67 while the
 packet/envelope gate step in ``.github/workflows/pr-pipeline.yml`` installed
-ead0f48. The old validator read four manifests and never the workflow, so the
-third identity was invisible to it. Every surface that installs the SDK is
-enumerated here, and a missing one FAILs rather than being skipped.
+ead0f48 (EIE-001). The fix is structural: there is now one declaration and one
+lock, and every install site reads the lock.
 
-Reproducibility lives in the generated ``requirements.lock``, which records the
-concrete object the channel resolved to plus that archive's sha256. That object
-is execution evidence; it is never the declared dependency, and this validator
-never requires a particular value for it.
+* ``pyproject.toml`` declares ``constellation-node-sdk`` by name, and
+  ``[tool.uv.sources]`` names the canonical repository at tag ``v1``.
+* ``uv.lock`` records that tag in the source URL query and the resolved commit
+  in its fragment: ``git = "https://github.com/Quantum-L9/Gate_SDK.git?tag=v1#<commit>"``.
+  That commit is execution evidence; it is never the declared dependency, and
+  this validator never requires a particular value for it.
+* No workflow, Dockerfile or devcontainer installs the SDK directly: each
+  installs from uv.lock (``tools/deps/install_locked.sh``). A direct install
+  is a second identity, so finding one FAILs.
 
 Modes
 -----
-default        Offline structural checks over every active surface.
+default        Offline structural checks over the manifest, the lock and every
+               install surface.
 --verify-tag   Resolves ``v1`` at the canonical remote and requires the lock's
-               resolved object to match. Fails closed when the remote cannot be
+               resolved commit to match. Fails closed when the remote cannot be
                resolved — a lock that cannot be checked has not been checked.
 """
 
@@ -31,31 +36,35 @@ import argparse
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MAJOR_TAG = "v1"
+SDK = "constellation-node-sdk"
 CANONICAL_REPO = "Quantum-L9/Gate_SDK"
 CANONICAL_REMOTE = f"https://github.com/{CANONICAL_REPO}.git"
 FORBIDDEN_FORK = "cryptoxdog/Gate_SDK"
-FORBIDDEN_BRANCHES = ("main", "master")
 
-# Every surface that declares or directly installs the SDK. The workflow is
-# on this list because leaving it off is what let a third sha live in CI.
-MANIFESTS = (
-    "pyproject.toml",
-    "requirements-ci.txt",
-    ".github/workflows/pr-pipeline.yml",
+MANIFEST = "pyproject.toml"
+LOCK = "uv.lock"
+# Files that install packages. None may name the SDK as a direct install: the
+# lock is the only place its identity is recorded.
+INSTALL_SURFACE_GLOBS = (
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
+    "Dockerfile*",
+    ".devcontainer/*",
 )
-LOCK = "requirements.lock"
 
 SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
-MANIFEST_REF_RE = re.compile(r"Gate_SDK(?:\.git)?@([0-9A-Za-z._/-]+)")
-LOCK_ARCHIVE_RE = re.compile(
-    r"constellation-node-sdk @ https://github\.com/"
-    + re.escape(CANONICAL_REPO)
-    + r"/archive/(?P<sha>[0-9a-f]{40})\.tar\.gz\s+--hash=sha256:(?P<digest>[0-9a-f]{64})"
+# The constellation-node-sdk entry of uv.lock: its git source carries the
+# requested tag in the query and the resolved commit in the fragment.
+LOCK_REFERENCE_RE = re.compile(
+    r'name = "constellation-node-sdk"\nversion = "[^"]*"\n'
+    r'source = \{ git = "(?P<url>[^"?#]+)\?(?P<kind>[a-z]+)=(?P<ref>[^"#&]+)#(?P<sha>[0-9a-f]{40})" \}'
 )
+DIRECT_INSTALL_RE = re.compile(r"Gate_SDK(?:\.git)?@|Gate_SDK/archive/|constellation-node-sdk\s*@")
 
 
 def safe_remote(remote: str) -> str:
@@ -115,67 +124,116 @@ def resolve_remote_tag(remote: str, tag: str) -> str | None:
     return peeled or direct
 
 
-def check_manifest(rel: str, text: str) -> list[str]:
-    """An active surface declares the compatibility channel and nothing else."""
+def _declaration_errors(rel: str, data: dict) -> list[str]:
+    """[project] names the SDK bare; its source lives in [tool.uv.sources]."""
+    declared = [
+        spec
+        for spec in data.get("project", {}).get("dependencies", [])
+        if re.match(rf"{re.escape(SDK)}\b", spec.strip())
+    ]
+    if not declared:
+        return [f"{rel}: {SDK} is not a [project] dependency"]
+    return [
+        f"{rel}: {SDK} declared as {spec!r}; name it bare and source it through [tool.uv.sources]"
+        for spec in declared
+        if spec.strip() != SDK
+    ]
+
+
+def _source_errors(rel: str, source: dict) -> list[str]:
+    """The [tool.uv.sources] entry is the canonical repository on tag v1."""
     errors: list[str] = []
-    if FORBIDDEN_FORK in text:
-        errors.append(f"{rel}: forbidden fork {FORBIDDEN_FORK}")
-
-    refs = MANIFEST_REF_RE.findall(text)
-    if not refs:
-        errors.append(f"{rel}: no {CANONICAL_REPO} declaration found")
-        return errors
-
-    for ref in refs:
-        if ref == MAJOR_TAG:
-            continue
-        if SHA_RE.fullmatch(ref):
-            errors.append(
-                f"{rel}: Gate_SDK declared by commit sha {ref} — the consumer "
-                f"contract is the moving major channel {MAJOR_TAG}"
-            )
-        elif ref in FORBIDDEN_BRANCHES:
-            errors.append(f"{rel}: Gate_SDK floats on branch {ref!r}")
-        else:
-            errors.append(f"{rel}: Gate_SDK ref {ref!r} is not {MAJOR_TAG!r}")
-
-    if CANONICAL_REPO not in text:
-        errors.append(f"{rel}: missing canonical repo {CANONICAL_REPO}")
+    if source.get("git") != CANONICAL_REMOTE:
+        errors.append(f"{rel}: {SDK} source is {source.get('git')!r}, not {CANONICAL_REMOTE}")
+    if "rev" in source:
+        rev = source["rev"]
+        kind = "commit sha" if SHA_RE.fullmatch(str(rev)) else "rev"
+        errors.append(
+            f"{rel}: Gate_SDK declared by {kind} {rev} — the consumer contract "
+            f"is the moving major channel {MAJOR_TAG}"
+        )
+    if "branch" in source:
+        errors.append(f"{rel}: Gate_SDK floats on branch {source['branch']!r}")
+    tag = source.get("tag")
+    if tag is None:
+        if "rev" not in source and "branch" not in source:
+            errors.append(f"{rel}: {SDK} source names no tag (want {MAJOR_TAG!r})")
+    elif tag != MAJOR_TAG:
+        errors.append(f"{rel}: Gate_SDK ref {tag!r} is not {MAJOR_TAG!r}")
     return errors
 
 
+def check_manifest(rel: str, text: str) -> list[str]:
+    """pyproject.toml names the SDK and sources it from the canonical tag v1."""
+    if FORBIDDEN_FORK in text:
+        return [f"{rel}: forbidden fork {FORBIDDEN_FORK}"]
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        return [f"{rel}: not valid TOML ({exc})"]
+
+    errors = _declaration_errors(rel, data)
+    source = data.get("tool", {}).get("uv", {}).get("sources", {}).get(SDK)
+    if source is None:
+        errors.append(f"{rel}: no [tool.uv.sources] entry for {SDK}")
+        return errors
+    return errors + _source_errors(rel, source)
+
+
 def lock_resolution(text: str) -> str | None:
-    """The concrete object the generated lock resolved the channel to."""
-    match = LOCK_ARCHIVE_RE.search(text)
+    """The concrete commit uv.lock recorded for the moving tag."""
+    match = LOCK_REFERENCE_RE.search(text)
     return match.group("sha") if match else None
 
 
 def check_lock(rel: str, text: str) -> list[str]:
-    """The lock must carry a concrete, hash-verified archive."""
+    """uv.lock carries the canonical source on tag v1 at a concrete commit."""
     if FORBIDDEN_FORK in text:
         return [f"{rel}: forbidden fork {FORBIDDEN_FORK}"]
-    if lock_resolution(text) is None:
+    match = LOCK_REFERENCE_RE.search(text)
+    if match is None:
         return [
-            f"{rel}: no hash-verified {CANONICAL_REPO} archive at a concrete "
-            "40-character object — regenerate with tools/lock_requirements.sh"
+            f"{rel}: no {CANONICAL_REPO} git source at a concrete 40-character "
+            "commit — run `uv lock`"
         ]
-    return []
+    errors: list[str] = []
+    if match.group("url") != CANONICAL_REMOTE:
+        errors.append(f"{rel}: {SDK} locked from {match.group('url')}, not {CANONICAL_REMOTE}")
+    if (match.group("kind"), match.group("ref")) != ("tag", MAJOR_TAG):
+        errors.append(
+            f"{rel}: {SDK} locked from {match.group('kind')}={match.group('ref')!r} "
+            f"(want tag={MAJOR_TAG!r})"
+        )
+    return errors
+
+
+def check_install_surface(rel: str, text: str) -> list[str]:
+    """An install site installs from uv.lock, never the SDK directly."""
+    errors: list[str] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if DIRECT_INSTALL_RE.search(line):
+            errors.append(
+                f"{rel}:{number}: installs Gate_SDK directly — install it from "
+                "uv.lock (tools/deps/install_locked.sh) so it is the locked commit"
+            )
+    return errors
 
 
 def check_tree(root: Path) -> list[str]:
     errors: list[str] = []
-    for rel in MANIFESTS:
+    for rel, check in ((MANIFEST, check_manifest), (LOCK, check_lock)):
         path = root / rel
         if not path.is_file():
-            errors.append(f"{rel}: active surface is missing")
+            errors.append(f"{rel}: missing")
             continue
-        errors.extend(check_manifest(rel, path.read_text(encoding="utf-8")))
+        errors.extend(check(rel, path.read_text(encoding="utf-8")))
 
-    lock_path = root / LOCK
-    if not lock_path.is_file():
-        errors.append(f"{LOCK}: generated lock is missing")
-    else:
-        errors.extend(check_lock(LOCK, lock_path.read_text(encoding="utf-8")))
+    surfaces = sorted(
+        {path for pattern in INSTALL_SURFACE_GLOBS for path in root.glob(pattern) if path.is_file()}
+    )
+    for path in surfaces:
+        rel = path.relative_to(root).as_posix()
+        errors.extend(check_install_surface(rel, path.read_text(encoding="utf-8")))
     return errors
 
 
@@ -187,11 +245,11 @@ def compare_lock_to_tag(resolved: str | None, tag_sha: str | None) -> list[str]:
             "an unverifiable lock does not pass"
         ]
     if resolved is None:
-        return ["--verify-tag: lock carries no concrete resolved object to compare"]
+        return ["--verify-tag: uv.lock carries no concrete resolved commit to compare"]
     if resolved != tag_sha:
         return [
-            f"--verify-tag: lock resolves {resolved} but {MAJOR_TAG} now points at "
-            f"{tag_sha} — the lock is stale; regenerate it"
+            f"--verify-tag: uv.lock resolves {resolved} but {MAJOR_TAG} now points at "
+            f"{tag_sha} — the lock is stale; run `uv lock --upgrade-package {SDK}`"
         ]
     return []
 
@@ -202,17 +260,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--verify-tag",
         action="store_true",
-        help="resolve the channel at the canonical remote and compare to the lock",
+        help="resolve the channel at the canonical remote and compare to uv.lock",
     )
     args = parser.parse_args(argv)
 
     errors = check_tree(args.root)
+    lock_path = args.root / LOCK
+    resolved = (
+        lock_resolution(lock_path.read_text(encoding="utf-8")) if lock_path.is_file() else None
+    )
 
     if args.verify_tag:
-        lock_path = args.root / LOCK
-        resolved = (
-            lock_resolution(lock_path.read_text(encoding="utf-8")) if lock_path.is_file() else None
-        )
         try:
             tag_sha = resolve_remote_tag(CANONICAL_REMOTE, MAJOR_TAG)
         except ValueError as exc:
@@ -222,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             errors.extend(compare_lock_to_tag(resolved, tag_sha))
             if not errors:
-                print(f"NETWORK: {CANONICAL_REPO}@{MAJOR_TAG} == lock {tag_sha}")
+                print(f"NETWORK: {CANONICAL_REPO}@{MAJOR_TAG} == uv.lock {tag_sha}")
 
     if errors:
         print("FAIL")
@@ -230,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     mode = "offline + networked" if args.verify_tag else "offline"
-    print(f"PASS EIE declares {CANONICAL_REPO}@{MAJOR_TAG} ({mode})")
+    print(f"PASS EIE declares {CANONICAL_REPO}@{MAJOR_TAG} ({mode}) -> {resolved}")
     return 0
 
 
