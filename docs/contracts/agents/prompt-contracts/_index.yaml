@@ -14,7 +14,7 @@ prompts:
       Core enrichment prompt for Perplexity Sonar. Builds a structured system
       prompt with schema definition, field types, and output format example.
       Supports SYSTEM_USER_ASSISTANT strategy for injecting known fields.
-    
+
     system_template: |
       You are a domain research analyst. Your task is to research
       the given entity and extract structured data matching the requested schema.
@@ -177,12 +177,12 @@ prompts:
     description: |
       Builds an assistant message summarizing known fields from prior passes.
       Primes the model with existing knowledge so targeted passes focus on gaps.
-    
+
     template: |
       I already have the following verified data for this entity:
         {field}: {value}
         ...
-      
+
       Focus your research on the fields I'm still missing from the target schema.
 
     input_variables:
