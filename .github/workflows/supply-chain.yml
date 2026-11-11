@@ -208,8 +208,9 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           bash tools/deps/install_locked.sh full
-          # Pinned for reproducible SBOMs (matches current CI default; bump deliberately)
-          pip install 'cyclonedx-bom==7.3.0'
+          # cyclonedx-bom==7.3.0 (pinned for reproducible SBOMs; bump deliberately)
+          # is the `sbom` dependency group, hash-verified from uv.lock.
+          bash tools/deps/install_locked.sh group sbom
 
       - name: Generate CycloneDX SBOM
         run: |

@@ -74,6 +74,17 @@ ci = [
 licenses = [
     "pip-licenses==5.5.5",
 ]
+# Single-purpose groups, installed only by the workflow that needs them
+# (tools/deps/install_locked.sh group <name>) and kept out of the `full` profile.
+# They live here so the install is hash-verified from uv.lock like every other
+# package, rather than an unhashed `pip install` in a workflow.
+release = [
+    "build>=1.2.2",
+]
+sbom = [
+    # Pinned for reproducible SBOMs; bump deliberately.
+    "cyclonedx-bom==7.3.0",
+]
 
 [tool.uv]
 # Core-owned tools never enter uv.lock, even transitively (pytest plugins require
