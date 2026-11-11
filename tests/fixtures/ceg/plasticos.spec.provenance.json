@@ -2,11 +2,9 @@
   "schema": "eie.ceg-spec-snapshot/v1",
   "source_repository": "Quantum-L9/Cognitive.Engine.Graphs",
   "source_path": "domains/plasticos/spec.yaml",
-  "source_commit": "92513336d4d9bae81cce21977c0e46ddaa805511",
-  "source_sha256": "855fbf8e894392b951c294582a7b518db8b8cbf702bd617748037e3ecb44e435",
-  "snapshot_sha256": "79dfbe8c65d5541884b31991cef2839956901c9574ae5898d7231ebda9bed9b9",
-  "overlay": [
-    "ontology.nodes[Facility].properties += processed_polymers: list<map{code: string required}> (CEG typed-contract change, branch agent/claude-code/ceg-typed-spec-contract)"
-  ],
-  "refresh_required": "replace with the merged CEG typed-contract commit's bytes; drop the overlay once upstream declares it"
+  "source_commit": "e9e6ceb669d37bd75dc9bded206105b5875a9c60",
+  "source_sha256": "4394284b46f0b52cd79caf8bc73c7122cd0726faab96de9402ddf4e969b59b43",
+  "snapshot_sha256": "a04363e00a6893db1e6f3bd25895adc34dec34d70beea56d11c7a21e6902b2b5",
+  "overlay": [],
+  "refresh_required": "replace with the pinned CEG revision's bytes whenever CEG_REVISION moves (tests/contracts/test_native_yaml_integrity.py)"
 }

@@ -119,14 +119,12 @@ def test_native_fixtures_pass_with_two_distinct_hashes_but_approvals_unknown(tmp
     assert proof["approvals"]["eie"]["status"] == "Unknown"
 
 
-@pytest.mark.parametrize("conflict", ["path", "method", "idproperty", "targetnode"])
+@pytest.mark.parametrize("conflict", ["path", "targetnode"])
 def test_both_native_specs_valid_yet_transport_pair_refused(tmp_path, conflict):
     eie, ceg = _inputs(tmp_path)
     raw = yaml.safe_load(eie.read_text())
     raw["sync"]["endpoints"][0][conflict] = {
         "path": "/v1/sync/absent",
-        "method": "PUT",
-        "idproperty": "unknown_id",
         "targetnode": "Other",
     }[conflict]
     eie.write_text(yaml.safe_dump(raw))
@@ -137,6 +135,38 @@ def test_both_native_specs_valid_yet_transport_pair_refused(tmp_path, conflict):
     assert not proof["release_ready"]
 
 
+@pytest.mark.parametrize(
+    ("conflict", "value", "reason"),
+    [
+        ("method", "PUT", "Unsupported sync.method"),
+        (
+            "idproperty",
+            "unknown_id",
+            "/v1/sync/facilities: idproperty unknown_id must be a declared scalar row property",
+        ),
+    ],
+)
+def test_eie_native_refuses_transport_fields_before_any_pair_check(
+    tmp_path, conflict, value, reason
+):
+    """A sync method or id property EIE cannot send fails EIE's own validation.
+
+    EIE's native schema checks these against its typed row contract, so the
+    spec is refused on its own: CEG is never consulted and no compatibility
+    verdict is produced.
+    """
+    eie, ceg = _inputs(tmp_path)
+    raw = yaml.safe_load(eie.read_text())
+    raw["sync"]["endpoints"][0][conflict] = value
+    eie.write_text(yaml.safe_dump(raw))
+    code, proof = _run(tmp_path, eie, ceg)
+    assert code == 1
+    assert proof["eie_native"] == {"status": "Failed", "reason": reason}
+    assert "ceg_native" not in proof
+    assert "compatibility" not in proof
+    assert not proof["release_ready"]
+
+
 def test_isolated_receipts_enable_exact_pair_record_not_identical_yaml(tmp_path):
     eie, ceg = _inputs(tmp_path)
     _reviewed_ceg(ceg)
@@ -144,7 +174,7 @@ def test_isolated_receipts_enable_exact_pair_record_not_identical_yaml(tmp_path)
     assert code == 0 and proof["release_ready"]
     pair = proof["pair_record"]
     assert pair["eie"]["sha256"] != pair["ceg"]["sha256"]
-    assert pair["eie"]["spec_version"] == "0.3.0"
+    assert pair["eie"]["spec_version"] == "0.4.0"
     assert pair["ceg"]["spec_version"] == "1.3.0-reviewed"
 
 
@@ -154,7 +184,7 @@ def test_post_review_tamper_refuses_release_even_if_native_spec_still_valid(tmp_
     eie_receipt = _receipt(eie, "eie", tmp_path / "eie-receipt.json")
     ceg_receipt = _receipt(ceg, "ceg", tmp_path / "ceg-receipt.json")
     raw = yaml.safe_load(eie.read_bytes())
-    raw["version"] = "0.4.0"
+    raw["version"] = "0.5.0"
     eie.write_text(yaml.safe_dump(raw))
     output = tmp_path / "tamper-proof.json"
     result = subprocess.run(

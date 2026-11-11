@@ -26,7 +26,7 @@ from app.engines.domain_yaml_reader import DomainPublicationError, DomainYamlRea
 
 pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[2]
-CEG_REVISION = "93cf1a83bdb88656a627b442a6d114c3a3502cde"
+CEG_REVISION = "e9e6ceb669d37bd75dc9bded206105b5875a9c60"
 GOOD = (ROOT / "domains/plasticos/spec.yaml").read_bytes()
 DUPLICATES = {
     "name": GOOD.replace(b"name: plasticos", b"name: other\nname: plasticos", 1),
@@ -277,8 +277,10 @@ def test_hosted_native_jobs_provision_pinned_real_ceg_subject(workflow_name, job
     preparation = next(step for step in steps if step.get("name") == "Prepare native CEG validator")
     assert steps.index(checkout) < steps.index(preparation)
     run = preparation["run"]
-    assert "requirements-runtime.lock" in run
-    assert "--require-hashes" in run
+    # CEG retired requirements-runtime.lock for uv.lock: its own installer is the
+    # hash-verified path (uv sync --locked; uv bootstrapped with --require-hashes).
+    assert 'PYTHON="$native_python" bash "$subject/tools/deps/install_locked.sh" runtime' in run
+    assert "requirements-runtime.lock" not in run
     assert "L9_CEG_NATIVE_REPO=" in run and "L9_CEG_NATIVE_PYTHON=" in run
     assert "GITHUB_ENV" in run
     assert "validate_domain.py" in run

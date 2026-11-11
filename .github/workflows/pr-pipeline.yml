@@ -263,7 +263,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
-          ref: 93cf1a83bdb88656a627b442a6d114c3a3502cde
+          ref: e9e6ceb669d37bd75dc9bded206105b5875a9c60
           path: .ci-subjects/ceg
           token: ${{ secrets.SDK_TOKEN }}
           persist-credentials: false
@@ -273,10 +273,13 @@ jobs:
         run: |
           set -euo pipefail
           subject="$GITHUB_WORKSPACE/.ci-subjects/ceg"
-          test "$(git -C "$subject" rev-parse HEAD)" = "93cf1a83bdb88656a627b442a6d114c3a3502cde"
+          test "$(git -C "$subject" rev-parse HEAD)" = "e9e6ceb669d37bd75dc9bded206105b5875a9c60"
           python -m venv "$RUNNER_TEMP/ceg-native-venv"
           native_python="$RUNNER_TEMP/ceg-native-venv/bin/python"
-          "$native_python" -m pip install --require-hashes --no-deps -r "$subject/requirements-runtime.lock"
+          # CEG's own hash-locked runtime profile (uv sync --locked against its
+          # uv.lock; uv itself bootstrapped with pip --require-hashes), as its
+          # production image installs it (CEG pins nothing outside uv.lock).
+          PYTHON="$native_python" bash "$subject/tools/deps/install_locked.sh" runtime
           # Import/CLI only: no CEG service, graph connection, or approval.
           "$native_python" "$subject/tools/validate_domain.py" --help
           echo "L9_CEG_NATIVE_REPO=$subject" >> "$GITHUB_ENV"
@@ -490,7 +493,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
-          ref: 93cf1a83bdb88656a627b442a6d114c3a3502cde
+          ref: e9e6ceb669d37bd75dc9bded206105b5875a9c60
           path: .ci-subjects/ceg
           token: ${{ secrets.SDK_TOKEN }}
           persist-credentials: false
@@ -500,10 +503,13 @@ jobs:
         run: |
           set -euo pipefail
           subject="$GITHUB_WORKSPACE/.ci-subjects/ceg"
-          test "$(git -C "$subject" rev-parse HEAD)" = "93cf1a83bdb88656a627b442a6d114c3a3502cde"
+          test "$(git -C "$subject" rev-parse HEAD)" = "e9e6ceb669d37bd75dc9bded206105b5875a9c60"
           python -m venv "$RUNNER_TEMP/ceg-native-venv"
           native_python="$RUNNER_TEMP/ceg-native-venv/bin/python"
-          "$native_python" -m pip install --require-hashes --no-deps -r "$subject/requirements-runtime.lock"
+          # CEG's own hash-locked runtime profile (uv sync --locked against its
+          # uv.lock; uv itself bootstrapped with pip --require-hashes), as its
+          # production image installs it (CEG pins nothing outside uv.lock).
+          PYTHON="$native_python" bash "$subject/tools/deps/install_locked.sh" runtime
           # Import/CLI only: no CEG service, graph connection, or approval.
           "$native_python" "$subject/tools/validate_domain.py" --help
           echo "L9_CEG_NATIVE_REPO=$subject" >> "$GITHUB_ENV"

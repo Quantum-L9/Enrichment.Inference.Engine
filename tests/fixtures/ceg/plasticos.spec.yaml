@@ -1,13 +1,11 @@
 # --- EIE TEST SNAPSHOT of a Cognitive.Engine.Graphs tenant spec ---
 # source:   Quantum-L9/Cognitive.Engine.Graphs domains/plasticos/spec.yaml
-# commit:   92513336d4d9bae81cce21977c0e46ddaa805511 (origin/main, 2026-11-11)
-# source sha256: 855fbf8e894392b951c294582a7b518db8b8cbf702bd617748037e3ecb44e435
-# overlay:  ontology Facility.processed_polymers declared list<map{code: string, required}>
-#           -- the declaration the parallel CEG typed-contract change
-#           (branch agent/claude-code/ceg-typed-spec-contract) adds; marked inline.
-# REFRESH REQUIRED: replace this file with the merged CEG commit's bytes (keep this
-# header, drop the overlay once upstream carries it) and update
-# plasticos.spec.provenance.json, which pins this file's sha256 (checked by
+# commit:   e9e6ceb669d37bd75dc9bded206105b5875a9c60 (CEG #453, typed spec contract)
+# source sha256: 4394284b46f0b52cd79caf8bc73c7122cd0726faab96de9402ddf4e969b59b43
+# overlay:  none -- the bytes below this header are the source commit's, unmodified.
+# REFRESH REQUIRED whenever the pinned CEG revision moves: replace the bytes below
+# with that commit's, keep this header, and update plasticos.spec.provenance.json,
+# which pins this file's sha256 (checked by
 # tests/contracts/test_cross_engine_domain_compatibility.py).
 # --- end header ---
 # --- L9_META ---
@@ -32,7 +30,7 @@
 domain:
   id: plasticos
   name: PlasticOS Recycling Marketplace
-  version: 1.3.0
+  version: 1.4.0
   description: 'Domain specification for matching material intake requests (RFQs)
     from buyers to recycling facilities (suppliers) based on polymer compatibility,
     geographic proximity, capacity, certifications, and historical transaction success.
@@ -98,17 +96,19 @@ ontology:
     - name: last_transaction_date
       type: datetime
       description: Date of most recent transaction
-    # SNAPSHOT OVERLAY (not in the source commit): the declaration the
-    # Cognitive.Engine.Graphs typed-contract change adds.
+    # Wire-only (list<map>): consumed by the facilities endpoint's childsync,
+    # never stored on Facility. Each element names one PolymerFamily by code;
+    # the row carries a JSON array of objects, not a JSON-encoded string.
     - name: processed_polymers
       type: list
+      description: Polymer families this facility processes (one PROCESSES edge each)
       items:
         type: map
         properties:
         - name: code
           type: string
           required: true
-      description: Polymer families the facility processes (childsync PROCESSES)
+          description: PolymerFamily.code
   - label: MaterialIntake
     managedby: api
     queryentity: true
@@ -528,9 +528,11 @@ sync:
   # Polymer edges are ingested with the nodes (CEG-COR-071): the polymer gates
   # require PROCESSES / FULFILLS_POLYMER, so engine-synced nodes without them
   # could never match.
-  # facilities: `processed_polymers` is a list of {code: <PolymerFamily.code>}
-  # maps. childsync SETs each map onto the PolymerFamily node (c += child_row),
-  # so the maps must carry the code only.
+  # facilities: `processed_polymers` is declared on Facility as
+  # list<map{code: string required}>. childsync MERGEs one PolymerFamily per
+  # element by code and links it with PROCESSES; PolymerFamily is a static
+  # taxonomy, so an existing node is never overwritten (properties are written
+  # only when the MERGE creates it).
   - path: /v1/sync/facilities
     targetnode: Facility
     idproperty: facility_id
