@@ -66,7 +66,12 @@ def test_repo_mk_defines_the_four_leaves_and_no_facade_target() -> None:
 
 def test_recipes_never_read_a_bare_environment_variable() -> None:
     # The facade sets SHELL flags -eu: an unset $$NAME aborts the recipe.
-    bare = re.findall(r"\$\$[A-Za-z_][A-Za-z0-9_]*", REPO_MK.read_text(encoding="utf-8"))
+    recipes = "\n".join(
+        line
+        for line in REPO_MK.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    bare = re.findall(r"\$\$[A-Za-z_][A-Za-z0-9_]*", recipes)
     assert not bare, f"use $${{NAME:-}} under bash -eu: {sorted(set(bare))}"
 
 
