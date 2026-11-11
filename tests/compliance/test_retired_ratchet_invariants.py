@@ -4,7 +4,8 @@ EIE's baseline-ratchet caller was deleted in #289 because the Core workflow it
 called had been retired. That caller was the only enforcement behind the two
 ledgers under ``.l9/baselines/``:
 
-* ``packet-envelope.yml``: "any future PacketEnvelope reference fails CI".
+* ``packet-envelope.yml``: any future reference to the deprecated envelope
+  class fails CI.
   TransportPacket is the only wire model; the deprecated envelope class must not
   come back. The ledger is retired and this file is the check.
 * ``test-quarantine.yml``: shrink-only quarantine of failing tests. The ledger
