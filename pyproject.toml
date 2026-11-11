@@ -45,23 +45,19 @@ dependencies = [
 ]
 
 # One lock (uv.lock) resolves the project and every group together; install
-# profiles select groups (tools/deps/install_locked.sh). Core-owned tool versions
-# (pytest, ruff, mypy, pre-commit) must equal Quantum-L9/l9-ci-core
-# toolchain-lock.json: tests/unit/test_core_toolchain_pins.py.
+# profiles select groups (tools/deps/install_locked.sh). Core-owned tools (pip,
+# pre-commit, ruff, mypy, pytest, semgrep) are declared nowhere here: they are
+# excluded from the lock ([tool.uv] below) and installed from
+# Quantum-L9/l9-ci-core's installer pins, so a Core bump needs no edit in this
+# repository (tests/unit/test_core_toolchain_pins.py).
 [dependency-groups]
 dev = [
-    "pytest==9.1.1",
     "pytest-asyncio>=0.24",
     "pytest-httpx>=0.34",
     "pytest-cov==7.1.0",
     "respx>=0.22",
-    "ruff==0.16.1",
-    # Exact pin: tools/mypy_ratchet.py fingerprints mypy's messages against
-    # tools/mypy_baseline.txt, so a range lets the verdict depend on the resolve.
-    "mypy==2.3.0",
     "coverage==7.17.0",
     "jsonschema>=4.23.0",
-    "pre-commit==4.4.0",
 ]
 # CI-only tools the workflows run beyond the dev set.
 ci = [
@@ -78,6 +74,15 @@ ci = [
 licenses = [
     "pip-licenses==5.5.5",
 ]
+
+[tool.uv]
+# Core-owned tools never enter uv.lock, even transitively (pytest plugins require
+# pytest, pip-audit requires pip): a locked copy would drift the next time Core
+# moves. tools/deps/install_locked.sh installs them from Core's installer pins
+# (exact versions, so tools/mypy_ratchet.py still sees one mypy). Names only,
+# never versions. Core list: l9-ci-core
+# .github/actions/install-consumer-ci/core-owned-tools.json.
+exclude-dependencies = ["mypy", "pip", "pre-commit", "pytest", "ruff", "semgrep"]
 
 [tool.uv.sources]
 # Policy (EIE-001, CEG#266): the manifest names Gate_SDK's moving major tag;

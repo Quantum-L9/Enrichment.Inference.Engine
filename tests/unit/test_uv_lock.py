@@ -142,21 +142,17 @@ def test_uv_bootstrap_pins_one_hashed_uv() -> None:
     assert len(re.findall(r"--hash=sha256:[0-9a-f]{64}", text)) >= 2
 
 
-def test_mypy_hook_type_checks_against_the_locked_versions() -> None:
+def test_mypy_hook_type_checks_against_the_locked_environment() -> None:
+    # A local system hook runs the mypy tools/deps/install_locked.sh full put in
+    # the environment, against the packages and stubs uv.lock installed there:
+    # no second, hand-pinned dependency list can diverge from the lock.
     config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
     hook = next(
         hook
         for repo in config["repos"]
-        if repo.get("repo") == "https://github.com/pre-commit/mirrors-mypy"
+        if repo.get("repo") == "local"
         for hook in repo["hooks"]
         if hook["id"] == "mypy"
     )
-    locked = {canonicalize_name(p["name"]): p["version"] for p in _lock()["package"]}
-    drift = {}
-    for spec in hook.get("additional_dependencies", []):
-        req = Requirement(spec)
-        pinned = [s.version for s in req.specifier if s.operator == "=="]
-        name = canonicalize_name(req.name)
-        if pinned != [locked.get(name)]:
-            drift[name] = (str(req.specifier), locked.get(name))
-    assert not drift, f"pre-commit mypy hook pins differ from uv.lock (hook, lock): {drift}"
+    assert hook["language"] == "system", hook
+    assert "additional_dependencies" not in hook, hook

@@ -32,13 +32,24 @@ repos:
         args: [--maxkb=1000]
 
   # ── Code formatting ──────────────────────────────────────────────────
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 39d9ac5938dadb73df0564a45f163e25ff9fa6e2  # v0.16.1 (Core toolchain lock)
+  # ruff and mypy are Core-owned (Quantum-L9/l9-ci-core installer pins,
+  # installed by tools/deps/install_locked.sh full): local system hooks run
+  # the installed tools, so no hook rev repeats a version.
+  - repo: local
     hooks:
       - id: ruff
-        args: [--fix]
+        name: ruff
+        entry: ruff check --force-exclude --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
         exclude: ^(Current Work/|LEAD ENRICHMENT|Enrichment-Deployment-pack/|"LEAD ENRICHMENT)
       - id: ruff-format
+        name: ruff-format
+        entry: ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
         exclude: ^(Current Work/|LEAD ENRICHMENT|Enrichment-Deployment-pack/)
 
   # ── Secrets scanning ─────────────────────────────────────────────────
@@ -49,21 +60,19 @@ repos:
         args: ["protect", "--staged", "--config=.gitleaks.toml"]
 
   # ── Type checking ────────────────────────────────────────────────────
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: 41e691678310dfd3833f7ab4e180ddb014310356  # v2.3.0 (Core toolchain lock)
+  - repo: local
     hooks:
       - id: mypy
-        args: [--ignore-missing-imports, "--exclude=app/engines/field_classifier\\.py", "--exclude=app/engines/inference_bridge_v2\\.py"]
-        # Pinned to the versions uv.lock records, which is what the CI
-        # type-check environment installs (tools/deps/install_locked.sh full +
-        # mypy --install-types), so the hook and the required job type-check
-        # against the same packages and stubs; tests/unit/test_uv_lock.py fails
-        # when they diverge. CI installs no types-aiofiles, so the hook does not
-        # either.
-        additional_dependencies:
-          [pydantic==2.14.1, pydantic-settings==2.16.1, types-PyYAML==6.0.12.20261103, structlog==26.1.0, httpx==0.28.1]
-        language_version: python3.12
-        exclude: ^(tests/|tools/|docs/|kb/|readme/|LEAD ENRICHMENT|Enrichment-Deployment-pack/|Current Work/|app/engines/field_classifier\.py|app/engines/inference_bridge_v2\.py|engine/kge/rotate3d\.py|app/engines/search_optimizer\.py|app/agents/data_hygiene\.py|plastics_enrichment_client\.py|app/models/schemas\.py|app/services/score/|app/services/perplexity_client\.py|app/services/crm/odoo_client\.py|app/services/crm/salesforce_client\.py|app/services/crm/hubspot_client\.py|app/core/config\.py|app/services/enrichment/sources/apollo\.py|app/engines/graph_sync_client\.py)
+        name: mypy
+        # The command the required CI job runs (ci.yml "Run Mypy Type Checker"),
+        # over the package as a whole, in the environment
+        # tools/deps/install_locked.sh full builds: the hook and the merge gate
+        # are one check against the same packages and stubs.
+        entry: mypy app --show-error-codes --ignore-missing-imports
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
 
   # ── Unit tests (fast subset for pre-commit) ─────────────────────────
   - repo: local

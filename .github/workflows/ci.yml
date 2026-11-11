@@ -44,7 +44,6 @@ jobs:
             pyproject.toml
       - name: Install Validation Tools
         run: |
-          python -m pip install --only-binary=:all: "pip==26.2.1"
           pip install pyyaml
       - name: Check Python Syntax
         run: |

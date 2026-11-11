@@ -365,3 +365,16 @@ Durable, non-obvious notes for running this service in the Cursor Cloud VM. The 
 > `[tool.uv.sources]` on tag `v1` and `uv.lock` records its commit. Change a
 > dependency with `uv add` / edit + `uv lock`, and commit `uv.lock`.
 > `tests/unit/test_uv_lock.py` fails on a stale lock or a second manifest.
+
+> **2026-11-11 correction (additive; append-only):** Core-owned tools (pip,
+> pre-commit, ruff, mypy, pytest, semgrep) are declared nowhere in this
+> repository. `pyproject.toml` names none of them, `[tool.uv]
+> exclude-dependencies` keeps them (and transitive copies via pytest plugins or
+> pip-audit) out of `uv.lock`, no workflow pins or upgrades pip or installs a
+> Core tool itself, the ruff and mypy pre-commit hooks are `repo: local` /
+> `language: system` (the mypy hook runs the CI command, `mypy app
+> --show-error-codes --ignore-missing-imports`), and `tools/deps/install_locked.sh
+> full` installs Quantum-L9/l9-ci-core's installer pins from the `v2` tag
+> (`L9_CI_CORE_REF` overrides it). A Core version bump needs no edit here.
+> A plain `uv sync` without `--inexact` removes them.
+> `tests/unit/test_core_toolchain_pins.py` fails on any declaration.
