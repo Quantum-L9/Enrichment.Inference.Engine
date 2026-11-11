@@ -1,7 +1,12 @@
 """Explicit cross-repository proof, never a deployment or real approval.
 
-Run with CEG_REPO and CEG_PYTHON supplied by the operator. The standard EIE
-suite skips this integration when the independent native owner is unavailable.
+The independent native owner is a Cognitive.Engine.Graphs checkout plus an
+interpreter that can run its ``tools/validate_domain.py``. It is resolved from
+CEG_REPO / CEG_PYTHON (operator-supplied; CI's ``integration`` job sets them to
+its pinned CEG checkout), else from L9_CEG_NATIVE_REPO / L9_CEG_NATIVE_PYTHON,
+the pinned native CEG subject the hosted ``test`` jobs already provision. EIE's
+side runs in the interpreter running this suite. Without an owner the module
+skips — or fails under EIE_REQUIRE_INTEGRATION=1.
 """
 
 from __future__ import annotations
@@ -10,21 +15,27 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
+from tests.conftest import skip_or_fail_unavailable
+
 ROOT = Path(__file__).resolve().parents[2]
-CEG_ROOT = os.environ.get("CEG_REPO")
-CEG_PYTHON = os.environ.get("CEG_PYTHON")
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(
-        not CEG_ROOT or not CEG_PYTHON,
-        reason="explicit independent CEG native checkout/interpreter not supplied",
-    ),
-]
+CEG_ROOT = os.environ.get("CEG_REPO") or os.environ.get("L9_CEG_NATIVE_REPO")
+CEG_PYTHON = os.environ.get("CEG_PYTHON") or os.environ.get("L9_CEG_NATIVE_PYTHON")
+pytestmark = [pytest.mark.integration]
+
+
+@pytest.fixture(autouse=True)
+def _require_native_owner() -> None:
+    if not CEG_ROOT or not CEG_PYTHON:
+        skip_or_fail_unavailable(
+            "explicit independent CEG native checkout/interpreter not supplied "
+            "(CEG_REPO/CEG_PYTHON or L9_CEG_NATIVE_REPO/L9_CEG_NATIVE_PYTHON)"
+        )
 
 
 def _inputs(tmp_path):
@@ -73,7 +84,7 @@ def _receipt(spec, engine, output):
 def _run(tmp_path, eie, ceg, receipts=False):
     output = tmp_path / "pair-proof.json"
     cmd = [
-        str(ROOT / ".venv/bin/python"),
+        sys.executable,
         str(ROOT / "scripts/check_domain_compatibility.py"),
         "--eie-spec",
         str(eie),
@@ -148,7 +159,7 @@ def test_post_review_tamper_refuses_release_even_if_native_spec_still_valid(tmp_
     output = tmp_path / "tamper-proof.json"
     result = subprocess.run(
         [
-            str(ROOT / ".venv/bin/python"),
+            sys.executable,
             str(ROOT / "scripts/check_domain_compatibility.py"),
             "--eie-spec",
             str(eie),
