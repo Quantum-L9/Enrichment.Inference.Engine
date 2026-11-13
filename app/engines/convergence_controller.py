@@ -21,6 +21,7 @@ Produces: Final EnrichResponse with merged fields from all passes + inference re
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -69,18 +70,15 @@ _classification_cache: dict[str, DomainClassification] = {}
 
 
 def _cache_key(domain_spec: dict[str, Any]) -> str:
-    """Deterministic hash of a domain spec for caching."""
-    domain_name = domain_spec.get("domain") or domain_spec.get("metadata", {}).get(
-        "domain", "unknown"
-    )
-    # Include field count for collision avoidance
-    ontology = domain_spec.get("ontology", domain_spec)
-    nodes = ontology.get("nodes", ontology.get("entities", {}))
-    node_count = len(nodes) if isinstance(nodes, (dict, list)) else 0
-    raw = f"{domain_name}:{node_count}"
-    # Non-security cache key only; usedforsecurity=False marks this hash as
-    # non-cryptographic to satisfy weak-hashing scanners (CWE-327/328).
-    return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
+    """Content digest of the loaded spec.
+
+    A classification is valid only for the exact spec it was computed from: two
+    cartridges, or two revisions of one, never share an entry. (The former key,
+    declared-domain-name plus node count, was `unknown:1` for every one-node
+    native cartridge.)
+    """
+    canonical = json.dumps(domain_spec, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def get_or_classify_domain(domain_spec: dict[str, Any]) -> DomainClassification:
