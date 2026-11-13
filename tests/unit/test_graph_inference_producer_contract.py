@@ -164,11 +164,22 @@ class _RecordingEnricher:
 
     def __init__(self) -> None:
         self.requests: list[EnrichRequest] = []
+        self.authorized: list[int | None] = []
 
     async def __call__(
-        self, request: EnrichRequest, settings, kb_resolver, idem_store, sonar_config=None
+        self,
+        request: EnrichRequest,
+        settings,
+        kb_resolver,
+        idem_store,
+        sonar_config=None,
+        *,
+        authorized_variations: int | None = None,
     ) -> EnrichResponse:
+        # Mirrors enrich_entity's signature, including the planner's
+        # authorization the loop hands the default enricher (post-#320 F2).
         self.requests.append(request)
+        self.authorized.append(authorized_variations)
         return EnrichResponse(
             fields={"website": "acme.example"}, confidence=0.9, tokens_used=10, state="completed"
         )
@@ -230,6 +241,8 @@ async def test_graph_result_reaches_the_live_convergence_pass(
     # It shaped the pass: the provider saw the graph value in the entity.
     (pass_request,) = live_runtime.requests
     assert pass_request.entity["tier"] == "mid_market"
+    # The live loop hands the default enricher the planner's pass budget.
+    assert live_runtime.authorized == [pass_request.max_variations]
     # And it is in the converged result, attributed to the graph.
     assert result["fields"]["tier"] == "mid_market"
     assert result["inferences"][0]["graph_seeded"] == ["tier"]
