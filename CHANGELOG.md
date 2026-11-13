@@ -40,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   No runtime package version changed. `.github/dependabot.yml` is the org
   render (uv ecosystem, safe-only).
 
+- **Converge contract v1 (2026-11-13).** `docs/contracts/converge/v1.md`
+  specifies the Odoo `converge` request and response. `docs/contracts/api/openapi.yaml`
+  2.5.0 and `docs/contracts/data/models/enrichment-result.schema.json` add
+  `degraded` to `EnrichResponse.state`: a converge request stopped by its 25 s
+  deadline answers `degraded` (previously `failed`). Converge `fields` are now a
+  subset of the request `schema`.
+
 ### Fixed
 - **`/score/compare` reads the records it is asked to compare (2026-11-11).**
   It read both sides with `score_store.get_score(entity_id, entity_id)` (the
