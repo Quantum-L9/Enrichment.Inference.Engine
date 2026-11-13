@@ -1,0 +1,245 @@
+{
+  "fields": {
+    "city": "Austin",
+    "tier": "t1"
+  },
+  "confidence": 0.9,
+  "kb_content_hash": "",
+  "variation_count": 0,
+  "consensus_threshold": 0.0,
+  "uncertainty_score": 7.0,
+  "pass_count": 1,
+  "inference_version": "v3.0.0-convergence",
+  "processing_time_ms": 0,
+  "enrichment_payload": null,
+  "feature_vector": null,
+  "kb_files_consulted": [],
+  "kb_fragment_ids": [],
+  "inferences": [
+    {
+      "pass": 1,
+      "mode": "discovery",
+      "enriched": [
+        "city"
+      ],
+      "inferred": [
+        "tier"
+      ],
+      "graph_seeded": [],
+      "confidence": 0.9,
+      "rules_fired": 1,
+      "inference_provenance": {
+        "tier": {
+          "rule_id": "tier-from-city",
+          "rule_version": "v-test",
+          "derivation_type": "classification",
+          "inputs": {
+            "city": "Austin"
+          },
+          "input_confidence": {
+            "city": 0.9
+          },
+          "rule_confidence": 0.9,
+          "confidence": 0.9,
+          "cascade_level": 0
+        }
+      },
+      "per_field_confidence": {
+        "city": 0.9
+      },
+      "uncertainty": 7.0
+    }
+  ],
+  "quality_tier": "unknown",
+  "grade_matches": [],
+  "tokens_used": 10,
+  "failure_reason": null,
+  "state": "completed",
+  "convergence_reason": "max_passes_reached",
+  "contract_version": "eie.converge.response/v2",
+  "field_evidence": {
+    "city": {
+      "state": "external_claim",
+      "admitted": true,
+      "value": "Austin",
+      "unit_status": "unknown",
+      "confidence": 0.9,
+      "sources": [
+        {
+          "source_type": "provider",
+          "source_ref": "pass:1/consensus",
+          "method": "provider_consensus",
+          "independent": null
+        }
+      ],
+      "derivation": null,
+      "conflict": null,
+      "unknown_reason": null,
+      "identity": {
+        "subject_ref": "rec:1",
+        "subject_type": "site",
+        "role": "seller"
+      }
+    },
+    "tier": {
+      "state": "inferred",
+      "admitted": true,
+      "value": "t1",
+      "unit_status": "unknown",
+      "confidence": 0.9,
+      "sources": [],
+      "derivation": {
+        "method": "tier-from-city",
+        "rule_or_model_version": "v-test",
+        "inputs": [
+          "city"
+        ],
+        "kb_fragment_ids": []
+      },
+      "conflict": null,
+      "unknown_reason": null,
+      "identity": {
+        "subject_ref": "rec:1",
+        "subject_type": "site",
+        "role": "seller"
+      }
+    },
+    "zip": {
+      "state": "conflicting",
+      "admitted": false,
+      "confidence": null,
+      "sources": [],
+      "conflict": {
+        "candidates": [
+          {
+            "value": "1",
+            "unit_status": "unknown",
+            "confidence": 0.7,
+            "sources": [
+              {
+                "source_type": "provider",
+                "source_ref": "pass:1/replies",
+                "method": "provider_reply",
+                "independent": null
+              }
+            ]
+          },
+          {
+            "value": "2",
+            "unit_status": "unknown",
+            "confidence": 0.6,
+            "sources": [
+              {
+                "source_type": "provider",
+                "source_ref": "pass:1/replies",
+                "method": "provider_reply",
+                "independent": null
+              }
+            ]
+          }
+        ],
+        "resolution": null
+      },
+      "derivation": null,
+      "unknown_reason": null,
+      "identity": {
+        "subject_ref": "rec:1",
+        "subject_type": "site",
+        "role": "seller"
+      }
+    },
+    "phone": {
+      "state": "external_claim",
+      "admitted": false,
+      "value": "555",
+      "unit_status": "unknown",
+      "confidence": 0.5,
+      "sources": [
+        {
+          "source_type": "provider",
+          "source_ref": "pass:1/replies",
+          "method": "provider_reply",
+          "independent": null
+        }
+      ],
+      "derivation": null,
+      "conflict": null,
+      "unknown_reason": null,
+      "identity": {
+        "subject_ref": "rec:1",
+        "subject_type": "site",
+        "role": "seller"
+      }
+    },
+    "name": {
+      "state": "observed",
+      "admitted": false,
+      "value": "Acme",
+      "unit_status": "unknown",
+      "confidence": null,
+      "sources": [
+        {
+          "source_type": "request_entity",
+          "source_ref": "entity.name",
+          "method": "consumer_supplied",
+          "independent": null
+        }
+      ],
+      "derivation": null,
+      "conflict": null,
+      "unknown_reason": null,
+      "identity": {
+        "subject_ref": "rec:1",
+        "subject_type": "site",
+        "role": "seller"
+      }
+    },
+    "site_url": {
+      "state": "unknown",
+      "admitted": false,
+      "confidence": null,
+      "sources": [],
+      "derivation": null,
+      "conflict": null,
+      "unknown_reason": "no_evidence",
+      "identity": {
+        "subject_ref": "rec:1",
+        "subject_type": "site",
+        "role": "seller"
+      }
+    }
+  },
+  "proposals": [
+    {
+      "proposal_id": "p1",
+      "proposal_type": "site",
+      "identity": {
+        "subject_ref": "rec:1",
+        "subject_type": "site",
+        "role": "seller"
+      },
+      "fields": [
+        "city",
+        "tier",
+        "zip",
+        "phone",
+        "name",
+        "site_url"
+      ],
+      "admitted_fields": [
+        "city",
+        "tier"
+      ],
+      "review": {
+        "required": true,
+        "reasons": [
+          "contains_external_claim",
+          "contains_inferred",
+          "contains_conflict",
+          "contains_unknown",
+          "contains_unadmitted"
+        ]
+      }
+    }
+  ]
+}
