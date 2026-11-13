@@ -1,0 +1,31 @@
+{
+  "case_id": "supplier_material",
+  "synthetic": true,
+  "role": "supplier",
+  "subject_type": "material_profile",
+  "evidence": [
+    {"ref": "req:entity", "states": {"polymer_type": "HDPE"}},
+    {"ref": "doc:s1", "states": {"material_form": "regrind", "melt_flow_index": 0.35}}
+  ],
+  "labels": {
+    "polymer_type": {"kind": "value", "value": "HDPE", "basis": "evidence"},
+    "material_form": {"kind": "value", "value": "regrind", "basis": "evidence"},
+    "melt_flow_index": {"kind": "value", "value": 0.35, "basis": "evidence", "unit": "g/10min"},
+    "material_grade": {"kind": "value", "value": "blow_molding_grade", "basis": "heuristic"},
+    "contamination_pct": {"kind": "unknown"}
+  },
+  "output": {
+    "polymer_type": {"state": "observed", "confidence": null, "source_refs": ["req:entity"], "value": "HDPE"},
+    "material_form": {"state": "external_claim", "confidence": 0.9, "source_refs": ["doc:s1"], "value": "regrind"},
+    "melt_flow_index": {"state": "external_claim", "confidence": 0.6, "source_refs": ["doc:s1"], "value": 0.35, "unit": "g/min"},
+    "material_grade": {"state": "inferred", "confidence": 0.9, "source_refs": [], "value": "blow_molding_grade"},
+    "contamination_pct": {"state": "unknown", "confidence": null, "source_refs": []}
+  },
+  "expected": {
+    "polymer_type": "evidence_supported_correct",
+    "material_form": "evidence_supported_correct",
+    "melt_flow_index": "unit_mismatch",
+    "material_grade": "heuristic_agreement",
+    "contamination_pct": "unknown_preserved"
+  }
+}

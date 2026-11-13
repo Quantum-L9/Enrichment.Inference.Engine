@@ -25,6 +25,12 @@ import structlog
 import yaml
 
 from ..core.config import get_settings
+from ..engines.converge_contract import (
+    COMPLETED_STATE,
+    degraded_response,
+    mark_deadline_degraded,
+    restrict_fields_to_schema,
+)
 from ..engines.convergence.convergence_config import ConvergenceConfig
 from ..engines.convergence_controller import run_convergence_loop
 from ..engines.domain_yaml_reader import (
@@ -67,7 +73,7 @@ logger = structlog.get_logger("handlers")
 
 # One operation budget for converge: Odoo waits 30 s on the Gate hop.
 DEFAULT_CONVERGE_TIMEOUT_SECONDS = CANONICAL_CONVERGE_BUDGET_SECONDS
-_COMPLETED_STATE = "completed"
+_COMPLETED_STATE = COMPLETED_STATE
 
 _kb: KBResolver | None = None
 _idem: IdempotencyStore | None = None
@@ -285,8 +291,9 @@ async def _handle_canonical_converge(
         # The response reserve exists so a timing-out request still answers in
         # EnrichResponse semantics. Odoo's mapper derives status from `state`,
         # so a non-completed state routes it to its own degraded handling —
-        # no Odoo-specific error envelope is invented here.
-        return _canonical_failure(f"converge exceeded {budget_seconds:.0f}s budget for {entity_id}")
+        # no Odoo-specific error envelope is invented here. Contract v1 names
+        # the state: `degraded`, with no partial result attached.
+        return degraded_response(f"converge exceeded {budget_seconds:.0f}s budget for {entity_id}")
     except Exception as exc:
         logger.exception(
             "handlers.converge_failed",
@@ -323,7 +330,7 @@ async def _run_canonical_converge(
         or request.kb_context
         or request.object_type
     )
-    domain_hints, inference_rules = await _load_domain_convergence_context(
+    domain_hints, inference_rules, domain_spec = await _load_domain_converge_bundle(
         domain_id=domain_id,
         node_label=payload.get("node_label"),
     )
@@ -342,11 +349,21 @@ async def _run_canonical_converge(
         idem_store=_idem,
         inference_rules=inference_rules,
         domain_hints=domain_hints,
+        # The effective revision's full spec, from the same single read as the
+        # hints and rules, so field classification and planning see the domain.
+        domain_spec=domain_spec,
         tenant_id=tenant,
         entity_id=entity_id,
         **loop_kwargs,
     )
     result = response.model_dump()
+    # Contract v1, applied before persistence so the durable record and the
+    # answer are the same object: fields ⊆ request.schema, and a deadline stop
+    # is `degraded`, never `completed`.
+    dropped = restrict_fields_to_schema(result, request.schema_)
+    if dropped:
+        logger.info("handlers.converge_fields_outside_schema_dropped", dropped=dropped)
+    mark_deadline_degraded(result)
 
     if response.state == _COMPLETED_STATE:
         # The top-level `entity_id` is the first key of the SEAM-02 order that
@@ -416,7 +433,22 @@ async def _load_domain_convergence_context(
     domain_id: str | None,
     node_label: str | None,
 ) -> tuple[dict[str, Any], Any]:
-    """Load optional domain hints + inference rules for converge.
+    """Domain hints + inference rules; see `_load_domain_converge_bundle`."""
+    hints, rules, _spec = await _load_domain_converge_bundle(
+        domain_id=domain_id, node_label=node_label
+    )
+    return hints, rules
+
+
+async def _load_domain_converge_bundle(
+    *,
+    domain_id: str | None,
+    node_label: str | None,
+) -> tuple[dict[str, Any], Any, dict[str, Any] | None]:
+    """Load optional domain hints + inference rules + the full spec for converge.
+
+    The third element is the effective revision's raw spec, or None when no
+    domain resolved; all three come from one `DomainYamlReader.load`.
 
     An unknown domain converges without inference. A loaded domain's rules come
     from `inference_rules_path`, else the spec's own `inference_rules`; they are
@@ -438,7 +470,7 @@ async def _load_domain_convergence_context(
     domain_hints: dict[str, Any] = {}
     inference_rules: Any = []
     if not domain_id or not _domain_reader:
-        return domain_hints, inference_rules
+        return domain_hints, inference_rules, None
 
     # Resolve once: pointer publication between two reads must never pair old
     # enrichment hints with a different revision's rules.
@@ -454,7 +486,7 @@ async def _load_domain_convergence_context(
             domain_id=domain_id,
             error=str(exc),
         )
-        return domain_hints, inference_rules
+        return domain_hints, inference_rules, None
     domain_hints = _node_hints(config, domain_id, node_label)
     logger.info(
         "handlers.converge_effective_revision",
@@ -469,7 +501,7 @@ async def _load_domain_convergence_context(
     else:
         inference_rules = config.raw_spec.get("inference_rules") or []
 
-    return domain_hints, inference_rules
+    return domain_hints, inference_rules, config.raw_spec or None
 
 
 def _node_hints(

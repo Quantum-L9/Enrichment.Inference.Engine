@@ -319,3 +319,202 @@ class TestPartialFieldThresholdsStandalone:
         # Without a map there is no per-field confidence bar; only agreement gates.
         response, _ = await _standalone(None, confidence=0.80)
         assert response.fields == {"street": "1 Main", "city": "Austin"}
+
+
+# ── Post-#320 F1: request-level confidence integrity ─────────────────────────
+
+
+async def _enrich_with_replies(replies, *, schema=None, field_thresholds=None, max_variations=3):
+    request = EnrichRequest(
+        entity={"Name": "Acme"},
+        object_type="Account",
+        objective="Find the city",
+        schema=schema if schema is not None else {"city": "string"},
+        field_thresholds=field_thresholds,
+        max_variations=max_variations,
+    )
+    side_effect = list(replies) + [replies[-1]] * 10
+    with patch(
+        "app.engines.enrichment_orchestrator.query_perplexity",
+        new_callable=AsyncMock,
+        side_effect=side_effect,
+    ) as provider:
+        response = await enrich_entity(request, _standalone_settings(), _standalone_resolver())
+    return response, provider.await_count
+
+
+def _reply(confidence, **fields):
+    return SonarResponse(
+        data={"confidence": confidence, **fields}, tokens_used=10, citations=[], model="sonar"
+    )
+
+
+class TestConfidenceIntegrityStandalone:
+    @pytest.mark.asyncio
+    async def test_f1_08_singleton_060_is_reported_as_060(self) -> None:
+        response, calls = await _enrich_with_replies([_reply(0.60, city="Austin")] * 3)
+        assert response.fields == {"city": "Austin"}
+        assert response.feature_vector["per_field_confidence"]["city"] == pytest.approx(0.60)
+        assert calls == 3  # 0.60 is below the 0.65 agreement bar, so no early stop
+
+    @pytest.mark.asyncio
+    async def test_f1_18_invalid_high_raw_confidence_is_not_sufficient(self) -> None:
+        _, calls = await _enrich_with_replies([_reply(True, city="Austin")], max_variations=3)
+        assert calls == 3
+
+    @pytest.mark.asyncio
+    async def test_f1_18_nan_raw_confidence_is_not_sufficient(self) -> None:
+        response, calls = await _enrich_with_replies(
+            [_reply("nan", city="Austin")], field_thresholds={"city": 0.5}, max_variations=2
+        )
+        assert calls == 2
+        assert "city" not in response.fields
+
+    @pytest.mark.asyncio
+    async def test_f1_19_legitimately_sufficient_reply_still_stops_early(self) -> None:
+        response, calls = await _enrich_with_replies([_reply(0.95, city="Austin")])
+        assert calls == 1
+        assert response.feature_vector["per_field_confidence"]["city"] == pytest.approx(0.95)
+
+    @pytest.mark.asyncio
+    async def test_f1_17_dissent_cannot_clear_a_095_field_bar(self) -> None:
+        replies = [
+            _reply(0.96, city="Austin"),
+            _reply(0.96, city="Austin"),
+            _reply(0.96, city="Dallas"),
+        ]
+        response, _ = await _enrich_with_replies(
+            replies, schema={"city": "string", "street": "string"}, field_thresholds={"city": 0.95}
+        )
+        assert "city" not in response.fields
+
+    @pytest.mark.asyncio
+    async def test_f1_21_failures_are_not_opposing_votes(self) -> None:
+        request = EnrichRequest(
+            entity={"Name": "Acme"},
+            object_type="Account",
+            objective="Find the city",
+            schema={"city": "string"},
+            max_variations=2,
+        )
+        with patch(
+            "app.engines.enrichment_orchestrator.query_perplexity",
+            new_callable=AsyncMock,
+            # 0.60 is below the 0.65 agreement bar, so the second call is made.
+            side_effect=[_reply(0.60, city="Austin"), RuntimeError("timeout")],
+        ):
+            response = await enrich_entity(request, _standalone_settings(), _standalone_resolver())
+        assert response.state == "completed"
+        assert response.variation_count == 2
+        # The timeout is not a dissenting vote: Austin's agreement is 1/1 over
+        # valid replies and its score is its own assertion, not halved.
+        assert response.feature_vector["per_field_confidence"]["city"] == pytest.approx(0.60)
+
+    @pytest.mark.asyncio
+    async def test_f1_16_missing_confidence_reports_no_success(self) -> None:
+        response, _ = await _enrich_with_replies(
+            [SonarResponse(data={"city": "Austin"}, tokens_used=10, citations=[], model="sonar")],
+            field_thresholds={"city": 0.5},
+        )
+        assert response.state == "failed"
+        assert response.fields == {}
+
+    @pytest.mark.asyncio
+    async def test_f1_22_public_response_shape_is_unchanged(self) -> None:
+        response, _ = await _enrich_with_replies([_reply(0.95, city="Austin")])
+        assert set(response.feature_vector) == {
+            "schema_hash",
+            "fields_enriched",
+            "per_field_confidence",
+            "requested_fields",
+        }
+        assert set(EnrichResponse.model_fields) >= {"fields", "confidence", "feature_vector"}
+
+
+# ── Post-#320 F2: dispatch obeys exactly one count owner ─────────────────────
+
+
+async def _dispatch(request, **kwargs):
+    reply = SonarResponse(data={"confidence": 0.9}, tokens_used=10, citations=[], model="sonar")
+    with patch(
+        "app.engines.enrichment_orchestrator.query_perplexity",
+        new_callable=AsyncMock,
+        return_value=reply,
+    ) as provider:
+        response = await enrich_entity(
+            request, _standalone_settings(), _standalone_resolver(), **kwargs
+        )
+    return response, provider.await_count
+
+
+def _street_request(max_variations: int = 5) -> EnrichRequest:
+    return EnrichRequest(
+        entity={"Name": "Acme"},
+        object_type="Account",
+        objective="Find the street",
+        schema={"street": "string"},
+        max_variations=max_variations,
+    )
+
+
+class TestVariationAuthority:
+    @pytest.mark.asyncio
+    async def test_f2_04_authorized_count_overrides_the_direct_heuristic(self) -> None:
+        with patch("app.engines.enrichment_orchestrator.compute_uncertainty", return_value=1):
+            _, calls = await _dispatch(_street_request(5), authorized_variations=4)
+        assert calls == 4
+
+    @pytest.mark.asyncio
+    async def test_f2_03_caller_cap_still_bounds_the_authorized_count(self) -> None:
+        _, calls = await _dispatch(_street_request(1), authorized_variations=5)
+        assert calls == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("heuristic", "cap", "expected"), [(3, 2, 2), (1, 5, 1)])
+    async def test_f2_07_direct_enrich_keeps_its_heuristic_and_caller_cap(
+        self, heuristic, cap, expected
+    ) -> None:
+        with patch(
+            "app.engines.enrichment_orchestrator.compute_uncertainty", return_value=heuristic
+        ):
+            _, calls = await _dispatch(_street_request(cap))
+        assert calls == expected
+
+    @pytest.mark.asyncio
+    async def test_f2_05_zero_variations_dispatch_nothing_and_say_so(self) -> None:
+        from app.engines.search_optimizer import SonarConfig
+
+        with patch("app.engines.enrichment_orchestrator.compute_uncertainty", return_value=3):
+            response, calls = await _dispatch(
+                _street_request(5), sonar_config=SonarConfig(variations=0)
+            )
+        assert calls == 0
+        assert response.state == "failed"
+        assert response.failure_reason == "no_variations_authorized"
+        assert response.variation_count == 0
+
+    @pytest.mark.asyncio
+    async def test_f2_05_disable_search_still_bypasses_the_provider(self) -> None:
+        from app.engines.search_optimizer import SonarConfig
+
+        response, calls = await _dispatch(
+            _street_request(5), sonar_config=SonarConfig(disable_search=True, variations=0)
+        )
+        assert calls == 0
+        assert response.state == "completed"
+
+    @pytest.mark.asyncio
+    async def test_f2_09_failed_first_reply_never_exceeds_the_authorization(self) -> None:
+        with patch(
+            "app.engines.enrichment_orchestrator.query_perplexity",
+            new_callable=AsyncMock,
+            side_effect=[RuntimeError("boom")] + [_reply(0.9)] * 10,
+        ) as provider:
+            response = await enrich_entity(
+                _street_request(5),
+                _standalone_settings(),
+                _standalone_resolver(),
+                authorized_variations=3,
+            )
+        assert provider.await_count == 3
+        assert response.variation_count == 3

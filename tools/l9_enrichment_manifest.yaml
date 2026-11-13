@@ -5,7 +5,7 @@ description: Active transport/runtime contract manifest for Enrichment.Inference
 contracts:
   active_transport_runtime:
   - path: app/main.py
-    contract_version: "1.2.0"
+    contract_version: "1.3.0"
     required_refs:
     - AGENTS.md
     - ARCHITECTURE.md
@@ -19,6 +19,13 @@ contracts:
     - ARCHITECTURE.md
     - REPO_MAP.md
     description: Retired peer-ingress router (empty); `/v1/execute` and `/v1/outcomes` are not defined here
+  - path: app/middleware/gate_ingress.py
+    contract_version: "1.0.0"
+    required_refs:
+    - AGENTS.md
+    - ARCHITECTURE.md
+    - EXECUTION_FLOWS.md
+    description: Gate-only ingress boundary in front of the SDK /v1/execute route (C-21, GATE-KEY-01)
   - path: app/services/chassis_handlers.py
     contract_version: "1.0.0"
     required_refs:

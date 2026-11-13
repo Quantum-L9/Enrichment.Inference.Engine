@@ -499,8 +499,9 @@ async def test_canonical_request_exits_within_the_complete_budget():
 
     # EIE2/PATCH 17: exhaustion is reported in EnrichResponse semantics, not as a
     # bespoke error envelope. Odoo's mapper reads state != "completed" and routes
-    # the run to its own degraded handling.
-    assert result["state"] == "failed"
+    # the run to its own degraded handling. Converge contract v1 names the
+    # state `degraded` (docs/contracts/converge/v1.md).
+    assert result["state"] == "degraded"
     assert "budget" in result["failure_reason"]
     assert result["fields"] == {}
 
@@ -525,7 +526,7 @@ async def test_persistence_is_inside_the_outer_deadline():
             timeout=budget + 0.5,
         )
 
-    assert result["state"] == "failed"
+    assert result["state"] == "degraded"
     assert "budget" in result["failure_reason"]
 
 
