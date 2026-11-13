@@ -1,0 +1,32 @@
+{
+  "case_id": "buyer_facility",
+  "synthetic": true,
+  "role": "buyer",
+  "subject_type": "facility_profile",
+  "evidence": [
+    {"ref": "req:entity", "states": {"name": "Synthetic Buyer Works"}},
+    {"ref": "doc:b3", "states": {"process_type": "injection_molding"}},
+    {"ref": "doc:b4", "states": {"dock_count": 4}},
+    {"ref": "doc:b5", "states": {"dock_count": 6}}
+  ],
+  "labels": {
+    "name": {"kind": "value", "value": "Synthetic Buyer Works", "basis": "evidence"},
+    "process_type": {"kind": "value", "value": "injection_molding", "basis": "evidence"},
+    "dock_count": {"kind": "conflicting", "values": [4, 6]},
+    "accepted_form_class": {"kind": "value", "value": "pellet_or_regrind", "basis": "heuristic"},
+    "phone": {"kind": "unknown"}
+  },
+  "output": {
+    "name": {"state": "observed", "confidence": null, "source_refs": ["req:entity"], "value": "Synthetic Buyer Works"},
+    "process_type": {"state": "external_claim", "confidence": 0.86, "source_refs": ["doc:b3"], "value": "extrusion"},
+    "dock_count": {"state": "external_claim", "confidence": 0.7, "source_refs": ["doc:b4"], "value": 4},
+    "phone": {"state": "unknown", "confidence": null, "source_refs": []}
+  },
+  "expected": {
+    "name": "evidence_supported_correct",
+    "process_type": "disagreement",
+    "dock_count": "conflict_coerced",
+    "accepted_form_class": "missing_output",
+    "phone": "unknown_preserved"
+  }
+}

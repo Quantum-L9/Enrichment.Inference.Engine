@@ -110,6 +110,8 @@ INFERENCE_SOURCE = "inference"
 # Convergence stopped because the shared request deadline ran out. Not a
 # successful convergence — see _assemble_convergence_response.
 DEADLINE_EXHAUSTED_REASON = "deadline_exhausted"
+# Stop reason when the planner authorized no provider variation for a pass.
+NO_VARIATIONS_AUTHORIZED = "no_variations_authorized"
 
 
 @dataclass
@@ -257,6 +259,8 @@ async def run_convergence_loop(
         # A per-run cap can only lower the deployment's budget (F-007).
         max_budget = min(max_budget, config.max_budget_tokens)
     cost_tracker = CostTracker(max_budget_tokens=max_budget)
+    # Only the default enricher takes the planner's authorization keyword.
+    default_enricher = enricher is None
 
     # Seed known_fields from the entity's existing data
     state.known_fields = {k: v for k, v in request.entity.items() if v is not None}
@@ -336,6 +340,15 @@ async def run_convergence_loop(
                 top_targets=search_plan.priority_fields[:3],
             )
 
+        # ── Variation authority (post-#320 F2) ────────────
+        # The planner's pass budget, capped by the caller, is the only count.
+        # A zero is a real zero: no provider call, and the loop says why.
+        pass_cap = _pass_variation_cap(request, search_plan)
+        if pass_cap <= 0:
+            logger.info("no_variations_authorized", pass_number=pass_num)
+            state.convergence_reason = NO_VARIATIONS_AUTHORIZED
+            break
+
         # ── Resolve optimal Sonar config for this pass ────
         sonar_config: SonarConfig | None = None
         if domain_classification and search_plan:
@@ -355,16 +368,19 @@ async def run_convergence_loop(
                 pass_number=pass_num,
                 allocated_tokens=cost_tracker.budget_remaining(),
             )
+            # The planner owns the count (post-#320 F2): the optimizer picks
+            # model, context, filters and tokens for the authorized count and
+            # the cost estimate is computed for it. cap_variations stays as the
+            # mechanical hard cap (#320); with one owner it never changes it.
             sonar_config = resolve_from_classification(
                 search_plan_mode=search_plan.mode,
                 target_fields=search_plan.priority_fields or [],
                 signals=signals,
                 classification=domain_classification,
                 budget_tokens=cost_tracker.budget_remaining(),
+                authorized_variations=pass_cap,
             )
-            # The optimizer only recommends a count. The pass budget (from
-            # U_action) and the caller's max_variations bound what runs.
-            sonar_config = cap_variations(sonar_config, _pass_variation_cap(request, search_plan))
+            sonar_config = cap_variations(sonar_config, pass_cap)
             logger.info(
                 "sonar_config_resolved",
                 pass_number=pass_num,
@@ -390,17 +406,23 @@ async def run_convergence_loop(
         )
 
         # --- SINGLE-PASS ENRICHMENT ---
+        # The default enricher receives the planner's authorization so its
+        # single-pass heuristic never re-decides the count. An injected
+        # enricher keeps its existing call contract.
+        enrich_kwargs: dict[str, Any] = {"sonar_config": sonar_config}
         if enricher is None:
             from ..engines.enrichment_orchestrator import enrich_entity
 
             enricher = enrich_entity
+        if default_enricher:
+            enrich_kwargs["authorized_variations"] = pass_cap
 
         pass_response: EnrichResponse = await enricher(
             pass_request,
             settings,
             kb_resolver,
             idem_store,
-            sonar_config=sonar_config,
+            **enrich_kwargs,
         )
         if search_plan is not None:
             search_plan.variation_count = pass_response.variation_count
@@ -736,6 +758,11 @@ def _assemble_convergence_response(
     if state.convergence_reason == DEADLINE_EXHAUSTED_REASON:
         response_state = "failed"
         failure_reason: str | None = DEADLINE_EXHAUSTED_REASON
+    elif state.convergence_reason == NO_VARIATIONS_AUTHORIZED:
+        # No provider call was authorized for a pass: a bounded failure,
+        # never "completed" with nothing enriched.
+        response_state = "failed"
+        failure_reason = NO_VARIATIONS_AUTHORIZED
     elif state.pass_results and all(pr.state == "failed" for pr in state.pass_results):
         # Every enrichment pass failed: the loop stopped on a bounded failure,
         # not on convergence (F-003). Name the last pass's own reason so the
@@ -826,5 +853,8 @@ def _build_pass_request(
 
 
 def _pass_variation_cap(original: EnrichRequest, plan: PromptPlan) -> int:
-    """Variations this pass may run: the plan's budget, never above the caller's."""
-    return min(plan.variation_count or original.max_variations, original.max_variations)
+    """Variations this pass may run: the plan's budget, never above the caller's.
+
+    A plan budget of 0 is a real 0, not a cue to fall back to the caller's cap.
+    """
+    return max(min(plan.variation_count, original.max_variations), 0)

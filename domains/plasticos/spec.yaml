@@ -96,9 +96,8 @@ chassisbinding:
 # packet_router projects every row onto that declaration (a list<map> travels as
 # a list of maps; a value whose type does not match is refused before sending;
 # an undeclared field is dropped). CEG validates the same rows against its own
-# tenant spec at ingress (flag sync_row_type_validation_enabled, landing in the
-# Cognitive.Engine.Graphs typed-contract change) and refuses the whole batch on
-# any defect. The compatibility contract eie-ceg-sync/v2
+# tenant spec at ingress (flag sync_row_type_validation_enabled,
+# Cognitive.Engine.Graphs #454) and refuses the whole batch on any defect. The compatibility contract eie-ceg-sync/v2
 # (app/engines/domain_spec_compatibility.py) proves every property EIE sends is
 # declared by CEG with the identical typed shape, checked
 # against tests/fixtures/ceg/plasticos.spec.yaml; CEG's other endpoints
