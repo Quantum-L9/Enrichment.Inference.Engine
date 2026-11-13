@@ -142,8 +142,9 @@ REFUSALS: list[tuple[str, dict[str, Any]]] = [
         },
     ),
     ("duplicate_target", {"targets": [{"field": "tier"}, {"field": "tier"}]}),
-    # PlasticOS on main declares no subject vocabulary, so any subject is refused.
-    ("subject_not_declared", {"subject": {"type": "facility"}}),
+    # A subject type no PlasticOS revision declares is refused, whether or not the
+    # loaded revision declares a subject vocabulary.
+    ("subject_not_declared", {"subject": {"type": "vessel"}}),
 ]
 
 
