@@ -1,15 +1,15 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: Unified OpenAPI Specification
 # Source:   app/main.py, app/api/v1/*, app/score/score_api.py, app/models/schemas.py
-# Version:  2.4.1
-# Updated:  2026-11-11
+# Version:  2.5.0
+# Updated:  2026-11-13
 # ═══════════════════════════════════════════════════════════════
 
 openapi: "3.1.0"
 
 info:
   title: L9 ENRICH — Domain Enrichment API
-  version: "2.4.1"
+  version: "2.5.0"
   description: |
     Universal domain-aware entity enrichment. Layer 2 of the L9 three-layer
     intelligence stack. Serves Salesforce Apex callouts, Odoo async_executor,
@@ -242,9 +242,11 @@ components:
           description: Error message if state is 'failed'.
         state:
           type: string
-          enum: [completed, failed, partial]
+          enum: [completed, degraded, failed, partial]
           default: completed
-          description: Enrichment outcome state.
+          description: >-
+            Enrichment outcome state. `degraded` is the converge action's
+            deadline stop (docs/contracts/converge/v1.md).
         convergence_reason:
           type: string
           nullable: true
