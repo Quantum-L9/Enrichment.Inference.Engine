@@ -20,6 +20,7 @@ case, which matches are supported by evidence and which are only agreement.
 | `disagreement` / `unit_mismatch` | A different value, or the same value in a different unit. |
 | `abstained` | The label has a value (or a conflict) and the output said unknown (or conflicting). |
 | `unknown_preserved` / `unknown_coerced` | The label is unknown; the output kept it unknown, or produced a value. |
+| `unknown_as_conflict` | The label is unknown and the output reported a conflict: no value was produced, but the output claims disagreeing evidence the case does not contain. |
 | `conflict_preserved` / `conflict_coerced` | The label is conflicting; the output kept the conflict, or picked a value. |
 | `missing_output` | A labelled field the output omits. Counted, never skipped. |
 

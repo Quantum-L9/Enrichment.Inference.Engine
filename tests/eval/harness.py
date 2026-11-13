@@ -15,7 +15,7 @@ uncalibrated score, never as a probability. See README.md for the claim level.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from typing import Any, TypeGuard
 
 CLAIM_LEVEL = "heuristic_quality"
 NOT_CLAIMED = ("accuracy", "calibration", "live_outcome")
@@ -34,6 +34,7 @@ OUTCOMES = (
     "abstained",
     "unknown_preserved",
     "unknown_coerced",
+    "unknown_as_conflict",
     "conflict_preserved",
     "conflict_coerced",
     "missing_output",
@@ -44,9 +45,23 @@ class CaseError(ValueError):
     """A case or output the harness cannot assess. Raised, never skipped."""
 
 
+def same_value(left: Any, right: Any) -> bool:
+    """JSON equality. A boolean never equals a number, though Python says ``True == 1``."""
+    if isinstance(left, bool) != isinstance(right, bool):
+        return False
+    return bool(left == right)
+
+
+def usable_score(value: Any) -> TypeGuard[float]:
+    """A JSON number in [0, 1]. ``0`` and ``1`` load as int; a boolean is not a score."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1
+
+
 def _supporting_refs(case: dict[str, Any], field: str, value: Any) -> set[str]:
     return {
-        e["ref"] for e in case["evidence"] if field in e["states"] and e["states"][field] == value
+        e["ref"]
+        for e in case["evidence"]
+        if field in e["states"] and same_value(e["states"][field], value)
     }
 
 
@@ -57,7 +72,7 @@ def _score_value_label(
         raise CaseError(f"{case['case_id']}:{field}: unknown label basis {label['basis']!r}")
     if out["state"] not in VALUE_STATES:
         return "abstained"
-    if out["value"] != label["value"]:
+    if not same_value(out["value"], label["value"]):
         return "disagreement"
     if out.get("unit") != label.get("unit"):
         return "unit_mismatch"
@@ -81,6 +96,8 @@ def score_field(case: dict[str, Any], field: str, out: dict[str, Any] | None) ->
     if label["kind"] == "value":
         return _score_value_label(case, field, label, out)
     if label["kind"] == "unknown":
+        if out["state"] == "conflicting":
+            return "unknown_as_conflict"
         return "unknown_preserved" if out["state"] == "unknown" else "unknown_coerced"
     if out["state"] == "conflicting":
         return "conflict_preserved"
@@ -95,7 +112,7 @@ def score_case(case: dict[str, Any], outputs: dict[str, dict[str, Any]]) -> dict
     scores: dict[str, list[float]] = {}
     for field, outcome in fields.items():
         confidence = outputs.get(field, {}).get("confidence")
-        if isinstance(confidence, float):
+        if usable_score(confidence):
             scores.setdefault(outcome, []).append(confidence)
     return {
         "case_id": case["case_id"],
@@ -138,7 +155,7 @@ def outputs_from_v1_response(response: dict[str, Any]) -> dict[str, dict[str, An
         outputs[field] = {
             "state": "external_claim",
             "value": value,
-            "confidence": confidence if isinstance(confidence, float) else None,
+            "confidence": confidence if usable_score(confidence) else None,
             "source_refs": [],
         }
     return outputs

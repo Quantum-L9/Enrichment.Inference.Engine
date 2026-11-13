@@ -157,3 +157,45 @@ def test_a_v1_response_reaches_heuristic_agreement_at_most() -> None:
     }
     result = harness.score_case(case, outputs)
     assert set(result["fields"].values()) == {"heuristic_agreement"}
+
+
+def test_a_boolean_never_matches_a_number() -> None:
+    case = {
+        "case_id": "bool_vs_number",
+        "role": "buyer",
+        "subject_type": "facility_profile",
+        "evidence": [{"ref": "doc:n", "states": {"dock_count": 1, "has_dock": True}}],
+        "labels": {
+            "dock_count": {"kind": "value", "value": 1, "basis": "evidence"},
+            "has_dock": {"kind": "value", "value": True, "basis": "evidence"},
+        },
+    }
+    claim = {"state": "external_claim", "confidence": 1, "source_refs": ["doc:n"]}
+    assert harness.score_field(case, "dock_count", {**claim, "value": True}) == "disagreement"
+    assert harness.score_field(case, "has_dock", {**claim, "value": 1}) == "disagreement"
+    assert (
+        harness.score_field(case, "dock_count", {**claim, "value": 1})
+        == "evidence_supported_correct"
+    )
+    assert (
+        harness.score_field(case, "has_dock", {**claim, "value": True})
+        == "evidence_supported_correct"
+    )
+
+
+def test_integer_scores_are_kept_and_booleans_are_not_scores() -> None:
+    case = _case("supplier_facility")
+    outputs = copy.deepcopy(case["output"])
+    outputs["has_rail_access"]["confidence"] = 1
+    outputs["website"]["confidence"] = True
+    scores = harness.score_case(case, outputs)["confidence_scores_by_outcome"]
+    assert scores["unknown_coerced"] == [1]
+    assert "heuristic_agreement" not in scores
+    v1 = {
+        "fields": {"a": "x", "b": "y"},
+        "feature_vector": {"per_field_confidence": {"a": 1, "b": True}},
+    }
+    assert {f: o["confidence"] for f, o in harness.outputs_from_v1_response(v1).items()} == {
+        "a": 1,
+        "b": None,
+    }
