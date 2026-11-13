@@ -5,8 +5,14 @@
 #           app/services/graph_return_channel.py,
 #           app/engines/convergence_controller.py,
 #           app/engines/observed_association_contract.py
-# Version:  2.0.0
-# Updated:  2026-11-11 (typed row contract, owner decision: the row schema a CEG sync endpoint
+# Version:  2.1.0
+# Updated:  2026-11-11 (D-9 verified label: a SYNCED observed-relationship result whose row
+#           carried `observed_association` is `mapping_verification =
+#           ceg_verified_observedfrom` -- CEG refuses an association its own observedfrom
+#           does not declare (Cognitive.Engine.Graphs#422, closing #386), so its
+#           acknowledgment is the cross-check. CEG's typed row validation shipped in
+#           Cognitive.Engine.Graphs #454)
+#           2026-11-11 (typed row contract, owner decision: the row schema a CEG sync endpoint
 #           accepts is the tenant spec's declared types. packet_router projects every row
 #           onto the endpoint's target-node declaration -- a list<map> travels as a list of
 #           maps, never a JSON string; a mismatched value refuses the row before sending; an
@@ -121,9 +127,10 @@ sync:
     CEG validates every sync row against the declared types of its own tenant spec at
     ingress and refuses the whole batch listing all defects (flag
     sync_row_type_validation_enabled, default true; undeclared keys are dropped unless
-    sync_undeclared_property_refusal_enabled), landing in the Cognitive.Engine.Graphs
-    typed-contract change. Until that change is deployed, CEG main does not type-check
-    rows: EIE's projection is the only enforcement.
+    sync_undeclared_property_refusal_enabled, default false). Shipped in
+    Cognitive.Engine.Graphs #454 (typed spec contract #453, proved on Neo4j in #455).
+    A CEG deployment older than #454 does not type-check rows; against one, EIE's
+    projection is the only enforcement.
   cross_engine_check: >-
     eie-ceg-sync/v2 (app/engines/domain_spec_compatibility.py) checks, for every
     endpoint EIE declares, that endpoint keys, childsync and taxonomyedges are
@@ -210,7 +217,7 @@ invariants:
     type, tenant, database, relevance or score. An assertion missing any of them is
     skipped with its defects (`relationship_sync_skipped_incomplete_assertion`); nothing
     is defaulted.
-  - D-9 (Cognitive.Engine.Graphs#386) -- with `observed_association_send_enabled` on, an
+  - D-9 (Cognitive.Engine.Graphs#422, which closed Cognitive.Engine.Graphs#386) -- with `observed_association_send_enabled` on, an
     observed row carries `observed_association` {provider, fromobjecttype, toobjecttype,
     associationcategory, associationtypeid} -- the association EIE's mirror mapped. CEG
     refuses the row unless its OWN tenant spec's `observedfrom` declares it, answering
@@ -260,11 +267,13 @@ invariants:
     malformed or conflicting declaration anywhere in the spec, a duplicate key, a reversed
     object-type pair, or a missing namespace resolves nothing
     (`observed_association_skipped_<reason>`), and nothing is read or sent.
-  - EIE's spec is a lockstep MIRROR of CEG's tenant spec, not CEG's approval. CEG does not
-    yet cross-check an observed row against its own `observedfrom` (D-9,
-    Cognitive.Engine.Graphs#386, required before live acceptance), so every producer
-    result after resolution carries `mapping_verification =
-    eie_mirror_unverified_by_ceg` and the mirror's `mapping_fingerprint`;
+  - EIE's spec is a lockstep MIRROR of CEG's tenant spec, not CEG's approval. CEG
+    cross-checks an observed row against its own `observedfrom` only when the row
+    carries `observed_association` (D-9, Cognitive.Engine.Graphs#422, required before
+    live acceptance). Every producer result after resolution carries the mirror's
+    `mapping_fingerprint` and a `mapping_verification` -- `ceg_verified_observedfrom`
+    when CEG acknowledged a row carrying the association (CEG's observedfrom declares
+    it; this says nothing about relevance), else `eie_mirror_unverified_by_ceg`.
     `mirror_drift(mirror, ceg_spec)` lists every divergence of the mapping declarations.
   - No live EIE producer of typed relationships exists as of 1.8.0; nothing on the
     enrichment path calls `notify_relationship_sync` (SOURCE_NOT_AVAILABLE).
