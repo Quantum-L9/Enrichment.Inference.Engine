@@ -1,5 +1,5 @@
 {
-  "contract_version": "converge.response/2.0.0-draft",
+  "contract_version": "eie.converge.response/v2",
   "fields": {},
   "confidence": 0.0,
   "kb_content_hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
@@ -38,7 +38,7 @@
       "derivation": null,
       "identity": {
         "subject_ref": "res.partner:9001",
-        "subject_type": "material_profile",
+        "subject_type": "material",
         "role": "supplier"
       },
       "conflict": null,
@@ -52,7 +52,7 @@
       "derivation": null,
       "identity": {
         "subject_ref": "res.partner:9001",
-        "subject_type": "material_profile",
+        "subject_type": "material",
         "role": "supplier"
       },
       "conflict": null,
