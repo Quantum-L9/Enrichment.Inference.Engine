@@ -1,5 +1,5 @@
 name: plasticos
-version: "0.5.0"
+version: "0.6.0"
 description: >
   PlasticOS evidence and inference domain for EIE.
   Candidate ranking, matching gates, and scoring dimensions are owned by CEG
@@ -33,12 +33,13 @@ ontology:
     properties:
     - {name: facility_id, type: string, required: true}
     - {name: name, type: string, required: true}
-    - {name: min_density, type: float}
-    - {name: max_density, type: float}
-    - {name: min_mfi, type: float}
-    - {name: max_mfi, type: float}
-    - {name: contamination_tolerance, type: float}
-    - {name: capacity_tons_month, type: float}
+    - {name: min_density, type: float, unit: g/cm3}
+    - {name: max_density, type: float, unit: g/cm3}
+    - {name: min_mfi, type: float, unit: g/10min}
+    - {name: max_mfi, type: float, unit: g/10min}
+    - {name: contamination_tolerance, type: float, unit: percent}
+    # t = metric tonne (1000 kg), per the operator's decision of 2026-11-13.
+    - {name: capacity_tons_month, type: float, unit: t/month}
     - {name: tier, type: string}
     # Wire-only shape: the childsync field below (PROCESSES -> PolymerFamily).
     - name: processed_polymers
@@ -63,6 +64,51 @@ ontology:
     # Material-profile evidence (0.5.0): the physical forms the facility
     # handles, e.g. Regrind, Pellet, Flake. EIE-only, never on a sync row.
     - {name: material_forms, type: list, items: {type: string}, evidenceonly: true}
+    # Odoo facility-profile evidence (0.6.0): every stored data field of
+    # plasticos.facility.profile (IB-Odoo_19) that 0.5.0 did not already declare
+    # under another name, declared under the Odoo field's own name. EIE-only,
+    # never on a sync row, so CEG's Facility shape and eie-ceg-sync/v2 are
+    # unchanged. Units are the ones Odoo stores, declared in each quantity's
+    # `unit` key: response v2 serves it as field_evidence[*].declaration.unit
+    # (response.v2.md section 10.2). `unit` is not part of the typed shape
+    # (spec_types.shape), so the CEG sync row is unchanged by it.
+    # Codes:
+    - name: equipment_type_ids
+      type: list
+      items:
+        type: enum
+        values: [horizontal_baler, downstroke_baler, shredder, granulator, wash_line, pelletizer, extruder, compounder, sorting_line, bales, regrind, pellet, flake, rollstock, metal_removal, moisture_reduction, fr_filtration, fines_screening]
+      evidenceonly: true
+      description: Odoo equipment-type codes the facility operates
+    - {name: form_preference_id, type: string, evidenceonly: true, description: "Odoo material-form code the facility prefers"}
+    - {name: process_type, type: string, evidenceonly: true, description: "Odoo process-type code"}
+    - {name: feedstock_type, type: enum, values: [post_industrial, post_consumer, mixed, virgin, unknown], evidenceonly: true}
+    - {name: application_class, type: string, evidenceonly: true, description: "End-use class; expected food, medical, automotive, packaging, agricultural or construction, open to any further value"}
+    # Capabilities:
+    - {name: handles_bales, type: bool, evidenceonly: true}
+    - {name: handles_regrind, type: bool, evidenceonly: true}
+    - {name: handles_pellet, type: bool, evidenceonly: true}
+    - {name: handles_flake, type: bool, evidenceonly: true}
+    - {name: handles_rollstock, type: bool, evidenceonly: true}
+    - {name: can_remove_metal, type: bool, evidenceonly: true}
+    - {name: can_reduce_moisture, type: bool, evidenceonly: true}
+    - {name: can_filter_fr, type: bool, evidenceonly: true}
+    - {name: can_screen_fines, type: bool, evidenceonly: true}
+    - {name: iso_certified, type: bool, evidenceonly: true}
+    - {name: medical_grade_capable, type: bool, evidenceonly: true}
+    - {name: accepts_spot, type: bool, evidenceonly: true}
+    - {name: prefers_contract, type: bool, evidenceonly: true}
+    - {name: accepts_filled_materials, type: bool, evidenceonly: true}
+    # Quantities, in the unit Odoo stores:
+    - {name: avg_truckload_lbs, type: float, evidenceonly: true, unit: lb, description: "Average truckload, in lb"}
+    - {name: min_lot_size_lbs, type: float, evidenceonly: true, unit: lb, description: "Minimum lot size, in lb"}
+    - {name: max_lot_size_lbs, type: float, evidenceonly: true, unit: lb, description: "Maximum lot size, in lb"}
+    - {name: moisture_tolerance_pct, type: float, evidenceonly: true, unit: percent, description: "Moisture tolerance, in percent (0-100)"}
+    - {name: pcr_pct_min, type: float, evidenceonly: true, unit: percent, description: "Minimum post-consumer recycled content, in percent (0-100)"}
+    - {name: pcr_pct_max, type: float, evidenceonly: true, unit: percent, description: "Maximum post-consumer recycled content, in percent (0-100)"}
+    # Free text:
+    - {name: freeform_notes, type: string, evidenceonly: true}
+    - {name: application_notes, type: string, evidenceonly: true}
     enrichment_hints:
       objective_template: "Enrich plastics facility profile for evidence emission"
       priority_fields:
@@ -80,7 +126,7 @@ queryschema:
   - {name: form, type: string, description: "e.g. Regrind, Pellet, Flake"}
   - {name: density, type: float, description: "g/cm³"}
   - {name: mfi, type: float, description: "melt flow index g/10min"}
-  - {name: contamination, type: float, description: "contamination fraction 0–1"}
+  - {name: contamination, type: float, description: "contamination, percent 0–100 (as CEG's contamination_pct)"}
   - {name: required_certifications, type: list, items: {type: string}, description: "list of cert codes"}
 
 # Ranking/match authority removed (owned by CEG).
@@ -153,6 +199,34 @@ subjects:
     - phone
     - capacity_tons_month
     - tier
+    # Odoo facility-profile evidence (0.6.0).
+    - equipment_type_ids
+    - form_preference_id
+    - process_type
+    - feedstock_type
+    - application_class
+    - handles_bales
+    - handles_regrind
+    - handles_pellet
+    - handles_flake
+    - handles_rollstock
+    - can_remove_metal
+    - can_reduce_moisture
+    - can_filter_fr
+    - can_screen_fines
+    - iso_certified
+    - medical_grade_capable
+    - accepts_spot
+    - prefers_contract
+    - accepts_filled_materials
+    - avg_truckload_lbs
+    - min_lot_size_lbs
+    - max_lot_size_lbs
+    - moisture_tolerance_pct
+    - pcr_pct_min
+    - pcr_pct_max
+    - freeform_notes
+    - application_notes
     ceg_owned:
     - lat
     - lon
@@ -185,26 +259,29 @@ semantic_registry:
     key_fields: [name, city, state, zip_code]
 
 inference_rules:
+# 0.6.0: contamination_tolerance is a percent (0-100), as CEG declares it, so the
+# grade thresholds are 3 and 7 percent. 0.5.0 tested a fraction (0.03, 0.07)
+# that a percent-valued field almost never satisfied.
 - rule_id: grade-assignment-hdpe-a
   conditions:
   - {field: processed_polymers, operator: CONTAINS, value: {code: HDPE}}
-  - {field: contamination_tolerance, operator: LT, value: 0.03}
+  - {field: contamination_tolerance, operator: LT, value: 3}
   outputs:
   - {field: material_grade, value_expr: "A", derivation_type: classification}
   confidence: 0.92
   priority: 10
-  rule_or_model_version: plasticos-inference-0.4.0
+  rule_or_model_version: plasticos-inference-0.6.0
 
 - rule_id: grade-assignment-hdpe-b
   conditions:
   - {field: processed_polymers, operator: CONTAINS, value: {code: HDPE}}
-  - {field: contamination_tolerance, operator: GTE, value: 0.03}
-  - {field: contamination_tolerance, operator: LTE, value: 0.07}
+  - {field: contamination_tolerance, operator: GTE, value: 3}
+  - {field: contamination_tolerance, operator: LTE, value: 7}
   outputs:
   - {field: material_grade, value_expr: "B", derivation_type: classification}
   confidence: 0.85
   priority: 5
-  rule_or_model_version: plasticos-inference-0.4.0
+  rule_or_model_version: plasticos-inference-0.6.0
 
 - rule_id: tier-1-high-capacity
   conditions:

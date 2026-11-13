@@ -55,7 +55,6 @@ class Cartridge:
     entity: dict[str, Any]
     evidence: dict[str, tuple[Any, float]]
     derived: dict[str, tuple[Any, str]]
-    rule_version: str
 
     def payload(self, **overrides: Any) -> dict[str, Any]:
         """A converge body naming this cartridge and node explicitly."""
@@ -85,14 +84,13 @@ PLASTICOS = Cartridge(
     entity={"id": "facility:1", "name": "Acme Recycling"},
     evidence={
         "processed_polymers": ([{"code": "HDPE"}], 0.95),
-        "contamination_tolerance": (0.02, 0.90),
+        "contamination_tolerance": (2.0, 0.90),  # percent, as the cartridge declares
         "capacity_tons_month": (500.0, 0.90),
     },
     derived={
         "material_grade": ("A", "grade-assignment-hdpe-a"),
         "tier": ("tier_1", "tier-1-high-capacity"),
     },
-    rule_version="plasticos-inference-0.4.0",
 )
 
 FREIGHT = Cartridge(
@@ -113,7 +111,6 @@ FREIGHT = Cartridge(
         "hazmat_qualified": ("qualified", "hazmat-qualified"),
         "service_tier": ("preferred", "service-tier-preferred"),
     },
-    rule_version="freight-carriers-inference-0.1.0",
 )
 
 CARTRIDGES = pytest.mark.parametrize("cartridge", [PLASTICOS, FREIGHT], ids=lambda c: c.domain_id)
@@ -244,15 +241,22 @@ async def test_derived_fields_come_from_the_cartridges_own_rules(cartridge: Cart
 
     provenance = _provenance(result)
     assert set(provenance) == set(cartridge.derived)
+    rule_versions = {
+        rule["rule_id"]: rule["rule_or_model_version"]
+        for rule in cartridge.spec()["inference_rules"]
+    }
     for name, (value, rule_id) in cartridge.derived.items():
         record = provenance[name]
         assert result["fields"][name] == value
         assert record["rule_id"] == rule_id
-        assert record["rule_version"] == cartridge.rule_version
+        # The version the cartridge itself declares for that rule.
+        assert record["rule_version"] == rule_versions[rule_id]
         assert set(record["inputs"]) <= _field_names(cartridge.spec())
         assert record["confidence"] <= min(record["input_confidence"].values())
         assert record["confidence"] <= record["rule_confidence"]
-    assert result["feature_vector"]["inference"]["rule_versions"] == [cartridge.rule_version]
+    assert result["feature_vector"]["inference"]["rule_versions"] == sorted(
+        set(rule_versions.values())
+    )
 
     other = FREIGHT if cartridge is PLASTICOS else PLASTICOS
     assert set(result["fields"]).isdisjoint(_field_names(other.spec()))

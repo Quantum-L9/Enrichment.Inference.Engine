@@ -39,6 +39,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 
 from app.models.schemas import EnrichRequest, EnrichResponse
 
@@ -274,7 +275,7 @@ async def test_converge_inference_provenance_shape() -> None:
 
     evidence = {
         "processed_polymers": ([{"code": "HDPE"}], 0.95),
-        "contamination_tolerance": (0.02, 0.90),
+        "contamination_tolerance": (2.0, 0.90),  # percent (0-100), as declared
         "capacity_tons_month": (500.0, 0.90),
     }
 
@@ -306,7 +307,10 @@ async def test_converge_inference_provenance_shape() -> None:
     assert set(result["feature_vector"]["inference"]) == INFERENCE_CONTEXT_KEYS
     provenance = result["inferences"][0]["inference_provenance"]
     assert set(provenance) == {"material_grade", "tier"}
+    spec = yaml.safe_load((domains / "plasticos" / "spec.yaml").read_bytes())
+    declared_versions = {r["rule_id"]: r["rule_or_model_version"] for r in spec["inference_rules"]}
     for record in provenance.values():
         assert set(record) == INFERENCE_PROVENANCE_KEYS
-        assert record["rule_version"] == "plasticos-inference-0.4.0"
+        # The version the cartridge itself declares for the rule that fired.
+        assert record["rule_version"] == declared_versions[record["rule_id"]]
         assert record["confidence"] <= min(record["input_confidence"].values())
