@@ -31,6 +31,7 @@ from ..engines.converge_contract import (
     mark_deadline_degraded,
     restrict_fields_to_schema,
 )
+from ..engines.converge_request_v2 import ConvergeRequestRefusedError, resolve_converge_request_v2
 from ..engines.convergence.convergence_config import ConvergenceConfig
 from ..engines.convergence_controller import run_convergence_loop
 from ..engines.domain_yaml_reader import (
@@ -39,6 +40,7 @@ from ..engines.domain_yaml_reader import (
     DomainYamlReader,
     default_node_label,
     enrichment_hints_for,
+    resolve_cartridge_id,
 )
 from ..engines.enrichment_orchestrator import enrich_batch, enrich_entity
 from ..engines.native_yaml import parse_native_yaml
@@ -130,7 +132,9 @@ async def _persist_and_sync(
     if entity_id is None:
         msg = f"entity identity required: one of {', '.join(ENTITY_IDENTITY_ORDER)}"
         raise ValueError(msg)
-    domain = payload.get("domain", settings.default_domain)
+    domain = resolve_cartridge_id(
+        tenant, requested=payload.get("domain"), configured_default=settings.default_domain
+    )
     from app.services.side_effect_coordinator import get_side_effect_coordinator
 
     await get_side_effect_coordinator().commit_after_enrich(
@@ -257,6 +261,19 @@ async def _handle_canonical_converge(
         budget_seconds = DEFAULT_CONVERGE_TIMEOUT_SECONDS
     deadline = Deadline.start(budget_seconds)
 
+    # Request v2 (docs/contracts/converge/request.v2.md) resolves completely
+    # against the cartridge it names, or is refused whole: nothing runs, and
+    # nothing falls back to v1 resolution. A v1 body resolves to None here and
+    # continues exactly as before.
+    cartridge: DomainEnrichmentConfig | None = None
+    try:
+        resolved = resolve_converge_request_v2(tenant, payload, _domain_reader)
+    except ConvergeRequestRefusedError as exc:
+        logger.warning("handlers.converge_v2_refused", tenant=tenant, code=exc.code)
+        return _canonical_failure(str(exc))
+    if resolved is not None:
+        payload, cartridge = resolved.body, resolved.config
+
     try:
         request = EnrichRequest.model_validate(payload)
     except Exception as exc:
@@ -274,7 +291,7 @@ async def _handle_canonical_converge(
         with deadline_scope(deadline):
             return await asyncio.wait_for(
                 _run_canonical_converge(
-                    tenant, payload, request, deadline, entity_id, operation_id
+                    tenant, payload, request, deadline, entity_id, operation_id, cartridge
                 ),
                 timeout=max(deadline.remaining(), 0.0),
             )
@@ -308,8 +325,12 @@ async def _run_canonical_converge(
     deadline: Deadline,
     entity_id: str | None,
     operation_id: str | None = None,
+    cartridge: DomainEnrichmentConfig | None = None,
 ) -> dict[str, Any]:
     """The complete canonical operation, run under the outer deadline.
+
+    `cartridge` is the revision a v2 request was resolved and pinned against;
+    hints, rules and spec are then taken from it, never from a second read.
 
     `entity_id` is the identity the caller resolved once from the body
     (`resolve_converge_identity`; None when the body names none); it is not
@@ -330,6 +351,7 @@ async def _run_canonical_converge(
     domain_hints, inference_rules, domain_spec = await _load_domain_converge_bundle(
         domain_id=domain_id,
         node_label=payload.get("node_label"),
+        config=cartridge,
     )
 
     loop_kwargs: dict[str, Any] = {}
@@ -370,7 +392,9 @@ async def _run_canonical_converge(
         persist_payload = {
             **payload,
             "entity_id": entity_id,
-            "domain": domain_id or settings.default_domain,
+            "domain": resolve_cartridge_id(
+                tenant, requested=domain_id, configured_default=settings.default_domain
+            ),
         }
         # E14: zero Graph calls on the canonical path. Graph sync awaits up to
         # two Gate attempts at 10 s each with a 1 s backoff between them
@@ -439,6 +463,7 @@ async def _load_domain_converge_bundle(
     *,
     domain_id: str | None,
     node_label: str | None,
+    config: DomainEnrichmentConfig | None = None,
 ) -> tuple[dict[str, Any], Any, dict[str, Any] | None]:
     """Load optional domain hints + inference rules + the full spec for converge.
 
@@ -469,8 +494,9 @@ async def _load_domain_converge_bundle(
 
     # Resolve once: pointer publication between two reads must never pair old
     # enrichment hints with a different revision's rules.
+    # A v2 request hands in the revision it was pinned against: no second read.
     try:
-        config = _domain_reader.load(domain_id)
+        config = config if config is not None else _domain_reader.load(domain_id)
     except DomainPublicationError:
         raise
     except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:
@@ -600,7 +626,7 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
     """
     settings = get_settings()
     crm_field_names: list[str] = payload.get("crm_field_names", [])
-    domain_id: str = payload.get("domain_id", "plastics")
+    domain_id = payload.get("domain_id")
     customer_name = payload.get("customer_name")
     query_profile: dict[str, Any] | None = payload.get("query_profile")
     entity_count: int = int(payload.get("entity_count", 20))
@@ -612,6 +638,8 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
         raise ValueError("simulate: crm_field_names is required and must be non-empty")
     if not isinstance(customer_name, str) or not customer_name.strip():
         raise ValueError("simulate: customer_name is required; it does not default to the tenant")
+    if not isinstance(domain_id, str) or not domain_id:
+        raise ValueError("simulate: domain_id is required; no cartridge is assumed")
 
     domain_spec: dict[str, Any] = {}
     if _domain_reader:

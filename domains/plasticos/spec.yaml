@@ -1,5 +1,5 @@
 name: plasticos
-version: "0.4.0"
+version: "0.5.0"
 description: >
   PlasticOS evidence and inference domain for EIE.
   Candidate ranking, matching gates, and scoring dimensions are owned by CEG
@@ -54,6 +54,15 @@ ontology:
     - {name: zip_code, type: string, evidenceonly: true}
     - {name: material_grade, type: string, evidenceonly: true}
     - {name: certifications, type: list, items: {type: string}, evidenceonly: true}
+    # Facility-profile contact evidence (0.5.0). EIE-only, never on a sync row.
+    - {name: street, type: string, evidenceonly: true}
+    - {name: street2, type: string, evidenceonly: true}
+    - {name: website, type: string, evidenceonly: true}
+    - {name: email, type: string, evidenceonly: true}
+    - {name: phone, type: string, evidenceonly: true}
+    # Material-profile evidence (0.5.0): the physical forms the facility
+    # handles, e.g. Regrind, Pellet, Flake. EIE-only, never on a sync row.
+    - {name: material_forms, type: list, items: {type: string}, evidenceonly: true}
     enrichment_hints:
       objective_template: "Enrich plastics facility profile for evidence emission"
       priority_fields:
@@ -115,6 +124,57 @@ sync:
       targetid: code
       edgetype: PROCESSES
       edgedirection: parenttochild
+
+# Subject vocabulary for converge request v2 (docs/contracts/converge/request.v2.md
+# `subject.type` / `subject.role`). The names are this cartridge's own; shared
+# runtime code compares them as opaque strings and gives them no meaning.
+#
+# Each type is one profile concern of a node. `fields` are the properties EIE
+# may enrich and propose for that concern; every Facility property except its
+# identity belongs to exactly one concern. `ceg_owned` names the properties of
+# CEG's node that CEG alone writes: EIE does not declare them, so they can
+# never be a converge target, and matching, ranking and scoring stay with CEG.
+# Both concerns bind to Facility: a second node would leave a request that
+# names no node (every v1 request) without an implicit one.
+subjects:
+  roles: [supplier, buyer]
+  types:
+  - name: facility
+    node: Facility
+    fields:
+    - name
+    - city
+    - state
+    - zip_code
+    - street
+    - street2
+    - website
+    - email
+    - phone
+    - capacity_tons_month
+    - tier
+    ceg_owned:
+    - lat
+    - lon
+    - credit_score
+    - community_id
+    - rate_per_ton
+    - rate_confidence
+    - last_transaction_date
+  - name: material
+    node: Facility
+    fields:
+    - processed_polymers
+    - min_density
+    - max_density
+    - min_mfi
+    - max_mfi
+    - contamination_tolerance
+    - material_grade
+    - material_forms
+    - certifications
+    ceg_owned:
+    - food_grade_certified
 
 semantic_registry:
   enabled: true

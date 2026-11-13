@@ -1,0 +1,55 @@
+{
+  "_source": "cryptoxdog/IB-Odoo_19 @ 3ad23289bd8fc8a8d10954bca9c2d4517d23a05c: tests/test_gate_canonical_contract.py, tests/test_gate_match_contract.py",
+  "cases": [
+    {
+      "id": "completed_maps_to_ok",
+      "payload": {"state": "completed", "fields": {"website": "https://acme.example", "phone": "555-0100"}, "confidence": 0.9},
+      "expect": {"status": "ok", "state": "completed", "failure_reason": null, "final_fields": {"website": "https://acme.example", "phone": "555-0100"}}
+    },
+    {"id": "empty_payload_fails_closed", "payload": {}, "expect": {"status": "failed", "state": null, "final_fields": {}}},
+    {"id": "blank_state_fails_closed", "payload": {"state": ""}, "expect": {"status": "failed", "state": null}},
+    {
+      "id": "fields_without_state_fail_closed",
+      "payload": {"fields": {"website": "x"}},
+      "expect": {"status": "failed", "final_fields": {"website": "x"}}
+    },
+    {
+      "id": "failure_reason_wins_over_state",
+      "payload": {"state": "failed", "failure_reason": "provider timeout", "fields": {}},
+      "expect": {"status": "provider timeout", "failure_reason": "provider timeout"}
+    },
+    {
+      "id": "sdk_failure_packet_reason",
+      "payload": {"status": "failed", "error": "RuntimeError", "message": "provider unavailable", "packet_id": "p-1"},
+      "expect": {"status": "RuntimeError: provider unavailable", "failure_reason": "RuntimeError: provider unavailable", "state": null, "final_fields": {}}
+    },
+    {
+      "id": "sdk_failure_message_equal_to_class_not_repeated",
+      "payload": {"status": "failed", "error": "RuntimeError", "message": "RuntimeError", "packet_id": "p-1"},
+      "expect": {"status": "RuntimeError"}
+    },
+    {
+      "id": "eie_failure_reason_wins_over_sdk_fields",
+      "payload": {"status": "failed", "error": "RuntimeError", "message": "provider unavailable", "failure_reason": "invalid converge request: entity missing"},
+      "expect": {"status": "invalid converge request: entity missing"}
+    },
+    {
+      "id": "sdk_failure_without_text_fails_closed",
+      "payload": {"status": "failed", "error": "", "message": null},
+      "expect": {"status": "failed", "failure_reason": null}
+    },
+    {"id": "wire_status_ok_is_not_success", "payload": {"status": "ok", "fields": {"website": "x"}}, "expect": {"status": "failed"}},
+    {
+      "id": "writeback_is_allowlisted",
+      "payload": {"state": "completed", "fields": {"website": "https://a.example", "vat": "SECRET", "id": 9, "supplier_rank": 9}},
+      "expect": {"status": "ok"},
+      "expect_partner_writeback": {"website": "https://a.example"}
+    },
+    {
+      "id": "writeback_drops_empty_values",
+      "payload": {"state": "completed", "fields": {"website": "", "phone": null, "city": "NC"}},
+      "expect": {"status": "ok"},
+      "expect_partner_writeback": {"city": "NC"}
+    }
+  ]
+}

@@ -194,6 +194,40 @@ def _resolution(value: object, nodes: dict[str, set[str]]) -> None:
         _field_refs(entity.get("key_fields"), nodes[label], "key_fields", nonempty=True)
 
 
+def _subjects(value: object, nodes: dict[str, set[str]]) -> None:
+    """Subject vocabulary: opaque type and role names bound to declared nodes.
+
+    A type's `ceg_owned` names must not be declared by its node: declaring one
+    would make a CEG-written property an EIE target. `fields` is the concern's
+    grouping and is checked for form only. Node properties are rewritten by the
+    schema-proposal workflow, which does not maintain this list, so membership
+    is pinned for the checked-in cartridge by its own contract test
+    (tests/contracts/test_plasticos_subject_profiles.py), not here.
+    """
+    subjects = _mapping(value, "subjects")
+    if subjects.keys() - {"roles", "types"}:
+        raise ValueError("Unsupported subjects keys")
+    roles: set[str] = set()
+    for role in _list(subjects.get("roles", []), "subjects.roles"):
+        _unique(_identifier(role, "subjects.roles"), roles, "subject role")
+    names: set[str] = set()
+    for entry in _list(subjects.get("types"), "subjects.types", nonempty=True):
+        subject = _mapping(entry, "subject type")
+        if subject.keys() - {"name", "node", "fields", "ceg_owned"}:
+            raise ValueError("Unsupported subject type keys")
+        name = _identifier(subject.get("name"), "subject type name")
+        _unique(name, names, "subject type")
+        node = subject.get("node")
+        if not isinstance(node, str) or node not in nodes:
+            raise ValueError(f"Subject type {name} is bound to undeclared node {node}")
+        grouped: set[str] = set()
+        for member in _list(subject.get("fields", []), f"subjects.{name}.fields"):
+            _unique(_identifier(member, f"subjects.{name}.fields"), grouped, "subject field")
+        for owned in _list(subject.get("ceg_owned", []), f"subjects.{name}.ceg_owned"):
+            if _identifier(owned, f"subjects.{name}.ceg_owned") in nodes[node]:
+                raise ValueError(f"subjects.{name}.ceg_owned {owned} is declared by {node}")
+
+
 def _sync_children(endpoint: dict[str, Any], path: str) -> None:
     """CEG's childsync / taxonomyedges declaration shapes (SyncEndpointSpec)."""
     for entry in _list(endpoint.get("childsync", []), f"{path}.childsync"):
@@ -328,6 +362,8 @@ def validate_spec(raw: object, tenant_id: str) -> dict[str, Any]:
             raise ValueError("Declare inline inference_rules or a reference, not both")
     if "semantic_registry" in spec:
         _resolution(spec["semantic_registry"], nodes)
+    if "subjects" in spec:
+        _subjects(spec["subjects"], nodes)
     if "sync" in spec:
         _sync(spec["sync"], declarations)
     return deepcopy(spec)

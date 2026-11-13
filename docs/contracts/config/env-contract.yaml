@@ -566,8 +566,10 @@ variables:
   - name: DEFAULT_DOMAIN
     type: string
     required: false
-    default: plasticos
-    description: Default domain id when request omits one.
+    default: ""
+    description: >-
+      Cartridge used when a request names none. Empty (the default) means the
+      tenant's own cartridge (tenant id == spec id); no cartridge is built in.
     sensitive: false
     source: env
 
