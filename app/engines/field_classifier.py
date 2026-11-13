@@ -6,7 +6,9 @@ All domain knowledge comes from the YAML spec — nothing else.
 
 Consumed YAML contract (see bottom of file for full schema):
   domain_spec.yaml must contain:
-    - ontology.nodes.{EntityType}.properties.{field_name}: {...}
+    - ontology.nodes: either the native cartridge form (a list of nodes, each
+      with `properties` as a list of `{name, type, ...}` declarations) or the
+      legacy form (`properties` as a `{field_name: {...}}` mapping)
     - search_sources (optional): {difficulty: [domains]}
     - gate_fields (optional): [field_names]
     - scoring_fields (optional): [field_names]
@@ -20,12 +22,16 @@ Integration:
 
 from __future__ import annotations
 
-import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-logger = logging.getLogger(__name__)
+import structlog
+
+from .domain_yaml_reader import declared_spec_identity
+
+logger = structlog.get_logger("field_classifier")
 
 
 class FieldDifficulty(StrEnum):
@@ -162,40 +168,50 @@ def _read_set(spec: dict[str, Any], key: str) -> set[str]:
     return set()
 
 
-def _extract_props_from_dict_nodes(
-    nodes: dict,
+def spec_domain_name(domain_spec: dict[str, Any]) -> str:
+    """The identity the loaded spec declares, never a guess.
+
+    A native cartridge declares top-level `name`; legacy specs use `domain` or
+    `metadata.domain`. A spec that declares none is `unknown`.
+    """
+    declared = declared_spec_identity(domain_spec)[0]
+    if declared:
+        return declared
+    metadata = domain_spec.get("metadata")
+    legacy = metadata.get("domain") if isinstance(metadata, dict) else None
+    return legacy if isinstance(legacy, str) and legacy else "unknown"
+
+
+def _iter_props(props: Any) -> Iterator[tuple[str, Any]]:
+    """(name, declaration) pairs from either supported `properties` form.
+
+    Native: a list of `{name, type, ...}` declarations (a bare string is a
+    string field). Legacy: a `{name: declaration}` mapping. An entry that names
+    no field is skipped; nothing is invented for it.
+    """
+    if isinstance(props, dict):
+        yield from props.items()
+    elif isinstance(props, list):
+        for entry in props:
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"]:
+                yield entry["name"], entry
+            elif isinstance(entry, str) and entry:
+                yield entry, "string"
+
+
+def _extract_props_from_nodes(
+    node_defs: Any,
     gates: set[str],
     scoring: set[str],
     time_sensitive: set[str],
 ) -> list[FieldMeta]:
-    """Extract FieldMeta list from a dict-keyed nodes structure."""
+    """FieldMeta for every property of every node, in declaration order."""
     fields: list[FieldMeta] = []
-    for _node_type, node_def in nodes.items():
+    for node_def in node_defs:
         if not isinstance(node_def, dict):
             continue
-        props = node_def.get("properties", {})
-        if not isinstance(props, dict):
-            continue
-        for prop_name, prop_def in props.items():
+        for prop_name, prop_def in _iter_props(node_def.get("properties", {})):
             fields.append(_parse_prop(prop_name, prop_def, gates, scoring, time_sensitive))
-    return fields
-
-
-def _extract_props_from_list_nodes(
-    nodes: list,
-    gates: set[str],
-    scoring: set[str],
-    time_sensitive: set[str],
-) -> list[FieldMeta]:
-    """Extract FieldMeta list from a list-format nodes structure."""
-    fields: list[FieldMeta] = []
-    for node_def in nodes:
-        if not isinstance(node_def, dict):
-            continue
-        props = node_def.get("properties", {})
-        if isinstance(props, dict):
-            for prop_name, prop_def in props.items():
-                fields.append(_parse_prop(prop_name, prop_def, gates, scoring, time_sensitive))
     return fields
 
 
@@ -213,9 +229,9 @@ def extract_field_meta(domain_spec: dict[str, Any]) -> list[FieldMeta]:
     nodes = ontology.get("nodes", ontology.get("entities", {}))
 
     if isinstance(nodes, dict):
-        return _extract_props_from_dict_nodes(nodes, gates, scoring, time_sensitive)
+        return _extract_props_from_nodes(nodes.values(), gates, scoring, time_sensitive)
     if isinstance(nodes, list):
-        return _extract_props_from_list_nodes(nodes, gates, scoring, time_sensitive)
+        return _extract_props_from_nodes(nodes, gates, scoring, time_sensitive)
     return []
 
 
@@ -337,7 +353,7 @@ def classify(domain_spec: dict[str, Any]) -> dict[str, FieldDifficulty]:
         counts[d.value] = counts.get(d.value, 0) + 1
     logger.info(
         "field_classifier.complete",
-        domain=domain_spec.get("domain", "unknown"),
+        domain=spec_domain_name(domain_spec),
         total_fields=len(result),
         distribution=counts,
     )
@@ -507,9 +523,7 @@ def auto_classify_domain(
     Zero LLM cost. Everything read from the YAML. No external arguments.
     Feed result directly into search_optimizer_v2.
     """
-    domain_name = domain_spec.get("domain") or domain_spec.get("metadata", {}).get(
-        "domain", "unknown"
-    )
+    domain_name = spec_domain_name(domain_spec)
 
     field_map = classify(domain_spec)
 
