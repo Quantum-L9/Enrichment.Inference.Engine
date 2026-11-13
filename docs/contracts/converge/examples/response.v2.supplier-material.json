@@ -1,15 +1,14 @@
 {
   "contract_version": "converge.response/2.0.0-draft",
   "fields": {
-    "polymer_type": "HDPE",
     "material_form": "regrind",
     "material_grade": "blow_molding_grade"
   },
-  "confidence": 0.93,
+  "confidence": 0.9,
   "kb_content_hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
   "variation_count": 3,
   "consensus_threshold": 0.8,
-  "uncertainty_score": 0.7,
+  "uncertainty_score": 4.0,
   "pass_count": 2,
   "inference_version": "v2.2.0",
   "processing_time_ms": 1200,
@@ -37,7 +36,7 @@
   "field_evidence": {
     "polymer_type": {
       "state": "observed",
-      "admitted": true,
+      "admitted": false,
       "value": "HDPE",
       "unit_status": "not_applicable",
       "confidence": null,
@@ -163,7 +162,6 @@
         "contamination_pct"
       ],
       "admitted_fields": [
-        "polymer_type",
         "material_form",
         "material_grade"
       ],

@@ -68,8 +68,8 @@ v1 (section 7).
 | Key | Type | Meaning |
 |---|---|---|
 | `subject_ref` | string | The consumer's identifier for the subject, echoed from the request (`entity.id`). EIE never mints one. |
-| `subject_type` | string | The domain-declared entity type of the subject. Opaque to this contract. |
-| `role` | string or `null` | The domain-declared role the subject plays in the request, when the request states one. Opaque to this contract; `null` when the request states none. |
+| `subject_type` | string | The domain-declared entity type of the subject, echoed from `request.v2: <key owned by campaign A>`. Opaque to this contract. |
+| `role` | string or `null` | The domain-declared role the subject plays, echoed from `request.v2: <key owned by campaign A>`. Opaque to this contract; `null` when the request states none. |
 
 `subject_type` and `role` are carried, not interpreted. This contract names no
 industry, role or entity type; the examples use values a domain spec would
@@ -86,7 +86,7 @@ declare.
 
 | State | Meaning | Value present | May be admitted |
 |---|---|---|---|
-| `observed` | The consumer supplied the value in the request (the entity, or an observation in the v2 request). EIE repeats it; EIE did not establish it. | yes | yes |
+| `observed` | The consumer supplied the value in the request (the entity, or an observation in the v2 request). EIE repeats it as evidence; EIE did not establish it. | yes | **never** |
 | `inferred` | A versioned deterministic rule derived the value from other fields of this response. | yes | yes |
 | `external_claim` | A source outside the consumer and outside EIE's rules asserted the value. Nothing in this response verifies it. | yes | yes |
 | `conflicting` | Sources assert different values and no rule in this contract picks one. | no (see `conflict.candidates`) | **never** |
@@ -103,8 +103,17 @@ Rules that hold for every response:
 3. **A state describes evidence, not acceptance.** A value below its field
    threshold keeps its real state with `admitted: false`. It is not relabelled
    `unknown`: the evidence exists, it was not strong enough.
-4. **`observed` is scoped to the request.** It says the consumer sent the
-   value. It does not say the value is true, current or verified.
+4. **`observed` is scoped to the request, and is evidence only.** It says the
+   consumer sent the value. It does not say the value is true, current or
+   verified. It is never admitted: v1 `fields` holds only values the run
+   produced (enriched, inferred or graph-seeded;
+   `app/engines/convergence_controller.py::_assemble_convergence_response`),
+   and v2 keeps that. Echoing a request value into `fields` would present the
+   consumer's own input back to it as a new result.
+5. **One state per entry.** When a source asserts a value for a field the
+   request also supplied, the entry reports the produced value (`inferred` or
+   `external_claim`) and may list the request among its `sources`; a
+   disagreement between them is `conflicting`.
 
 `unknown_reason` is one of `no_evidence`, `source_unavailable`,
 `budget_exhausted`, `not_attempted`.
@@ -128,10 +137,15 @@ this draft declares no equivalence and no mapping.
   in particular never assigns 1.0 for "the consumer said so".
 - The top-level `confidence` and `uncertainty_score` keep their v1 meaning and
   the uncertainty policy that governs them (`D9-v2`,
-  `app/engines/convergence/confidence_tracker.py`): readiness is per field, a
-  field's value must be present and its effective confidence must meet its own
-  threshold, and no aggregate overrides that. Under that policy a field in
-  its population with `null` confidence has effective confidence 0. v2 does not redefine either aggregate.
+  `app/engines/convergence/confidence_tracker.py`). v2 changes neither the
+  formulas nor the population: readiness and both uncertainty scores are
+  measured over the tracker's deciding fields (the requested fields when the
+  request names a schema), a field is ready only when its value is present and
+  its effective confidence meets its own threshold, a `null` confidence has
+  effective confidence 0, and no aggregate overrides that.
+- The examples follow those formulas: `uncertainty_score` is
+  `10 * (1 - mean effective confidence)` over the requested fields, and
+  `confidence` is the mean confidence of the fields in `fields`.
 
 ## 5. TypedProposal
 
@@ -145,7 +159,7 @@ values of its own; it points at `field_evidence` entries.
 | `identity` | Identity | The subject the proposal is about. Every referenced field has the same `identity`. |
 | `fields` | array of string | Names of `field_evidence` entries, **including** `unknown` and `conflicting` ones, so a reviewer sees what is missing. |
 | `admitted_fields` | array of string | The subset with `admitted: true`. |
-| `review` | object | `required` is always `true`. `reasons` lists why, drawn from `contains_external_claim`, `contains_inferred`, `contains_conflict`, `contains_unknown`, `contains_unadmitted`. |
+| `review` | object | `required` is always `true`. `reasons` lists why, drawn from `contains_external_claim`, `contains_inferred`, `contains_conflict`, `contains_unknown`, `contains_unadmitted` (an `inferred` or `external_claim` field below its threshold). |
 
 A proposal is a proposal. EIE writes nothing to the consumer's system; converge
 performs no writeback in v1 and v2 does not add one.
@@ -158,7 +172,8 @@ rather than a partial v2 body.
 
 1. `field_evidence` has exactly one entry for every field the request asked
    for. A requested field with nothing to report is an explicit `unknown`
-   entry, never a missing key.
+   entry, never a missing key. Entries for fields the request supplied but did
+   not ask for are allowed; they are always `observed`.
 2. The keys of `fields` are exactly the entries with `admitted: true`, and each
    `fields[name]` equals that entry's `value`.
 3. Every entry satisfies the presence rules of section 2 for its state.
@@ -196,23 +211,25 @@ read `field_evidence` today.
 
 | File | Shows |
 |---|---|
-| `examples/response.v2.supplier-material.json` | `observed`, `external_claim`, `inferred`, an unadmitted `external_claim`, and an explicit `unknown`. |
-| `examples/response.v2.supplier-facility.json` | Stated units, `not_applicable` units, admitted contact fields. |
+| `examples/response.v2.supplier-material.json` | Evidence-only `observed`, `external_claim`, `inferred`, an unadmitted `external_claim`, and an explicit `unknown`. |
+| `examples/response.v2.supplier-facility.json` | Stated units, `not_applicable` units, an admitted contact field. |
 | `examples/response.v2.buyer-material.json` | A `conflicting` field with two candidates and no resolution. |
 | `examples/response.v2.buyer-facility.json` | An `inferred` field whose input is an `external_claim`. |
 | `examples/response.v2.failed.json` | A failed run: nothing admitted, no proposals. |
 
 ## 9. Open questions for the freeze
 
-1. Is `external_claim` the same state as FeatureEvidence `reported`? Unresolved
-   (section 3).
+1. **Unknown:** whether `external_claim` is the same state as FeatureEvidence
+   `reported`. No equivalence or mapping is declared (section 3).
 2. Which request key carries `role` and `subject_type`? That is `request.v2`
    (campaign A). This draft only requires that they be echoed, not derived.
 3. Should `proposals` be omitted, rather than empty, when a domain declares no
    proposal types? This draft says always present, possibly empty.
-4. How do `observed` fields relate to the `D9-v2` population? This draft's
-   position: they are outside it, because EIE did not assess them, so their
-   `null` confidence does not count as 0 against readiness. That needs the
-   uncertainty-policy owner's decision, not this contract's.
+4. A requested field that the request also supplied, and that no source
+   speaks to, is `observed` with `null` confidence. Under `D9-v2` as
+   implemented it is a deciding field with effective confidence 0, so it can
+   never be ready. Whether that is intended is the uncertainty-policy owner's
+   decision. This draft changes nothing there, and its examples avoid the
+   case: their `observed` fields were supplied, not requested.
 5. Per-source `independent` is `null` everywhere until a provider reply carries
    per-field provenance. Whether to ship the key before then is undecided.
