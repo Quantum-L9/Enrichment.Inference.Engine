@@ -645,7 +645,8 @@ def test_e2e_observed_association_becomes_one_scored_evidence_edge(seam: Seam) -
     assert props["_object_ref"] == object_ref(CAVE)
     assert "source_revision" not in props  # HubSpot reports none; none is invented
 
-    # The mapping came from EIE's mirror, labelled as not yet cross-checked by CEG (D-9).
+    # The mapping came from EIE's mirror; this run sends no association, so CEG did
+    # not cross-check it (D-9) and the label stays unverified.
     assert produced["mapping_verification"] == MAPPING_UNVERIFIED_MIRROR
     mirror = _spec(seam.eie_domains_root, CAVE)
     authority = _spec(seam.domains_root, CAVE)
@@ -791,12 +792,14 @@ def test_e2e_a_node_id_outside_the_declared_namespace_is_never_created(seam: Sea
 
 
 def test_e2e_a_drifted_mirror_is_reported_and_never_presented_as_ceg_approval(seam: Seam) -> None:
-    """Residual risk until D-9 (Cognitive.Engine.Graphs#386), witnessed, not hidden.
+    """Residual risk while the association is not sent (D-9), witnessed, not hidden.
 
-    EIE's mirror maps an association CEG's spec does not declare. CEG cannot yet
-    tell (its row carries no provenance), so the edge is written; the producer
-    labels the result as an unverified mirror and ``mirror_drift`` names the
-    divergence. The edge is removed afterwards.
+    EIE's mirror maps an association CEG's spec does not declare. With
+    observed_association_send_enabled off (the default, as here) the row carries
+    no provenance, so CEG cannot tell (Cognitive.Engine.Graphs#422 checks only a
+    row that carries it) and the edge is written; the producer labels the result
+    as an unverified mirror and ``mirror_drift`` names the divergence. The edge
+    is removed afterwards.
     """
     path = seam.eie_domains_root / CAVE / "spec.yaml"
     original = path.read_text(encoding="utf-8")

@@ -35,6 +35,7 @@ from constellation_node_sdk.transport import create_transport_packet
 from app.engines.domain_yaml_reader import DomainYamlReader
 from app.engines.observed_association_contract import (
     MAPPING_UNVERIFIED_MIRROR,
+    MAPPING_VERIFIED_BY_CEG,
     ObservedRelationshipContract,
     mapping_fingerprint,
 )
@@ -845,6 +846,61 @@ async def test_drift_is_claimed_only_when_the_association_was_sent(
         send_observed_association=False,
     )
     assert result.status is ProducerStatus.NOT_ACKNOWLEDGED
+
+
+@pytest.mark.parametrize("tenant", sorted(VOCABULARIES))
+async def test_ceg_acknowledging_the_sent_association_verifies_the_mapping(
+    router: PacketRouter, hubspot: HubSpotClient, tenant: str
+) -> None:
+    """D-9: CEG refuses an association its own observedfrom does not declare, so
+    its acknowledgment of a row carrying one is CEG's cross-check of the mapping."""
+    result, _get, _execute = await _produce(
+        router,
+        hubspot,
+        tenant,
+        http=_http(body=_associations_body(tenant)),
+        send_observed_association=True,
+    )
+    assert result.status is ProducerStatus.SYNCED
+    assert result.mapping_verification == MAPPING_VERIFIED_BY_CEG
+    assert result.mapping_fingerprint == mapping_fingerprint(_tenant_spec(tenant))
+
+
+async def test_an_acknowledgment_without_the_association_is_not_a_cross_check(
+    router: PacketRouter, hubspot: HubSpotClient
+) -> None:
+    result, _get, _execute = await _produce(
+        router,
+        hubspot,
+        "orbit-yard",
+        http=_http(body=_associations_body("orbit-yard")),
+        send_observed_association=False,
+    )
+    assert result.status is ProducerStatus.SYNCED
+    assert result.mapping_verification == MAPPING_UNVERIFIED_MIRROR
+
+
+@pytest.mark.parametrize(
+    ("gate", "status"),
+    [
+        (_ceg_rejected_packet(), ProducerStatus.MAPPING_REJECTED_BY_CEG),
+        (_failure_packet(), ProducerStatus.NOT_ACKNOWLEDGED),
+    ],
+    ids=["ceg-refused-association", "not-acknowledged"],
+)
+async def test_a_sent_association_ceg_did_not_acknowledge_stays_unverified(
+    router: PacketRouter, hubspot: HubSpotClient, gate: Any, status: ProducerStatus
+) -> None:
+    result, _get, _execute = await _produce(
+        router,
+        hubspot,
+        "orbit-yard",
+        http=_http(body=_associations_body("orbit-yard")),
+        gate=gate,
+        send_observed_association=True,
+    )
+    assert result.status is status
+    assert result.mapping_verification == MAPPING_UNVERIFIED_MIRROR
 
 
 # ── Domain neutrality ─────────────────────────────────────────────────────────

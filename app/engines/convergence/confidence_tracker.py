@@ -14,10 +14,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from math import fsum, isfinite
+from math import fsum
 from typing import Any
 
 import structlog
+
+# Re-exported: the planner and controller import it from here.
+from app.utils.safe_convert import normalize_confidence as normalize_confidence
 
 logger = structlog.get_logger("confidence_tracker")
 
@@ -46,24 +49,6 @@ UNCERTAINTY_POLICY = "D9-v2"
 # D-9 v1's acceptance claim (code and test docstrings said "owner-accepted
 # 2026-10-29" while merged PR #259 said "pending owner acceptance") was never
 # independently verified. D-9 v2 is a new decision, not a confirmation of v1.
-
-
-def normalize_confidence(value: object) -> float:
-    """Effective confidence of one reported confidence value, in [0, 1].
-
-    Absent, boolean, non-numeric and non-finite values are unusable and count
-    as 0, so malformed input can never create confidence. Finite values,
-    including numeric strings, are clamped to [0, 1].
-    """
-    if value is None or isinstance(value, bool):
-        return 0.0
-    try:
-        number = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError, OverflowError):
-        return 0.0
-    if not isfinite(number):
-        return 0.0
-    return max(0.0, min(1.0, number))
 
 
 def value_present(value: Any) -> bool:

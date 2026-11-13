@@ -42,7 +42,7 @@ Apply this verdict BEFORE writing any inline comments.
 - [ ] C-08 / SEC-007: yaml.load( without SafeLoader?
 - [ ] C-10: Hardcoded API key, token, or credential?
 - [ ] C-11: SDK transport objects mutated in place after construction?
-- [ ] C-13: Active transport/runtime bundle drift — changes to `app/main.py`, `app/api/v1/chassis_endpoint.py`, `app/services/chassis_handlers.py`, `app/engines/orchestration_layer.py`, `app/engines/handlers.py`, or `app/engines/graph_sync_client.py` without paired updates to the active bundle?
+- [ ] C-13: Active transport/runtime bundle drift — changes to `app/main.py`, `app/api/v1/chassis_endpoint.py`, `app/services/chassis_handlers.py`, `app/engines/orchestration_layer.py`, `app/engines/handlers.py`, `app/engines/graph_sync_client.py`, or `app/middleware/gate_ingress.py` without paired updates to the active bundle?
 - [ ] C-21: Does this PR reintroduce production reliance on deprecated `chassis/envelope.py`, `chassis/router.py`, or `chassis/registry.py`?
 - [ ] C-16: Python less than 3.12 syntax or backport import present?
 
