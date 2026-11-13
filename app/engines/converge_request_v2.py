@@ -18,12 +18,18 @@ already understands (`domain_id`, `node_label`, `schema`, `field_thresholds`)
 together with the one cartridge revision it was checked against, or it is
 refused whole with a contract code. Nothing here falls back, defaults or
 branches on a particular cartridge, node, subject or field name.
+
+Request v2.1 (additive, frozen 2026-11-13) adds `observations`: what the
+consumer itself observed about fields of the node. They are checked here and
+handed on beside the body, never inside it: an observation is evidence about
+one field, not an entity value, so it must not reach the loop as a fact.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import yaml
@@ -38,7 +44,9 @@ from .domain_yaml_reader import (
 from .spec_types import TypeDeclarationError, describe, node_properties, shape, validate_declaration
 
 REQUEST_CONTRACT_V2 = "eie.converge.request/v2"
-V2_MEMBERS = frozenset({"cartridge", "node", "subject", "targets"})
+V2_MEMBERS = frozenset({"cartridge", "node", "subject", "targets", "observations"})
+_OBSERVATION_REQUIRED = frozenset({"field", "value", "source_kind", "source_ref"})
+_OBSERVATION_OPTIONAL = frozenset({"unit", "observed_at", "confidence"})
 # v1 members a v2 body still carries (request.v2.md section 3.6).
 _CARRIED = frozenset(
     {
@@ -82,6 +90,9 @@ class ResolvedConvergeRequest:
     config: DomainEnrichmentConfig
     node: str
     subject: dict[str, str] | None
+    # Request v2.1: the consumer's observations, validated, in request order.
+    # Evidence only (`convergence.observation_evidence`); never part of `body`.
+    observations: tuple[dict[str, Any], ...] = ()
 
 
 def resolve_converge_request_v2(
@@ -128,12 +139,15 @@ def resolve_converge_request_v2(
 
     schema, thresholds = _targets(payload.get("targets"), {p["name"]: p for p in declared}, node)
     subject = _subject(payload.get("subject"), config.raw_spec, node)
+    observations = _observations(payload.get("observations"), {p["name"] for p in declared}, node)
 
     body = {key: value for key, value in payload.items() if key in _CARRIED | _PRODUCER_CONTEXT}
     body.update(domain_id=cartridge_id, node_label=node, schema=schema)
     if thresholds:
         body["field_thresholds"] = thresholds
-    return ResolvedConvergeRequest(body=body, config=config, node=node, subject=subject)
+    return ResolvedConvergeRequest(
+        body=body, config=config, node=node, subject=subject, observations=observations
+    )
 
 
 def _cartridge(value: object) -> tuple[str, str, str | None]:
@@ -246,6 +260,63 @@ def _confidence(name: str, value: object) -> float:
             "invalid_request", f"targets.{name}.min_confidence not in [0, 1]"
         )
     return safe_float(value)
+
+
+def _observations(value: object, declared: set[str], node: str) -> tuple[dict[str, Any], ...]:
+    """Validate `observations` (request v2.1). Nothing is defaulted or inferred."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ConvergeRequestRefusedError("invalid_request", "observations must be a list")
+    return tuple(_observation(entry, declared, node) for entry in value)
+
+
+def _observation(entry: object, declared: set[str], node: str) -> dict[str, Any]:
+    allowed = _OBSERVATION_REQUIRED | _OBSERVATION_OPTIONAL
+    if (
+        not isinstance(entry, Mapping)
+        or entry.keys() - allowed
+        or _OBSERVATION_REQUIRED - entry.keys()
+    ):
+        raise ConvergeRequestRefusedError(
+            "invalid_request",
+            "an observation is {field, value, source_kind, source_ref, unit?, observed_at?, "
+            "confidence?}",
+        )
+    for key in ("field", "source_kind", "source_ref", *(k for k in ("unit",) if k in entry)):
+        if not isinstance(entry[key], str) or not entry[key]:
+            raise ConvergeRequestRefusedError(
+                "invalid_request", f"observation.{key} must be a nonempty string"
+            )
+    name = entry["field"]
+    if name not in declared:
+        raise ConvergeRequestRefusedError("target_not_declared", f"{node}.{name} (observation)")
+    if entry["value"] is None:
+        raise ConvergeRequestRefusedError(
+            "invalid_request", f"observation of {name} carries no value"
+        )
+    observation = {key: entry[key] for key in entry if key != "confidence"}
+    if "observed_at" in entry:
+        _check_timestamp(name, entry["observed_at"])
+    if "confidence" in entry:
+        # The consumer's own statement. EIE never assigns one.
+        stated = entry["confidence"]
+        if isinstance(stated, bool) or not isinstance(stated, (int, float)) or not 0 <= stated <= 1:
+            raise ConvergeRequestRefusedError(
+                "invalid_request", f"observation of {name}: confidence not in [0, 1]"
+            )
+        observation["confidence"] = safe_float(stated)
+    return observation
+
+
+def _check_timestamp(name: str, value: object) -> None:
+    try:
+        if not isinstance(value, str) or datetime.fromisoformat(value).tzinfo is None:
+            raise ValueError("an RFC 3339 timestamp carries a UTC offset")
+    except ValueError as exc:
+        raise ConvergeRequestRefusedError(
+            "invalid_request", f"observation of {name}: observed_at is not RFC 3339"
+        ) from exc
 
 
 def _subject(value: object, spec: Mapping[str, Any], node: str) -> dict[str, str] | None:
