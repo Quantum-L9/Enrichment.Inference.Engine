@@ -815,7 +815,7 @@ async def test_concurrent_native_approvals_preserve_both_audits_without_activati
         assert all(r.reviewed_by == "test-fixture-only" for r in table.rows)
         assert all(
             r.json()["publication_status"] == "awaiting_operator_publication"
-            and r.json()["new_version"] == "0.4.0"
+            and r.json()["new_version"] == "0.5.0"
             for r in responses
         )
         assert converge_module._domain_specs is registry
@@ -994,7 +994,7 @@ def test_explicit_bound_replay_keeps_batch_fields_associations_and_historical_pa
         "capacity_tons_month",
         "tier",
     }
-    assert replayed["version"] == "0.6.0-discovered"
+    assert replayed["version"] == "0.7.0-discovered"
     assert replayed["sync"] == base["sync"]
     assert replayed["semantic_registry"] == base["semantic_registry"]
     assert replayed["inference_rules"] == base["inference_rules"]
@@ -1197,7 +1197,7 @@ async def test_unapplied_approvals_publish_no_revision_so_replay_matches_live(ap
     assert responses[1].json()["detail"] == "Approval decision names an unproposed owner/field pair"
     bodies = [responses[0].json(), responses[2].json()]
     assert [b["approved"] for b in bodies] == [0, 1], "applied counts, not decided counts"
-    assert [b["new_version"] for b in bodies] == ["0.4.0", "0.5.0-discovered"]
+    assert [b["new_version"] for b in bodies] == ["0.5.0", "0.6.0-discovered"]
     assert all(b["unapplied"] == [] for b in bodies)
     assert len(table.rows) == 2 and all(
         row.field_name != "not_a_proposed_field" for row in table.rows
