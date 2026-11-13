@@ -28,9 +28,13 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[2]
 CEG_REVISION = "e9e6ceb669d37bd75dc9bded206105b5875a9c60"
 GOOD = (ROOT / "domains/plasticos/spec.yaml").read_bytes()
+# The specimen's own version line, whatever revision it is at: the anchor must
+# not go stale each time the cartridge version is bumped.
+VERSION_LINE = next(line for line in GOOD.splitlines() if line.startswith(b"version: "))
+SPEC_VERSION = VERSION_LINE.split(b'"')[1].decode()
 DUPLICATES = {
     "name": GOOD.replace(b"name: plasticos", b"name: other\nname: plasticos", 1),
-    "version": GOOD.replace(b'version: "0.4.0"', b'version: "9.0.0"\nversion: "0.4.0"', 1),
+    "version": GOOD.replace(VERSION_LINE, b'version: "9.0.0"\n' + VERSION_LINE, 1),
     "sync": GOOD.replace(b"sync:\n", b"sync: {}\nsync:\n", 1),
     "properties": GOOD.replace(b"    properties:\n", b"    properties: []\n    properties:\n", 1),
     "type": GOOD.replace(
@@ -60,7 +64,7 @@ def _publish(root: Path, content: bytes) -> Path:
     receipt = {
         "schema": "eie.domain-approval/v1",
         "tenant_id": "plasticos",
-        "version": "0.4.0",
+        "version": SPEC_VERSION,
         "sha256": digest,
         "reviewed_input_sha256": digest,
         "reviewed_by": "test-only-reviewer",
@@ -93,7 +97,7 @@ def test_reader_refuses_duplicate_without_cache_or_legacy_fallback(
     else:
         (tmp_path / "plasticos.yaml").write_bytes(GOOD)
     reader = DomainYamlReader(tmp_path)
-    assert reader.load("plasticos").version == "0.4.0"
+    assert reader.load("plasticos").version == SPEC_VERSION
     if published:
         # Hash and receipt correctly bind the ambiguous bytes: hashing is not parsing.
         _publish(tmp_path, content)
