@@ -55,7 +55,7 @@ The constant string `eie.converge.request/v2`.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `id` | string | yes | Cartridge id, in the tenant-id grammar of `domain_yaml_reader.TENANT_ID_PATTERN`. |
+| `id` | string | yes | Cartridge id. Must satisfy `domain_yaml_reader.is_legal_tenant_id`, the complete predicate the reader applies (lowercase, the tenant-id grammar, and not the reserved `system` prefix). An id that fails it is `invalid_request`. |
 | `version` | string | no | Semantic version the caller expects. |
 | `sha256` | string | no | Digest of the published `spec.yaml` bytes the caller expects. |
 
@@ -76,7 +76,7 @@ A list of field targets on the named node.
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `field` | string | yes | A property the node declares. |
-| `type` | declaration | no | The caller's expected type, in the shared typed syntax (`app/engines/spec_types.py`): a scalar name, or `{type: list, items: ...}` / `{type: map, properties: [...]}`. |
+| `type` | declaration | no | The caller's expected type as a declaration object in the shared typed syntax (`app/engines/spec_types.py`, `validate_declaration`): `{type: float}`, `{type: list, items: {...}}` or `{type: map, properties: [...]}`. Always an object, scalars included; a bare string such as `"float"` is `invalid_request`, so no normalization step exists. |
 | `min_confidence` | number in [0, 1] | no | The caller's bar for this field. Same meaning as a v1 `field_thresholds` entry. |
 
 Rules:
@@ -144,9 +144,9 @@ select a cartridge or node in v2; if present they must agree with `cartridge.id`
   "node": "Facility",
   "subject": {"type": "facility", "role": "supplier"},
   "targets": [
-    {"field": "contamination_tolerance", "type": "float", "min_confidence": 0.8},
+    {"field": "contamination_tolerance", "type": {"type": "float"}, "min_confidence": 0.8},
     {"field": "processed_polymers"},
-    {"field": "capacity_tons_month", "type": "float"}
+    {"field": "capacity_tons_month", "type": {"type": "float"}}
   ],
   "entity": {"id": "res.partner:55", "name": "Acme Recycling", "city": "Charlotte"},
   "object_type": "res.partner",
