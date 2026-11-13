@@ -359,6 +359,60 @@ jobs:
             -rfEs \
             -v
 
+  # Advisory, like `integration`: not in ci-gate's needs and not a required check.
+  # Odoo's `converge` request through a REAL Gate in Docker (tests/e2e/README.md):
+  # client -> Gate -> EIE -> Gate -> client, EIE on its deterministic provider.
+  # Fails closed: no Constellation.Gate checkout, image or rail means a red job;
+  # tests/e2e never skips.
+  e2e-converge:
+    name: E2E (Odoo converge through a real Gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: validate
+    permissions:
+      contents: read
+    env:
+      # Same pinned Gate subject as `integration`. Bump both deliberately.
+      GATE_SUBJECT_SHA: ab8fb674e65f2cafe4172178c1ce6de18b4bb0f4
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Checkout pinned Constellation.Gate (rail + Gate image source)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Quantum-L9/Constellation.Gate
+          ref: ${{ env.GATE_SUBJECT_SHA }}
+          path: .ci-subjects/gate-peer
+          token: ${{ secrets.SDK_TOKEN }}
+          persist-credentials: false
+      - name: Build EIE virtualenv (.venv)
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
+          python -m venv .venv
+          PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" bash tools/deps/install_locked.sh full
+          git config --global --remove-section "url.https://x-access-token:${SDK_TOKEN}@github.com/"
+      - name: Build Gate and EIE images from their own Dockerfiles
+        run: |
+          set -euo pipefail
+          gate="$GITHUB_WORKSPACE/.ci-subjects/gate-peer"
+          test "$(git -C "$gate" rev-parse HEAD)" = "$GATE_SUBJECT_SHA"
+          docker build -t l9e2e/gate:local "$gate/constellation-gate"
+          docker build -t l9e2e/eie:local .
+      - name: Run converge e2e
+        env:
+          L9_E2E_GATE_RAIL: ${{ github.workspace }}/.ci-subjects/gate-peer/constellation-gate/tests/e2e/docker
+          L9_E2E_STATE_DIR: ${{ runner.temp }}/l9e2e
+        run: bash tests/e2e/run_converge_e2e.sh
+
   security:
     name: Security Scanning
     runs-on: ubuntu-latest

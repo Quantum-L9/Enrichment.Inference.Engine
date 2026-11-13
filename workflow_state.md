@@ -145,6 +145,7 @@ Last run: 2026-04-11
 
 ## Recent Sessions (7-day window)
 
+- 2026-11-13: Converge lane L5 — `tests/e2e/` proves Odoo's `converge` request through a real Gate in Docker (overlay on Constellation.Gate's rail; opt-in via `EIE_E2E=1`; CI job `e2e-converge`, advisory). On main `7f4bac2`: completed / fields ⊆ schema / < 25 s / identical replay pass; an unsigned packet impersonating Gate is still executed by EIE in `test` (SDK `dev_mode`) — that assertion is red until ingress hardening lands
 - 2026-06-24: Documented `plastics_enrichment_client.py` as intentional Gate-bypass test harness for Engine ↔ IB-Odoo_19 integration (not production path)
 - 2026-04-11: L9_CANON gap closure — structlog conversion (9 files), async timeouts + error handling (event_emitter, handlers, pg_store), typing tightened, 4 new test files (39 tests), test_gap_fixes.py rewritten to match current APIs, chassis_handlers structlog bug fixed
 - ✅ 2026-04-11: Transport SDK cutover — SDK runtime adopted in `app/main.py`, Gate-only egress wired, local `chassis/` files removed, targeted transport slice green, broader transport-adjacent slice at 126 passing with 8 legacy `test_gap_fixes` failures remaining
