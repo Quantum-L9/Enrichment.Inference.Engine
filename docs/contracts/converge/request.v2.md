@@ -1,10 +1,11 @@
-# Converge request v2 — DRAFT
+# Converge request v2
 
-> **Status: DRAFT. Not frozen, not implemented, not binding.**
-> Drafted by Campaign A (lane A-DOC) for the CTO to freeze. Until the CTO
-> freezes it, nothing may be built against this document, and no field named
-> here exists in `app/`. Sibling documents: `v1.md` (Campaign C, the request the
-> runtime accepts today) and `response.v2.md` (Campaign B, the response).
+> **Status: FROZEN 2026-11-13 by the CTO (session_017xwbxxupo1nc2CvFZN6ewa).**
+> Drafted by Campaign A (lane A-DOC). A change to this document is a contract
+> change and needs a new CTO decision. Frozen is not implemented: the EIE side
+> lands with lane A3e. Sibling documents: `v1.md` (Campaign C, the request the
+> runtime accepts today) and `response.v2.md` (Campaign B, contract constant
+> `eie.converge.response/v2`).
 
 L9_META:
   tier: 2
@@ -23,7 +24,7 @@ v2 extends v1. It adds five members to the v1 body and changes nothing in it:
 | Member | Purpose |
 | --- | --- |
 | `contract` | Selects v2. Its absence selects v1. |
-| `cartridge` | Names, and optionally pins, the cartridge that directs the run. |
+| `cartridge` | Names and pins the cartridge that directs the run. |
 | `node` | Names the cartridge node the entity is an instance of. |
 | `subject` | Carries the subject type and commercial role of what the targets describe. |
 | `targets` | Names the typed fields the caller wants enriched. |
@@ -37,7 +38,8 @@ reaches its cartridge and fields implicitly:
 | --- | --- | --- |
 | Cartridge | First non-empty of `domain_id`, `domain`, `kb_context`, `object_type`. | `cartridge.id` only. No fallback chain. |
 | Unknown cartridge | Logged; the run continues with no hints and no rules. | Refused. |
-| Revision | Whatever revision the reader currently serves. | Optionally pinned by `version` and `sha256`; a mismatch is refused. |
+| Revision | Whatever revision the reader currently serves. | Pinned by `version` (required) and optionally `sha256`; a mismatch is refused. |
+| Tenant | Not compared with the cartridge. | `cartridge.id` must equal the chassis-resolved tenant. |
 | Node | `node_label`, else the spec's only node, else no hints (logged). | `node` is required. |
 | Fields | `schema`, a free `{name: type-string}` map not checked against the cartridge. | `targets`, each checked against the cartridge's declaration. |
 
@@ -47,21 +49,30 @@ reaches its cartridge and fields implicitly:
 
 The constant string `eie.converge.request/v2`.
 
-- Absent: the body is v1 and is handled exactly as today. No v2 member is read.
-- Present with any other value: refused (`unsupported_contract`). A v2 member
-  on a body without `contract` is not an upgrade request; see section 6.
+- Absent: the body is v1 and is handled exactly as today, unless it carries a
+  v2 member (`cartridge`, `node`, `subject` or `targets`). That body is refused
+  (`v2_member_without_contract`): it is a v2 request that forgot `contract`,
+  and running it as v1 would silently drop what the caller asked for.
+- Present with any other value: refused (`unsupported_contract`).
 
 ### 3.2 `cartridge` (required)
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `id` | string | yes | Cartridge id. Must satisfy `domain_yaml_reader.is_legal_tenant_id`, the complete predicate the reader applies (lowercase, the tenant-id grammar, and not the reserved `system` prefix). An id that fails it is `invalid_request`. |
-| `version` | string | no | Semantic version the caller expects. |
+| `version` | string | yes | Semantic version the caller expects. |
 | `sha256` | string | no | Digest of the published `spec.yaml` bytes the caller expects. |
 
-A pin that is present must equal the loaded revision (`DomainEnrichmentConfig.version`,
-`.source_sha256`). A `sha256` pin against an unpublished (legacy, digestless)
-cartridge cannot be checked and is refused rather than ignored.
+`id` must equal the tenant the chassis resolved from the packet. This is the
+identity contract (operator decision 2026-10-22: tenant id == spec id), which
+v2 enforces and v1 does not. A different id is refused
+(`tenant_cartridge_mismatch`). v2.0 has no grant table; letting a tenant use
+another cartridge needs a new operator decision.
+
+`version` must equal the loaded revision's (`DomainEnrichmentConfig.version`).
+`sha256`, when present, must equal `.source_sha256`. A `sha256` pin against an
+unpublished (legacy, digestless) cartridge cannot be checked and is refused
+rather than ignored.
 
 ### 3.3 `node` (required)
 
@@ -89,9 +100,8 @@ Rules:
   replaces both, and two sources for the same fact are refused.
 
 **Material and facility targets.** Shared code has no notion of "material" or
-"facility". They are node labels (or, after lane A2s, cartridge-declared profile
-concerns) of the PlasticOS cartridge. A request addresses them by `node` plus
-`targets`, exactly as a request against any other cartridge addresses its own
+"facility". They are node labels and subject types the PlasticOS cartridge declares. A
+request addresses them by `node`, `subject` and explicit `targets`, exactly as a request against any other cartridge addresses its own
 nodes. The freight-carriers test cartridge (lane A5) addresses `Carrier` the
 same way.
 
@@ -119,18 +129,25 @@ PlasticOS vocabulary, not contract vocabulary. One request converges one
 entity, so `subject` applies to every entry of `targets`.
 
 - A value the cartridge does not declare is refused (`subject_not_declared`).
-- If the cartridge binds a subject type to a node or to a set of fields, `node`
-  and every target must fall inside that binding (`subject_target_mismatch`).
+- The cartridge declares its subject vocabulary in its own spec: subject types,
+  each bound to a node, and a list of roles. Lane A2s owns the shape of that
+  declaration.
+- `node` must be the node the subject type is bound to
+  (`subject_target_mismatch`).
+- A subject type never stands in for a field list. v2.0 has no
+  subject-to-fields expansion; `targets` stay explicit.
 - A cartridge that declares no subject vocabulary accepts no `subject`; a
   request that sends one is refused, never silently stripped.
-- Where a cartridge declares this vocabulary is not defined yet. Lane A2s
-  proposes it for PlasticOS; see open question 4.
 
 ### 3.6 Members carried over from v1 unchanged
 
-`entity`, `entity_id`, `object_type`, `objective`, `consensus_threshold`,
-`max_variations`, `max_passes`, `idempotency_key`, and producer context blocks
-such as `odoo`. In v2, `object_type` is a source-system label only and never
+The authority for the v1 body is `v1.md`. Its "eight-field" request is the
+eight allowlisted partner fields the producer sends in `schema` (`name`,
+`website`, `city`, `zip`, `street`, `street2`, `email`, `phone`), not eight
+top-level members. v2 carries over `entity`, `entity_id`, `object_type`,
+`objective`, `consensus_threshold`, `max_variations`, `max_passes`,
+`idempotency_key`, and producer context blocks such as `odoo`. `schema` is not
+carried over: `targets` replaces it (section 3.4). In v2, `object_type` is a source-system label only and never
 selects a cartridge. `domain`, `domain_id`, `node_label` and `kb_context` do not
 select a cartridge or node in v2; if present they must agree with `cartridge.id`
 / `node` or the request is refused.
@@ -167,31 +184,30 @@ below fails, the request is refused as a whole:
   to "converge without hints";
 - the answer is an `EnrichResponse` with `state: "failed"` and a
   `failure_reason` beginning with the code below. The response contract for v2
-  belongs to `response.v2.md`; these codes are proposed here for it to adopt.
+  belongs to `response.v2.md`, which adopts this table.
 
 | Code | Condition |
 | --- | --- |
 | `unsupported_contract` | `contract` is present and is not the v2 constant. |
-| `invalid_request` | A required member is missing, mistyped, or `targets` is empty. |
+| `v2_member_without_contract` | `cartridge`, `node`, `subject` or `targets` on a body without `contract`. |
+| `invalid_request` | A required member (including `cartridge.version`) is missing, mistyped, or `targets` is empty. |
 | `conflicting_members` | `schema`/`field_thresholds` present, or a v1 selector disagrees with `cartridge.id`/`node`. |
 | `cartridge_not_found` | No cartridge with that id can be loaded. |
 | `cartridge_refused` | The reader refused the revision (`DomainPublicationError`). |
 | `cartridge_pin_mismatch` | `version` or `sha256` differs from the loaded revision, or cannot be checked. |
-| `tenant_cartridge_mismatch` | The tenant may not use this cartridge. See open question 1. |
+| `tenant_cartridge_mismatch` | `cartridge.id` is not the chassis-resolved tenant. |
 | `node_not_declared` | The cartridge declares no such node. |
 | `target_not_declared` | A target field is not a property of the node. |
 | `target_type_mismatch` | A target `type` differs from the declaration. |
 | `duplicate_target` | A field appears twice in `targets`. |
 | `subject_not_declared` | `subject.type` or `subject.role` is not declared by the cartridge. |
-| `subject_target_mismatch` | `node` or a target falls outside the cartridge's binding for the subject. |
+| `subject_target_mismatch` | `node` is not the node the cartridge binds the subject type to. |
 
-**Response states.** Per the CTO (2026-11-13), converge v1 gains a third
-response state, `degraded`, for an exhausted deadline, alongside `completed`
-and `failed`; it lands with Campaign C lane L3 and is not on `main` 7f4bac2,
-where an exhausted deadline is still `failed` / `deadline_exhausted`. v2 builds
-on the three-state model. Every refusal in the table above is `failed`: a
-request that did not resolve was never run, so it is not `degraded`. `degraded`
-is reserved for a resolved request that ran and ran out of time.
+**Response states.** v2 builds on v1's three states (`v1.md`): `completed`,
+`degraded` (the deadline stopped the request) and `failed`. Every refusal in
+the table above is `failed`: a request that did not resolve was never run, so
+it is not `degraded`. `degraded` is reserved for a resolved request that ran
+and ran out of time.
 
 An unknown, unreadable or unresolved input is never treated as absent, defaulted
 or satisfied (L9-UNKNOWN-001). An unknown top-level member is refused as
@@ -200,11 +216,15 @@ fall back to a default.
 
 ## 6. Compatibility with v1
 
-- A body without `contract` is v1. Every v1 body valid today stays valid and
-  behaves identically; the live producer payload pinned by
-  `tests/contracts/test_canonical_converge_runtime_contract.py` is the witness.
-- v2 members on a v1 body are not read. Whether they are ignored or refused is
-  open question 3.
+- A body without `contract` and without a v2 member is v1. Every such body
+  valid today stays valid and behaves identically; the live producer payload
+  pinned by `tests/contracts/test_canonical_converge_runtime_contract.py`
+  carries no v2 member and is the witness.
+- A body without `contract` that carries a v2 member is refused
+  (`v2_member_without_contract`).
+- v1 does not compare tenant and cartridge; that existing behavior, including
+  the contract test that converges tenant `tenant-a` on `plasticos`, is
+  unchanged.
 - v1's fail-soft behaviors (unknown cartridge, ambiguous node) are unchanged for
   v1 callers. v2 does not tighten v1.
 
@@ -214,24 +234,16 @@ Odoo writeback, the response shape and its proposal types (`response.v2.md`),
 evidence acquisition and provenance (Campaign B), ingress and handler contract
 versions (Campaign C), batch converge, scoring, matching and ranking (CEG).
 
-## 8. Open questions for the CTO
+## 8. Decisions recorded at freeze
 
-1. **Tenant to cartridge.** The identity contract (operator decision 2026-10-22,
-   `domain_yaml_reader.py`) says tenant id == spec id. The converge handler does
-   not enforce it today: the existing contract test converges tenant `tenant-a`
-   on cartridge `plasticos`. Does v2 require `cartridge.id == tenant`, or an
-   explicit tenant-to-cartridge grant? `tenant_cartridge_mismatch` is reserved
-   for whichever is chosen.
-2. **Pin strength.** Is `version` alone an acceptable pin, or must a v2 request
-   against a published cartridge carry `sha256`?
-3. **v2 members on a v1 body.** Ignore (strict v1 compatibility) or refuse
-   (catches a caller that forgot `contract`)? This draft assumes ignore.
-4. **Subject vocabulary.** Where does a cartridge declare its subject types and
-   roles, and how does a subject type bind to a node or field set (lane A2s)?
-   Should `subject` stay request-level, as drafted, or move onto each target so
-   one request can mix subjects? Should a subject type be able to stand in for
-   an explicit field list, expanding to the cartridge's fields for it?
-5. **"8-field v1 request."** The campaign brief describes v1 as an 8-field
-   request. `EnrichRequest` at `main` declares 11 fields and the live producer
-   payload sends 6 top-level members. Which 8 is meant is Unknown to this lane;
-   `v1.md` is the authority and section 3.6 should be reconciled with it.
+Decided by the CTO on 2026-11-13; each is reflected in the sections above.
+
+1. **Tenant to cartridge.** `cartridge.id` must equal the chassis-resolved
+   tenant. No grant table in v2.0.
+2. **Pin strength.** `cartridge.version` is required. `sha256` is optional and
+   must match when present.
+3. **v2 members without `contract`.** Refused with `v2_member_without_contract`.
+4. **Subject.** Request-level. The cartridge declares the vocabulary (lane A2s
+   owns the shape). No subject-to-fields expansion in v2.0.
+5. **"Eight-field" v1.** The eight partner fields in v1 `schema`; `v1.md` is
+   the authority for the v1 body.
