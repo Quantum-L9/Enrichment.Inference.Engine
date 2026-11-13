@@ -27,7 +27,7 @@ from app.engines.field_classifier import (
 pytestmark = pytest.mark.unit
 
 PLASTICOS: dict[str, Any] = yaml.safe_load(
-    (Path(__file__).resolve().parents[1] / "domains/plasticos/spec.yaml").read_bytes()
+    (Path(__file__).resolve().parents[2] / "domains/plasticos/spec.yaml").read_bytes()
 )
 # A second native cartridge with the same node count and no shared field.
 CARRIERS: dict[str, Any] = {
