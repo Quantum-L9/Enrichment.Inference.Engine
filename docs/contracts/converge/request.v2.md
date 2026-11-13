@@ -18,13 +18,14 @@ by Gate. Gate is the only route to the node; this contract adds no endpoint, no
 peer call and no transport field. The tenant is the one the chassis resolved
 from the packet and hands to the handler. It is never read from the body.
 
-v2 extends v1. It adds four members to the v1 body and changes nothing in it:
+v2 extends v1. It adds five members to the v1 body and changes nothing in it:
 
 | Member | Purpose |
 | --- | --- |
 | `contract` | Selects v2. Its absence selects v1. |
 | `cartridge` | Names, and optionally pins, the cartridge that directs the run. |
 | `node` | Names the cartridge node the entity is an instance of. |
+| `subject` | Carries the subject type and commercial role of what the targets describe. |
 | `targets` | Names the typed fields the caller wants enriched. |
 
 ## 2. What v2 replaces
@@ -100,7 +101,32 @@ eligible for enrichment and for a typed proposal in the response. It authorizes
 no write to any system. Fields the cartridge does not declare, which includes
 every CEG-owned matching and ranking field, cannot be targets.
 
-### 3.5 Members carried over from v1 unchanged
+### 3.5 `subject` (optional)
+
+`subject` is the key that carries the subject type and the commercial role of
+the thing the targets describe. `response.v2.md` refers to this key by the
+paths `subject.type` and `subject.role`.
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `type` | string | yes, when `subject` is present | Subject type, e.g. `material` or `facility` in PlasticOS. |
+| `role` | string | no | Commercial role, e.g. `supplier` or `buyer` in PlasticOS. |
+
+Both are **opaque, cartridge-declared strings**. Shared code compares them for
+equality against what the loaded cartridge declares and gives them no other
+meaning: it never branches on a particular value, and the examples above are
+PlasticOS vocabulary, not contract vocabulary. One request converges one
+entity, so `subject` applies to every entry of `targets`.
+
+- A value the cartridge does not declare is refused (`subject_not_declared`).
+- If the cartridge binds a subject type to a node or to a set of fields, `node`
+  and every target must fall inside that binding (`subject_target_mismatch`).
+- A cartridge that declares no subject vocabulary accepts no `subject`; a
+  request that sends one is refused, never silently stripped.
+- Where a cartridge declares this vocabulary is not defined yet. Lane A2s
+  proposes it for PlasticOS; see open question 4.
+
+### 3.6 Members carried over from v1 unchanged
 
 `entity`, `entity_id`, `object_type`, `objective`, `consensus_threshold`,
 `max_variations`, `max_passes`, `idempotency_key`, and producer context blocks
@@ -116,6 +142,7 @@ select a cartridge or node in v2; if present they must agree with `cartridge.id`
   "contract": "eie.converge.request/v2",
   "cartridge": {"id": "plasticos", "version": "0.4.0"},
   "node": "Facility",
+  "subject": {"type": "facility", "role": "supplier"},
   "targets": [
     {"field": "contamination_tolerance", "type": "float", "min_confidence": 0.8},
     {"field": "processed_polymers"},
@@ -155,6 +182,16 @@ below fails, the request is refused as a whole:
 | `target_not_declared` | A target field is not a property of the node. |
 | `target_type_mismatch` | A target `type` differs from the declaration. |
 | `duplicate_target` | A field appears twice in `targets`. |
+| `subject_not_declared` | `subject.type` or `subject.role` is not declared by the cartridge. |
+| `subject_target_mismatch` | `node` or a target falls outside the cartridge's binding for the subject. |
+
+**Response states.** Per the CTO (2026-11-13), converge v1 gains a third
+response state, `degraded`, for an exhausted deadline, alongside `completed`
+and `failed`; it lands with Campaign C lane L3 and is not on `main` 7f4bac2,
+where an exhausted deadline is still `failed` / `deadline_exhausted`. v2 builds
+on the three-state model. Every refusal in the table above is `failed`: a
+request that did not resolve was never run, so it is not `degraded`. `degraded`
+is reserved for a resolved request that ran and ran out of time.
 
 An unknown, unreadable or unresolved input is never treated as absent, defaulted
 or satisfied (L9-UNKNOWN-001). An unknown top-level member is refused as
@@ -189,10 +226,12 @@ versions (Campaign C), batch converge, scoring, matching and ranking (CEG).
    against a published cartridge carry `sha256`?
 3. **v2 members on a v1 body.** Ignore (strict v1 compatibility) or refuse
    (catches a caller that forgot `contract`)? This draft assumes ignore.
-4. **Profile concerns.** If lane A2s declares material-profile and
-   facility-profile concerns inside one node rather than as nodes, should a
-   target group be addressable by concern name, expanding to its fields?
+4. **Subject vocabulary.** Where does a cartridge declare its subject types and
+   roles, and how does a subject type bind to a node or field set (lane A2s)?
+   Should `subject` stay request-level, as drafted, or move onto each target so
+   one request can mix subjects? Should a subject type be able to stand in for
+   an explicit field list, expanding to the cartridge's fields for it?
 5. **"8-field v1 request."** The campaign brief describes v1 as an 8-field
    request. `EnrichRequest` at `main` declares 11 fields and the live producer
    payload sends 6 top-level members. Which 8 is meant is Unknown to this lane;
-   `v1.md` is the authority and section 3.5 should be reconciled with it.
+   `v1.md` is the authority and section 3.6 should be reconciled with it.
