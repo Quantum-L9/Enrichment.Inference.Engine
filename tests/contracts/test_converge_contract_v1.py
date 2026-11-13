@@ -57,7 +57,7 @@ def _request(**overrides: Any) -> dict[str, Any]:
         "consensus_threshold": 0.80,
         "kb_context": "plasticos",
         "schema": dict(SCHEMA),
-        "idempotency_key": "plasticos.enrichment.run:7:attempt:1",
+        "idempotency_key": "odoo:enrichment:plasticos:plasticos.enrichment.run:7",
         "odoo": {"model": "plasticos.enrichment.run", "record_id": 7, "db_name": "plasticos"},
     }
     base.update(overrides)
@@ -150,6 +150,14 @@ async def test_fields_outside_the_request_schema_are_not_returned_or_persisted(
     persisted = runtime["persist"].call_args
     assert persisted is not None
     assert "annual_tonnage" not in repr(persisted), "the durable record must equal the answer"
+
+
+async def test_an_empty_schema_names_no_field(stub_loop: AsyncMock) -> None:
+    stub_loop.return_value = EnrichResponse(state="completed", fields={"zip": "28202"})
+
+    result = await handlers.handle_converge("plasticos", _request(schema={}))
+
+    assert result["fields"] == {}
 
 
 async def test_deadline_exhaustion_is_degraded_never_a_completed_partial(

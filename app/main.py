@@ -51,6 +51,7 @@ from .core.telemetry import setup_telemetry
 from .engines.domain_yaml_reader import DomainYamlReader
 from .engines.enrichment_orchestrator import breaker, enrich_batch, enrich_entity
 from .engines.orchestration_layer import register as register_orchestration
+from .middleware.gate_ingress import install_gate_only_ingress
 from .middleware.rate_limiter import RateLimitMiddleware
 from .models.schemas import (
     BatchEnrichRequest,
@@ -450,14 +451,22 @@ def _fallback_loop_store():
     return _InMemory()
 
 
+_runtime_config = _build_runtime_config()
 app = create_node_app(
     service_name="enrichment-engine",
     version="2.3.0",
     lifecycle_hook=EnrichmentLifecycle(),
-    config=_build_runtime_config(),
+    config=_runtime_config,
     auto_register_with_gate=False,
 )
 
+# C-21: the SDK owns /v1/execute; this only refuses non-Gate packets in front of
+# it. Installed before the rate limiter so a refused packet is still counted.
+install_gate_only_ingress(
+    app,
+    config=_runtime_config,
+    gate_signing_key_ids=get_settings().l9_gate_signing_key_ids,
+)
 app.add_middleware(RateLimitMiddleware, requests_per_minute=120)
 setup_telemetry(app)
 

@@ -15,6 +15,8 @@ from typing import Any
 
 import structlog
 
+from app.utils.safe_convert import normalize_confidence
+
 logger = structlog.get_logger("validation_engine")
 
 
@@ -52,7 +54,8 @@ def validate_response(
     shared spec syntax (``{"type": "list", "items": {"type": "map", ...}}``,
     ``app.engines.spec_types``); a declared list keeps its declared item type.
     Without schema: passes through with basic normalization.
-    Always extracts and clamps confidence to [0.0, 1.0].
+    Always extracts confidence through ``normalize_confidence``: clamped to
+    [0.0, 1.0], and 0.0 when missing or malformed.
 
     Returns normalized dict with 'confidence' key guaranteed.
     Raises ValidationError only if payload is not a dict at all.
@@ -61,11 +64,10 @@ def validate_response(
         raise ValidationError("response_not_dict")
 
     # ── Extract confidence ───────────────────────────
-    raw_conf = payload.get("confidence")
-    try:
-        confidence = max(0.0, min(1.0, float(raw_conf))) if raw_conf is not None else 0.5
-    except (ValueError, TypeError):
-        confidence = 0.5
+    # The provider's own confidence is an uncalibrated claim. Missing or
+    # malformed (bool, unparseable, NaN, ±Inf) is 0.0, never a default that
+    # could clear a threshold; finite values are clamped (post-#320 F1).
+    confidence = normalize_confidence(payload.get("confidence"))
 
     normalized: dict[str, Any] = {"confidence": confidence}
 

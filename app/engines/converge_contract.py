@@ -35,10 +35,11 @@ def restrict_fields_to_schema(
 ) -> list[str]:
     """Drop every `fields` entry the request `schema` did not name.
 
-    Returns the dropped names, sorted. A request without a schema is outside
-    contract v1 (the Odoo producer always sends one) and is left untouched.
+    Returns the dropped names, sorted. A request with no `schema` at all is
+    outside contract v1 (the Odoo producer always sends one) and is left
+    untouched; an empty `schema` names no field, so nothing is returned.
     """
-    if not schema:
+    if schema is None:
         return []
     fields = result.get("fields") or {}
     dropped = sorted(name for name in fields if name not in schema)

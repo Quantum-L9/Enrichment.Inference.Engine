@@ -15,12 +15,14 @@ CEG would refuse at load: a malformed entry anywhere, an ambiguous or conflictin
 namespace, an association declared twice, a reversed or undeclared edge. Nothing
 is guessed or defaulted, and there is no second mapping source.
 
-The mirror is NOT CEG's approval. Every resolution is labelled
+The mirror is NOT CEG's approval. A resolution is labelled
 ``MAPPING_UNVERIFIED_MIRROR`` and ``mirror_drift`` is the explicit comparison
-against an authoritative CEG spec. CEG's D-9 cross-check
-(Cognitive.Engine.Graphs#386) verifies an observed row only when the row carries
-the association (``Settings.observed_association_send_enabled``); a CEG refusal
-is reported as ``MAPPING_REJECTED_BY_CEG`` by the producer.
+against an authoritative CEG spec. CEG's D-9 cross-check (Cognitive.Engine.Graphs
+#422, closing #386) verifies an observed row only when the row carries the
+association (``Settings.observed_association_send_enabled``, default off): CEG
+refuses an association its own ``observedfrom`` does not declare, reported as
+``MAPPING_REJECTED_BY_CEG``, and the producer labels a row CEG acknowledged with
+the association on it ``MAPPING_VERIFIED_BY_CEG``.
 """
 
 from __future__ import annotations
@@ -44,8 +46,13 @@ _ENTRY_KEYS = frozenset(
     {"provider", "fromobjecttype", "toobjecttype", "associationcategory", "associationtypeid"}
 )
 
-# Until D-9 lands the mapping is EIE's mirror, which CEG has not cross-checked.
+# The mapping came from EIE's mirror and CEG did not cross-check it: the row
+# carried no association, or CEG did not acknowledge the row.
 MAPPING_UNVERIFIED_MIRROR = "eie_mirror_unverified_by_ceg"
+# CEG acknowledged a row that carried the association, so CEG's own tenant spec
+# declares it in ``observedfrom`` (D-9, observed_association_defects). It says
+# nothing about the relationship's relevance, which CEG's spec owns.
+MAPPING_VERIFIED_BY_CEG = "ceg_verified_observedfrom"
 
 AssociationKey = tuple[str, str, str, str, int]
 
@@ -72,7 +79,9 @@ class ObservedRelationshipContract:
     object_ref_namespace: str
     # Digest of the mirror's mapping declarations this contract was read from.
     mapping_fingerprint: str
-    # Who approved the mapping: EIE's mirror, which CEG has not cross-checked (D-9).
+    # Who approved the mapping when it was resolved: EIE's mirror. Only a CEG
+    # acknowledgment of a row carrying the association upgrades a producer
+    # result to MAPPING_VERIFIED_BY_CEG (D-9).
     mapping_verification: str = MAPPING_UNVERIFIED_MIRROR
 
 
