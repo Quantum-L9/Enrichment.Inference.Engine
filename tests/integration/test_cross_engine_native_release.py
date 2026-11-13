@@ -174,7 +174,8 @@ def test_isolated_receipts_enable_exact_pair_record_not_identical_yaml(tmp_path)
     assert code == 0 and proof["release_ready"]
     pair = proof["pair_record"]
     assert pair["eie"]["sha256"] != pair["ceg"]["sha256"]
-    assert pair["eie"]["spec_version"] == "0.4.0"
+    # The pair records the version of the EIE spec under test, whatever release it is.
+    assert pair["eie"]["spec_version"] == yaml.safe_load(eie.read_bytes())["version"]
     assert pair["ceg"]["spec_version"] == "1.3.0-reviewed"
 
 
@@ -184,7 +185,8 @@ def test_post_review_tamper_refuses_release_even_if_native_spec_still_valid(tmp_
     eie_receipt = _receipt(eie, "eie", tmp_path / "eie-receipt.json")
     ceg_receipt = _receipt(ceg, "ceg", tmp_path / "ceg-receipt.json")
     raw = yaml.safe_load(eie.read_bytes())
-    raw["version"] = "0.5.0"
+    # A real post-review edit: a version the reviewed spec does not carry.
+    raw["version"] = f"{raw['version']}-tampered"
     eie.write_text(yaml.safe_dump(raw))
     output = tmp_path / "tamper-proof.json"
     result = subprocess.run(
