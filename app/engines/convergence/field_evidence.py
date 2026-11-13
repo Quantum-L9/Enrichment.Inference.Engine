@@ -204,6 +204,62 @@ def build_field_evidence(
     return evidence
 
 
+def merge_observation_evidence(
+    evidence: Mapping[str, Mapping[str, Any]],
+    observed: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Fold request v2.1 observation entries into run evidence, one state per field.
+
+    response.v2 section 3 rule 5: a field the run produced keeps its produced
+    state and lists the observation among its sources when they agree; when they
+    disagree the field is `conflicting` and nothing is admitted. A field the run
+    left `unknown`, or never reported, takes the observation entry, which is
+    `observed` (never admitted) or already `conflicting`.
+    """
+    merged = {name: dict(entry) for name, entry in evidence.items()}
+    for name, obs in observed.items():
+        run = merged.get(name)
+        if run is None or run["state"] == "unknown":
+            merged[name] = dict(obs)
+            continue
+        if obs["state"] == "conflicting" or run["state"] == "conflicting":
+            candidates = [
+                *(run.get("conflict") or {}).get("candidates", []),
+                *(obs.get("conflict") or {}).get("candidates", []),
+            ]
+            for entry in (run, obs):
+                if entry["state"] != "conflicting":
+                    candidates.append(_candidate(entry))
+            merged[name] = _conflicting(run, candidates)
+            continue
+        if run.get("value") == obs.get("value"):
+            merged[name] = {**run, "sources": [*run["sources"], *obs["sources"]]}
+        else:
+            merged[name] = _conflicting(run, [_candidate(run), _candidate(obs)])
+    return merged
+
+
+def _candidate(entry: Mapping[str, Any]) -> dict[str, Any]:
+    candidate = {key: entry[key] for key in ("value", "unit_status") if key in entry}
+    if "unit" in entry:
+        candidate["unit"] = entry["unit"]
+    candidate.update(confidence=entry.get("confidence"), sources=list(entry.get("sources", [])))
+    return candidate
+
+
+def _conflicting(run: Mapping[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "state": "conflicting",
+        "admitted": False,
+        "confidence": None,
+        "sources": [],
+        "derivation": None,
+        "conflict": {"candidates": candidates, "resolution": None},
+        "unknown_reason": None,
+        "identity": dict(run["identity"]),
+    }
+
+
 def build_proposals(
     evidence: Mapping[str, Mapping[str, Any]], identity: Mapping[str, Any]
 ) -> list[dict[str, Any]]:

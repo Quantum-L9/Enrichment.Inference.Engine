@@ -143,3 +143,71 @@ async def test_refused_v2_request_runs_nothing(
     assert result["fields"] == {}
     assert runtime["loop"] == {}
     assert runtime["persist"].call_count == 0
+
+
+# --- Response v2 wiring (CTO integration, response.v2 revision 1) ---
+
+
+async def test_v2_request_is_answered_in_v2_with_resolution_and_declarations(
+    runtime: dict[str, Any],
+) -> None:
+    result = await handlers.handle_converge(
+        "plasticos", _v2(subject={"type": "facility", "role": "supplier"})
+    )
+
+    assert runtime["loop"]["response_contract"] == "eie.converge.response/v2"
+    assert result["contract_version"] == "eie.converge.response/v2"
+    assert EnrichResponse.model_validate(result).model_dump() == result
+    resolution = result["resolution"]
+    assert (resolution["cartridge_id"], resolution["node"]) == ("plasticos", "Facility")
+    assert resolution["cartridge_version"] == CARTRIDGE_VERSION
+    evidence = result["field_evidence"]
+    assert set(evidence) >= TARGET_NAMES
+    for name in TARGET_NAMES:
+        assert evidence[name]["declaration"]["type"] in {"float", "string"}
+        identity = evidence[name]["identity"]
+        assert identity == {
+            "subject_ref": "res.partner:55",
+            "subject_type": "facility",
+            "role": "supplier",
+        }
+    admitted = {n for n, e in evidence.items() if e["admitted"]}
+    assert set(result["fields"]) == admitted
+
+
+async def test_observation_is_evidence_only_and_disagreement_is_a_conflict(
+    runtime: dict[str, Any],
+) -> None:
+    observation = {
+        "field": "tier",
+        "value": "observed-tier-from-history",
+        "source_kind": "transaction",
+        "source_ref": "sale.order:123",
+    }
+    result = await handlers.handle_converge("plasticos", _v2(observations=[observation]))
+
+    entry = result["field_evidence"]["tier"]
+    assert entry["admitted"] is False
+    assert "tier" not in result["fields"]
+    sources = [
+        source
+        for candidate in (entry.get("conflict") or {}).get("candidates", [entry])
+        for source in candidate["sources"]
+    ]
+    assert any(source["source_type"] == "request_observation" for source in sources)
+    assert entry["state"] in {"observed", "conflicting"}
+
+
+async def test_v1_request_stays_v1(runtime: dict[str, Any]) -> None:
+    body = _v2()
+    v1 = {
+        "entity": body["entity"],
+        "object_type": "res.partner",
+        "objective": body["objective"],
+        "schema": {"name": "string", "city": "string"},
+        "kb_context": "plasticos",
+        "idempotency_key": "run:8:attempt:1",
+    }
+    result = await handlers.handle_converge("plasticos", v1)
+    for key in ("contract_version", "field_evidence", "proposals", "resolution"):
+        assert key not in result

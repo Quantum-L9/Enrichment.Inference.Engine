@@ -55,7 +55,9 @@ from .convergence.field_evidence import (
     build_field_evidence,
     build_proposals,
     check_response_v2,
+    merge_observation_evidence,
 )
+from .convergence.observation_evidence import observation_evidence
 from .field_classifier import DomainClassification, auto_classify_domain
 from .inference.rule_loader import build_unlock_index
 from .inference_bridge_adapter import InferenceBridge
@@ -189,6 +191,7 @@ async def run_convergence_loop(
     entity_id: str | None = None,
     response_contract: str | None = None,
     subject: Mapping[str, str] | None = None,
+    observations: tuple[Mapping[str, Any], ...] = (),
 ) -> EnrichResponse:
     """
     Multi-pass convergence loop.
@@ -225,6 +228,9 @@ async def run_convergence_loop(
     subject : Mapping[str, str] | None
         The request's resolved ``subject`` (``type``, ``role``), echoed into
         every evidence entry's identity. Never derived here.
+    observations : tuple of mappings
+        Request v2.1 observations, already validated against the cartridge. They
+        are evidence only, folded into a v2 response; they never steer the loop.
     """
     if response_contract not in (None, RESPONSE_CONTRACT_V2):
         raise ValueError(f"unsupported_contract: {response_contract!r}")
@@ -619,6 +625,7 @@ async def run_convergence_loop(
         response_contract=response_contract,
         subject=subject,
         entity_id=entity_id,
+        observations=observations,
     )
 
 
@@ -731,6 +738,7 @@ def _assemble_convergence_response(
     response_contract: str | None = None,
     subject: Mapping[str, str] | None = None,
     entity_id: str | None = None,
+    observations: tuple[Mapping[str, Any], ...] = (),
 ) -> EnrichResponse:
     """Build the final EnrichResponse from accumulated convergence state."""
     enriched_or_inferred: set[str] = set()
@@ -833,7 +841,9 @@ def _assemble_convergence_response(
         return response
     if confidence_tracker is None:
         raise ValueError("a v2 response needs the loop's confidence tracker")
-    return _as_response_v2(response, state, request, confidence_tracker, subject, entity_id)
+    return _as_response_v2(
+        response, state, request, confidence_tracker, subject, entity_id, observations
+    )
 
 
 def _unknown_reason(state: ConvergenceState) -> str:
@@ -854,6 +864,7 @@ def _as_response_v2(
     confidence_tracker: ConfidenceTracker,
     subject: Mapping[str, str] | None,
     entity_id: str | None,
+    observations: tuple[Mapping[str, Any], ...] = (),
 ) -> EnrichResponse:
     """Attach response v2 evidence, or fail the response when it cannot be stated."""
     requested = _required_fields(request) or []
@@ -892,6 +903,13 @@ def _as_response_v2(
             identity=identity,
             unknown_reason=_unknown_reason(state),
         )
+        if observations:
+            evidence = merge_observation_evidence(
+                evidence, observation_evidence(observations, identity)
+            )
+            # A disagreement turns a produced value into a conflict, which is
+            # never admitted, so `fields` is rebuilt from what stays admitted.
+            fields = {name: e["value"] for name, e in evidence.items() if e["admitted"]}
         proposals = build_proposals(evidence, identity) if response.state == "completed" else []
         body = {
             "state": response.state,
