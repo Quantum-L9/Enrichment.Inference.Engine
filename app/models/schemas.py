@@ -311,13 +311,18 @@ class EnrichResponse(BaseModel):
     contract_version: str | None = None
     field_evidence: dict[str, dict[str, Any]] | None = None
     proposals: list[dict[str, Any]] | None = None
+    # Revision 1: the cartridge revision and node that actually governed the run.
+    resolution: dict[str, Any] | None = None
 
     @model_serializer(mode="wrap")
     def _omit_absent_v2_members(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data: dict[str, Any] = handler(self)
         if self.contract_version is None:
-            for key in ("contract_version", "field_evidence", "proposals"):
+            for key in ("contract_version", "field_evidence", "proposals", "resolution"):
                 data.pop(key, None)
+        elif self.resolution is None:
+            # Revision 1: absent, never null, where nothing was resolved.
+            data.pop("resolution", None)
         return data
 
 

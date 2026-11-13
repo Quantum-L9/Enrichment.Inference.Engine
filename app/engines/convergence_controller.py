@@ -55,7 +55,9 @@ from .convergence.field_evidence import (
     build_field_evidence,
     build_proposals,
     check_response_v2,
+    merge_observation_evidence,
 )
+from .convergence.observation_evidence import observation_evidence
 from .field_classifier import DomainClassification, auto_classify_domain
 from .inference.rule_loader import build_unlock_index
 from .inference_bridge_adapter import InferenceBridge
@@ -189,6 +191,7 @@ async def run_convergence_loop(
     entity_id: str | None = None,
     response_contract: str | None = None,
     subject: Mapping[str, str] | None = None,
+    observations: tuple[Mapping[str, Any], ...] = (),
 ) -> EnrichResponse:
     """
     Multi-pass convergence loop.
@@ -225,6 +228,9 @@ async def run_convergence_loop(
     subject : Mapping[str, str] | None
         The request's resolved ``subject`` (``type``, ``role``), echoed into
         every evidence entry's identity. Never derived here.
+    observations : tuple of mappings
+        Request v2.1 observations, already validated against the cartridge. They
+        are evidence only, folded into a v2 response; they never steer the loop.
     """
     if response_contract not in (None, RESPONSE_CONTRACT_V2):
         raise ValueError(f"unsupported_contract: {response_contract!r}")
@@ -619,6 +625,7 @@ async def run_convergence_loop(
         response_contract=response_contract,
         subject=subject,
         entity_id=entity_id,
+        observations=observations,
     )
 
 
@@ -731,6 +738,7 @@ def _assemble_convergence_response(
     response_contract: str | None = None,
     subject: Mapping[str, str] | None = None,
     entity_id: str | None = None,
+    observations: tuple[Mapping[str, Any], ...] = (),
 ) -> EnrichResponse:
     """Build the final EnrichResponse from accumulated convergence state."""
     enriched_or_inferred: set[str] = set()
@@ -833,7 +841,9 @@ def _assemble_convergence_response(
         return response
     if confidence_tracker is None:
         raise ValueError("a v2 response needs the loop's confidence tracker")
-    return _as_response_v2(response, state, request, confidence_tracker, subject, entity_id)
+    return _as_response_v2(
+        response, state, request, confidence_tracker, subject, entity_id, observations
+    )
 
 
 def _unknown_reason(state: ConvergenceState) -> str:
@@ -847,6 +857,63 @@ def _unknown_reason(state: ConvergenceState) -> str:
     return "no_evidence"
 
 
+def _subject_identity(
+    request: EnrichRequest, subject: Mapping[str, str] | None, entity_id: str | None
+) -> dict[str, Any]:
+    return {
+        "subject_ref": entity_id or request.entity.get("id"),
+        "subject_type": (subject or {}).get("type"),
+        "role": (subject or {}).get("role"),
+    }
+
+
+def deadline_response_v2(
+    request: EnrichRequest,
+    subject: Mapping[str, str] | None,
+    entity_id: str | None,
+    observations: tuple[Mapping[str, Any], ...],
+    reason: str,
+) -> EnrichResponse:
+    """A v2 request stopped by the outer deadline, answered in v2 (response.v2 section 6).
+
+    The loop's own record did not survive the cancellation, so nothing was
+    produced: `fields` and `proposals` are empty, every requested field the
+    request did not itself supply is `unknown` with `budget_exhausted`, and
+    the request's values and observations stay evidence only.
+    """
+    requested = _required_fields(request) or []
+    identity = _subject_identity(request, subject, entity_id)
+    try:
+        if not identity["subject_ref"]:
+            raise EvidenceContractError("the request names no subject identity")
+        evidence = build_field_evidence(
+            requested=requested,
+            fields={},
+            produced={},
+            provenance={},
+            withheld={},
+            entity=request.entity,
+            identity=identity,
+            unknown_reason="budget_exhausted",
+        )
+        if observations:
+            evidence = merge_observation_evidence(
+                evidence, observation_evidence(observations, identity)
+            )
+        body = {"state": "degraded", "fields": {}, "field_evidence": evidence, "proposals": []}
+        check_response_v2(body, requested)
+    except EvidenceContractError as exc:
+        logger.warning("response_v2_evidence_refused", error=str(exc))
+        return EnrichResponse(state="failed", failure_reason=f"evidence_contract_violation: {exc}")
+    return EnrichResponse(
+        state="degraded",
+        failure_reason=reason,
+        contract_version=RESPONSE_CONTRACT_V2,
+        field_evidence=evidence,
+        proposals=[],
+    )
+
+
 def _as_response_v2(
     response: EnrichResponse,
     state: ConvergenceState,
@@ -854,11 +921,17 @@ def _as_response_v2(
     confidence_tracker: ConfidenceTracker,
     subject: Mapping[str, str] | None,
     entity_id: str | None,
+    observations: tuple[Mapping[str, Any], ...] = (),
 ) -> EnrichResponse:
     """Attach response v2 evidence, or fail the response when it cannot be stated."""
     requested = _required_fields(request) or []
     # A failed response admits nothing (response.v2 section 6).
     fields = dict(response.fields) if response.state == "completed" else {}
+    if request.schema_ is not None:
+        # Contract v1's cut to the request schema (restrict_fields_to_schema),
+        # made here, before the evidence is built: cutting `fields` afterwards
+        # would leave admitted entries that `fields` no longer carries.
+        fields = {name: value for name, value in fields.items() if name in request.schema_}
     provenance: dict[str, dict[str, Any]] = {}
     withheld: dict[str, dict[str, Any]] = {}
     for pr in state.pass_results:
@@ -874,11 +947,7 @@ def _as_response_v2(
         }
         for name, tracked in confidence_tracker.fields.items()
     }
-    identity = {
-        "subject_ref": entity_id or request.entity.get("id"),
-        "subject_type": (subject or {}).get("type"),
-        "role": (subject or {}).get("role"),
-    }
+    identity = _subject_identity(request, subject, entity_id)
     try:
         if not identity["subject_ref"]:
             raise EvidenceContractError("the request names no subject identity")
@@ -892,6 +961,13 @@ def _as_response_v2(
             identity=identity,
             unknown_reason=_unknown_reason(state),
         )
+        if observations:
+            evidence = merge_observation_evidence(
+                evidence, observation_evidence(observations, identity)
+            )
+            # A disagreement turns a produced value into a conflict, which is
+            # never admitted, so `fields` is rebuilt from what stays admitted.
+            fields = {name: e["value"] for name, e in evidence.items() if e["admitted"]}
         proposals = build_proposals(evidence, identity) if response.state == "completed" else []
         body = {
             "state": response.state,

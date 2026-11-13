@@ -31,9 +31,15 @@ from ..engines.converge_contract import (
     mark_deadline_degraded,
     restrict_fields_to_schema,
 )
-from ..engines.converge_request_v2 import ConvergeRequestRefusedError, resolve_converge_request_v2
+from ..engines.converge_request_v2 import (
+    ConvergeRequestRefusedError,
+    ResolvedConvergeRequest,
+    attach_resolution,
+    resolve_converge_request_v2,
+)
 from ..engines.convergence.convergence_config import ConvergenceConfig
-from ..engines.convergence_controller import run_convergence_loop
+from ..engines.convergence.field_evidence import RESPONSE_CONTRACT_V2
+from ..engines.convergence_controller import deadline_response_v2, run_convergence_loop
 from ..engines.domain_yaml_reader import (
     DomainEnrichmentConfig,
     DomainPublicationError,
@@ -291,7 +297,14 @@ async def _handle_canonical_converge(
         with deadline_scope(deadline):
             return await asyncio.wait_for(
                 _run_canonical_converge(
-                    tenant, payload, request, deadline, entity_id, operation_id, cartridge
+                    tenant,
+                    payload,
+                    request,
+                    deadline,
+                    entity_id,
+                    operation_id,
+                    cartridge,
+                    resolved,
                 ),
                 timeout=max(deadline.remaining(), 0.0),
             )
@@ -307,7 +320,15 @@ async def _handle_canonical_converge(
         # so a non-completed state routes it to its own degraded handling —
         # no Odoo-specific error envelope is invented here. Contract v1 names
         # the state: `degraded`, with no partial result attached.
-        return degraded_response(f"converge exceeded {budget_seconds:.0f}s budget for {entity_id}")
+        reason = f"converge exceeded {budget_seconds:.0f}s budget for {entity_id}"
+        if resolved is None:
+            return degraded_response(reason)
+        # A v2 request is answered in v2 even here (response.v2 section 6).
+        body = deadline_response_v2(
+            request, resolved.subject, entity_id, resolved.observations, reason
+        ).model_dump()
+        attach_resolution(body, resolved)
+        return body
     except Exception as exc:
         logger.exception(
             "handlers.converge_failed",
@@ -326,6 +347,7 @@ async def _run_canonical_converge(
     entity_id: str | None,
     operation_id: str | None = None,
     cartridge: DomainEnrichmentConfig | None = None,
+    resolved: ResolvedConvergeRequest | None = None,
 ) -> dict[str, Any]:
     """The complete canonical operation, run under the outer deadline.
 
@@ -358,6 +380,14 @@ async def _run_canonical_converge(
     max_passes = payload.get("max_passes")
     if max_passes is not None:
         loop_kwargs["convergence_config"] = ConvergenceConfig(max_passes=int(max_passes))
+    if resolved is not None:
+        # A v2 request is answered in v2: per-field evidence for its subject,
+        # with its observations folded in as evidence only.
+        loop_kwargs.update(
+            response_contract=RESPONSE_CONTRACT_V2,
+            subject=resolved.subject,
+            observations=resolved.observations,
+        )
 
     # EIE-POST-F001: identity lets each pass consume this entity's
     # graph-inference-result targets from GraphReturnChannel.
@@ -383,6 +413,8 @@ async def _run_canonical_converge(
     if dropped:
         logger.info("handlers.converge_fields_outside_schema_dropped", dropped=dropped)
     mark_deadline_degraded(result)
+    if resolved is not None:
+        attach_resolution(result, resolved)
 
     if response.state == _COMPLETED_STATE:
         # The top-level `entity_id` is the first key of the SEAM-02 order that

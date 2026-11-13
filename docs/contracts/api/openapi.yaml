@@ -265,6 +265,21 @@ components:
           items:
             type: object
           description: Response v2 only. Reviewable groupings of evidence entries; always present on v2, possibly empty. Absent on v1.
+        resolution:
+          type: object
+          required: [cartridge_id, cartridge_version, cartridge_sha256, node]
+          properties:
+            cartridge_id:
+              type: string
+            cartridge_version:
+              type: string
+            cartridge_sha256:
+              type: string
+              nullable: true
+            node:
+              type: string
+          additionalProperties: false
+          description: Response v2 revision 1. The cartridge revision and node that actually governed the run, as loaded and pinned (response.v2.md section 10.1). Absent on v1 and on a refusal.
       x-source-file: app/models/schemas.py:68
       additionalProperties: false
 

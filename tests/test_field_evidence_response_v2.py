@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.engines.converge_contract import restrict_fields_to_schema
 from app.engines.convergence.convergence_config import ConvergenceConfig
 from app.engines.convergence.field_evidence import (
     RESPONSE_CONTRACT_V2,
@@ -18,6 +19,7 @@ from app.engines.convergence.field_evidence import (
     build_field_evidence,
     build_proposals,
     check_response_v2,
+    merge_observation_evidence,
     withheld_fields,
 )
 from app.engines.convergence_controller import run_convergence_loop
@@ -408,3 +410,64 @@ async def test_single_pass_reports_withheld_fields_only_on_request() -> None:
             ]
         }
     }
+
+
+# ── Codex review of the integration wiring (#347) ──
+
+
+@pytest.mark.asyncio
+async def test_v2_fields_outside_the_schema_are_cut_before_evidence_is_stated() -> None:
+    """fields == admitted entries survives contract v1's cut to the request schema.
+
+    The cut used to run in the handler after the v2 body was built, so a field
+    outside the schema left `fields` while its entry stayed admitted.
+    """
+    extra = _pass()
+    extra.fields["website"] = "acme.example"
+    extra.feature_vector["per_field_confidence"]["website"] = 0.9
+    body = (
+        await _converge(
+            extra,
+            response_contract=RESPONSE_CONTRACT_V2,
+            subject={"type": "site", "role": "seller"},
+        )
+    ).model_dump()
+
+    assert "website" not in body["fields"]
+    assert not body["field_evidence"].get("website", {}).get("admitted")
+    assert restrict_fields_to_schema(body, SCHEMA) == []  # nothing left for the handler to cut
+    assert body["fields"] == {
+        n: e["value"] for n, e in body["field_evidence"].items() if e["admitted"]
+    }
+    check_response_v2(body, list(SCHEMA))
+
+
+def _observed(value: Any) -> dict[str, dict[str, Any]]:
+    entry = {
+        "state": "observed",
+        "admitted": False,
+        "value": value,
+        "unit_status": "unknown",
+        "confidence": None,
+        "sources": [{"source_type": "request_observation", "source_ref": "o:1"}],
+        "derivation": None,
+        "conflict": None,
+        "unknown_reason": None,
+        "identity": IDENTITY,
+    }
+    return {"flag": entry}
+
+
+@pytest.mark.parametrize(
+    ("produced", "observed", "state"),
+    [(1, True, "conflicting"), (0, False, "conflicting"), (3, 3.0, "external_claim")],
+)
+def test_observation_agreement_uses_value_identity_not_raw_equality(
+    produced: Any, observed: Any, state: str
+) -> None:
+    run = _build(
+        requested=["flag"], fields={"flag": produced}, produced={"flag": _record(produced, 0.9)}
+    )
+    merged = merge_observation_evidence(run, _observed(observed))["flag"]
+    assert merged["state"] == state
+    assert merged["admitted"] is (state == "external_claim")

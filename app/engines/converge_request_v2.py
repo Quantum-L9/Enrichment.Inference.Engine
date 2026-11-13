@@ -351,3 +351,43 @@ def _subject(value: object, spec: Mapping[str, Any], node: str) -> dict[str, str
             raise ConvergeRequestRefusedError("subject_not_declared", f"subject.role {role!r}")
         resolved["role"] = role
     return resolved
+
+
+def resolution_echo(resolved: ResolvedConvergeRequest) -> dict[str, Any]:
+    """Response v2 revision 1 `resolution`: what EIE actually loaded and pinned against.
+
+    `cartridge_sha256` is the digest of the published spec bytes actually served
+    (`DomainEnrichmentConfig.source_sha256`). It is None only for an unpublished
+    legacy revision, which a production reader refuses before this point.
+    """
+    return {
+        "cartridge_id": resolved.config.domain_id,
+        "cartridge_version": resolved.config.version,
+        "cartridge_sha256": resolved.config.source_sha256,
+        "node": resolved.node,
+    }
+
+
+def field_declarations(resolved: ResolvedConvergeRequest) -> dict[str, dict[str, Any]]:
+    """Response v2 revision 1 `declaration` per field: the node's declarations as loaded.
+
+    The typed shape (`spec_types.shape`) plus the declared `unit` when the
+    cartridge states one. Prose such as descriptions is not part of it.
+    """
+    declarations: dict[str, dict[str, Any]] = {}
+    for prop in node_properties(resolved.config.raw_spec, resolved.node) or []:
+        declaration = shape(prop)
+        if isinstance(prop.get("unit"), str):
+            declaration["unit"] = prop["unit"]
+        declarations[str(prop["name"])] = declaration
+    return declarations
+
+
+def attach_resolution(result: dict[str, Any], resolved: ResolvedConvergeRequest) -> None:
+    """Add `resolution` and each evidence entry's `declaration` to a v2 response body."""
+    if result.get("contract_version") is None:
+        return
+    result["resolution"] = resolution_echo(resolved)
+    declarations = field_declarations(resolved)
+    for name, entry in (result.get("field_evidence") or {}).items():
+        entry["declaration"] = declarations.get(name)
