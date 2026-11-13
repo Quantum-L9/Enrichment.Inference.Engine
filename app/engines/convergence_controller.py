@@ -40,6 +40,7 @@ from ..models.schemas import (
 from ..services.graph_return_channel import EnrichmentTarget, GraphReturnChannel
 from ..services.idempotency import IdempotencyStore
 from ..services.request_deadline import current_deadline
+from .convergence.acquisition_order import latest_withheld
 from .convergence.confidence_tracker import (
     UNCERTAINTY_POLICY,
     UNCERTAINTY_SCALE,
@@ -339,6 +340,8 @@ async def run_convergence_loop(
             required_fields=required_fields,
             field_thresholds=request.field_thresholds,
             deciding_fields=confidence_tracker.deciding_fields(),
+            # Tie-break only: what earlier passes' replies said and withheld.
+            withheld_fields=latest_withheld(pr.withheld_fields for pr in state.pass_results),
         )
 
         # ── Inference-unlock target prioritization ─────────

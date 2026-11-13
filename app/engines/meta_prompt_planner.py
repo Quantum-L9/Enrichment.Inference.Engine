@@ -22,6 +22,7 @@ from app.utils.safe_convert import safe_float
 
 from ..models.loop_schemas import PassContext
 from ..services.domain_yaml_reader import DomainSpec
+from .convergence.acquisition_order import evidence_tiebreak
 from .convergence.confidence_tracker import normalize_confidence, value_present
 
 logger = structlog.get_logger("meta_prompt_planner")
@@ -134,6 +135,7 @@ class MetaPromptPlanner:
         required_fields: Sequence[str] | None = None,
         field_thresholds: Mapping[str, float] | None = None,
         deciding_fields: Collection[str] | None = None,
+        withheld_fields: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> PromptPlan:
         """
         Plan enrichment strategy for next convergence pass.
@@ -153,6 +155,10 @@ class MetaPromptPlanner:
             deciding_fields: Without a schema, the tracked fields that decide
                 convergence (inference-derived values excluded). Any of them
                 still unresolved keeps the pass targeted.
+            withheld_fields: What valid replies said about fields earlier passes
+                did not admit. Used only to order gap fields the ranking below
+                leaves equal (`evidence_tiebreak`); it changes no mode, budget,
+                variation count or threshold. None leaves the order as it was.
 
         Returns:
             PromptPlan with mode, priority fields, KB fragments, variation budget
@@ -176,8 +182,9 @@ class MetaPromptPlanner:
             has_required_gaps=has_required_gaps,
             has_deciding_gaps=has_deciding_gaps,
         )
+        tiebreak = evidence_tiebreak(gap_names, withheld_fields or {})
         priority_fields = self._required_first(
-            self._hints_first(self._rank_fields(missing_fields, mode)), required
+            self._hints_first(self._rank_fields(missing_fields, mode, tiebreak)), required
         )
         kb_fragments = self._select_kb_fragments(priority_fields, mode)
         variation_budget = self._compute_variation_budget(
@@ -285,12 +292,19 @@ class MetaPromptPlanner:
 
         return gaps
 
-    def _rank_fields(self, missing_fields: list[FieldGap], mode: str) -> list[str]:
+    def _rank_fields(
+        self,
+        missing_fields: list[FieldGap],
+        mode: str,
+        tiebreak: Mapping[str, int] | None = None,
+    ) -> list[str]:
         """
         Rank missing fields by priority for enrichment.
 
         ROI 4: Uses inference-unlock-aware ranking when rule_registry available.
-        Fallback: Gate-critical → scoring weight → alphabetical.
+        Fallback: Gate-critical → scoring weight → evidence tie-break → alphabetical.
+        `tiebreak` orders only fields equal on gate and weight; without it, or
+        when every field ranks the same, the order is exactly what it was.
 
         Args:
             missing_fields: List of FieldGap objects
@@ -330,6 +344,7 @@ class MetaPromptPlanner:
             key=lambda f: (
                 1000 if f.is_gate_critical else 0,
                 f.scoring_weight,
+                (tiebreak or {}).get(f.field_name, 0),
                 f.field_name,
             ),
             reverse=True,
