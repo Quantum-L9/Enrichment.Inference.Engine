@@ -30,16 +30,19 @@ Integration:
 
 from __future__ import annotations
 
-import logging
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+import structlog
+
 from app.utils.safe_convert import safe_float
 
-logger = logging.getLogger(__name__)
+# structlog, like the rest of app/engines: every call here passes structured
+# keywords, which a stdlib logging.Logger rejects with TypeError once INFO is on.
+logger = structlog.get_logger(__name__)
 
 
 # ──────────────────────────────────────────────
