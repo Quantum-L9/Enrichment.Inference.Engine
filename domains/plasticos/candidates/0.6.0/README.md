@@ -48,6 +48,8 @@ repository root, with your own reviewer identity and approval evidence:
 && git rm -r domains/plasticos/candidates/0.6.0
 ```
 
-Then commit `domains/plasticos/`. `tests/contracts/test_plasticos_publication.py`
+Then commit `domains/plasticos/`. `test_plasticos_0_6_0_candidate.py` needs no
+edit: it reads these bytes from the candidate copy or, once that is removed, from
+the published revision (pinned by digest), and asserts whichever state it finds. `tests/contracts/test_plasticos_publication.py`
 requires the authoring copy to equal the published revision, which the `cp`
 step restores.

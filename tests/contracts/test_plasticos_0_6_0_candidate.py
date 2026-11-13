@@ -47,13 +47,26 @@ pytestmark = pytest.mark.unit
 REPO = Path(__file__).resolve().parents[2]
 TENANT = "plasticos"
 TENANT_DIR = REPO / "domains" / TENANT
-CANDIDATE_PATH = TENANT_DIR / "candidates" / "0.6.0" / "spec.yaml"
-CANDIDATE_BYTES = CANDIDATE_PATH.read_bytes()
-CANDIDATE_SHA = hashlib.sha256(CANDIDATE_BYTES).hexdigest()
-CANDIDATE: dict[str, Any] = yaml.safe_load(CANDIDATE_BYTES)
-CURRENT: dict[str, Any] = yaml.safe_load((TENANT_DIR / "spec.yaml").read_bytes())
-CEG: dict[str, Any] = yaml.safe_load((REPO / "tests/fixtures/ceg/plasticos.spec.yaml").read_bytes())
 PUBLISHED_0_5_0 = "7e5787b059835a82f63b24592694b8eac289432133e2d07dcd9b50cfb91d5706"
+# The reviewed candidate bytes (README). Before activation they live in
+# candidates/0.6.0; activation installs them as an immutable revision and removes
+# the candidate copy. Reading whichever exists keeps this suite valid across that
+# step (Codex review on #348), and the pin proves it is the same bytes.
+CANDIDATE_SHA = "590f0fdb6ce1181b4a716f3e00512bf5425ba42d266208aa4dab18afca8dafdb"
+_CANDIDATE_FILE = TENANT_DIR / "candidates" / "0.6.0" / "spec.yaml"
+CANDIDATE_PATH = (
+    _CANDIDATE_FILE
+    if _CANDIDATE_FILE.exists()
+    else TENANT_DIR / "revisions" / CANDIDATE_SHA / "spec.yaml"
+)
+CANDIDATE_BYTES = CANDIDATE_PATH.read_bytes()
+CANDIDATE: dict[str, Any] = yaml.safe_load(CANDIDATE_BYTES)
+# The 0.5.0 baseline, from its immutable published revision (never the authoring
+# copy, which becomes 0.6.0 on activation).
+BASELINE: dict[str, Any] = yaml.safe_load(
+    (TENANT_DIR / "revisions" / PUBLISHED_0_5_0 / "spec.yaml").read_bytes()
+)
+CEG: dict[str, Any] = yaml.safe_load((REPO / "tests/fixtures/ceg/plasticos.spec.yaml").read_bytes())
 
 EQUIPMENT_CODES = [
     "horizontal_baler",
@@ -162,25 +175,38 @@ def _subject(spec: dict[str, Any], name: str) -> dict[str, Any]:
 # ── Shape of the candidate ──────────────────────────────────────────────────
 
 
-def test_candidate_is_a_valid_0_6_0_that_is_not_published_or_activated() -> None:
+def test_candidate_is_a_valid_0_6_0_in_exactly_one_coherent_state() -> None:
+    assert hashlib.sha256(CANDIDATE_BYTES).hexdigest() == CANDIDATE_SHA
     assert CANDIDATE["version"] == "0.6.0"
     assert validate_native_spec(CANDIDATE, TENANT) == CANDIDATE
+    assert BASELINE["version"] == "0.5.0"
     pointer = json.loads((TENANT_DIR / "current.json").read_text(encoding="utf-8"))
-    assert pointer["sha256"] == PUBLISHED_0_5_0
-    assert CURRENT["version"] == "0.5.0"
-    # No revision, hence no receipt or approval, exists for the candidate bytes.
-    assert not (TENANT_DIR / "revisions" / CANDIDATE_SHA).exists()
+    revision = TENANT_DIR / "revisions" / CANDIDATE_SHA
+    if _CANDIDATE_FILE.exists():
+        # Candidate: not published, not active. No revision, receipt or approval.
+        assert pointer["sha256"] == PUBLISHED_0_5_0
+        assert not revision.exists()
+    else:
+        # Activated: the reviewed bytes are the current revision, chained on
+        # 0.5.0, approved by a reviewer who is not this suite's fixture, and the
+        # authoring copy equals them.
+        assert pointer["sha256"] == CANDIDATE_SHA
+        receipt = json.loads((revision / "receipt.json").read_text(encoding="utf-8"))
+        assert receipt["previous_sha256"] == PUBLISHED_0_5_0
+        assert receipt["version"] == "0.6.0"
+        assert "test-fixture" not in receipt["reviewed_by"]
+        assert (TENANT_DIR / "spec.yaml").read_bytes() == CANDIDATE_BYTES
 
 
 def test_exactly_the_27_odoo_fields_are_added_all_evidence_only() -> None:
     assert len(ADDED) == len(set(ADDED)) == 27
-    before, after = _props(CURRENT), _props(CANDIDATE)
+    before, after = _props(BASELINE), _props(CANDIDATE)
     assert set(after) - set(before) == set(ADDED)
     assert all(after[name].get("evidenceonly") is True for name in ADDED)
 
 
 def test_every_0_5_0_declaration_is_unchanged_but_for_its_declared_unit() -> None:
-    before, after = _props(CURRENT), _props(CANDIDATE)
+    before, after = _props(BASELINE), _props(CANDIDATE)
     assert set(before) <= set(after)
     for name, decl in before.items():
         unit = after[name].get("unit")
@@ -205,12 +231,12 @@ def test_everything_outside_facility_properties_and_fields_is_unchanged() -> Non
         ]
         return {**rest, "nodes": nodes, "roles": spec["subjects"]["roles"], "types": types}
 
-    assert outside(CANDIDATE) == outside(CURRENT)
-    assert _subject(CANDIDATE, "material") == _subject(CURRENT, "material")
+    assert outside(CANDIDATE) == outside(BASELINE)
+    assert _subject(CANDIDATE, "material") == _subject(BASELINE, "material")
 
 
 def test_added_fields_join_the_facility_subject_after_its_0_5_0_fields() -> None:
-    before = _subject(CURRENT, "facility")["fields"]
+    before = _subject(BASELINE, "facility")["fields"]
     after = _subject(CANDIDATE, "facility")["fields"]
     assert after == [*before, *ADDED]
 
@@ -255,7 +281,7 @@ def test_declared_units_are_served_as_the_v2_declaration(candidate_store: Path) 
 def test_contamination_is_a_percent_everywhere() -> None:
     """0.5.0's grade rules tested a fraction (0.03, 0.07); CEG declares 0-100 percent."""
     rules = {rule["rule_id"]: rule for rule in CANDIDATE["inference_rules"]}
-    old = {rule["rule_id"]: rule for rule in CURRENT["inference_rules"]}
+    old = {rule["rule_id"]: rule for rule in BASELINE["inference_rules"]}
     bounds = {
         rid: [
             (c["operator"], c["value"])
@@ -277,7 +303,7 @@ def test_contamination_is_a_percent_everywhere() -> None:
     query = {f["name"]: f for f in CANDIDATE["queryschema"]["fields"]}
     assert "percent" in query["contamination"]["description"]
     assert {k: v for k, v in CANDIDATE["queryschema"].items() if k != "fields"} == {
-        k: v for k, v in CURRENT["queryschema"].items() if k != "fields"
+        k: v for k, v in BASELINE["queryschema"].items() if k != "fields"
     }
 
 
@@ -302,11 +328,11 @@ def test_ceg_sync_row_is_identical_to_0_5_0() -> None:
     # The typed row contract (what packet_router checks and encodes, and what the
     # CEG compatibility check compares) is unchanged. A declared `unit` is not
     # part of it (spec_types.shape); it is the only difference allowed.
-    after, before = row_properties(CANDIDATE, "Facility"), row_properties(CURRENT, "Facility")
+    after, before = row_properties(CANDIDATE, "Facility"), row_properties(BASELINE, "Facility")
     assert after is not None and before is not None
     assert {n: shape(d) for n, d in after.items()} == {n: shape(d) for n, d in before.items()}
     assert {n: {k: v for k, v in d.items() if k != "unit"} for n, d in after.items()} == before
-    assert CANDIDATE["sync"] == CURRENT["sync"]
+    assert CANDIDATE["sync"] == BASELINE["sync"]
 
 
 def test_candidate_passes_the_eie_ceg_sync_contract() -> None:
@@ -318,6 +344,28 @@ def test_candidate_passes_the_eie_ceg_sync_contract() -> None:
 # ── Request v2 against the candidate once published ─────────────────────────
 
 
+def _baseline_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The real published 0.5.0 store, copied aside with 0.5.0 current.
+
+    Built from the immutable revisions, never the live pointer, so it is the
+    same before and after 0.6.0 is activated in the repository.
+    """
+    root = tmp_path_factory.mktemp("store")
+    tenant = root / TENANT
+    (tenant / "revisions").mkdir(parents=True)
+    for revision in (TENANT_DIR / "revisions").iterdir():
+        if revision.name != CANDIDATE_SHA:
+            shutil.copytree(revision, tenant / "revisions" / revision.name)
+    pointer = {"schema": "eie.domain-current/v1", "sha256": PUBLISHED_0_5_0}
+    (tenant / "current.json").write_text(json.dumps(pointer, separators=(",", ":")))
+    return root
+
+
+@pytest.fixture(scope="module")
+def baseline_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return _baseline_root(tmp_path_factory)
+
+
 @pytest.fixture(scope="module")
 def candidate_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """The real 0.5.0 store copied aside, then the candidate published onto it.
@@ -325,12 +373,7 @@ def candidate_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
     The receipt written here is a test-only fixture so the published reader can
     load the candidate; it is not, and does not stand in for, owner approval.
     """
-    root = tmp_path_factory.mktemp("store")
-    tenant = root / TENANT
-    (tenant / "revisions").mkdir(parents=True)
-    shutil.copyfile(TENANT_DIR / "current.json", tenant / "current.json")
-    for revision in (TENANT_DIR / "revisions").iterdir():
-        shutil.copytree(revision, tenant / "revisions" / revision.name)
+    root = _baseline_root(tmp_path_factory)
     receipt = publish_effective_spec(
         root,
         TENANT,
@@ -426,8 +469,8 @@ def test_food_grade_certified_is_refused(candidate_store: Path, member: str) -> 
 # nothing; it is checked against that revision and refused on mismatch.
 
 
-def test_a_0_5_0_pin_resolves_0_5_0_while_0_5_0_is_current() -> None:
-    reader = DomainYamlReader(REPO / "domains", require_published=True)
+def test_a_0_5_0_pin_resolves_0_5_0_while_0_5_0_is_current(baseline_store: Path) -> None:
+    reader = DomainYamlReader(baseline_store, require_published=True)
     request = _request("0.5.0", targets=[{"field": "name"}])
     request["cartridge"]["sha256"] = PUBLISHED_0_5_0
     resolved = resolve_converge_request_v2(TENANT, request, reader)
@@ -436,8 +479,8 @@ def test_a_0_5_0_pin_resolves_0_5_0_while_0_5_0_is_current() -> None:
     assert resolved.config.source_sha256 == PUBLISHED_0_5_0
 
 
-def test_0_6_0_fields_are_not_targets_while_0_5_0_is_current() -> None:
-    reader = DomainYamlReader(REPO / "domains", require_published=True)
+def test_0_6_0_fields_are_not_targets_while_0_5_0_is_current(baseline_store: Path) -> None:
+    reader = DomainYamlReader(baseline_store, require_published=True)
     with pytest.raises(ConvergeRequestRefusedError) as refused:
         resolve_converge_request_v2(
             TENANT, _request("0.5.0", targets=[{"field": "feedstock_type"}]), reader
