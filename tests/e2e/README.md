@@ -50,7 +50,10 @@ Credentials are generated per run next to it and never enter the repository.
 
 `pytest tests/` does not collect this directory: `conftest.py` ignores `test_*.py`
 unless `EIE_E2E=1`. With the flag set and no rail, the tests fail; they never skip.
-CI runs them in the `e2e-converge` job of `.github/workflows/ci.yml`.
+CI runs them in the `e2e-converge` job of `.github/workflows/ci.yml`. That job runs only when the
+Constellation.Gate checkout credential (`secrets.SDK_TOKEN`) is present; without it the job says
+so in a warning annotation and the job summary instead of running. It triggers only on pull
+requests into `main`.
 
 Declared deviation: EIE runs `L9_ENVIRONMENT=test`, because the deterministic provider is
 refused elsewhere (EIE-212-F002). Gate stays `staging` with mandatory signatures.
