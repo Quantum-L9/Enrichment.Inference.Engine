@@ -1,7 +1,8 @@
 """Evidence-state tie-break for acquisition order (Campaign B, B3).
 
-The tie-break orders only fields the planner's own ranking leaves equal. It
-changes no mode, budget, variation count or threshold.
+Behavioural contract of the planner hook: the tie-break orders only fields the
+planner's own ranking leaves equal, and changes no mode, budget, variation
+count or threshold.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ from app.engines.convergence.acquisition_order import (
 from app.engines.meta_prompt_planner import MetaPromptPlanner, PromptPlan
 from app.models.loop_schemas import PassContext
 from app.models.schemas import EnrichRequest, EnrichResponse
+
+pytestmark = [pytest.mark.unit, pytest.mark.enforcement]
 
 FIELDS = ["alpha", "bravo", "charlie", "delta"]
 ONE = {"candidates": [{"value": "x", "confidence": 0.4}]}
