@@ -56,6 +56,22 @@ def is_legal_tenant_id(value: object) -> bool:
     return TENANT_ID_PATTERN.fullmatch(value) is not None
 
 
+def resolve_cartridge_id(
+    tenant: str, *, requested: object = None, configured_default: object = None
+) -> str:
+    """Which cartridge a request addresses, resolved explicitly at the app boundary.
+
+    In order: the cartridge the request names; the deployment's configured
+    default (`DEFAULT_DOMAIN`), when the operator set one; else the tenant's
+    own cartridge, which is the identity contract (tenant id == spec id). There
+    is no built-in industry default: generic runtime code names no cartridge.
+    """
+    for candidate in (requested, configured_default):
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return tenant
+
+
 def validate_native_spec(raw: object, tenant_id: str) -> dict[str, Any]:
     """Validate a complete EIE-native spec and return a defensive copy."""
     if not is_legal_tenant_id(tenant_id):
