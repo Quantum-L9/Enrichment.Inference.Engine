@@ -1,0 +1,15 @@
+{
+  "example": "response.v2.buyer-facility.json",
+  "status": "ok",
+  "final_fields": {
+    "name": "Synthetic Buyer Works",
+    "process_type": "injection_molding",
+    "accepted_form_class": "pellet_or_regrind"
+  },
+  "partner_writeback": {
+    "name": "Synthetic Buyer Works"
+  },
+  "never_as_value": [
+    "phone"
+  ]
+}

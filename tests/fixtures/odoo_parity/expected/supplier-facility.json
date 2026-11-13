@@ -1,0 +1,16 @@
+{
+  "example": "response.v2.supplier-facility.json",
+  "status": "ok",
+  "final_fields": {
+    "city": "Springfield",
+    "website": "https://supplier.example",
+    "monthly_capacity": 120000
+  },
+  "partner_writeback": {
+    "city": "Springfield",
+    "website": "https://supplier.example"
+  },
+  "never_as_value": [
+    "has_rail_access"
+  ]
+}
