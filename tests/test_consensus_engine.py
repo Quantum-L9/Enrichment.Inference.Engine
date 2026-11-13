@@ -255,3 +255,185 @@ class TestPartialFieldThresholds:
         assert all("city" in v for v in filtered)  # every reply clears 0.85
         result = synthesize(filtered, threshold=0.65, total_attempted=len(filtered))
         assert "city" not in result["fields"]  # 1/3 agreement < 0.65
+
+
+# ── Post-#320 F1: agreement never manufactures confidence ────────────────────
+
+
+class TestSelectedValueScore:
+    """per_field_confidence is a bounded uncalibrated heuristic.
+
+    It never exceeds the strongest raw assertion behind the selected value,
+    duplication never raises it, and dissent among distinct values lowers it.
+    """
+
+    @staticmethod
+    def _score(variations, field="city", threshold=0.6):
+        result = synthesize(variations, threshold=threshold, total_attempted=len(variations))
+        return result["fields"].get(field), result["per_field_confidence"].get(field)
+
+    def test_f1_08_single_060_reply_stays_060(self) -> None:
+        value, score = self._score([{"confidence": 0.60, "city": "Austin"}])
+        assert value == "Austin"
+        assert score == pytest.approx(0.60)
+
+    def test_f1_09_single_095_reply_is_not_upgraded_to_one(self) -> None:
+        _, score = self._score([{"confidence": 0.95, "city": "Austin"}])
+        assert score == pytest.approx(0.95)
+        assert score < 1.0
+
+    def test_f1_10_zero_raw_confidence_stays_zero(self) -> None:
+        _, score = self._score([{"confidence": 0.0, "city": "Austin"}])
+        assert score == 0.0
+
+    def test_f1_11_losing_high_confidence_does_not_upgrade_the_winner(self) -> None:
+        variations = [
+            {"confidence": 0.50, "city": "Austin"},
+            {"confidence": 0.50, "city": "Austin"},
+            {"confidence": 0.99, "city": "Dallas"},
+        ]
+        value, score = self._score(variations, threshold=0.6)
+        assert value == "Austin"
+        assert score <= 0.50
+
+    def test_f1_12_duplication_does_not_raise_the_score(self) -> None:
+        one = [{"confidence": 0.70, "city": "Austin"}, {"confidence": 0.90, "city": "Dallas"}]
+        many = [{"confidence": 0.70, "city": "Austin"}] * 10 + [
+            {"confidence": 0.90, "city": "Dallas"}
+        ]
+        _, single_score = self._score(one, threshold=0.0)
+        value, dup_score = self._score(many, threshold=0.0)
+        assert value == "Austin"
+        assert dup_score <= single_score
+
+    def test_f1_12_unanimous_duplicates_score_as_one_observation(self) -> None:
+        _, score = self._score([{"confidence": 0.70, "city": "Austin"}] * 5)
+        assert score == pytest.approx(0.70)
+
+    def test_f1_13_distinct_citations_do_not_create_independence(self) -> None:
+        """Response-level citations are not per-field provenance; no id is invented."""
+        plain = [{"confidence": 0.7, "city": "Austin"}] * 3
+        cited = [
+            {"confidence": 0.7, "city": "Austin", "citations": [f"https://s{i}.example"]}
+            for i in range(3)
+        ]
+        _, plain_score = self._score(plain)
+        _, cited_score = self._score(cited)
+        assert cited_score == plain_score == pytest.approx(0.7)
+
+    def test_f1_14_synthetic_median_is_capped_by_its_contributors(self) -> None:
+        variations = [
+            {"confidence": 0.9, "mfi": 1.0},
+            {"confidence": 0.4, "mfi": 2.0},
+        ]
+        value, score = self._score(variations, field="mfi", threshold=0.0)
+        assert value == 1.5  # median, observed in no reply
+        assert score <= 0.4
+
+    @pytest.mark.parametrize(
+        ("value", "expected_type"),
+        [(0, int), (False, bool), ("02139", str), (2.5, float)],
+    )
+    def test_f1_15_types_and_values_are_retained(self, value, expected_type) -> None:
+        got, _ = self._score([{"confidence": 0.8, "f": value}], field="f")
+        assert got == value
+        assert type(got) is expected_type
+
+    def test_f1_16_empty_values_are_not_enriched(self) -> None:
+        result = synthesize(
+            [{"confidence": 0.9, "city": None}, {"confidence": 0.9, "city": ""}],
+            threshold=0.0,
+            total_attempted=2,
+        )
+        assert result["fields"] == {}
+        assert result["confidence"] == 0.0
+
+    def test_agreement_floor_no_longer_admits_dissent(self) -> None:
+        """The removed 0.2 floor let any value pass a threshold at or below 0.2."""
+        variations = [{"confidence": 0.9, "city": c} for c in ("A", "B", "C", "D", "E", "F")]
+        result = synthesize(variations, threshold=0.2, total_attempted=len(variations))
+        assert "city" not in result["fields"]
+
+    def test_f1_17_field_threshold_judges_the_effective_score(self) -> None:
+        """Agreement among 0.96 replies with dissent cannot clear a 0.95 field bar."""
+        from app.services.consensus_engine import apply_field_score_thresholds
+
+        variations = [
+            {"confidence": 0.96, "city": "Austin"},
+            {"confidence": 0.96, "city": "Austin"},
+            {"confidence": 0.96, "city": "Dallas"},
+        ]
+        synthesis = synthesize(variations, threshold=0.6, total_attempted=3)
+        assert synthesis["fields"]["city"] == "Austin"
+        gated = apply_field_score_thresholds(
+            synthesis, {"city": 0.95}, requested_fields=["city"], default_threshold=0.85
+        )
+        assert "city" not in gated["fields"]
+        assert gated["per_field_confidence"] == {}
+
+    def test_field_score_gate_uses_the_resolved_default(self) -> None:
+        from app.services.consensus_engine import apply_field_score_thresholds
+
+        synthesis = synthesize(
+            [{"confidence": 0.84, "city": "Austin", "street": "1 Main"}],
+            threshold=0.6,
+            total_attempted=1,
+        )
+        gated = apply_field_score_thresholds(
+            synthesis, {"street": 0.5}, requested_fields=["city", "street"], default_threshold=0.85
+        )
+        assert gated["fields"] == {"street": "1 Main"}
+        assert gated["confidence"] == pytest.approx(0.84)
+
+    @pytest.mark.parametrize("raw", [float("nan"), "nan", True, "high"])
+    def test_malformed_raw_confidence_cannot_clear_a_field_bar(self, raw) -> None:
+        from app.services.consensus_engine import apply_field_confidence_thresholds
+
+        kept = apply_field_confidence_thresholds(
+            [{"confidence": raw, "city": "Austin"}], {"city": 0.5}
+        )
+        assert "city" not in kept[0]
+
+
+class TestOneValueKey:
+    """Selection, the agreement gate and score support compare values one way."""
+
+    def test_score_does_not_borrow_from_a_different_spelling(self) -> None:
+        result = synthesize(
+            [{"confidence": 0.3, "city": "Boston"}, {"confidence": 0.95, "city": "boston"}],
+            threshold=0.0,
+            total_attempted=2,
+        )
+        assert result["fields"]["city"] == "Boston"
+        assert result["per_field_confidence"]["city"] <= 0.3
+
+    def test_score_does_not_borrow_across_types(self) -> None:
+        result = synthesize(
+            [{"confidence": 0.4, "f": True}, {"confidence": 0.9, "f": "true"}],
+            threshold=0.0,
+            total_attempted=2,
+        )
+        assert result["fields"]["f"] is True
+        assert result["per_field_confidence"]["f"] <= 0.4
+
+    def test_gate_measures_the_selected_values_own_share(self) -> None:
+        variations = [
+            {"confidence": 0.9, "city": c} for c in ("Boston", "boston", "BOSTON", "NYC", "NYC")
+        ]
+        result = synthesize(variations, threshold=0.6, total_attempted=5)
+        # NYC is the mode at 2/5 = 0.4; spelling variants of another value
+        # do not lend it agreement.
+        assert "city" not in result["fields"]
+
+    def test_equal_numbers_in_different_types_agree(self) -> None:
+        result = synthesize(
+            [
+                {"confidence": 0.9, "n": 3},
+                {"confidence": 0.9, "n": 3.0},
+                {"confidence": 0.9, "n": 3},
+            ],
+            threshold=0.6,
+            total_attempted=3,
+        )
+        assert result["fields"]["n"] == 3
+        assert result["per_field_confidence"]["n"] == pytest.approx(0.9)

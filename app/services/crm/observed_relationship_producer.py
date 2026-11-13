@@ -19,10 +19,13 @@ read: an undeclared, ambiguous, malformed or reversed mapping costs no HubSpot
 call and sends nothing.
 
 Mirror, not approval. EIE resolves the mapping from its lockstep mirror of the
-tenant spec. CEG does not yet cross-check an observed row against its own copy
-(D-9, Cognitive.Engine.Graphs#386), so every result after resolution carries
-``mapping_verification`` (``MAPPING_UNVERIFIED_MIRROR``) and the mirror's
-``mapping_fingerprint``; ``mirror_drift`` compares the mirror with CEG's spec.
+tenant spec, and every result after resolution carries ``mapping_verification``
+and the mirror's ``mapping_fingerprint``; ``mirror_drift`` compares the mirror
+with CEG's spec. CEG cross-checks an observed row against its own copy only
+when the row carries the association (D-9, Cognitive.Engine.Graphs#422;
+``Settings.observed_association_send_enabled``, default off). So a ``SYNCED``
+result whose row carried it is ``MAPPING_VERIFIED_BY_CEG``; every other result
+is ``MAPPING_UNVERIFIED_MIRROR``.
 
 What "observed" means here. The association exists in the authenticated
 source at read time: ``assertion_status="observed"``, ``polarity="positive"``
@@ -54,7 +57,10 @@ from typing import Any
 
 import structlog
 
-from app.engines.observed_association_contract import ObservedRelationshipContract
+from app.engines.observed_association_contract import (
+    MAPPING_VERIFIED_BY_CEG,
+    ObservedRelationshipContract,
+)
 from app.engines.packet_router import (
     CEG_OBSERVED_ASSOCIATION_REJECTED,
     PacketRouter,
@@ -113,8 +119,9 @@ class ObservedRelationshipResult:
     evidence_ref: str | None = None
     source_ref: str | None = None
     ceg_ack: dict[str, Any] | None = None
-    # Set once a mapping was resolved: which spec mirror decided it, and that CEG
-    # has not cross-checked it (D-9).
+    # Set once a mapping was resolved: which spec mirror decided it, and whether
+    # CEG cross-checked it (D-9): MAPPING_VERIFIED_BY_CEG only on SYNCED with the
+    # association on the row, MAPPING_UNVERIFIED_MIRROR otherwise.
     mapping_fingerprint: str | None = None
     mapping_verification: str | None = None
 
@@ -159,6 +166,7 @@ def _resolved(
     evidence_ref: str | None = None,
     source_ref: str | None = None,
     ceg_ack: dict[str, Any] | None = None,
+    mapping_verification: str | None = None,
 ) -> ObservedRelationshipResult:
     """A result after resolution: it always names the mirror mapping that decided it."""
     return ObservedRelationshipResult(
@@ -168,7 +176,7 @@ def _resolved(
         source_ref,
         ceg_ack,
         mapping_fingerprint=contract.mapping_fingerprint,
-        mapping_verification=contract.mapping_verification,
+        mapping_verification=mapping_verification or contract.mapping_verification,
     )
 
 
@@ -315,6 +323,8 @@ async def produce_observed_relationship(
     # spec; that second resolution must agree (defence in depth).
     sync = await router.notify_relationship_sync(tenant_id, assertion, correlation_id)
     if sync.outcome is RelationshipSyncOutcome.ACKNOWLEDGED and sync.ack is not None:
+        # D-9: CEG refuses a row whose association its own observedfrom does not
+        # declare, so its acknowledgment of a row carrying one is a cross-check.
         return _resolved(
             contract,
             ProducerStatus.SYNCED,
@@ -322,6 +332,9 @@ async def produce_observed_relationship(
             evidence_ref,
             source_ref,
             sync.ack,
+            mapping_verification=(
+                MAPPING_VERIFIED_BY_CEG if assertion.observed_association is not None else None
+            ),
         )
     if sync.outcome is RelationshipSyncOutcome.TRANSPORT_UNAVAILABLE:
         return _resolved(
