@@ -23,6 +23,7 @@ from typing import Any
 import structlog
 
 from ..core.config import Settings
+from ..engines.convergence.field_evidence import withheld_fields
 from ..models.schemas import (
     DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
     EnrichRequest,
@@ -95,8 +96,14 @@ async def enrich_entity(
     *,
     idempotency_scope: str | None = None,
     authorized_variations: int | None = None,
+    report_withheld: bool = False,
 ) -> EnrichResponse:
     """Full enrichment pipeline for a single entity.
+
+    `report_withheld` adds `feature_vector["withheld_fields"]`: what valid
+    replies said about fields this pass did not admit. The convergence loop
+    asks for it only to answer in response v2; without it the response shape
+    is exactly what it was.
 
     Parameters
     ----------
@@ -330,6 +337,9 @@ async def enrich_entity(
         field_bars = request.field_thresholds is not None and bool(
             target_schema or request.field_thresholds
         )
+        # Every valid reply, before any bar removes a value: what a withheld
+        # field's evidence is read from (response v2).
+        replies = valid
         if field_bars and request.field_thresholds is not None:
             valid = apply_field_confidence_thresholds(
                 valid,
@@ -352,10 +362,17 @@ async def enrich_entity(
                 default_threshold=DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
             )
 
+        withheld: dict[str, Any] | None = (
+            withheld_fields(replies, synthesis["fields"], target_schema or {})
+            if report_withheld
+            else None
+        )
+
         if not synthesis["fields"]:
             return EnrichResponse(
                 state="failed",
                 failure_reason="no_fields_above_consensus_threshold",
+                feature_vector=None if withheld is None else {"withheld_fields": withheld},
                 confidence=synthesis["confidence"],
                 variation_count=calls_made,
                 consensus_threshold=request.consensus_threshold,
@@ -393,6 +410,7 @@ async def enrich_entity(
                 "fields_enriched": list(synthesis["fields"].keys()),
                 "per_field_confidence": per_field_confidence,  # NEW
                 "requested_fields": sorted(request.schema_ or {}),
+                **({} if withheld is None else {"withheld_fields": withheld}),
             },
             state="completed",
         )

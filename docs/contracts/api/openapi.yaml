@@ -251,6 +251,20 @@ components:
           type: string
           nullable: true
           description: Why the convergence loop stopped (e.g. budget_exhausted, insufficient_improvement_delta_0.05, max_passes_reached). Null for single-pass enrich.
+        contract_version:
+          type: string
+          enum: [eie.converge.response/v2]
+          description: Present only on a converge response v2 (docs/contracts/converge/response.v2.md). Absent means v1; never null.
+        field_evidence:
+          type: object
+          additionalProperties:
+            type: object
+          description: Response v2 only. One evidence entry per requested field and per field in `fields` (state observed, inferred, external_claim, conflicting or unknown). Absent on v1.
+        proposals:
+          type: array
+          items:
+            type: object
+          description: Response v2 only. Reviewable groupings of evidence entries; always present on v2, possibly empty. Absent on v1.
       x-source-file: app/models/schemas.py:68
       additionalProperties: false
 
