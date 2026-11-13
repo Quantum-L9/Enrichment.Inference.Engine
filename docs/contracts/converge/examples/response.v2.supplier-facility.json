@@ -1,15 +1,14 @@
 {
   "contract_version": "converge.response/2.0.0-draft",
   "fields": {
-    "city": "Springfield",
     "website": "https://supplier.example",
     "monthly_capacity": 120000
   },
-  "confidence": 0.92,
+  "confidence": 0.875,
   "kb_content_hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
   "variation_count": 2,
   "consensus_threshold": 0.8,
-  "uncertainty_score": 0.8,
+  "uncertainty_score": 4.17,
   "pass_count": 1,
   "inference_version": "v2.2.0",
   "processing_time_ms": 1200,
@@ -27,7 +26,7 @@
   "field_evidence": {
     "city": {
       "state": "observed",
-      "admitted": true,
+      "admitted": false,
       "value": "Springfield",
       "unit_status": "not_applicable",
       "confidence": null,
@@ -126,7 +125,6 @@
         "has_rail_access"
       ],
       "admitted_fields": [
-        "city",
         "website",
         "monthly_capacity"
       ],

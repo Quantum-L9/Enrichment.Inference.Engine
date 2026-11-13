@@ -1,15 +1,14 @@
 {
   "contract_version": "converge.response/2.0.0-draft",
   "fields": {
-    "name": "Synthetic Buyer Works",
     "process_type": "injection_molding",
     "accepted_form_class": "pellet_or_regrind"
   },
-  "confidence": 0.91,
+  "confidence": 0.86,
   "kb_content_hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
   "variation_count": 1,
   "consensus_threshold": 0.8,
-  "uncertainty_score": 0.9,
+  "uncertainty_score": 4.27,
   "pass_count": 1,
   "inference_version": "v2.2.0",
   "processing_time_ms": 1200,
@@ -33,11 +32,11 @@
   "tokens_used": 400,
   "failure_reason": null,
   "state": "completed",
-  "convergence_reason": "all_fields_above_threshold_0.85",
+  "convergence_reason": "max_passes_reached",
   "field_evidence": {
     "name": {
       "state": "observed",
-      "admitted": true,
+      "admitted": false,
       "value": "Synthetic Buyer Works",
       "unit_status": "not_applicable",
       "confidence": null,
@@ -137,7 +136,6 @@
         "phone"
       ],
       "admitted_fields": [
-        "name",
         "process_type",
         "accepted_form_class"
       ],
