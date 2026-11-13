@@ -34,11 +34,12 @@ import yaml
 
 from app.engines.converge_request_v2 import (
     ConvergeRequestRefusedError,
+    field_declarations,
     resolve_converge_request_v2,
 )
 from app.engines.domain_spec_compatibility import check_compatibility
 from app.engines.domain_yaml_reader import DomainYamlReader, validate_native_spec
-from app.engines.spec_types import row_properties
+from app.engines.spec_types import row_properties, shape
 from app.services.domain_spec_workflow import publish_effective_spec
 
 pytestmark = pytest.mark.unit
@@ -91,7 +92,7 @@ BOOLEANS = [
     "prefers_contract",
     "accepts_filled_materials",
 ]
-# Field -> the unit Odoo stores, stated in the declaration's description.
+# Field -> the unit Odoo stores, declared in the property's `unit` key.
 NUMBERS = {
     "avg_truckload_lbs": "lb",
     "min_lot_size_lbs": "lb",
@@ -99,6 +100,16 @@ NUMBERS = {
     "moisture_tolerance_pct": "percent",
     "pcr_pct_min": "percent",
     "pcr_pct_max": "percent",
+}
+# Operator decisions 2026-11-13: units on the 0.5.0 quantities. capacity is in
+# metric tonnes; contamination_tolerance is a percent, as CEG declares it (0-100).
+UNITS_0_5_0 = {
+    "min_density": "g/cm3",
+    "max_density": "g/cm3",
+    "min_mfi": "g/10min",
+    "max_mfi": "g/10min",
+    "contamination_tolerance": "percent",
+    "capacity_tons_month": "t/month",
 }
 STRINGS = ["form_preference_id", "process_type", "application_class"]
 TEXT = ["freeform_notes", "application_notes"]
@@ -168,17 +179,23 @@ def test_exactly_the_27_odoo_fields_are_added_all_evidence_only() -> None:
     assert all(after[name].get("evidenceonly") is True for name in ADDED)
 
 
-def test_every_0_5_0_declaration_is_unchanged() -> None:
+def test_every_0_5_0_declaration_is_unchanged_but_for_its_declared_unit() -> None:
     before, after = _props(CURRENT), _props(CANDIDATE)
     assert set(before) <= set(after)
-    assert all(after[name] == decl for name, decl in before.items())
+    for name, decl in before.items():
+        unit = after[name].get("unit")
+        assert unit == UNITS_0_5_0.get(name), name
+        assert {k: v for k, v in after[name].items() if k != "unit"} == decl, name
     # 0.5.0 order is preserved; additions follow it.
     assert list(after)[: len(before)] == list(before)
 
 
 def test_everything_outside_facility_properties_and_fields_is_unchanged() -> None:
     def outside(spec: dict[str, Any]) -> dict[str, Any]:
-        rest = {k: v for k, v in spec.items() if k not in {"version", "ontology", "subjects"}}
+        # inference_rules and queryschema change only for the percent decision;
+        # test_contamination_is_a_percent_everywhere pins exactly how.
+        changed = {"version", "ontology", "subjects", "inference_rules", "queryschema"}
+        rest = {k: v for k, v in spec.items() if k not in changed}
         nodes = [
             {k: v for k, v in n.items() if k != "properties"} for n in spec["ontology"]["nodes"]
         ]
@@ -217,9 +234,51 @@ def test_declared_types_and_units() -> None:
     for value in ("food", "medical", "automotive", "packaging", "agricultural", "construction"):
         assert value in props["application_class"]["description"]
     assert all(props[name]["type"] == "bool" for name in BOOLEANS)
-    for name, unit in NUMBERS.items():
+    for name, unit in {**NUMBERS, **UNITS_0_5_0}.items():
         assert props[name]["type"] == "float"
-        assert f"in {unit}" in props[name]["description"]
+        assert props[name]["unit"] == unit, name
+
+
+def test_declared_units_are_served_as_the_v2_declaration(candidate_store: Path) -> None:
+    """Units reach the consumer: response v2 section 10.2, field_evidence[*].declaration.unit."""
+    reader = DomainYamlReader(candidate_store, require_published=True)
+    resolved = resolve_converge_request_v2(
+        TENANT, _request("0.6.0", targets=[{"field": name} for name in NUMBERS]), reader
+    )
+    assert resolved is not None
+    declarations = field_declarations(resolved)
+    for name, unit in {**NUMBERS, **UNITS_0_5_0}.items():
+        assert declarations[name]["unit"] == unit, name
+    assert "unit" not in declarations["name"]
+
+
+def test_contamination_is_a_percent_everywhere() -> None:
+    """0.5.0's grade rules tested a fraction (0.03, 0.07); CEG declares 0-100 percent."""
+    rules = {rule["rule_id"]: rule for rule in CANDIDATE["inference_rules"]}
+    old = {rule["rule_id"]: rule for rule in CURRENT["inference_rules"]}
+    bounds = {
+        rid: [
+            (c["operator"], c["value"])
+            for c in rules[rid]["conditions"]
+            if c["field"] == "contamination_tolerance"
+        ]
+        for rid in ("grade-assignment-hdpe-a", "grade-assignment-hdpe-b")
+    }
+    assert bounds == {
+        "grade-assignment-hdpe-a": [("LT", 3)],
+        "grade-assignment-hdpe-b": [("GTE", 3), ("LTE", 7)],
+    }
+    for rid in bounds:
+        assert rules[rid]["rule_or_model_version"] == "plasticos-inference-0.6.0"
+    # Every other rule is untouched.
+    assert {k: v for k, v in rules.items() if k not in bounds} == {
+        k: v for k, v in old.items() if k not in bounds
+    }
+    query = {f["name"]: f for f in CANDIDATE["queryschema"]["fields"]}
+    assert "percent" in query["contamination"]["description"]
+    assert {k: v for k, v in CANDIDATE["queryschema"].items() if k != "fields"} == {
+        k: v for k, v in CURRENT["queryschema"].items() if k != "fields"
+    }
 
 
 def test_aliased_odoo_fields_are_not_duplicated() -> None:
@@ -240,7 +299,13 @@ def test_food_grade_certified_stays_ceg_owned_and_undeclared() -> None:
 
 
 def test_ceg_sync_row_is_identical_to_0_5_0() -> None:
-    assert row_properties(CANDIDATE, "Facility") == row_properties(CURRENT, "Facility")
+    # The typed row contract (what packet_router checks and encodes, and what the
+    # CEG compatibility check compares) is unchanged. A declared `unit` is not
+    # part of it (spec_types.shape); it is the only difference allowed.
+    after, before = row_properties(CANDIDATE, "Facility"), row_properties(CURRENT, "Facility")
+    assert after is not None and before is not None
+    assert {n: shape(d) for n, d in after.items()} == {n: shape(d) for n, d in before.items()}
+    assert {n: {k: v for k, v in d.items() if k != "unit"} for n, d in after.items()} == before
     assert CANDIDATE["sync"] == CURRENT["sync"]
 
 

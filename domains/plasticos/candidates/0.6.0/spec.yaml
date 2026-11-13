@@ -33,12 +33,13 @@ ontology:
     properties:
     - {name: facility_id, type: string, required: true}
     - {name: name, type: string, required: true}
-    - {name: min_density, type: float}
-    - {name: max_density, type: float}
-    - {name: min_mfi, type: float}
-    - {name: max_mfi, type: float}
-    - {name: contamination_tolerance, type: float}
-    - {name: capacity_tons_month, type: float}
+    - {name: min_density, type: float, unit: g/cm3}
+    - {name: max_density, type: float, unit: g/cm3}
+    - {name: min_mfi, type: float, unit: g/10min}
+    - {name: max_mfi, type: float, unit: g/10min}
+    - {name: contamination_tolerance, type: float, unit: percent}
+    # t = metric tonne (1000 kg), per the operator's decision of 2026-11-13.
+    - {name: capacity_tons_month, type: float, unit: t/month}
     - {name: tier, type: string}
     # Wire-only shape: the childsync field below (PROCESSES -> PolymerFamily).
     - name: processed_polymers
@@ -67,9 +68,10 @@ ontology:
     # plasticos.facility.profile (IB-Odoo_19) that 0.5.0 did not already declare
     # under another name, declared under the Odoo field's own name. EIE-only,
     # never on a sync row, so CEG's Facility shape and eie-ceg-sync/v2 are
-    # unchanged. Units are the ones Odoo stores; the shared declaration syntax
-    # has no unit key, so a unit is stated in `description` (prose, not part of
-    # any typed shape), as CEG states its own.
+    # unchanged. Units are the ones Odoo stores, declared in each quantity's
+    # `unit` key: response v2 serves it as field_evidence[*].declaration.unit
+    # (response.v2.md section 10.2). `unit` is not part of the typed shape
+    # (spec_types.shape), so the CEG sync row is unchanged by it.
     # Codes:
     - name: equipment_type_ids
       type: list
@@ -98,12 +100,12 @@ ontology:
     - {name: prefers_contract, type: bool, evidenceonly: true}
     - {name: accepts_filled_materials, type: bool, evidenceonly: true}
     # Quantities, in the unit Odoo stores:
-    - {name: avg_truckload_lbs, type: float, evidenceonly: true, description: "Average truckload, in lb"}
-    - {name: min_lot_size_lbs, type: float, evidenceonly: true, description: "Minimum lot size, in lb"}
-    - {name: max_lot_size_lbs, type: float, evidenceonly: true, description: "Maximum lot size, in lb"}
-    - {name: moisture_tolerance_pct, type: float, evidenceonly: true, description: "Moisture tolerance, in percent (0-100)"}
-    - {name: pcr_pct_min, type: float, evidenceonly: true, description: "Minimum post-consumer recycled content, in percent (0-100)"}
-    - {name: pcr_pct_max, type: float, evidenceonly: true, description: "Maximum post-consumer recycled content, in percent (0-100)"}
+    - {name: avg_truckload_lbs, type: float, evidenceonly: true, unit: lb, description: "Average truckload, in lb"}
+    - {name: min_lot_size_lbs, type: float, evidenceonly: true, unit: lb, description: "Minimum lot size, in lb"}
+    - {name: max_lot_size_lbs, type: float, evidenceonly: true, unit: lb, description: "Maximum lot size, in lb"}
+    - {name: moisture_tolerance_pct, type: float, evidenceonly: true, unit: percent, description: "Moisture tolerance, in percent (0-100)"}
+    - {name: pcr_pct_min, type: float, evidenceonly: true, unit: percent, description: "Minimum post-consumer recycled content, in percent (0-100)"}
+    - {name: pcr_pct_max, type: float, evidenceonly: true, unit: percent, description: "Maximum post-consumer recycled content, in percent (0-100)"}
     # Free text:
     - {name: freeform_notes, type: string, evidenceonly: true}
     - {name: application_notes, type: string, evidenceonly: true}
@@ -124,7 +126,7 @@ queryschema:
   - {name: form, type: string, description: "e.g. Regrind, Pellet, Flake"}
   - {name: density, type: float, description: "g/cm³"}
   - {name: mfi, type: float, description: "melt flow index g/10min"}
-  - {name: contamination, type: float, description: "contamination fraction 0–1"}
+  - {name: contamination, type: float, description: "contamination, percent 0–100 (as CEG's contamination_pct)"}
   - {name: required_certifications, type: list, items: {type: string}, description: "list of cert codes"}
 
 # Ranking/match authority removed (owned by CEG).
@@ -257,26 +259,29 @@ semantic_registry:
     key_fields: [name, city, state, zip_code]
 
 inference_rules:
+# 0.6.0: contamination_tolerance is a percent (0-100), as CEG declares it, so the
+# grade thresholds are 3 and 7 percent. 0.5.0 tested a fraction (0.03, 0.07)
+# that a percent-valued field almost never satisfied.
 - rule_id: grade-assignment-hdpe-a
   conditions:
   - {field: processed_polymers, operator: CONTAINS, value: {code: HDPE}}
-  - {field: contamination_tolerance, operator: LT, value: 0.03}
+  - {field: contamination_tolerance, operator: LT, value: 3}
   outputs:
   - {field: material_grade, value_expr: "A", derivation_type: classification}
   confidence: 0.92
   priority: 10
-  rule_or_model_version: plasticos-inference-0.4.0
+  rule_or_model_version: plasticos-inference-0.6.0
 
 - rule_id: grade-assignment-hdpe-b
   conditions:
   - {field: processed_polymers, operator: CONTAINS, value: {code: HDPE}}
-  - {field: contamination_tolerance, operator: GTE, value: 0.03}
-  - {field: contamination_tolerance, operator: LTE, value: 0.07}
+  - {field: contamination_tolerance, operator: GTE, value: 3}
+  - {field: contamination_tolerance, operator: LTE, value: 7}
   outputs:
   - {field: material_grade, value_expr: "B", derivation_type: classification}
   confidence: 0.85
   priority: 5
-  rule_or_model_version: plasticos-inference-0.4.0
+  rule_or_model_version: plasticos-inference-0.6.0
 
 - rule_id: tier-1-high-capacity
   conditions:

@@ -14,23 +14,34 @@ sync row), and a field of the `facility` subject. Every 0.5.0 declaration, the
 `material` subject, the roles, the node list, `ceg_owned` and `sync` are
 unchanged. `food_grade_certified` stays CEG-owned and undeclared.
 
-Units are stated in each quantity's `description`: the shared declaration syntax
-(`app/engines/spec_types.py`) has no unit key, and prose is not part of any
-typed shape. `equipment_type_ids` and `feedstock_type` use `type: enum`;
-`application_class` is an open string.
+Operator decisions of 2026-11-13 (scope: all 27 fields; capacity in metric
+tonnes; contamination in percent; `food_grade_certified` stays CEG-owned; the
+`material` subject means the facility's material capability):
+
+- Every quantity declares its `unit`, served to the consumer as
+  `field_evidence[*].declaration.unit` (response.v2.md section 10.2): `lb`,
+  `percent`, `g/cm3`, `g/10min`, and `t/month` (metric tonne) for
+  `capacity_tons_month`. `unit` is not part of the typed row shape, so the CEG
+  sync row is unchanged (`test_ceg_sync_row_is_identical_to_0_5_0`).
+- `contamination_tolerance` is a percent (0-100), as CEG declares it. The two
+  HDPE grade rules now test 3 and 7 percent instead of the fractions 0.03 and
+  0.07, and carry `rule_or_model_version: plasticos-inference-0.6.0`; the
+  query-schema description says percent. No other rule changes.
+- `equipment_type_ids` and `feedstock_type` use `type: enum`;
+  `application_class` is an open string.
 
 Tests: `tests/contracts/test_plasticos_0_6_0_candidate.py`.
 
 ## Activation (repository owner only)
 
 Review these exact bytes (sha256
-`d0805f5430782a6cf6a4c451446abf324a91a1761cb0e11569239fd5cd082793`), then from the
+`590f0fdb6ce1181b4a716f3e00512bf5425ba42d266208aa4dab18afca8dafdb`), then from the
 repository root, with your own reviewer identity and approval evidence:
 
 ```bash
 .venv/bin/python -m scripts.domain_spec_operator publish --root domains --tenant plasticos \
   --spec domains/plasticos/candidates/0.6.0/spec.yaml \
-  --reviewed-input-sha256 d0805f5430782a6cf6a4c451446abf324a91a1761cb0e11569239fd5cd082793 \
+  --reviewed-input-sha256 590f0fdb6ce1181b4a716f3e00512bf5425ba42d266208aa4dab18afca8dafdb \
   --reviewed-by "<reviewer>" --approval-ref "<approval evidence>" \
   --expected-previous-sha256 7e5787b059835a82f63b24592694b8eac289432133e2d07dcd9b50cfb91d5706 \
 && cp domains/plasticos/candidates/0.6.0/spec.yaml domains/plasticos/spec.yaml \
