@@ -221,21 +221,26 @@ async def test_live_odoo_failure_degrades_rather_than_injecting(eie_runtime):
     assert mapped["final_fields"] == {}
 
 
-async def test_canonical_fields_reach_odoo_without_eie_side_filtering(eie_runtime):
-    """A non-partner field survives EIE; only Odoo's allowlist removes it.
+async def test_requested_fields_reach_odoo_and_eie_has_no_partner_key_filter(eie_runtime):
+    """A requested non-partner field survives EIE; only Odoo's allowlist removes it.
 
-    The compatibility adapter filtered ``fields`` down to the eight partner keys
-    before answering. On the canonical rail that is field loss: EnrichResponse
-    carries whatever converged, and Odoo's ``partner_writeback_from_converge``
-    decides what it will write.
+    The compatibility adapter filtered ``fields`` down to eight hard-coded
+    partner keys before answering, which is field loss. Converge contract v1
+    (docs/contracts/converge/v1.md) bounds ``fields`` by the caller's own
+    ``schema`` instead: EIE holds no partner allowlist, so a field the request
+    names is carried through and Odoo's ``partner_writeback_from_converge``
+    decides what it will write. A field the request did not name is not
+    returned (tests/contracts/test_converge_contract_v1.py).
     """
     eie_runtime["loop"].return_value = EnrichResponse(
         state="completed",
         fields={"website": "https://acme.example", "annual_tonnage": 4200},
         pass_count=1,
     )
+    payload = _odoo_builder_payload()
+    payload["schema"] = {**payload["schema"], "annual_tonnage": "integer"}
 
-    result = await handle_converge("plasticos", _odoo_builder_payload())
+    result = await handle_converge("plasticos", payload)
 
     assert result["fields"]["annual_tonnage"] == 4200
     mapped = _odoo_map_converge_response(result)
