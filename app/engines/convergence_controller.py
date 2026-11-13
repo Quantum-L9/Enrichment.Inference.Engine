@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -47,6 +48,13 @@ from .convergence.confidence_tracker import (
 )
 from .convergence.convergence_config import ConvergenceConfig  # NEW
 from .convergence.cost_tracker import CostTracker
+from .convergence.field_evidence import (
+    RESPONSE_CONTRACT_V2,
+    EvidenceContractError,
+    build_field_evidence,
+    build_proposals,
+    check_response_v2,
+)
 from .field_classifier import DomainClassification, auto_classify_domain
 from .inference.rule_loader import build_unlock_index
 from .inference_bridge_adapter import InferenceBridge
@@ -127,6 +135,8 @@ class PassResult:
     per_field_confidence: dict[str, float] = field(default_factory=dict)  # NEW
     graph_seeded_fields: dict[str, Any] = field(default_factory=dict)
     inference_provenance: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Fields valid replies spoke to and this pass did not admit (response v2).
+    withheld_fields: dict[str, dict[str, Any]] = field(default_factory=dict)
     # The enrichment pass's own outcome (F-003): a failed pass must not be
     # folded into a "completed" converge as though it had merely found nothing.
     state: str = "completed"
@@ -176,6 +186,8 @@ async def run_convergence_loop(
     convergence_config: ConvergenceConfig | None = None,  # NEW
     tenant_id: str | None = None,
     entity_id: str | None = None,
+    response_contract: str | None = None,
+    subject: Mapping[str, str] | None = None,
 ) -> EnrichResponse:
     """
     Multi-pass convergence loop.
@@ -206,7 +218,15 @@ async def run_convergence_loop(
         graph-inference-result values CEG sent back through Gate — so graph
         inference feeds the pass it precedes. Without both, no tenant's queue
         is read: a target is never applied across a tenant or entity boundary.
+    response_contract : str | None
+        None answers in v1. ``eie.converge.response/v2`` adds per-field evidence
+        (docs/contracts/converge/response.v2.md). Any other value is refused.
+    subject : Mapping[str, str] | None
+        The request's resolved ``subject`` (``type``, ``role``), echoed into
+        every evidence entry's identity. Never derived here.
     """
+    if response_contract not in (None, RESPONSE_CONTRACT_V2):
+        raise ValueError(f"unsupported_contract: {response_contract!r}")
     start = time.monotonic()
     state = ConvergenceState()
     bridge = InferenceBridge(
@@ -414,6 +434,9 @@ async def run_convergence_loop(
             enricher = enrich_entity
         if default_enricher:
             enrich_kwargs["authorized_variations"] = pass_cap
+            if response_contract is not None:
+                # Only a v2 answer needs it; a v1 call is exactly what it was.
+                enrich_kwargs["report_withheld"] = True
 
         pass_response: EnrichResponse = await enricher(
             pass_request,
@@ -456,6 +479,9 @@ async def run_convergence_loop(
         if pass_response.feature_vector:
             per_field_conf = pass_response.feature_vector.get("per_field_confidence", {})
         pass_result.per_field_confidence = per_field_conf
+        pass_result.withheld_fields = (pass_response.feature_vector or {}).get(
+            "withheld_fields"
+        ) or {}
 
         # Merge into accumulated state with per-field confidence
         for field_name, value in pass_result.enriched_fields.items():
@@ -587,6 +613,9 @@ async def run_convergence_loop(
         cost_tracker,
         confidence_tracker,
         inference_context=bridge.describe(),
+        response_contract=response_contract,
+        subject=subject,
+        entity_id=entity_id,
     )
 
 
@@ -696,6 +725,9 @@ def _assemble_convergence_response(
     cost_tracker: CostTracker | None = None,
     confidence_tracker: ConfidenceTracker | None = None,  # NEW
     inference_context: dict[str, Any] | None = None,
+    response_contract: str | None = None,
+    subject: Mapping[str, str] | None = None,
+    entity_id: str | None = None,
 ) -> EnrichResponse:
     """Build the final EnrichResponse from accumulated convergence state."""
     enriched_or_inferred: set[str] = set()
@@ -772,7 +804,7 @@ def _assemble_convergence_response(
         response_state = "completed"
         failure_reason = None
 
-    return EnrichResponse(
+    response = EnrichResponse(
         fields=final_fields,
         confidence=round(avg_confidence, 4),
         # Variations are provider calls, not tokens: each pass ran the number
@@ -793,6 +825,95 @@ def _assemble_convergence_response(
         convergence_reason=state.convergence_reason or None,
         inferences=pass_inferences,
         feature_vector=feature_vector if feature_vector else None,
+    )
+    if response_contract is None:
+        return response
+    if confidence_tracker is None:
+        raise ValueError("a v2 response needs the loop's confidence tracker")
+    return _as_response_v2(response, state, request, confidence_tracker, subject, entity_id)
+
+
+def _unknown_reason(state: ConvergenceState) -> str:
+    """Why a requested field has no evidence, from how the loop stopped."""
+    if not state.pass_results:
+        return "not_attempted"
+    if all(pr.state == "failed" for pr in state.pass_results):
+        return "source_unavailable"
+    if state.convergence_reason == "budget_exhausted":
+        return "budget_exhausted"
+    return "no_evidence"
+
+
+def _as_response_v2(
+    response: EnrichResponse,
+    state: ConvergenceState,
+    request: EnrichRequest,
+    confidence_tracker: ConfidenceTracker,
+    subject: Mapping[str, str] | None,
+    entity_id: str | None,
+) -> EnrichResponse:
+    """Attach response v2 evidence, or fail the response when it cannot be stated."""
+    requested = _required_fields(request) or []
+    # A failed response admits nothing (response.v2 section 6).
+    fields = dict(response.fields) if response.state == "completed" else {}
+    provenance: dict[str, dict[str, Any]] = {}
+    withheld: dict[str, dict[str, Any]] = {}
+    for pr in state.pass_results:
+        provenance.update(pr.inference_provenance)
+        for name, record in pr.withheld_fields.items():
+            withheld[name] = {**record, "pass_number": pr.pass_number}
+    produced = {
+        name: {
+            "value": tracked.current_value,
+            "confidence": tracked.confidence,
+            "source": tracked.source_variation,
+            "pass_number": tracked.pass_number,
+        }
+        for name, tracked in confidence_tracker.fields.items()
+    }
+    identity = {
+        "subject_ref": entity_id or request.entity.get("id"),
+        "subject_type": (subject or {}).get("type"),
+        "role": (subject or {}).get("role"),
+    }
+    try:
+        if not identity["subject_ref"]:
+            raise EvidenceContractError("the request names no subject identity")
+        evidence = build_field_evidence(
+            requested=requested,
+            fields=fields,
+            produced=produced,
+            provenance=provenance,
+            withheld=withheld,
+            entity=request.entity,
+            identity=identity,
+            unknown_reason=_unknown_reason(state),
+        )
+        proposals = build_proposals(evidence, identity) if response.state == "completed" else []
+        body = {
+            "state": response.state,
+            "fields": fields,
+            "field_evidence": evidence,
+            "proposals": proposals,
+        }
+        check_response_v2(body, requested)
+    except EvidenceContractError as exc:
+        # Never a partial v2 body, and never a v1 body passed off as v2.
+        logger.warning("response_v2_evidence_refused", error=str(exc))
+        return response.model_copy(
+            update={
+                "state": "failed",
+                "failure_reason": f"evidence_contract_violation: {exc}",
+                "fields": {},
+            }
+        )
+    return response.model_copy(
+        update={
+            "fields": fields,
+            "contract_version": RESPONSE_CONTRACT_V2,
+            "field_evidence": evidence,
+            "proposals": proposals,
+        }
     )
 
 
