@@ -616,8 +616,6 @@ def test_startup_replays_approved_rows_batch_by_batch() -> None:
     assert spec == _spec("plasticos")
 
 
-@requires_db_runtime
-@pytest.mark.unit
 def _live_version(bumps: int = 0) -> str:
     """The live plasticos version, or that version with its minor bumped `bumps` times.
 
@@ -631,6 +629,8 @@ def _live_version(bumps: int = 0) -> str:
     return f"{major}.{minor + bumps}.0"
 
 
+@requires_db_runtime
+@pytest.mark.unit
 def test_bound_startup_replay_preserves_original_discovery_and_associations() -> None:
     fixture = Path(__file__).resolve().parents[2] / "domains/plasticos/spec.yaml"
     spec = yaml.safe_load(fixture.read_bytes())
