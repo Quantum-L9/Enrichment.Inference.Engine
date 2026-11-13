@@ -1,0 +1,15 @@
+{
+  "example": "response.v2.supplier-facility.json",
+  "status": "ok",
+  "final_fields": {
+    "website": "https://supplier.example",
+    "monthly_capacity": 120000
+  },
+  "partner_writeback": {
+    "website": "https://supplier.example"
+  },
+  "never_as_value": [
+    "city",
+    "has_rail_access"
+  ]
+}
