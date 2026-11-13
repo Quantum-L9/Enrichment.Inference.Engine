@@ -1,0 +1,28 @@
+{
+  "case_id": "supplier_facility",
+  "synthetic": true,
+  "role": "supplier",
+  "subject_type": "facility_profile",
+  "evidence": [
+    {"ref": "req:entity", "states": {"city": "Springfield"}},
+    {"ref": "doc:s2", "states": {"monthly_capacity": 120000}}
+  ],
+  "labels": {
+    "city": {"kind": "value", "value": "Springfield", "basis": "evidence"},
+    "monthly_capacity": {"kind": "value", "value": 120000, "basis": "evidence", "unit": "lb/month"},
+    "website": {"kind": "value", "value": "https://supplier.example", "basis": "evidence"},
+    "has_rail_access": {"kind": "unknown"}
+  },
+  "output": {
+    "city": {"state": "observed", "confidence": null, "source_refs": ["req:entity"], "value": "Springfield"},
+    "monthly_capacity": {"state": "external_claim", "confidence": 0.85, "source_refs": ["doc:s2"], "value": 120000, "unit": "lb/month"},
+    "website": {"state": "external_claim", "confidence": 0.9, "source_refs": ["doc:s2"], "value": "https://supplier.example"},
+    "has_rail_access": {"state": "external_claim", "confidence": 0.95, "source_refs": [], "value": true}
+  },
+  "expected": {
+    "city": "evidence_supported_correct",
+    "monthly_capacity": "evidence_supported_correct",
+    "website": "heuristic_agreement",
+    "has_rail_access": "unknown_coerced"
+  }
+}
