@@ -212,3 +212,70 @@ def test_cap_variations_bounds_count_and_recomputes_cost() -> None:
     # The original is not mutated, and a cap above the count changes nothing.
     assert config.variations == 4
     assert cap_variations(config, 7) is config
+
+
+# ── Post-#320 F2: the planner owns the convergence variation count ───────────
+
+
+def _findable_resolve(**kwargs):
+    from app.engines.field_classifier import FieldDifficulty
+    from app.engines.search_optimizer import resolve
+
+    defaults = {
+        "search_plan_mode": "verification",
+        "target_fields": ["street"],
+        "signals": EntitySignals(avg_confidence=0.9, allocated_tokens=60000),
+        "field_map": {"street": FieldDifficulty.TRIVIAL},
+    }
+    defaults.update(kwargs)
+    return resolve(**defaults)
+
+
+def test_f2_01_authorized_count_is_not_undercut_by_the_optimizer() -> None:
+    # Unauthorized, this verification/trivial/high-confidence pass recommends 2.
+    assert _findable_resolve().variations == 2
+    config = _findable_resolve(authorized_variations=5)
+    assert config.variations == 5
+
+
+def test_f2_02_authorized_count_is_not_raised_by_the_optimizer() -> None:
+    from app.engines.field_classifier import FieldDifficulty
+
+    obscure = {
+        "search_plan_mode": "discovery",
+        "field_map": {"street": FieldDifficulty.OBSCURE},
+        "signals": EntitySignals(avg_confidence=0.1, allocated_tokens=60000),
+    }
+    assert _findable_resolve(**obscure).variations > 2
+    assert _findable_resolve(**obscure, authorized_variations=2).variations == 2
+
+
+def test_f2_11_cost_estimate_is_for_the_authorized_count() -> None:
+    config = _findable_resolve(authorized_variations=5)
+    assert config.estimated_cost_per_call == estimate_call_cost(
+        config.model, config.search_context_size, config.max_tokens, 5
+    )
+
+
+def test_f2_06_zero_budget_is_not_replaced_by_allocated_tokens() -> None:
+    signals = EntitySignals(avg_confidence=0.5, allocated_tokens=60000)
+    assert _findable_resolve(search_plan_mode="discovery", signals=signals).variations == 3
+    # A real zero budget bounds the recommendation; `or` used to swap in 60000.
+    zero = _findable_resolve(search_plan_mode="discovery", signals=signals, budget_tokens=0)
+    assert zero.variations == 2
+
+
+def test_f2_05_zero_authorization_is_a_real_zero() -> None:
+    config = _findable_resolve(authorized_variations=0)
+    assert config.variations == 0
+    assert config.estimated_cost_per_call == 0.0
+
+
+def test_inferrable_fields_still_disable_search_whatever_is_authorized() -> None:
+    from app.engines.field_classifier import FieldDifficulty
+
+    config = _findable_resolve(
+        field_map={"street": FieldDifficulty.INFERRABLE}, authorized_variations=5
+    )
+    assert config.disable_search is True
+    assert config.variations == 0

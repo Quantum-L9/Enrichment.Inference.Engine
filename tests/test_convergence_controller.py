@@ -2093,3 +2093,156 @@ class TestReviewFailedPassIsolation:
         assert response.fields["street"] == "v-street"
         assert response.convergence_reason == "insufficient_improvement_delta_0.05"
         assert response.tokens_used == 170
+
+
+class TestConfidenceIntegrityThroughTheLoop:
+    """F1-20: the D-9 v2 tracker receives the bounded score the response carries."""
+
+    @pytest.mark.asyncio
+    async def test_f1_20_tracker_receives_bounded_singleton_score(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+        from app.services.perplexity_client import SonarResponse
+
+        reply = SonarResponse(
+            data={"confidence": 0.70, "street": "1 Main"},
+            tokens_used=10,
+            citations=[],
+            model="sonar",
+        )
+        with patch(
+            "app.engines.enrichment_orchestrator.query_perplexity",
+            new_callable=AsyncMock,
+            return_value=reply,
+        ):
+            response = await run_convergence_loop(
+                request=EnrichRequest(
+                    entity={"Name": "Acme"},
+                    object_type="Account",
+                    objective="Find the street",
+                    schema={"street": "string"},
+                    max_variations=1,
+                ),
+                settings=_settings(),
+                kb_resolver=_kb_resolver(),
+                enricher=_real_provider_enricher([]),
+                inference_rules=[],
+                convergence_config=ConvergenceConfig(max_passes=1),
+            )
+        tracking = _tracking(response)
+        assert response.fields["street"] == "1 Main"
+        assert tracking["converged"] is False  # 0.70 < 0.85, never inflated to 1.0
+        street = tracking["fields"]["street"]
+        assert street["confidence"] == pytest.approx(0.70)
+
+
+class TestPlannerOwnsVariationCount:
+    """F2: the D-9 v2 planner is the only adaptive variation-count owner."""
+
+    @staticmethod
+    async def _run(
+        *, reply, max_variations=5, optimizer=2, domain_spec=None, budget=None, configs=None
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        from app.engines.convergence.convergence_config import ConvergenceConfig
+
+        _classification_cache.clear()
+        patches = [
+            patch(
+                "app.engines.enrichment_orchestrator.query_perplexity",
+                new_callable=AsyncMock,
+                return_value=reply,
+            ),
+            patch("app.engines.search_optimizer._compute_variations", return_value=optimizer),
+        ]
+        if budget is not None:
+            patches.append(
+                patch(
+                    "app.engines.meta_prompt_planner.MetaPromptPlanner._compute_variation_budget",
+                    return_value=budget,
+                )
+            )
+        with patches[0] as provider, patches[1]:
+            if budget is not None:
+                patches[2].start()
+            try:
+                response = await run_convergence_loop(
+                    request=EnrichRequest(
+                        entity={"Name": "Acme"},
+                        object_type="Account",
+                        objective="Find the street",
+                        schema={"street": "string"},
+                        max_variations=max_variations,
+                    ),
+                    settings=_settings(),
+                    kb_resolver=_kb_resolver(),
+                    inference_rules=[],
+                    domain_spec=domain_spec,
+                    convergence_config=ConvergenceConfig(max_passes=1),
+                    **(
+                        {"enricher": _real_provider_enricher(configs)}
+                        if configs is not None
+                        else {}
+                    ),
+                )
+            finally:
+                if budget is not None:
+                    patches[2].stop()
+        return response, provider.await_count
+
+    @staticmethod
+    def _empty_reply():
+        from app.services.perplexity_client import SonarResponse
+
+        return SonarResponse(data={"confidence": 0.9}, tokens_used=10, citations=[], model="sonar")
+
+    @pytest.mark.asyncio
+    async def test_f2_01_plan_5_is_dispatched_though_the_optimizer_says_2(self) -> None:
+        configs: list = []
+        _, calls = await self._run(
+            reply=self._empty_reply(), domain_spec=SAMPLE_DOMAIN_SPEC, configs=configs
+        )
+        assert configs[0].variations == 5
+        assert calls == 5
+
+    @pytest.mark.asyncio
+    async def test_f2_04_without_classification_the_planner_still_owns_the_count(self) -> None:
+        from unittest.mock import patch
+
+        with patch("app.engines.enrichment_orchestrator.compute_uncertainty", return_value=1):
+            _, calls = await self._run(reply=self._empty_reply())
+        assert calls == 5  # cold start: U_action 10 -> planner budget 5
+
+    @pytest.mark.asyncio
+    async def test_f2_08_planned_and_actual_are_reported_separately(self) -> None:
+        from app.services.perplexity_client import SonarResponse
+
+        configs: list = []
+        sufficient = SonarResponse(
+            data={"confidence": 0.95, "street": "1 Main"},
+            tokens_used=10,
+            citations=[],
+            model="sonar",
+        )
+        response, calls = await self._run(
+            reply=sufficient, domain_spec=SAMPLE_DOMAIN_SPEC, configs=configs
+        )
+        assert configs[0].variations == 5  # planned and authorized
+        assert calls == 1  # actual: the first reply was sufficient
+        assert response.variation_count == 1
+
+    @pytest.mark.asyncio
+    async def test_f2_13_zero_authorization_stops_without_a_provider_call(self) -> None:
+        response, calls = await self._run(reply=self._empty_reply(), budget=0)
+        assert calls == 0
+        assert response.state == "failed"
+        assert response.convergence_reason == "no_variations_authorized"
+        assert _tracking(response)["converged"] is False
+
+    @pytest.mark.parametrize(("u_action", "expected"), [(2.0, 2), (2.01, 3), (5.0, 3), (5.01, 5)])
+    def test_f2_12_d9_v2_budget_boundaries_are_unchanged(self, u_action, expected) -> None:
+        from app.engines.meta_prompt_planner import MetaPromptPlanner
+
+        assert MetaPromptPlanner()._compute_variation_budget(u_action, 10_000) == expected

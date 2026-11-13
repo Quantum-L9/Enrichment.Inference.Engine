@@ -79,7 +79,10 @@ class TestLivePathsAlreadyUnwrap:
 
         out = validate_response({"industry": "Plastics"}, None)
         assert out["industry"] == "Plastics"
-        assert out["confidence"] == 0.5  # documented default
+        # Missing provider confidence is 0.0 (post-#320 F1): it was a 0.5
+        # default that no owner contract declared, and it let an answer with no
+        # stated confidence clear a 0.5 field bar. The flat unwrap is unchanged.
+        assert out["confidence"] == 0.0
 
 
 class _FakeSonarResponse:
