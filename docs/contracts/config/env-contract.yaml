@@ -444,9 +444,10 @@ variables:
     description: |
       GATE-KEY-01 (Settings l9_gate_signing_key_ids): comma-separated key ids
       Gate signs with. With it set, POST /v1/execute answers 403 to a packet
-      signed under any other key id. Required when L9_ENVIRONMENT is staging or
-      prod: startup fails without it, and hmac-sha256 Gate signatures are
-      refused there, so Gate must sign with ed25519.
+      signed under any other key id, and when L9_ENVIRONMENT is staging or prod
+      hmac-sha256 Gate signatures are refused too, so Gate must sign with
+      ed25519. Unset, only the packet's Gate claims are checked; staging/prod
+      log that at error level on every start.
     sensitive: false
     source: env
     example: gate-v1

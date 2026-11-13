@@ -47,7 +47,7 @@
 
 ### INV-1: SDK Transport Ingress Governance
 **Severity**: CRITICAL | **Enforcement**: PARTIAL — C-21 by test, C-13 lockstep by human review
-**C-21 enforcement**: `tests/unit/test_gate_ingress.py` (the live app's one `/v1/execute` route is the SDK's; a packet that is not Gate-authored, not Gate-resolved, not from Gate, for another node, or outside the GATE-KEY-01 key binding gets 403 before any handler) and `tests/architecture/test_no_bespoke_gate_transport.py` (no local route or transport). Residual: no test drives a real Gate signature through the boundary, and C-13 lockstep has no mechanical check.
+**C-21 enforcement**: `tests/unit/test_gate_ingress.py` (the live app's one `/v1/execute` route is the SDK's; a packet that is not Gate-authored, not Gate-resolved, not from Gate, for another node, or outside the GATE-KEY-01 key binding gets 403 before any handler) and `tests/architecture/test_no_bespoke_gate_transport.py` (no local route or transport). Residual: the key binding is off until `L9_GATE_SIGNING_KEY_IDS` is deployed (staging/prod start without it and log `gate_signing_key_binding_unset` at error level), no test drives a real Gate signature through the boundary, and C-13 lockstep has no mechanical check.
 **Rule**: Production transport ingress is owned by the SDK runtime in `app/main.py`. `/v1/execute` must not be implemented or re-routed through deprecated local chassis dispatch artifacts. The active transport/runtime bundle is:
 - `app/main.py`
 - `app/api/v1/chassis_endpoint.py`

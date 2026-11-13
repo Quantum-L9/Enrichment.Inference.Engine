@@ -68,21 +68,23 @@ def resolve_gate_key_binding(
 ) -> tuple[frozenset[str] | None, bool]:
     """GATE-KEY-01: the Gate key ids ``/v1/execute`` accepts, and the HMAC refusal.
 
-    In staging/prod ``L9_GATE_SIGNING_KEY_IDS`` is required (startup fails
-    without it) and hmac-sha256 is refused: every verifier of a shared HMAC key
-    can mint it. Elsewhere an unset list leaves the claim checks only.
+    With ``L9_GATE_SIGNING_KEY_IDS`` set, a packet signed under any other key
+    id is refused, and in staging/prod hmac-sha256 is refused as well: every
+    verifier of a shared HMAC key can mint it.
+
+    Unset, the claim checks still run and the binding does not. In staging/prod
+    that is a stated residual, logged at error level on every start: a peer
+    whose key this node verifies can then claim Gate authorship. It is not a
+    startup failure because no deployment sets the variable yet, and refusing
+    to start would take the node down on a change its deploy config has not
+    made (CEG fails closed here; EIE can follow once the variable is deployed).
     """
     key_ids = frozenset(part.strip() for part in raw_key_ids.split(",") if part.strip())
     trust_required = environment in TRUST_REQUIRED_ENVIRONMENTS
     if key_ids:
         return key_ids, trust_required
-    if trust_required:
-        raise RuntimeError(
-            f"L9_GATE_SIGNING_KEY_IDS is required when L9_ENVIRONMENT={environment} "
-            "(GATE-KEY-01): without it any peer whose key this node verifies can "
-            "claim Gate authorship"
-        )
-    logger.warning("gate_signing_key_binding_unset", environment=environment)
+    log = logger.error if trust_required else logger.warning
+    log("gate_signing_key_binding_unset", environment=environment, trust_required=trust_required)
     return None, False
 
 

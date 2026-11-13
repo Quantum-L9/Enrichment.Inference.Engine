@@ -108,9 +108,9 @@ class Settings(BaseSettings):
     # C-09 (EIE-212-F004): env name L9_GATE_REREGISTRATION_INTERVAL_SECONDS.
     l9_gate_reregistration_interval_seconds: float = 300.0
     # GATE-KEY-01: comma-separated key ids Gate signs with. /v1/execute refuses a
-    # packet signed under any other id. Required when L9_ENVIRONMENT is staging
-    # or prod, where hmac-sha256 Gate signatures are refused as well
-    # (app/middleware/gate_ingress.py). Env name L9_GATE_SIGNING_KEY_IDS (C-09).
+    # packet signed under any other id, and in staging/prod an hmac-sha256 Gate
+    # signature too. Unset = Gate claim checks only, logged at error level in
+    # staging/prod (app/middleware/gate_ingress.py). Env L9_GATE_SIGNING_KEY_IDS.
     l9_gate_signing_key_ids: str = ""
     # GRAPH-IDENT-02: the CEG `sync` contract for post-enrichment graph sync is
     # read per tenant from the tenant's own spec (tenant id == domain spec id;

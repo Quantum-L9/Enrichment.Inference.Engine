@@ -144,9 +144,9 @@ def test_rejects_hmac_where_trust_is_required(seen: list[dict[str, Any]]) -> Non
 
 
 @pytest.mark.parametrize("environment", ["staging", "prod"])
-def test_startup_fails_closed_without_gate_key_ids(environment: str) -> None:
-    with pytest.raises(RuntimeError, match="L9_GATE_SIGNING_KEY_IDS is required"):
-        resolve_gate_key_binding(environment, " , ")
+def test_key_binding_applies_only_when_gate_key_ids_are_configured(environment: str) -> None:
+    # Unset in staging/prod is the stated residual: claim checks only, no binding.
+    assert resolve_gate_key_binding(environment, " , ") == (None, False)
     assert resolve_gate_key_binding(environment, "gate-v1") == (frozenset({"gate-v1"}), True)
     assert resolve_gate_key_binding("local", "") == (None, False)
 
