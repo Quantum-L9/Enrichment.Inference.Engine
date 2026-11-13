@@ -248,3 +248,39 @@ read `field_evidence` today.
    requested.
 5. **`independent`** ships as an explicit `null` wherever independence is
    unknown. It is stated, not omitted.
+
+## 10. Revision 1 (2026-11-13, additive, CTO)
+
+Frozen by the CTO integration session `session_017xwbxxupo1nc2CvFZN6ewa`. The constant
+stays `eie.converge.response/v2`. The revision lets a consumer answer from the response
+alone: which record it is about, the state of each field, what supports each value, and
+which cartridge revision and field definitions governed the result.
+
+### 10.1 `resolution` (required on every v2 response whose request resolved)
+
+What EIE actually loaded. This is not an echo of the request: the request's `version` and
+`sha256` pins were checked against these values before any provider call.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `cartridge_id` | string | The loaded cartridge. |
+| `cartridge_version` | string | Its loaded version. |
+| `cartridge_sha256` | string | The digest of the published `spec.yaml` bytes actually served. It is always present, even when the request pinned only `version`. |
+| `node` | string | The node the entity was resolved as. |
+
+It is absent only on a refusal (section 6 codes), where nothing was resolved.
+
+### 10.2 `field_evidence[*].declaration` (required)
+
+The cartridge's declaration for that field, exactly as loaded: a declaration object in the
+shared typed syntax (`app/engines/spec_types.py`), plus the declared `unit` when the
+cartridge states one. A field without a declaration cannot have an entry, because
+undeclared targets are refused.
+
+### 10.3 Source additions
+
+- `source_type` gains `graph`: a value seeded from the graph return channel.
+- A `provider` source may carry `citations`: an array of URL strings the provider returned
+  for the whole reply, with `citation_granularity: "reply"`. They support the reply as a
+  whole. They are never presented as proof of one specific field, because providers do not
+  attribute citations per field.
