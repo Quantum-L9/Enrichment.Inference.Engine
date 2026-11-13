@@ -56,7 +56,7 @@
     },
     "state": {
       "type": "string",
-      "enum": ["completed", "failed", "partial"],
+      "enum": ["completed", "degraded", "failed", "partial"],
       "default": "completed",
       "description": "Enrichment outcome state. Indexed."
     },

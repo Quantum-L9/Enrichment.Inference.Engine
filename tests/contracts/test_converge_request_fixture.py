@@ -1,10 +1,12 @@
 """`contracts/converge_request.json` is the live Odoo builder shape.
 
-The fixture previously carried a Salesforce-style Account payload with
-`kb_context` and a top-level `idempotency_key`, neither of which the live
-IB-Odoo_19 builder emits. It is now the exact shape
+It is the exact shape IB-Odoo_19 (Staging @ 3ad2328)
 `plasticos_gate/services/gate_builders.py::build_converge_request` produces,
-and this test proves EIE accepts it on the canonical path.
+and this test proves EIE accepts it on the canonical path. Since Odoo PR #163
+that builder also emits `kb_context` (the domain), `schema` (its partner
+writeback allowlist) and `idempotency_key` (`build_operation_id`); an earlier
+revision of this fixture and test asserted their absence, which had become
+false. docs/contracts/converge/v1.md specifies the shape.
 """
 
 from __future__ import annotations
@@ -34,13 +36,23 @@ def test_fixture_carries_the_odoo_envelope(payload: dict) -> None:
         "objective",
         "max_variations",
         "consensus_threshold",
+        "kb_context",
+        "schema",
+        "idempotency_key",
         "odoo",
     }
     assert payload["consensus_threshold"] == 0.80
     assert payload["entity"]["_odoo_entity_id"] == payload["entity"]["id"]
     assert payload["odoo"]["model"] == "plasticos.enrichment.run"
-    assert "kb_context" not in payload
-    assert "idempotency_key" not in payload
+    assert payload["kb_context"] == payload["object_type"] == "plasticos"
+    # The eight partner fields Odoo may write back: the whole v1 field contract.
+    assert payload["schema"] == dict.fromkeys(
+        ["city", "email", "name", "phone", "street", "street2", "website", "zip"], "string"
+    )
+    odoo = payload["odoo"]
+    assert payload["idempotency_key"] == (
+        f"odoo:enrichment:{odoo['db_name']}:{odoo['model']}:{odoo['record_id']}"
+    )
 
 
 @pytest.mark.unit
@@ -61,5 +73,8 @@ def test_fixture_validates_as_the_canonical_enrich_request(payload: dict) -> Non
     assert request.entity["name"] == "Acme Recycling"
     assert request.object_type == "plasticos"
     assert request.max_variations == 5
+    assert request.schema_ == payload["schema"]
+    assert request.kb_context == "plasticos"
+    assert request.idempotency_key == payload["idempotency_key"]
     # The canonical branch keeps `entity` verbatim, Odoo alias included.
     assert request.entity["_odoo_entity_id"] == "res.partner:55"
