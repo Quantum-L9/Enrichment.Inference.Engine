@@ -213,9 +213,12 @@ def test_v2_keys_do_not_change_what_a_v1_consumer_reads(name: str) -> None:
     assert with_v2 == without_v2
     model = EnrichResponse.model_validate(payload)
     assert model.fields == payload["fields"] and model.state == payload["state"]
-    assert not set(_V2_KEYS) & set(EnrichResponse.model_fields), (
-        "v2 is not implemented: the v1 model must not carry it yet"
-    )
+    # Whether or not the model carries v2 yet, every v2 key it carries stays optional,
+    # so a v1 body without them still validates and reads the same.
+    for key in set(_V2_KEYS) & set(EnrichResponse.model_fields):
+        assert not EnrichResponse.model_fields[key].is_required(), key
+    v1_model = EnrichResponse.model_validate(v1_only)
+    assert v1_model.fields == payload["fields"] and v1_model.state == payload["state"]
 
 
 _CASES = _json(_PARITY / "mapper_cases.json")["cases"]
