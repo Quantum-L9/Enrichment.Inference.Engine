@@ -242,9 +242,11 @@ components:
           description: Error message if state is 'failed'.
         state:
           type: string
-          enum: [completed, failed, partial]
+          enum: [completed, degraded, failed, partial]
           default: completed
-          description: Enrichment outcome state.
+          description: >-
+            Enrichment outcome state. `degraded` is the converge action's
+            deadline stop (docs/contracts/converge/v1.md).
         convergence_reason:
           type: string
           nullable: true
