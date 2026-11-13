@@ -19,7 +19,13 @@ import math
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 from app.engines.domain_yaml_reader import TENANT_ID_PATTERN, TENANT_ID_RESERVED_PREFIX
 
@@ -297,6 +303,22 @@ class EnrichResponse(BaseModel):
     # "insufficient_improvement_delta_0.05", "max_passes_reached". None for a
     # single-pass enrich, which has no loop.
     convergence_reason: str | None = None
+
+    # ── Converge response v2 (docs/contracts/converge/response.v2.md) ──
+    # Present only on a v2 response. A v1 response omits all three keys: the
+    # contract reads an absent `contract_version` as v1, so None is never
+    # serialized as a value.
+    contract_version: str | None = None
+    field_evidence: dict[str, dict[str, Any]] | None = None
+    proposals: list[dict[str, Any]] | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_v2_members(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if self.contract_version is None:
+            for key in ("contract_version", "field_evidence", "proposals"):
+                data.pop(key, None)
+        return data
 
 
 class BatchEnrichResponse(BaseModel):
