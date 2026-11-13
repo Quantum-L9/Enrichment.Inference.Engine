@@ -491,8 +491,7 @@ async def _load_domain_converge_bundle(
     # enrichment hints with a different revision's rules.
     # A v2 request hands in the revision it was pinned against: no second read.
     try:
-        if config is None:
-            config = _domain_reader.load(domain_id)
+        config = config if config is not None else _domain_reader.load(domain_id)
     except DomainPublicationError:
         raise
     except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:

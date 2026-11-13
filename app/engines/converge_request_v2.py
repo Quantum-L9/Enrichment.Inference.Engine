@@ -28,6 +28,7 @@ from typing import Any
 
 import yaml
 
+from ..utils.safe_convert import safe_float
 from .domain_yaml_reader import (
     DomainEnrichmentConfig,
     DomainPublicationError,
@@ -244,7 +245,7 @@ def _confidence(name: str, value: object) -> float:
         raise ConvergeRequestRefusedError(
             "invalid_request", f"targets.{name}.min_confidence not in [0, 1]"
         )
-    return float(value)
+    return safe_float(value)
 
 
 def _subject(value: object, spec: Mapping[str, Any], node: str) -> dict[str, str] | None:
