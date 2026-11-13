@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Converge contract v1 (2026-11-13).** `docs/contracts/converge/v1.md`
+  specifies the Odoo `converge` request and response. `docs/contracts/api/openapi.yaml`
+  2.5.0 and `docs/contracts/data/models/enrichment-result.schema.json` add
+  `degraded` to `EnrichResponse.state`: a converge request stopped by its 25 s
+  deadline answers `degraded` (previously `failed`). Converge `fields` are now a
+  subset of the request `schema`.
 - **Contract gaps TODO-01, TODO-04, TODO-05 closed (2026-11-11).**
   - `docs/contracts/api/openapi.yaml` 2.4.0: the ten `/score/*` routes of
     `app/score/score_api.py` (router prefix `/score`, no `/v1`), with request

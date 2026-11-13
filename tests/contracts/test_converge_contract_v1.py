@@ -152,6 +152,14 @@ async def test_fields_outside_the_request_schema_are_not_returned_or_persisted(
     assert "annual_tonnage" not in repr(persisted), "the durable record must equal the answer"
 
 
+async def test_an_empty_schema_names_no_field(stub_loop: AsyncMock) -> None:
+    stub_loop.return_value = EnrichResponse(state="completed", fields={"zip": "28202"})
+
+    result = await handlers.handle_converge("plasticos", _request(schema={}))
+
+    assert result["fields"] == {}
+
+
 async def test_deadline_exhaustion_is_degraded_never_a_completed_partial(
     stub_loop: AsyncMock, runtime: dict[str, Any]
 ) -> None:
