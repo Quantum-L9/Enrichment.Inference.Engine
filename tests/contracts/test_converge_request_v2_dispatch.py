@@ -11,10 +11,12 @@ Not marked `unit`: `app.engines.handlers` needs the provider runtime.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import yaml
 
 pytest.importorskip("perplexity", reason="app.engines.handlers needs the provider runtime")
 
@@ -28,6 +30,12 @@ from app.services.side_effect_coordinator import get_side_effect_coordinator
 
 pytestmark = pytest.mark.asyncio
 
+# Pinned to whatever revision is checked in, so a cartridge version bump on
+# another branch of the stack does not turn this into a pin-mismatch refusal.
+CARTRIDGE_VERSION: str = yaml.safe_load(
+    (Path(__file__).resolve().parents[2] / "domains/plasticos/spec.yaml").read_bytes()
+)["version"]
+
 TARGETS = [
     {"field": "contamination_tolerance", "type": {"type": "float"}, "min_confidence": 0.8},
     {"field": "capacity_tons_month", "type": {"type": "float"}},
@@ -39,7 +47,7 @@ TARGET_NAMES = {target["field"] for target in TARGETS}
 def _v2(**overrides: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
         "contract": REQUEST_CONTRACT_V2,
-        "cartridge": {"id": "plasticos", "version": "0.4.0"},
+        "cartridge": {"id": "plasticos", "version": CARTRIDGE_VERSION},
         "node": "Facility",
         "targets": [dict(target) for target in TARGETS],
         "entity": {"id": "res.partner:55", "name": "Acme Recycling", "city": "Charlotte"},
@@ -95,7 +103,7 @@ async def test_typed_targets_direct_the_run_from_the_pinned_cartridge(
         "tier": "string",
     }
     assert request.field_thresholds == {"contamination_tolerance": 0.8}
-    assert runtime["loop"]["domain_spec"]["version"] == "0.4.0"
+    assert runtime["loop"]["domain_spec"]["version"] == CARTRIDGE_VERSION
     assert "contamination_tolerance" in runtime["loop"]["domain_hints"]["priority_fields"]
     assert runtime["loop"]["inference_rules"]
 
