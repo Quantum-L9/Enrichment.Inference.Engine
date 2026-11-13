@@ -1,0 +1,32 @@
+{
+  "case_id": "buyer_material",
+  "synthetic": true,
+  "role": "buyer",
+  "subject_type": "material_profile",
+  "evidence": [
+    {"ref": "req:entity", "states": {"accepted_polymer": "PP"}},
+    {"ref": "doc:b1", "states": {"max_contamination_pct": 2.0, "accepted_form": "pellet"}},
+    {"ref": "doc:b2", "states": {"max_contamination_pct": 5.0, "accepted_form": "pellet"}}
+  ],
+  "labels": {
+    "accepted_polymer": {"kind": "value", "value": "PP", "basis": "evidence"},
+    "accepted_form": {"kind": "value", "value": "pellet", "basis": "evidence"},
+    "max_contamination_pct": {"kind": "conflicting", "values": [2.0, 5.0]},
+    "min_lot_size": {"kind": "value", "value": 40000, "basis": "heuristic", "unit": "lb"},
+    "payment_terms": {"kind": "unknown"}
+  },
+  "output": {
+    "accepted_polymer": {"state": "observed", "confidence": null, "source_refs": ["req:entity"], "value": "PP"},
+    "accepted_form": {"state": "external_claim", "confidence": 0.88, "source_refs": ["doc:b1", "doc:b2"], "value": "pellet"},
+    "max_contamination_pct": {"state": "conflicting", "confidence": null, "source_refs": []},
+    "min_lot_size": {"state": "unknown", "confidence": null, "source_refs": []},
+    "payment_terms": {"state": "conflicting", "confidence": null, "source_refs": []}
+  },
+  "expected": {
+    "accepted_polymer": "evidence_supported_correct",
+    "accepted_form": "evidence_supported_correct",
+    "max_contamination_pct": "conflict_preserved",
+    "min_lot_size": "abstained",
+    "payment_terms": "unknown_as_conflict"
+  }
+}
