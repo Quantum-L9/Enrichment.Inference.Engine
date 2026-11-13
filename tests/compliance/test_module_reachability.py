@@ -49,6 +49,13 @@ OPERATOR_ENTRY_POINTS = {
 # Modules that exist but are deliberately not wired yet. Each needs a reason
 # and a tracking reference so this never becomes a silent dumping ground.
 STAGED_ARTIFACTS = {
+    "app.engines.convergence.observation_evidence": (
+        "Campaign B lane B1. Evidence semantics of request v2.1 observations. Its "
+        "caller is the response v2 evidence builder (app/engines/convergence/"
+        "field_evidence.py), which lives on the B2 stack (PR #344), not on this "
+        "one; the handler seam that passes ResolvedConvergeRequest.observations "
+        "to it is wired at integration. Remove this entry in that change."
+    ),
     "app.engines.inference.nary_inference_engine": (
         "N-ary inference engine. Wiring needs a KB n-ary fact schema, "
         "hand-authored domain facts, a YAML->NAryFact loader, and reconciliation "
