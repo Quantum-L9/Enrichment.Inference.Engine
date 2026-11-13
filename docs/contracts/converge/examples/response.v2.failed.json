@@ -1,0 +1,63 @@
+{
+  "contract_version": "converge.response/2.0.0-draft",
+  "fields": {},
+  "confidence": 0.0,
+  "kb_content_hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "variation_count": 0,
+  "consensus_threshold": 0.8,
+  "uncertainty_score": 10.0,
+  "pass_count": 0,
+  "inference_version": "v2.2.0",
+  "processing_time_ms": 1200,
+  "enrichment_payload": null,
+  "feature_vector": null,
+  "kb_files_consulted": [],
+  "kb_fragment_ids": [],
+  "inferences": [],
+  "quality_tier": "unknown",
+  "grade_matches": [],
+  "tokens_used": 0,
+  "failure_reason": "no_valid_responses",
+  "state": "failed",
+  "convergence_reason": null,
+  "field_evidence": {
+    "polymer_type": {
+      "state": "observed",
+      "admitted": false,
+      "value": "HDPE",
+      "unit_status": "not_applicable",
+      "confidence": null,
+      "sources": [
+        {
+          "source_type": "request_entity",
+          "source_ref": "entity.polymer_type",
+          "method": "consumer_supplied",
+          "independent": null
+        }
+      ],
+      "derivation": null,
+      "identity": {
+        "subject_ref": "res.partner:9001",
+        "subject_type": "material_profile",
+        "role": "supplier"
+      },
+      "conflict": null,
+      "unknown_reason": null
+    },
+    "material_form": {
+      "state": "unknown",
+      "admitted": false,
+      "confidence": null,
+      "sources": [],
+      "derivation": null,
+      "identity": {
+        "subject_ref": "res.partner:9001",
+        "subject_type": "material_profile",
+        "role": "supplier"
+      },
+      "conflict": null,
+      "unknown_reason": "source_unavailable"
+    }
+  },
+  "proposals": []
+}

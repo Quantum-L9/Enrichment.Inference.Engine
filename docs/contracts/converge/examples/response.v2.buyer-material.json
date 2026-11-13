@@ -1,0 +1,153 @@
+{
+  "contract_version": "converge.response/2.0.0-draft",
+  "fields": {
+    "accepted_polymer": "PP",
+    "accepted_form": "pellet"
+  },
+  "confidence": 0.94,
+  "kb_content_hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "variation_count": 2,
+  "consensus_threshold": 0.8,
+  "uncertainty_score": 0.6,
+  "pass_count": 2,
+  "inference_version": "v2.2.0",
+  "processing_time_ms": 1200,
+  "enrichment_payload": null,
+  "feature_vector": null,
+  "kb_files_consulted": [],
+  "kb_fragment_ids": [],
+  "inferences": [],
+  "quality_tier": "unknown",
+  "grade_matches": [],
+  "tokens_used": 800,
+  "failure_reason": null,
+  "state": "completed",
+  "convergence_reason": "max_passes_reached",
+  "field_evidence": {
+    "accepted_polymer": {
+      "state": "observed",
+      "admitted": true,
+      "value": "PP",
+      "unit_status": "not_applicable",
+      "confidence": null,
+      "sources": [
+        {
+          "source_type": "request_entity",
+          "source_ref": "entity.accepted_polymer",
+          "method": "consumer_supplied",
+          "independent": null
+        }
+      ],
+      "derivation": null,
+      "identity": {
+        "subject_ref": "res.partner:9002",
+        "subject_type": "material_profile",
+        "role": "buyer"
+      },
+      "conflict": null,
+      "unknown_reason": null
+    },
+    "max_contamination_pct": {
+      "state": "conflicting",
+      "admitted": false,
+      "confidence": null,
+      "sources": [],
+      "derivation": null,
+      "identity": {
+        "subject_ref": "res.partner:9002",
+        "subject_type": "material_profile",
+        "role": "buyer"
+      },
+      "conflict": {
+        "candidates": [
+          {
+            "value": 2.0,
+            "unit_status": "stated",
+            "unit": "percent",
+            "confidence": 0.7,
+            "sources": [
+              {
+                "source_type": "provider",
+                "source_ref": "reply:synthetic-0003",
+                "method": "provider_reply",
+                "independent": null
+              }
+            ]
+          },
+          {
+            "value": 5.0,
+            "unit_status": "stated",
+            "unit": "percent",
+            "confidence": 0.7,
+            "sources": [
+              {
+                "source_type": "provider",
+                "source_ref": "reply:synthetic-0004",
+                "method": "provider_reply",
+                "independent": null
+              }
+            ]
+          }
+        ],
+        "resolution": null
+      },
+      "unknown_reason": null
+    },
+    "accepted_form": {
+      "state": "external_claim",
+      "admitted": true,
+      "value": "pellet",
+      "unit_status": "not_applicable",
+      "confidence": 0.88,
+      "sources": [
+        {
+          "source_type": "provider",
+          "source_ref": "reply:synthetic-0003",
+          "method": "provider_reply",
+          "independent": null
+        },
+        {
+          "source_type": "provider",
+          "source_ref": "reply:synthetic-0004",
+          "method": "provider_reply",
+          "independent": null
+        }
+      ],
+      "derivation": null,
+      "identity": {
+        "subject_ref": "res.partner:9002",
+        "subject_type": "material_profile",
+        "role": "buyer"
+      },
+      "conflict": null,
+      "unknown_reason": null
+    }
+  },
+  "proposals": [
+    {
+      "proposal_id": "p1",
+      "proposal_type": "material_profile",
+      "identity": {
+        "subject_ref": "res.partner:9002",
+        "subject_type": "material_profile",
+        "role": "buyer"
+      },
+      "fields": [
+        "accepted_polymer",
+        "max_contamination_pct",
+        "accepted_form"
+      ],
+      "admitted_fields": [
+        "accepted_polymer",
+        "accepted_form"
+      ],
+      "review": {
+        "required": true,
+        "reasons": [
+          "contains_external_claim",
+          "contains_conflict"
+        ]
+      }
+    }
+  ]
+}
