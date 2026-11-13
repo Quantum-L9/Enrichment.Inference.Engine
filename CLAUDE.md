@@ -41,6 +41,7 @@ Do NOT use vague language. Be specific.
   - `app/engines/handlers.py`
   - `app/engines/packet_router.py` — **the** EIE → Gate → CEG egress
   - `app/services/gate_client.py` — the single Gate client factory
+  - `app/middleware/gate_ingress.py` — Gate-only boundary in front of the SDK `/v1/execute`
 
 Two modules that this list used to name are governed by C-13 but carry no live
 traffic. Naming them as "active transport" sent readers tracing egress to files

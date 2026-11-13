@@ -43,6 +43,8 @@ Production transport ingress is SDK-owned.
 ```text
 Client / caller
   -> POST /v1/execute
+  -> app/middleware/gate_ingress.py: 403 unless Gate-authored, Gate-resolved,
+     from Gate, for this node, and (GATE-KEY-01) signed under a Gate key id
   -> SDK runtime receives packet/request
   -> runtime validates allowed action
   -> registered handler executes

@@ -437,6 +437,20 @@ variables:
     sensitive: false
     source: env
 
+  - name: L9_GATE_SIGNING_KEY_IDS
+    type: string
+    required: false
+    default: ""
+    description: |
+      GATE-KEY-01 (Settings l9_gate_signing_key_ids): comma-separated key ids
+      Gate signs with. With it set, POST /v1/execute answers 403 to a packet
+      signed under any other key id. Required when L9_ENVIRONMENT is staging or
+      prod: startup fails without it, and hmac-sha256 Gate signatures are
+      refused there, so Gate must sign with ed25519.
+    sensitive: false
+    source: env
+    example: gate-v1
+
   - name: GATE_INTERNAL_URL
     type: url
     required: false

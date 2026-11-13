@@ -42,6 +42,7 @@ This document defines the rules of engagement for AI agents (Manus, Copilot, Cur
 | `app/engines/graph_sync_client.py` | T4 | Gate transport contract |
 | `app/engines/packet_router.py` | T4 | Gate-only egress for graph `sync` / score invalidation (retry discipline) |
 | `app/services/gate_client.py` | T4 | Single signed GateClient factory — the only place outbound Gate config is built |
+| `app/middleware/gate_ingress.py` | T4 | Gate-only ingress boundary in front of the SDK `/v1/execute` route (C-21, GATE-KEY-01); in the C-13 lockstep set |
 | `app/models/` (all files) | T5 | Pydantic schema — downstream breaking change risk (`app/models/loop_schemas.py`, `app/models/field_confidence.py`) |
 | `app/score/score_models.py` | T5 | Score schema contract |
 | `app/health/health_models.py` | T5 | Health schema contract |
