@@ -662,7 +662,7 @@ def test_bound_startup_replay_preserves_original_discovery_and_associations() ->
     revised = _converge().apply_approved_records(spec, [row], discovery_specs={digest: discovery})
     names = {p["name"] for p in revised["ontology"]["nodes"][0]["properties"]}
     assert names == original_names | {"capacity_tons_month"}
-    assert revised["version"] == "0.5.0-discovered"
+    assert revised["version"] == "0.6.0-discovered"
     assert revised["sync"] == spec["sync"]
     assert revised["semantic_registry"] == spec["semantic_registry"]
     assert vars(row) == before
