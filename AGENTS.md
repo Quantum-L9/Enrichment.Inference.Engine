@@ -175,7 +175,7 @@ All PRs must pass:
 | C-10 | Zero hardcoded credentials — env vars via pydantic-settings only | CRITICAL |
 | C-11 | `TransportPacket` and SDK transport objects are immutable at boundaries — never mutate in place. Deprecated local chassis dict envelopes are not part of production dispatch. | CRITICAL |
 | C-12 | No `Field(alias=...)` in Pydantic models | HIGH |
-| C-13 | Transport contract lockstep: `app/main.py`, `app/api/v1/chassis_endpoint.py`, `app/services/chassis_handlers.py`, `app/engines/orchestration_layer.py`, `app/engines/handlers.py`, `app/engines/graph_sync_client.py`, `app/engines/packet_router.py`, and `app/services/gate_client.py` must stay aligned | CRITICAL |
+| C-13 | Transport contract lockstep: `app/main.py`, `app/api/v1/chassis_endpoint.py`, `app/services/chassis_handlers.py`, `app/engines/orchestration_layer.py`, `app/engines/handlers.py`, `app/engines/graph_sync_client.py`, `app/engines/packet_router.py`, `app/services/gate_client.py`, and `app/middleware/gate_ingress.py` must stay aligned | CRITICAL |
 | C-14 | New SDK action registration requires corresponding handler + test in same PR | HIGH |
 | C-15 | Coverage >= 71% — never lower the threshold | HIGH |
 | C-16 | Python 3.12+ — no backports, no 3.11-only APIs | CRITICAL |
