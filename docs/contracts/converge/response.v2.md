@@ -1,11 +1,11 @@
-# Converge response v2 — DRAFT
+# Converge response v2
 
 | | |
 |---|---|
-| Status | **DRAFT. Not frozen, not implemented.** The CTO integration session freezes it; until then nothing in `app/` emits it and no consumer may depend on it. |
-| Contract id | `converge.response/2.0.0-draft` |
-| Extends | The v1 converge response: `app.models.schemas.EnrichResponse`, canonical fixture `contracts/converge_response.json`. |
-| Sibling drafts | `request.v2.md` (campaign A) and `v1.md` (campaign C) are written elsewhere. This file does not define them. |
+| Status | **FROZEN 2026-11-13** by the CTO integration session `session_017xwbxxupo1nc2CvFZN6ewa`. A change is a new revision, not an edit. **Not implemented:** nothing in `app/` emits it yet. |
+| Contract id | `eie.converge.response/v2`, paired with the request constant `eie.converge.request/v2`. |
+| Extends | The v1 converge response: `app.models.schemas.EnrichResponse`, `docs/contracts/converge/v1.md`, canonical fixture `contracts/converge_response.json`. |
+| Sibling contracts | `request.v2.md` (campaign A) and `v1.md` (campaign C). This file does not define them. |
 | Transport | Payload of a `TransportPacket` answered through Gate. This file defines a payload, not a transport or a route. |
 | Examples | `docs/contracts/converge/examples/response.v2.*.json`. Synthetic data only. |
 
@@ -22,7 +22,7 @@ top-level keys are added:
 
 | Key | Type | Meaning |
 |---|---|---|
-| `contract_version` | string | `converge.response/2.0.0-draft`. Absent means the payload is v1. |
+| `contract_version` | string | `eie.converge.response/v2`. Absent means the payload is v1. |
 | `field_evidence` | object, field name → FieldEvidence | One entry per requested field (section 2). |
 | `proposals` | array of TypedProposal | Reviewable groupings of fields about one subject (section 5). |
 
@@ -68,8 +68,8 @@ v1 (section 7).
 | Key | Type | Meaning |
 |---|---|---|
 | `subject_ref` | string | The consumer's identifier for the subject, echoed from the request (`entity.id`). EIE never mints one. |
-| `subject_type` | string | The domain-declared entity type of the subject, echoed from `request.v2: <key owned by campaign A>`. Opaque to this contract. |
-| `role` | string or `null` | The domain-declared role the subject plays, echoed from `request.v2: <key owned by campaign A>`. Opaque to this contract; `null` when the request states none. |
+| `subject_type` | string or `null` | Echo of the request's `subject.type`. Opaque to this contract; `null` when the request carries no `subject`. Never derived. |
+| `role` | string or `null` | Echo of the request's `subject.role`. Opaque to this contract; `null` when the request states none. Never derived. |
 
 `subject_type` and `role` are carried, not interpreted. This contract names no
 industry, role or entity type; the examples use values a domain spec would
@@ -120,8 +120,8 @@ Rules that hold for every response:
 
 Relation to `contracts/feature_evidence` (`value_state`): the two vocabularies
 overlap on `observed`, `inferred`, `unknown` and `conflicting`. Whether
-`external_claim` here is the same thing as `reported` there is **unresolved**;
-this draft declares no equivalence and no mapping.
+`external_claim` here is the same thing as `reported` there is **Unknown**;
+this contract declares no equivalence and no mapping.
 
 ## 4. Confidence
 
@@ -177,9 +177,25 @@ rather than a partial v2 body.
 2. The keys of `fields` are exactly the entries with `admitted: true`, and each
    `fields[name]` equals that entry's `value`.
 3. Every entry satisfies the presence rules of section 2 for its state.
-4. When `state` is not `completed`, or `failure_reason` is set: `fields` is
-   empty, `proposals` is empty and no entry has `admitted: true`. Evidence
-   gathered before the failure may still be listed, unadmitted.
+4. `state` is `completed`, `degraded` or `failed`, as v1 defines them.
+   - `failed`: `fields` is empty, `proposals` is empty and no entry has
+     `admitted: true`. Evidence gathered before the failure may still be
+     listed, unadmitted.
+   - `degraded` (the deadline stopped the run): as v1, `fields` is empty or a
+     partial subset, and rule 2 still holds for whatever it contains.
+     `proposals` is empty: a partial result is not a proposal.
+5. `proposals` is always present, possibly empty.
+
+**Refusals.** A request that does not resolve is refused as a whole: `state`
+is `failed` and `failure_reason` begins with one of the codes below. A refusal
+is never `degraded`: a request that did not resolve was never run. The first
+thirteen codes and their conditions are the table in `request.v2.md` section 5;
+this contract adopts them unchanged and adds the last.
+
+| Code | Condition |
+|---|---|
+| `unsupported_contract`, `invalid_request`, `conflicting_members`, `cartridge_not_found`, `cartridge_refused`, `cartridge_pin_mismatch`, `tenant_cartridge_mismatch`, `node_not_declared`, `target_not_declared`, `target_type_mismatch`, `duplicate_target`, `subject_not_declared`, `subject_target_mismatch` | As defined in `request.v2.md` section 5. |
+| `v2_member_without_contract` | The request carries a v2 member but not the `eie.converge.request/v2` contract constant. |
 
 **Consumer.**
 
@@ -217,19 +233,18 @@ read `field_evidence` today.
 | `examples/response.v2.buyer-facility.json` | An `inferred` field whose input is an `external_claim`. |
 | `examples/response.v2.failed.json` | A failed run: nothing admitted, no proposals. |
 
-## 9. Open questions for the freeze
+## 9. Decisions at the freeze
 
-1. **Unknown:** whether `external_claim` is the same state as FeatureEvidence
-   `reported`. No equivalence or mapping is declared (section 3).
-2. Which request key carries `role` and `subject_type`? That is `request.v2`
-   (campaign A). This draft only requires that they be echoed, not derived.
-3. Should `proposals` be omitted, rather than empty, when a domain declares no
-   proposal types? This draft says always present, possibly empty.
-4. A requested field that the request also supplied, and that no source
-   speaks to, is `observed` with `null` confidence. Under `D9-v2` as
-   implemented it is a deciding field with effective confidence 0, so it can
-   never be ready. Whether that is intended is the uncertainty-policy owner's
-   decision. This draft changes nothing there, and its examples avoid the
-   case: their `observed` fields were supplied, not requested.
-5. Per-source `independent` is `null` everywhere until a provider reply carries
-   per-field provenance. Whether to ship the key before then is undecided.
+1. **`external_claim` and FeatureEvidence `reported`.** Whether they are the
+   same state stays explicitly **Unknown**. No equivalence, no mapping.
+2. **Subject.** `identity.subject_type` and `identity.role` echo the request's
+   `subject.type` and `subject.role`.
+3. **`proposals`** is always present, possibly empty.
+4. **Known consequence, not a defect.** A field the request both asks for and
+   supplies, and that no source speaks to, is `observed` with `null`
+   confidence. Under `D9-v2` it is a deciding field with effective confidence
+   0, so it is never ready. v2.0 keeps `D9-v2` unchanged; this is intended.
+   The examples avoid the case: their `observed` fields were supplied, not
+   requested.
+5. **`independent`** ships as an explicit `null` wherever independence is
+   unknown. It is stated, not omitted.

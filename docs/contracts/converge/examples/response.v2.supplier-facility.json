@@ -1,5 +1,5 @@
 {
-  "contract_version": "converge.response/2.0.0-draft",
+  "contract_version": "eie.converge.response/v2",
   "fields": {
     "website": "https://supplier.example",
     "monthly_capacity": 120000
@@ -41,7 +41,7 @@
       "derivation": null,
       "identity": {
         "subject_ref": "res.partner:9001",
-        "subject_type": "facility_profile",
+        "subject_type": "facility",
         "role": "supplier"
       },
       "conflict": null,
@@ -64,7 +64,7 @@
       "derivation": null,
       "identity": {
         "subject_ref": "res.partner:9001",
-        "subject_type": "facility_profile",
+        "subject_type": "facility",
         "role": "supplier"
       },
       "conflict": null,
@@ -88,7 +88,7 @@
       "derivation": null,
       "identity": {
         "subject_ref": "res.partner:9001",
-        "subject_type": "facility_profile",
+        "subject_type": "facility",
         "role": "supplier"
       },
       "conflict": null,
@@ -102,7 +102,7 @@
       "derivation": null,
       "identity": {
         "subject_ref": "res.partner:9001",
-        "subject_type": "facility_profile",
+        "subject_type": "facility",
         "role": "supplier"
       },
       "conflict": null,
@@ -115,7 +115,7 @@
       "proposal_type": "facility_profile",
       "identity": {
         "subject_ref": "res.partner:9001",
-        "subject_type": "facility_profile",
+        "subject_type": "facility",
         "role": "supplier"
       },
       "fields": [
