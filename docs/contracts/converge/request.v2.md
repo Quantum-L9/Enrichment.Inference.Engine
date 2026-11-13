@@ -247,3 +247,32 @@ Decided by the CTO on 2026-11-13; each is reflected in the sections above.
    owns the shape). No subject-to-fields expansion in v2.0.
 5. **"Eight-field" v1.** The eight partner fields in v1 `schema`; `v1.md` is
    the authority for the v1 body.
+
+## 9. Revision 1 (2026-11-13, additive, CTO)
+
+Frozen by the CTO integration session `session_017xwbxxupo1nc2CvFZN6ewa`. The contract
+constant is still `eie.converge.request/v2`; the revision adds one optional member and
+changes nothing above.
+
+### 9.1 `observations` (optional)
+
+Facts the consumer already holds about the entity, such as transaction history. They are
+offered as evidence. They are not targets and not instructions.
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `field` | string | yes | A property declared on `node`. Need not be a target. |
+| `value` | any JSON value | yes | The observed value, as the consumer holds it. |
+| `unit` | string | no | Unit of `value`, as the consumer states it. No conversion is implied. |
+| `source_kind` | string | yes | Opaque consumer label for where it came from, for example `transaction`. |
+| `source_ref` | string | yes | The consumer's record reference, for example `sale.order:123`. |
+| `observed_at` | string (RFC 3339) | no | When the consumer observed it. |
+| `confidence` | number in [0, 1] | no | The consumer's own confidence. EIE never assigns one. |
+
+Rules:
+- A `field` the node does not declare is refused as `target_not_declared`.
+- An observation is evidence only. In the response it is reported with state `observed`
+  and source type `request_observation`, and it is never admitted into `fields`.
+- An observation speaks only to its own field. It is never generalized into another
+  field, another subject or a capability.
+- `observations` on a body without `contract` is `v2_member_without_contract`.
