@@ -17,9 +17,12 @@ This is an **overlay** on Constellation.Gate's rail
 3. wall-clock round trip < 25 s;
 4. a replay of the same logical operation (same `idempotency_key`) returns an identical payload;
 5. a packet Gate did not author, posted straight to EIE's `/v1/execute` from inside EIE's
-   container, is refused (a 4xx or a `failure` packet, never a `response`): non-Gate source,
-   wrong destination, `resolved_by_gate=false`, and a full Gate impersonation without
-   Gate's signature.
+   container, is refused. EIE's Gate-only boundary (`app/middleware/gate_ingress.py`, bound
+   to Gate's key id by `L9_GATE_SIGNING_KEY_IDS=gate-e2e` in the overlay) answers HTTP 403
+   naming the missing proof for: non-Gate `origin_kind`, non-Gate source, wrong destination,
+   `resolved_by_gate=false`, and a full Gate impersonation that is unsigned. A packet signed
+   with a forged key under Gate's key id passes the boundary by design and must be refused by
+   the SDK's signature verification (never a `response`).
 
 ## Run
 

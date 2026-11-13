@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from constellation_node_sdk import sign_transport_packet
 from constellation_node_sdk.gate import GateClient, GateClientConfig
 from constellation_node_sdk.transport.packet import TransportPacket, create_transport_packet
 from constellation_node_sdk.transport.provenance import RoutingProvenance
@@ -130,19 +131,28 @@ def test_identical_replay_returns_identical_business_result(round_trip: RoundTri
     assert replay.payload == packet.payload
 
 
-FORGERIES: dict[str, dict[str, Any]] = {
-    "non_gate_source": {"source_node": "odoo"},
-    "wrong_destination": {"destination_node": "graph"},
-    "not_resolved_by_gate": {"resolved_by_gate": False},
-    # Impersonates Gate in every field, but carries no Gate signature.
-    "unsigned_gate_impersonation": {},
+# Each forgery is Gate's own dispatch shape with exactly one thing wrong, and
+# names the refusal EIE's boundary must give for it (app/middleware/gate_ingress.py).
+# The first three are signed under Gate's key id so the key binding passes and
+# the named claim check is the one that answers; EIE never verifies that
+# signature because the boundary refuses first.
+FORGERIES: dict[str, tuple[dict[str, Any], str]] = {
+    "non_gate_origin": ({"origin_kind": "node"}, "origin_kind must be 'gate'"),
+    "non_gate_source": ({"source_node": "odoo"}, "must originate from 'gate'"),
+    "wrong_destination": ({"destination_node": "graph"}, "does not match local node"),
+    "not_resolved_by_gate": ({"resolved_by_gate": False}, "resolved_by_gate must be true"),
+    # Impersonates Gate in every claim, but carries no Gate signature.
+    "unsigned_gate_impersonation": ({"unsigned": True}, "is not a Gate signing key"),
+    # Every claim and the key id are Gate's; only the key is not. The boundary
+    # cannot tell, so the SDK's signature verification must ("" = not a 403).
+    "forged_signature_under_gate_key_id": ({}, ""),
 }
 
 
 def _forged(name: str) -> TransportPacket:
     """A packet shaped exactly like Gate's dispatch to EIE, minus Gate's authorship."""
-    shape = {"source_node": "gate", "destination_node": "enrichment-engine"} | FORGERIES[name]
-    return create_transport_packet(
+    shape = {"source_node": "gate", "destination_node": "enrichment-engine"} | FORGERIES[name][0]
+    packet = create_transport_packet(
         action="converge",
         payload=odoo_request(f"e2e:forged:{name}"),
         tenant=TENANT,
@@ -150,12 +160,18 @@ def _forged(name: str) -> TransportPacket:
         destination_node=shape["destination_node"],
         reply_to="gate",
         provenance=RoutingProvenance(
-            origin_kind="node",
+            origin_kind=shape.get("origin_kind", "gate"),
             requested_action="converge",
             resolved_by_gate=shape.get("resolved_by_gate", True),
             route_kind="external_ingress",
             original_source_node="odoo",
         ),
+    )
+    if shape.get("unsigned"):
+        return packet
+    # A key the forger invented, presented under Gate's key id.
+    return sign_transport_packet(
+        packet, key="forged-key-not-gates" * 2, key_id="gate-e2e", algorithm="hmac-sha256"
     )
 
 
@@ -165,8 +181,14 @@ def test_forged_packet_posted_directly_to_eie_is_rejected(name: str) -> None:
     body = _forged(name).model_dump_json().encode()
     done = subprocess.run(command, input=body, capture_output=True, check=True, timeout=90)
     status, _, response = done.stdout.decode().partition("\n")
-    # The SDK runtime owns /v1/execute and refuses a packet either with a 4xx or
-    # with a `failure` packet; what must never come back is a `response`, which
-    # means the handler ran for a caller that is not Gate.
-    refused = 400 <= int(status) < 500 or json.loads(response)["header"]["packet_type"] == "failure"
-    assert refused, f"EIE executed a forged packet (HTTP {status}): {response[:600]}"
+    # EIE's Gate-only boundary answers 403 before the SDK route or any handler
+    # runs, and says which proof the packet lacked.
+    expected = FORGERIES[name][1]
+    if not expected:
+        body = json.loads(response)
+        executed = body.get("header", {}).get("packet_type") == "response"
+        assert not executed, f"EIE executed a packet with a forged Gate signature: {response[:600]}"
+        return
+    assert int(status) == 403, f"forged packet was not refused (HTTP {status}): {response[:600]}"
+    detail = json.loads(response)["detail"]
+    assert detail.startswith("gate-only ingress: ") and expected in detail, detail

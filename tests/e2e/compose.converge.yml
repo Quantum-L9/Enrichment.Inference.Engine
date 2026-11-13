@@ -23,6 +23,10 @@ services:
       # is refused outside local/dev/test, so EIE — and only EIE — runs `test`.
       L9_ENVIRONMENT: test
       L9_ENRICHMENT_PROVIDER: deterministic
+      # GATE-KEY-01 (app/middleware/gate_ingress.py): `test` turns SDK dev_mode
+      # on, which accepts unsigned packets. Binding /v1/execute to Gate's key id
+      # is what still refuses a packet that claims Gate but was not signed by it.
+      L9_GATE_SIGNING_KEY_IDS: gate-e2e
     depends_on:
       # The image entrypoint runs `alembic upgrade head` (migrations/, unmodified)
       # before serving; it needs Postgres accepting connections, not just started.
