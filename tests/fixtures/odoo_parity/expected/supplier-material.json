@@ -2,12 +2,12 @@
   "example": "response.v2.supplier-material.json",
   "status": "ok",
   "final_fields": {
-    "polymer_type": "HDPE",
     "material_form": "regrind",
     "material_grade": "blow_molding_grade"
   },
   "partner_writeback": {},
   "never_as_value": [
+    "polymer_type",
     "melt_flow_index",
     "contamination_pct"
   ]

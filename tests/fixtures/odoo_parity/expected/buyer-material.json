@@ -2,11 +2,11 @@
   "example": "response.v2.buyer-material.json",
   "status": "ok",
   "final_fields": {
-    "accepted_polymer": "PP",
     "accepted_form": "pellet"
   },
   "partner_writeback": {},
   "never_as_value": [
+    "accepted_polymer",
     "max_contamination_pct"
   ]
 }

@@ -33,7 +33,20 @@ _VERSION = "converge.response/2.0.0-draft"
 _VALUE_STATES = {"observed", "inferred", "external_claim"}
 _NO_VALUE_STATES = {"unknown", "conflicting"}
 _UNKNOWN_REASONS = {"no_evidence", "source_unavailable", "budget_exhausted", "not_attempted"}
+_SOURCE_TYPES = {"request_entity", "request_observation", "provider", "kb"}
 _V2_KEYS = ("contract_version", "field_evidence", "proposals")
+
+
+def _is_confidence(value: Any) -> bool:
+    """A JSON number in [0, 1]. ``0`` and ``1`` load as int; bool is not a number here."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 1.0
+
+
+def _check_sources(sources: list[dict[str, Any]], where: str) -> None:
+    for source in sources:
+        assert source["source_type"] in _SOURCE_TYPES, where
+        assert source["source_ref"] and source["method"], where
+        assert source["independent"] is None or isinstance(source["independent"], bool), where
 
 
 def _load_mapper() -> ModuleType:
@@ -79,7 +92,7 @@ def _check_entry(name: str, entry: dict[str, Any]) -> None:
         assert "unit" not in entry and "unit_status" not in entry, name
         assert entry["admitted"] is False and entry["confidence"] is None, name
     confidence = entry["confidence"]
-    assert confidence is None or (isinstance(confidence, float) and 0.0 <= confidence <= 1.0), name
+    assert confidence is None or _is_confidence(confidence), name
     assert (entry["derivation"] is not None) == (state == "inferred"), name
     assert (entry["conflict"] is not None) == (state == "conflicting"), name
     assert (entry["unknown_reason"] is not None) == (state == "unknown"), name
@@ -89,8 +102,8 @@ def _check_entry(name: str, entry: dict[str, Any]) -> None:
         assert entry["sources"], name
     if state == "observed":
         assert all(s["source_type"].startswith("request_") for s in entry["sources"]), name
-    for source in entry["sources"]:
-        assert source["source_ref"] and source["method"] and "independent" in source, name
+        assert entry["admitted"] is False, f"{name}: a request value is evidence, never a result"
+    _check_sources(entry["sources"], name)
     if state == "inferred":
         assert entry["derivation"]["rule_or_model_version"], name
     if state == "conflicting":
@@ -101,6 +114,8 @@ def _check_entry(name: str, entry: dict[str, Any]) -> None:
         for candidate in candidates:
             _check_value_shape(candidate, name)
             assert candidate["sources"], name
+            _check_sources(candidate["sources"], name)
+            assert candidate["confidence"] is None or _is_confidence(candidate["confidence"]), name
     assert entry["identity"]["subject_ref"] and entry["identity"]["subject_type"], name
 
 
@@ -131,6 +146,18 @@ def test_example_obeys_the_draft_rules(name: str) -> None:
     failed = payload["state"] != "completed" or bool(payload["failure_reason"])
     if failed:
         assert payload["fields"] == {} and payload["proposals"] == []
+    else:
+        # D9-v2 as implemented: U_mean over the requested (non-observed) fields, null counting 0.
+        population = [e["confidence"] or 0.0 for e in evidence.values() if e["state"] != "observed"]
+        assert payload["uncertainty_score"] == pytest.approx(
+            10 * (1 - sum(population) / len(population)), abs=0.005
+        )
+        mean_admitted = sum(evidence[f]["confidence"] for f in admitted) / len(admitted)
+        assert payload["confidence"] == pytest.approx(mean_admitted, abs=0.0001)
+        all_ready = all(e["admitted"] for e in evidence.values() if e["state"] != "observed")
+        assert all_ready or not str(payload["convergence_reason"]).startswith(
+            "all_fields_above_threshold"
+        )
     for proposal in payload["proposals"]:
         assert proposal["review"]["required"] is True and proposal["review"]["reasons"]
         assert set(proposal["fields"]) <= set(evidence)
