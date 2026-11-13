@@ -39,6 +39,7 @@ from ..engines.domain_yaml_reader import (
     DomainYamlReader,
     default_node_label,
     enrichment_hints_for,
+    resolve_cartridge_id,
 )
 from ..engines.enrichment_orchestrator import enrich_batch, enrich_entity
 from ..engines.native_yaml import parse_native_yaml
@@ -130,7 +131,9 @@ async def _persist_and_sync(
     if entity_id is None:
         msg = f"entity identity required: one of {', '.join(ENTITY_IDENTITY_ORDER)}"
         raise ValueError(msg)
-    domain = payload.get("domain", settings.default_domain)
+    domain = resolve_cartridge_id(
+        tenant, requested=payload.get("domain"), configured_default=settings.default_domain
+    )
     from app.services.side_effect_coordinator import get_side_effect_coordinator
 
     await get_side_effect_coordinator().commit_after_enrich(
@@ -370,7 +373,9 @@ async def _run_canonical_converge(
         persist_payload = {
             **payload,
             "entity_id": entity_id,
-            "domain": domain_id or settings.default_domain,
+            "domain": resolve_cartridge_id(
+                tenant, requested=domain_id, configured_default=settings.default_domain
+            ),
         }
         # E14: zero Graph calls on the canonical path. Graph sync awaits up to
         # two Gate attempts at 10 s each with a 1 s backoff between them
@@ -600,7 +605,7 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
     """
     settings = get_settings()
     crm_field_names: list[str] = payload.get("crm_field_names", [])
-    domain_id: str = payload.get("domain_id", "plastics")
+    domain_id = payload.get("domain_id")
     customer_name = payload.get("customer_name")
     query_profile: dict[str, Any] | None = payload.get("query_profile")
     entity_count: int = int(payload.get("entity_count", 20))
@@ -612,6 +617,8 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
         raise ValueError("simulate: crm_field_names is required and must be non-empty")
     if not isinstance(customer_name, str) or not customer_name.strip():
         raise ValueError("simulate: customer_name is required; it does not default to the tenant")
+    if not isinstance(domain_id, str) or not domain_id:
+        raise ValueError("simulate: domain_id is required; no cartridge is assumed")
 
     domain_spec: dict[str, Any] = {}
     if _domain_reader:

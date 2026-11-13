@@ -1,0 +1,158 @@
+name: plasticos
+version: "0.4.0"
+description: >
+  PlasticOS evidence and inference domain for EIE.
+  Candidate ranking, matching gates, and scoring dimensions are owned by CEG
+  (TASK-020). This contract is evidence-only.
+
+authority:
+  owns:
+  - feature evidence extraction
+  - enrichment target schema
+  - inference rules with provenance
+  - entity resolution hints
+  does_not_own:
+  - candidate ranking
+  - match gates / scoring dimensions
+  - match/outcomes chassis actions
+
+ontology:
+  nodes:
+  - label: Facility
+    description: Plastics recycling or processing facility
+    # Row contract of /v1/sync/facilities (eie-ceg-sync/v2): every property
+    # below that is not `evidenceonly` is one EIE produces, declared exactly as
+    # CEG's Facility declares it (Cognitive.Engine.Graphs
+    # domains/plasticos/spec.yaml), name for name and typed shape for typed
+    # shape. CEG-owned properties EIE never produces (lat, lon, credit_score,
+    # food_grade_certified, community_id -- written by CEG's GDS job --
+    # rate_per_ton, rate_confidence, last_transaction_date) are deliberately
+    # not declared, so EIE can never send or overwrite them. packet_router
+    # builds each sync row from exactly these declarations and refuses a value
+    # that does not match one.
+    properties:
+    - {name: facility_id, type: string, required: true}
+    - {name: name, type: string, required: true}
+    - {name: min_density, type: float}
+    - {name: max_density, type: float}
+    - {name: min_mfi, type: float}
+    - {name: max_mfi, type: float}
+    - {name: contamination_tolerance, type: float}
+    - {name: capacity_tons_month, type: float}
+    - {name: tier, type: string}
+    # Wire-only shape: the childsync field below (PROCESSES -> PolymerFamily).
+    - name: processed_polymers
+      type: list
+      items:
+        type: map
+        properties:
+        - {name: code, type: string, required: true}
+    # EIE-only evidence: enrichment, inference and resolution inputs. CEG does
+    # not declare them, so they are never projected onto a sync row.
+    - {name: city, type: string, evidenceonly: true}
+    - {name: state, type: string, evidenceonly: true}
+    - {name: zip_code, type: string, evidenceonly: true}
+    - {name: material_grade, type: string, evidenceonly: true}
+    - {name: certifications, type: list, items: {type: string}, evidenceonly: true}
+    enrichment_hints:
+      objective_template: "Enrich plastics facility profile for evidence emission"
+      priority_fields:
+      - processed_polymers
+      - contamination_tolerance
+      - min_mfi
+      - max_mfi
+      - capacity_tons_month
+      - certifications
+      min_confidence: 0.75
+
+queryschema:
+  fields:
+  - {name: polymer_type, type: string, description: "e.g. HDPE, LDPE, PP"}
+  - {name: form, type: string, description: "e.g. Regrind, Pellet, Flake"}
+  - {name: density, type: float, description: "g/cm³"}
+  - {name: mfi, type: float, description: "melt flow index g/10min"}
+  - {name: contamination, type: float, description: "contamination fraction 0–1"}
+  - {name: required_certifications, type: list, items: {type: string}, description: "list of cert codes"}
+
+# Ranking/match authority removed (owned by CEG).
+gates: []
+scoring:
+  dimensions: []
+
+chassisbinding:
+  handleractions:
+  - {name: enrich, description: "Enrich facility fields for evidence"}
+  - {name: converge, description: "Run enrichment-inference convergence"}
+  - {name: discover, description: "Discover schema/fields for evidence"}
+  - {name: sync, description: "Sync facility record via Gate"}
+  - {name: resolve, description: "Resolve entity to canonical form"}
+  forbidden_actions:
+  - match
+  - outcomes
+
+# CEG `sync` endpoint EIE produces rows for (GRAPH-IDENT-02). The row schema an
+# endpoint accepts is this tenant spec's declared types: the target node's
+# properties that are not `evidenceonly`, including the childsync field. EIE's
+# packet_router projects every row onto that declaration (a list<map> travels as
+# a list of maps; a value whose type does not match is refused before sending;
+# an undeclared field is dropped). CEG validates the same rows against its own
+# tenant spec at ingress (flag sync_row_type_validation_enabled,
+# Cognitive.Engine.Graphs #454) and refuses the whole batch on any defect. The compatibility contract eie-ceg-sync/v2
+# (app/engines/domain_spec_compatibility.py) proves every property EIE sends is
+# declared by CEG with the identical typed shape, checked
+# against tests/fixtures/ceg/plasticos.spec.yaml; CEG's other endpoints
+# (polymerfamilies, materialforms, supply-opportunities, buyer-demands) target
+# nodes EIE does not enrich, so EIE declares and sends none of them.
+sync:
+  endpoints:
+  - path: /v1/sync/facilities
+    targetnode: Facility
+    idproperty: facility_id
+    batchstrategy: UNWINDMERGE
+    childsync:
+    - field: processed_polymers
+      targetnode: PolymerFamily
+      targetid: code
+      edgetype: PROCESSES
+      edgedirection: parenttochild
+
+semantic_registry:
+  enabled: true
+  canonical_entities:
+  - entity_type: Facility
+    resolution_strategy: hybrid
+    resolution_threshold: 0.85
+    key_fields: [name, city, state, zip_code]
+
+inference_rules:
+- rule_id: grade-assignment-hdpe-a
+  conditions:
+  - {field: processed_polymers, operator: CONTAINS, value: {code: HDPE}}
+  - {field: contamination_tolerance, operator: LT, value: 0.03}
+  outputs:
+  - {field: material_grade, value_expr: "A", derivation_type: classification}
+  confidence: 0.92
+  priority: 10
+  rule_or_model_version: plasticos-inference-0.4.0
+
+- rule_id: grade-assignment-hdpe-b
+  conditions:
+  - {field: processed_polymers, operator: CONTAINS, value: {code: HDPE}}
+  - {field: contamination_tolerance, operator: GTE, value: 0.03}
+  - {field: contamination_tolerance, operator: LTE, value: 0.07}
+  outputs:
+  - {field: material_grade, value_expr: "B", derivation_type: classification}
+  confidence: 0.85
+  priority: 5
+  rule_or_model_version: plasticos-inference-0.4.0
+
+- rule_id: tier-1-high-capacity
+  conditions:
+  # 5000 t/year expressed in CEG's monthly capacity unit (5000 / 12).
+  - {field: capacity_tons_month, operator: GTE, value: 416.67}
+  - {field: material_grade, operator: IN, value: ["A", "A+"]}
+  outputs:
+  - {field: tier, value_expr: "tier_1", derivation_type: classification}
+  confidence: 0.90
+  priority: 8
+  rule_or_model_version: plasticos-inference-0.4.0

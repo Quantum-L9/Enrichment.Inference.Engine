@@ -139,7 +139,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://enrich:changeme@localhost:5432/enrich"
 
     domains_dir: str = "./domains"
-    default_domain: str = "plasticos"
+    # No built-in cartridge. Empty means "the tenant's own cartridge" (identity
+    # contract: tenant id == spec id); an operator may still pin one cartridge
+    # for a single-tenant deployment with DEFAULT_DOMAIN.
+    default_domain: str = ""
 
     max_budget_tokens: int = 50_000
     max_budget_tokens_default: int = 50_000
