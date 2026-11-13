@@ -57,7 +57,7 @@ def _request(**overrides: Any) -> dict[str, Any]:
         "consensus_threshold": 0.80,
         "kb_context": "plasticos",
         "schema": dict(SCHEMA),
-        "idempotency_key": "plasticos.enrichment.run:7:attempt:1",
+        "idempotency_key": "odoo:enrichment:plasticos:plasticos.enrichment.run:7",
         "odoo": {"model": "plasticos.enrichment.run", "record_id": 7, "db_name": "plasticos"},
     }
     base.update(overrides)
