@@ -21,7 +21,7 @@ reading or writing Odoo.
 
 ## What this does and does not show
 
-It shows that the response v2 **draft examples**, read by a faithful copy of
+It shows that the response v2 **examples**, read by a faithful copy of
 the v1 Odoo mapper at the commit above, give the expected v1 result and never
 expose an `unknown` or `conflicting` field as a value.
 

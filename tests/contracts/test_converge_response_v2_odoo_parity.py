@@ -1,8 +1,8 @@
-"""Response v2 DRAFT examples checked against the Odoo consumer's expectations.
+"""Response v2 examples checked against the Odoo consumer's expectations.
 
 Two independent checks over ``docs/contracts/converge/examples/response.v2.*.json``:
 
-1. The examples obey the draft's own rules (``docs/contracts/converge/response.v2.md``
+1. The examples obey the contract's own rules (``docs/contracts/converge/response.v2.md``
    sections 2, 3, 5 and 6).
 2. A vendored copy of Odoo's v1 ``map_converge_response``
    (``tests/fixtures/odoo_parity/``) reads them to the hand-written expected
@@ -29,7 +29,7 @@ _PARITY = _ROOT / "tests" / "fixtures" / "odoo_parity"
 
 # Declared, not discovered: a missing or extra file must fail, never shrink the check.
 _NAMES = ("supplier-material", "supplier-facility", "buyer-material", "buyer-facility", "failed")
-_VERSION = "converge.response/2.0.0-draft"
+_VERSION = "eie.converge.response/v2"
 _VALUE_STATES = {"observed", "inferred", "external_claim"}
 _NO_VALUE_STATES = {"unknown", "conflicting"}
 _UNKNOWN_REASONS = {"no_evidence", "source_unavailable", "budget_exhausted", "not_attempted"}
@@ -129,7 +129,7 @@ def test_every_declared_example_and_expectation_exists_and_nothing_else() -> Non
 
 
 @pytest.mark.parametrize("name", _NAMES)
-def test_example_obeys_the_draft_rules(name: str) -> None:
+def test_example_obeys_the_contract_rules(name: str) -> None:
     payload = _example(name)
     evidence = payload["field_evidence"]
     assert payload["contract_version"] == _VERSION
@@ -214,7 +214,7 @@ def test_v2_keys_do_not_change_what_a_v1_consumer_reads(name: str) -> None:
     model = EnrichResponse.model_validate(payload)
     assert model.fields == payload["fields"] and model.state == payload["state"]
     assert not set(_V2_KEYS) & set(EnrichResponse.model_fields), (
-        "v2 is a draft: the v1 model must not carry it yet"
+        "v2 is not implemented: the v1 model must not carry it yet"
     )
 
 
