@@ -211,3 +211,64 @@ async def test_v1_request_stays_v1(runtime: dict[str, Any]) -> None:
     result = await handlers.handle_converge("plasticos", v1)
     for key in ("contract_version", "field_evidence", "proposals", "resolution"):
         assert key not in result
+
+
+async def test_v2_deadline_stop_is_answered_in_v2(
+    runtime: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """response.v2 section 6 rule 4: a deadline stop is `degraded` in v2, not a v1 body."""
+    import asyncio
+
+    async def stalled_loop(**kwargs: Any) -> EnrichResponse:
+        await asyncio.sleep(5)
+        raise AssertionError("the deadline did not stop the loop")
+
+    monkeypatch.setattr(handlers, "run_convergence_loop", stalled_loop)
+    observation = {
+        "field": "tier",
+        "value": "gold",
+        "source_kind": "transaction",
+        "source_ref": "sale.order:123",
+    }
+    result = await handlers._handle_canonical_converge(
+        "plasticos",
+        _v2(subject={"type": "facility", "role": "supplier"}, observations=[observation]),
+        budget_seconds=0.05,
+    )
+
+    assert result["state"] == "degraded"
+    assert result["contract_version"] == "eie.converge.response/v2"
+    assert EnrichResponse.model_validate(result).model_dump() == result
+    assert (result["fields"], result["proposals"]) == ({}, [])
+    assert result["resolution"]["cartridge_id"] == "plasticos"
+    evidence = result["field_evidence"]
+    assert set(evidence) >= TARGET_NAMES
+    assert evidence["tier"]["state"] == "observed" and evidence["tier"]["admitted"] is False
+    for name in TARGET_NAMES - {"tier"}:
+        assert evidence[name]["state"] == "unknown"
+        assert evidence[name]["unknown_reason"] == "budget_exhausted"
+    assert runtime["persist"].call_count == 0
+
+
+async def test_v1_deadline_stop_stays_v1(
+    runtime: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    async def stalled_loop(**kwargs: Any) -> EnrichResponse:
+        await asyncio.sleep(5)
+        raise AssertionError("the deadline did not stop the loop")
+
+    monkeypatch.setattr(handlers, "run_convergence_loop", stalled_loop)
+    v1 = {
+        "entity": {"id": "res.partner:55", "name": "Acme"},
+        "object_type": "res.partner",
+        "objective": "Enrich",
+        "schema": {"name": "string"},
+        "kb_context": "plasticos",
+    }
+    result = await handlers._handle_canonical_converge("plasticos", v1, budget_seconds=0.05)
+
+    assert result["state"] == "degraded"
+    for key in ("contract_version", "field_evidence", "proposals", "resolution"):
+        assert key not in result

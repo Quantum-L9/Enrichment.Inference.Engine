@@ -857,6 +857,63 @@ def _unknown_reason(state: ConvergenceState) -> str:
     return "no_evidence"
 
 
+def _subject_identity(
+    request: EnrichRequest, subject: Mapping[str, str] | None, entity_id: str | None
+) -> dict[str, Any]:
+    return {
+        "subject_ref": entity_id or request.entity.get("id"),
+        "subject_type": (subject or {}).get("type"),
+        "role": (subject or {}).get("role"),
+    }
+
+
+def deadline_response_v2(
+    request: EnrichRequest,
+    subject: Mapping[str, str] | None,
+    entity_id: str | None,
+    observations: tuple[Mapping[str, Any], ...],
+    reason: str,
+) -> EnrichResponse:
+    """A v2 request stopped by the outer deadline, answered in v2 (response.v2 section 6).
+
+    The loop's own record did not survive the cancellation, so nothing was
+    produced: `fields` and `proposals` are empty, every requested field the
+    request did not itself supply is `unknown` with `budget_exhausted`, and
+    the request's values and observations stay evidence only.
+    """
+    requested = _required_fields(request) or []
+    identity = _subject_identity(request, subject, entity_id)
+    try:
+        if not identity["subject_ref"]:
+            raise EvidenceContractError("the request names no subject identity")
+        evidence = build_field_evidence(
+            requested=requested,
+            fields={},
+            produced={},
+            provenance={},
+            withheld={},
+            entity=request.entity,
+            identity=identity,
+            unknown_reason="budget_exhausted",
+        )
+        if observations:
+            evidence = merge_observation_evidence(
+                evidence, observation_evidence(observations, identity)
+            )
+        body = {"state": "degraded", "fields": {}, "field_evidence": evidence, "proposals": []}
+        check_response_v2(body, requested)
+    except EvidenceContractError as exc:
+        logger.warning("response_v2_evidence_refused", error=str(exc))
+        return EnrichResponse(state="failed", failure_reason=f"evidence_contract_violation: {exc}")
+    return EnrichResponse(
+        state="degraded",
+        failure_reason=reason,
+        contract_version=RESPONSE_CONTRACT_V2,
+        field_evidence=evidence,
+        proposals=[],
+    )
+
+
 def _as_response_v2(
     response: EnrichResponse,
     state: ConvergenceState,
@@ -870,6 +927,11 @@ def _as_response_v2(
     requested = _required_fields(request) or []
     # A failed response admits nothing (response.v2 section 6).
     fields = dict(response.fields) if response.state == "completed" else {}
+    if request.schema_ is not None:
+        # Contract v1's cut to the request schema (restrict_fields_to_schema),
+        # made here, before the evidence is built: cutting `fields` afterwards
+        # would leave admitted entries that `fields` no longer carries.
+        fields = {name: value for name, value in fields.items() if name in request.schema_}
     provenance: dict[str, dict[str, Any]] = {}
     withheld: dict[str, dict[str, Any]] = {}
     for pr in state.pass_results:
@@ -885,11 +947,7 @@ def _as_response_v2(
         }
         for name, tracked in confidence_tracker.fields.items()
     }
-    identity = {
-        "subject_ref": entity_id or request.entity.get("id"),
-        "subject_type": (subject or {}).get("type"),
-        "role": (subject or {}).get("role"),
-    }
+    identity = _subject_identity(request, subject, entity_id)
     try:
         if not identity["subject_ref"]:
             raise EvidenceContractError("the request names no subject identity")

@@ -232,7 +232,9 @@ def merge_observation_evidence(
                     candidates.append(_candidate(entry))
             merged[name] = _conflicting(run, candidates)
             continue
-        if run.get("value") == obs.get("value"):
+        # Value identity as the consensus engine states it: 3 and 3.0 agree,
+        # but 1 and True do not, as a raw `==` would have them.
+        if _value_key(run.get("value")) == _value_key(obs.get("value")):
             merged[name] = {**run, "sources": [*run["sources"], *obs["sources"]]}
         else:
             merged[name] = _conflicting(run, [_candidate(run), _candidate(obs)])
