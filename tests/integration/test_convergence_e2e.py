@@ -241,11 +241,22 @@ _ENTITY_REF = "res.partner:55"
 _REPO_DOMAINS = Path(__file__).resolve().parents[2] / "domains"
 
 
+def _rule_version(rule_id: str) -> str:
+    """The version the live plasticos cartridge declares for one of its rules."""
+    spec = yaml.safe_load((_REPO_DOMAINS / "plasticos" / "spec.yaml").read_bytes())
+    (version,) = [
+        rule["rule_or_model_version"]
+        for rule in spec["inference_rules"]
+        if rule["rule_id"] == rule_id
+    ]
+    return str(version)
+
+
 def _evidence(**overrides: Any) -> dict[str, tuple[Any, float]]:
     """Provider evidence for one pass: field -> (value, per-field confidence)."""
     evidence: dict[str, tuple[Any, float]] = {
         "processed_polymers": ([{"code": "HDPE"}, {"code": "PP"}], 0.95),
-        "contamination_tolerance": (0.02, 0.90),
+        "contamination_tolerance": (2.0, 0.90),  # percent (0-100), as declared
         "capacity_tons_month": (500.0, 0.90),
     }
     for name, value in overrides.items():
@@ -370,11 +381,11 @@ class TestLiveDomainInference:
         provenance = _inferred(response)
         grade = provenance["material_grade"]
         assert grade["rule_id"] == "grade-assignment-hdpe-a"
-        assert grade["rule_version"] == "plasticos-inference-0.4.0"
+        assert grade["rule_version"] == _rule_version("grade-assignment-hdpe-a")
         assert grade["cascade_level"] == 0
         assert grade["inputs"] == {
             "processed_polymers": [{"code": "HDPE"}, {"code": "PP"}],
-            "contamination_tolerance": 0.02,
+            "contamination_tolerance": 2.0,
         }
         # Bounded by the weakest evidence it consumed (0.90), never the rule's 0.92.
         assert grade["confidence"] == pytest.approx(0.90)
@@ -395,7 +406,7 @@ class TestLiveDomainInference:
         "overrides",
         [
             pytest.param({"contamination_tolerance": None}, id="missing-input"),
-            pytest.param({"contamination_tolerance": (0.12, 0.9)}, id="unmet-condition"),
+            pytest.param({"contamination_tolerance": (12.0, 0.9)}, id="unmet-condition"),
             pytest.param(
                 {"processed_polymers": ([{"code": "PET"}], 0.95)}, id="non-matching-polymer"
             ),
@@ -538,31 +549,31 @@ class TestLiveDomainInference:
         Pass 2 corrects it to 0.05 (0.95): grade-assignment-hdpe-b applies, and
         tier-1-high-capacity (A/A+ only) no longer does. On the pre-fix head the
         pass-1 derivations were treated as facts on pass 2 and never re-run, so
-        the response carried contamination 0.05 beside grade A and tier 1 with
-        provenance inputs frozen at 0.02.
+        the response carried contamination 5 (percent) beside grade A and tier 1
+        with provenance inputs frozen at 2.
         """
         state, run, _router = sdk_converge
         state["evidence"] = [
-            _evidence(contamination_tolerance=(0.02, 0.40)),
-            _evidence(contamination_tolerance=(0.05, 0.95)),
+            _evidence(contamination_tolerance=(2.0, 0.40)),
+            _evidence(contamination_tolerance=(5.0, 0.95)),
         ]
         response, provider = await run(_canonical_payload())
 
         assert response["state"] == "completed"
         assert provider.await_count == 2
-        assert response["fields"]["contamination_tolerance"] == 0.05
+        assert response["fields"]["contamination_tolerance"] == 5.0
         assert response["fields"]["material_grade"] == "B"
         assert "tier" not in response["fields"]  # retracted: B is not A/A+
 
         per_pass = {entry["pass"]: entry for entry in response["inferences"]}
         pass1 = per_pass[1]["inference_provenance"]
         assert pass1["material_grade"]["rule_id"] == "grade-assignment-hdpe-a"
-        assert pass1["material_grade"]["inputs"]["contamination_tolerance"] == 0.02
+        assert pass1["material_grade"]["inputs"]["contamination_tolerance"] == 2.0
         assert "tier" in pass1
         pass2 = per_pass[2]["inference_provenance"]
         assert set(pass2) == {"material_grade"}
         assert pass2["material_grade"]["rule_id"] == "grade-assignment-hdpe-b"
-        assert pass2["material_grade"]["inputs"]["contamination_tolerance"] == 0.05
+        assert pass2["material_grade"]["inputs"]["contamination_tolerance"] == 5.0
         # Re-bounded by the inputs now in the response: min(rule 0.85, 0.95, 0.95).
         assert pass2["material_grade"]["confidence"] == pytest.approx(0.85)
 
@@ -577,8 +588,8 @@ class TestLiveDomainInference:
         """Once the provider evidences material_grade, it is no longer a derivation."""
         state, run, _router = sdk_converge
         state["evidence"] = [
-            _evidence(contamination_tolerance=(0.02, 0.40)),  # pass 1 derives A, tier 1
-            _evidence(contamination_tolerance=(0.02, 0.95), material_grade=("C", 0.95)),
+            _evidence(contamination_tolerance=(2.0, 0.40)),  # pass 1 derives A, tier 1
+            _evidence(contamination_tolerance=(2.0, 0.95), material_grade=("C", 0.95)),
         ]
         response, provider = await run(_canonical_payload())
 

@@ -43,4 +43,5 @@ def test_domain_reader_still_loads_ontology() -> None:
     cfg = DomainYamlReader(ROOT / "domains").load("plasticos")
     assert "Facility" in cfg.node_schemas
     assert cfg.node_schemas["Facility"].properties
-    assert cfg.version == "0.5.0"
+    live = yaml.safe_load((ROOT / "domains/plasticos/spec.yaml").read_bytes())
+    assert cfg.version == live["version"]
