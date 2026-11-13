@@ -128,6 +128,7 @@ These files define the live production transport/runtime contract and must remai
 * `app/engines/graph_sync_client.py` — contract surface, **not** a live path
 * `app/engines/packet_router.py`
 * `app/services/gate_client.py`
+* `app/middleware/gate_ingress.py` — 403s non-Gate packets before the SDK `/v1/execute` route
 
 > EIE-006 / EIE-007: this list is the C-13 transport-contract lockstep set, not
 > the set of modules that carry traffic. Two of its entries carry none:
