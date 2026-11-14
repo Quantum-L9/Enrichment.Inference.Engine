@@ -27,7 +27,6 @@
 app/engines/          ← enrichment orchestrator, inference bridge, chassis contract, handlers
 app/services/         ← kb_resolver, consensus_engine, perplexity_client, crm clients, waterfall
 app/score/            ← ICP scoring, decay, explainer
-app/health/           ← field health assessor, triggers
 app/api/v1/           ← HTTP surface (intake, converge, chassis_endpoint)
 app/models/           ← Pydantic schemas
 app/agents/           ← lead_router, deal_risk, data_hygiene, MCP server

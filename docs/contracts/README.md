@@ -41,8 +41,6 @@ The **Enrichment Inference Engine** is a **Hybrid** (AI Agent Framework + Data P
 | `GET /v1/score/{entity_id}` | REST API | `app/score/score_api.py` | Get latest score |
 | `POST /v1/score/decay` | REST API | `app/score/score_api.py` | Apply temporal decay |
 | `GET /v1/score/{entity_id}/explain` | REST API | `app/score/score_api.py` | Score explainability |
-| `POST /v1/health/assess` | REST API | `app/health/health_api.py` | Full CRM health assessment |
-| `GET /v1/health/ai-readiness` | REST API | `app/health/health_api.py` | AI readiness score |
 | `enrich_contact` | MCP Tool | `app/agents/mcp_server.py:35` | Waterfall entity enrichment |
 | `lead_router` | MCP Tool | `app/agents/mcp_server.py:46` | Lead routing via scores |
 | `deal_risk` | MCP Tool | `app/agents/mcp_server.py:55` | Opportunity risk assessment |
@@ -113,7 +111,6 @@ docs/contracts/
 │   │   ├── discover.yaml
 │   │   ├── fields.yaml
 │   │   ├── score.yaml
-│   │   ├── health.yaml
 │   │   └── chassis.yaml
 │   └── schemas/
 │       ├── shared-models.yaml

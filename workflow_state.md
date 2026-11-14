@@ -45,7 +45,7 @@ Do not delete this file without confirming Odoo-side test workflows no longer de
 | KB Resolver | ✅ Enhanced | `kb_resolver.py` with `KBContext`, domain fragments |
 | Prompt Variations | ✅ New | `build_variation_prompts()` in `prompt_builder.py` |
 | Consensus Handler | ✅ New | `handle_enrich_consensus` in `handlers.py` |
-| HEALTH Service | ✅ Complete | 5 files in `app/health/` |
+| HEALTH Service | ❌ Deleted | `app/health/` — deleted 2026-11-14: dead code (no importer, routes never mounted); record readiness (`health-assess`) is owned by Cognitive.Engine.Graphs |
 | SCORE Service | ✅ Complete | 6 files in `app/score/` |
 | CI/CD Pipelines | ✅ Complete | 13 workflow files in `.github/workflows/` |
 | Test Coverage | ✅ Expanded | 54 test files (was 1) |

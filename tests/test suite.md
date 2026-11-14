@@ -1035,7 +1035,6 @@ Coverage Configuration (.coveragerc)
 source = app
 omit =
 app/score/*
-app/health/*
 app/services/simulation_bridge.py
 /tests/
 /migrations/

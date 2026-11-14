@@ -94,7 +94,7 @@ repos:
         entry: >
           bash -c 'if git diff --cached --name-only | grep "^app/.*\.py$" |
           grep -v "app/api/" | grep -v "app/main.py" | grep -v "handlers.py" |
-          grep -v "app/score/" | grep -v "app/health/" | grep -v "app/bootstrap/" |
+          grep -v "app/score/" | grep -v "app/bootstrap/" |
           xargs grep -l "from fastapi import\|import fastapi" 2>/dev/null |
           grep -q .; then
           echo "ERROR: FastAPI imports found in engine modules (only app/api/, app/main.py, handlers.py, app/bootstrap/ allowed)";

@@ -84,11 +84,6 @@ contracts:
     required_refs:
     - AGENTS.md
     description: Score schema contract
-  - path: app/health/health_models.py
-    contract_version: "1.0.0"
-    required_refs:
-    - AGENTS.md
-    description: Health schema contract
 deprecated_artifacts:
 - path: chassis/node_client.py
   description: Removed 2026-09-02 (seam audit) — raw peer HTTP client; must not return
