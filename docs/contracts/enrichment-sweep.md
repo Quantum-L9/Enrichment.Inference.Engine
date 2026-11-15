@@ -111,8 +111,13 @@ Rejection reasons: `invalid_candidate`, `invalid_entity_id`, `invalid_entity`,
    `data`. `domain` and `tier` are not sent. The call uses the one EIE Gate
    client (`PacketRouter.route`), never a peer URL.
 2. **What is read.** Only `entities[i].entity_health.{critical_gaps,
-   enrichment_targets, readiness_score, grade, gate_completeness}`. A gap or
-   target is a field name, or an object carrying `field`. Every other field of
+   enrichment_targets, readiness_score, grade, gate_completeness}`, in CEG's
+   shapes (engine/health/field_health.py): `critical_gaps` is a list of
+   field-name strings; `enrichment_targets` is a list of EnrichmentTarget
+   objects, of which only `field_name` is read. Any other shape skips the
+   candidate as malformed. A successful batch answer carries no `status`
+   (CEG's BatchHealthReport has none); only `{"status": "disabled"}` and other
+   non-answer statuses are refusals. Every other field of
    the reply (`enrichment_priority`, `enrichment_dispatch`, `upgrade_prompt`,
    tier fields) is ignored.
 3. **Ranking.** Candidates with critical gaps or enrichment targets, ordered

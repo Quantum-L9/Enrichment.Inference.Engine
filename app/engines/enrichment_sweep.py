@@ -342,14 +342,19 @@ def _readiness(health: object, entity_id: str, batch: int, position: int) -> Rea
 
 
 def _field_names(value: object) -> tuple[str, ...] | None:
-    """A list of field names; an entry may be a name or an object carrying `field`."""
+    """A list of field names, in CEG's shapes (engine/health/field_health.py).
+
+    `critical_gaps` is a list of field-name strings. `enrichment_targets` is a
+    list of EnrichmentTarget objects whose field is named `field_name`. Any
+    other shape is malformed: the candidate is skipped, never guessed at.
+    """
     if value is None:
         return ()
     if not isinstance(value, list):
         return None
     names: list[str] = []
     for item in value:
-        name = item.get("field") if isinstance(item, Mapping) else item
+        name = item.get("field_name") if isinstance(item, Mapping) else item
         if not isinstance(name, str) or not name:
             return None
         names.append(name)

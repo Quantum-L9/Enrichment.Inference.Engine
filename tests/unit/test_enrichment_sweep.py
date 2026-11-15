@@ -157,12 +157,24 @@ class MemoryStore:
         return len(expired)
 
 
+def target(name: str, priority: float = 50.0) -> dict[str, Any]:
+    """CEG's EnrichmentTarget, as engine/health/field_health.py serialises it."""
+    return {
+        "field_name": name,
+        "priority_score": priority,
+        "is_gate_critical": False,
+        "unlocks_rules": [],
+        "estimated_tokens": 0,
+    }
+
+
 def healthy(entity_id: str, *, gaps: list[str], targets: list[str], score: float) -> dict[str, Any]:
+    """One EntityHealthResponse in CEG's real shape: gaps are names, targets objects."""
     return {
         "entity_id": entity_id,
         "entity_health": {
             "critical_gaps": gaps,
-            "enrichment_targets": targets,
+            "enrichment_targets": [target(name) for name in targets],
             "readiness_score": score,
             "grade": "C",
             "gate_completeness": 0.5,
@@ -188,8 +200,9 @@ class Graph:
             raise self.raises
         if self.reply is not None:
             return self.reply(payload) if callable(self.reply) else self.reply
+        # CEG's BatchHealthReport has no `status` field: a successful batch
+        # answer carries none (only the disabled API answers {"status": "disabled"}).
         return {
-            "status": "success",
             "entities": [
                 healthy(e["entity_id"], gaps=[FIELDS[-1]], targets=[], score=0.4)
                 for e in payload["entities"]
@@ -683,3 +696,20 @@ def test_new_modules_name_no_tenant_domain_or_node() -> None:
         text = (REPO / module).read_text()
         hits = sorted(w for w in vocabulary if re.search(rf"\b{re.escape(w)}\b", text))
         assert hits == [], f"{module} names cartridge vocabulary {hits}"
+
+
+def test_ceg_shapes_parse_and_a_wrong_target_shape_is_malformed() -> None:
+    """Targets are EnrichmentTarget objects keyed `field_name`; gaps are names.
+
+    A target object without `field_name` (e.g. keyed `field`) is not CEG's shape:
+    the candidate is skipped as malformed, never enriched on a guessed field.
+    """
+    batch = candidates(2)
+    ok = healthy("rec-0000", gaps=["a"], targets=["b", "c"], score=0.2)
+    wrong = healthy("rec-0001", gaps=[], targets=[], score=0.2)
+    wrong["entity_health"]["enrichment_targets"] = [{"field": "b"}]
+    found, skipped = parse_assessment({"entities": [ok, wrong]}, batch, 0)
+    assert found["rec-0000"].critical_gaps == ("a",)
+    assert found["rec-0000"].enrichment_targets == ("b", "c")
+    assert "rec-0001" not in found
+    assert [s["entity_id"] for s in skipped] == ["rec-0001"]
