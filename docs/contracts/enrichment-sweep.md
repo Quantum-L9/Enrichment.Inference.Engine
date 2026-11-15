@@ -52,6 +52,13 @@ for a candidate). `enrichment-sweep-results` takes no `idempotency_key`.
 | `L9_SWEEP_RESULT_TTL_HOURS` | `72` | How long a sweep is kept after it completes. |
 | `L9_SWEEP_RESULTS_PAGE_SIZE` | `50` | Results per page. |
 
+**Advertisement and rollout order.** The two actions are advertised to Gate only
+while `L9_ENRICHMENT_SWEEP_ENABLED` is true (`app/main.py` `advertised_actions`).
+Gate refuses a node registration that names an action it has no canonical owner
+for, and refuses it whole, `converge` included (GATE-OWN-01). So a deployment
+turns the flag on only after its Gate owns `enrichment-sweep` and
+`enrichment-sweep-results`; with the flag off, EIE's registration is unchanged.
+
 ## 3. `enrichment-sweep`
 
 ### 3.1 Request

@@ -258,9 +258,9 @@ async def handle_enrichment_sweep_results(
         "results": [{"entity_id": r.entity_id, "response": r.response} for r in rows],
         "next_cursor": None if finished else str(last),
         "budget": {
-            "effective_usd": float(effective),
-            "spent_usd": float(ledger.spent_usd),
-            "remaining_usd": float(remaining),
+            "effective_usd": _usd(effective),
+            "spent_usd": _usd(ledger.spent_usd),
+            "remaining_usd": _usd(remaining),
         },
         "skipped": list(record.skipped),
         "stats": dict(record.stats),
@@ -308,3 +308,11 @@ __all__ = [
     "init_sweep",
     "wait_for_background_sweeps",
 ]
+
+
+def _usd(amount: object) -> float:
+    """A stored money amount as a JSON number; never a crash on a bad value."""
+    try:
+        return float(amount)  # type: ignore[arg-type]
+    except (ValueError, TypeError, OverflowError):
+        return 0.0

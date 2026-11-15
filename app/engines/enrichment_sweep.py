@@ -333,12 +333,20 @@ def _readiness(health: object, entity_id: str, batch: int, position: int) -> Rea
         entity_id=entity_id,
         critical_gaps=gaps,
         enrichment_targets=targets,
-        readiness_score=None if score is None else float(score),
+        readiness_score=None if score is None else _as_float(score),
         grade=health.get("grade"),
         gate_completeness=health.get("gate_completeness"),
         batch=batch,
         position=position,
     )
+
+
+def _as_float(value: int | float) -> float | None:
+    """A finite float, or None when it cannot be represented as one."""
+    try:
+        return float(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 def _field_names(value: object) -> tuple[str, ...] | None:
