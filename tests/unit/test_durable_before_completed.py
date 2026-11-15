@@ -212,11 +212,13 @@ async def test_canonical_converge_requires_persistence():
     """The canonical branch must ask for durability, not merely tolerate it."""
     from app.engines import handlers
     from app.models.schemas import EnrichResponse
+    from app.services.side_effect_coordinator import SideEffectReport
 
     seen: dict = {}
 
     async def _record(*_a, **kwargs):
         seen.update(kwargs)
+        return SideEffectReport(key="k")
 
     with (
         patch.object(handlers, "run_convergence_loop", new_callable=AsyncMock) as loop,
@@ -230,3 +232,4 @@ async def test_canonical_converge_requires_persistence():
 
     assert seen.get("require_persistence") is True
     assert seen.get("graph_sync") is False, "zero synchronous Graph on the canonical path"
+    assert seen.get("defer_graph_sync") is True, "the Graph leg is deferred, not dropped"

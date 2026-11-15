@@ -400,7 +400,7 @@ class TestLiveDomainInference:
         tracked = response["feature_vector"]["confidence_tracking"]["fields"]
         assert tracked["material_grade"]["confidence"] == pytest.approx(0.90)
         assert response["feature_vector"]["inference"]["status"] == "active"
-        router.notify_graph_sync.assert_not_awaited()  # E14: no Graph call on this path
+        router.notify_graph_sync.assert_not_awaited()  # E14: no awaited Graph call on this path
 
     @pytest.mark.parametrize(
         "overrides",

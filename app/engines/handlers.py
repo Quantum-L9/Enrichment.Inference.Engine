@@ -18,6 +18,7 @@ Integration fixes applied (PR#21/PR#22 merge pass):
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import aiofiles
@@ -68,7 +69,7 @@ from ..services.request_deadline import (
     effective_budget_seconds,
     packet_timeout_ms,
 )
-from ..services.side_effect_coordinator import PersistenceRequiredError
+from ..services.side_effect_coordinator import PersistenceRequiredError, SideEffectReport
 from ..services.simulation_bridge import (
     analyze_leverage,
     brief_to_dict,
@@ -107,7 +108,9 @@ async def _persist_and_sync(
     graph_sync: bool = True,
     require_persistence: bool = False,
     operation_id: str | None = None,
-) -> None:
+    defer_graph_sync: bool = False,
+    graph_fields: Mapping[str, Any] | None = None,
+) -> SideEffectReport:
     """
     Delegate post-enrich side effects to the single SideEffectCoordinator (TASK-021).
 
@@ -128,6 +131,11 @@ async def _persist_and_sync(
     fire-and-forget to SCORE and costs the caller nothing, so a bounded path
     still leaves no stale score behind (EIE-004; see
     app/services/side_effect_coordinator.py for the full reasoning).
+
+    `defer_graph_sync=True` keeps the Graph leg off the caller's path WITHOUT
+    dropping it: the key is left pending for its graph leg (with `graph_fields`
+    pinned), and the caller starts it detached via the returned report's key
+    once its answer is decided.
     """
     settings = get_settings()
     # SEAM-02: identity resolves top-level entity_id, then entity.id, then
@@ -143,7 +151,7 @@ async def _persist_and_sync(
     )
     from app.services.side_effect_coordinator import get_side_effect_coordinator
 
-    await get_side_effect_coordinator().commit_after_enrich(
+    return await get_side_effect_coordinator().commit_after_enrich(
         tenant=tenant,
         entity_id=entity_id,
         object_type=object_type,
@@ -156,7 +164,40 @@ async def _persist_and_sync(
         graph_sync=graph_sync,
         require_persistence=require_persistence,
         node_label=payload.get("node_label") or object_type,
+        defer_graph_sync=defer_graph_sync,
+        graph_fields=graph_fields,
     )
+
+
+def admitted_fields(result: Mapping[str, Any]) -> dict[str, Any]:
+    """The fields a converge result admits — the only ones that may reach CEG.
+
+    A v2 body (docs/contracts/converge/response.v2.md) names admission per
+    field: exactly the `field_evidence` entries with `admitted: true`, with
+    their values. A v1 body admits its `fields`, already cut to the request's
+    schema (`restrict_fields_to_schema`). Observed, unknown, conflicting or
+    otherwise unadmitted entries are never returned.
+
+    A `None` value is never returned either. CEG writes `SET n += row.node`
+    and keeps a declared key even when null, so a key sent as null DELETES
+    that property on the graph node, while an omitted key leaves it untouched.
+    A converge that has no value for a field has learned nothing about it and
+    must not clear what the graph holds. This is the converge sync path's own
+    rule: `project_graph_sync_row` still sends a `None` as a clear for its
+    other callers.
+    """
+    evidence = result.get("field_evidence")
+    if isinstance(evidence, Mapping):
+        return {
+            name: entry["value"]
+            for name, entry in evidence.items()
+            if isinstance(entry, Mapping)
+            and entry.get("admitted") is True
+            and entry.get("value") is not None
+        }
+    return {
+        name: value for name, value in (result.get("fields") or {}).items() if value is not None
+    }
 
 
 def _operation_id(packet: Any) -> str | None:
@@ -293,9 +334,12 @@ async def _handle_canonical_converge(
     # one row; a body that names no identity is refused by `_persist_and_sync`.
     entity_id = resolve_converge_identity(payload)
 
+    # Work that runs only once the answer is decided `completed`, outside the
+    # deadline (the detached graph leg). A timeout or failure discards it.
+    after_completed: list[Callable[[], None]] = []
     try:
         with deadline_scope(deadline):
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 _run_canonical_converge(
                     tenant,
                     payload,
@@ -305,6 +349,7 @@ async def _handle_canonical_converge(
                     operation_id,
                     cartridge,
                     resolved,
+                    after_completed=after_completed,
                 ),
                 timeout=max(deadline.remaining(), 0.0),
             )
@@ -337,6 +382,10 @@ async def _handle_canonical_converge(
             error=str(exc),
         )
         raise
+    if result.get("state") == _COMPLETED_STATE:
+        for action in after_completed:
+            action()
+    return result
 
 
 async def _run_canonical_converge(
@@ -348,8 +397,13 @@ async def _run_canonical_converge(
     operation_id: str | None = None,
     cartridge: DomainEnrichmentConfig | None = None,
     resolved: ResolvedConvergeRequest | None = None,
+    *,
+    after_completed: list[Callable[[], None]] | None = None,
 ) -> dict[str, Any]:
     """The complete canonical operation, run under the outer deadline.
+
+    `after_completed` collects what the caller runs once the answer is decided
+    `completed`, outside the deadline: here, the detached graph leg.
 
     `cartridge` is the revision a v2 request was resolved and pinned against;
     hints, rules and spec are then taken from it, never from a second read.
@@ -428,11 +482,17 @@ async def _run_canonical_converge(
                 tenant, requested=domain_id, configured_default=settings.default_domain
             ),
         }
-        # E14: zero Graph calls on the canonical path. Graph sync awaits up to
-        # two Gate attempts at 10 s each with a 1 s backoff between them
-        # (packet_router._MAX_ATTEMPTS / _ROUTE_TIMEOUT) — 21 s in the worst
-        # case, most of a caller's 30 s budget. Persistence stays synchronous
-        # because the response depends on it; Graph does not.
+        # E14: zero AWAITED Graph calls on the canonical path. Graph sync
+        # awaits up to two Gate attempts at 10 s each with a 1 s backoff
+        # between them (packet_router._MAX_ATTEMPTS / _ROUTE_TIMEOUT) — 21 s in
+        # the worst case, most of a caller's 30 s budget. Persistence stays
+        # synchronous because the response depends on it; Graph does not.
+        #
+        # Converge results still reach CEG (converge_graph_sync_enabled): the
+        # graph leg is deferred — the key is left pending for it with only the
+        # admitted fields pinned — and started detached by the caller after the
+        # answer is decided `completed`, outside the deadline. Its failure
+        # leaves the key pending for the graph leg; the answer never changes.
         #
         # require_persistence=True is what makes `completed` mean durable. The
         # producer treats a completed EnrichResponse as the authoritative record
@@ -440,8 +500,9 @@ async def _run_canonical_converge(
         # a result no store holds loses the work silently — the enrichment is
         # gone, and the once-per-key guard suppresses the retry that would have
         # recovered it.
+        defer_graph = settings.converge_graph_sync_enabled
         try:
-            await _persist_and_sync(
+            report = await _persist_and_sync(
                 tenant,
                 persist_payload,
                 result,
@@ -449,6 +510,8 @@ async def _run_canonical_converge(
                 graph_sync=False,
                 require_persistence=True,
                 operation_id=operation_id,
+                defer_graph_sync=defer_graph,
+                graph_fields=admitted_fields(result) if defer_graph else None,
             )
         except PersistenceRequiredError as exc:
             logger.error(
@@ -461,6 +524,8 @@ async def _run_canonical_converge(
             # state != "completed" and routes the run to its own degraded
             # handling, leaving the logical operation retryable.
             return _canonical_failure(f"result not durable: {exc}")
+        if report.graph_deferred and after_completed is not None:
+            after_completed.append(_graph_leg_starter(report.key, settings))
 
     logger.info(
         "handlers.converge_ok",
@@ -472,6 +537,17 @@ async def _run_canonical_converge(
         remaining_s=round(deadline.remaining(), 3),
     )
     return result
+
+
+def _graph_leg_starter(key: str, settings: Any) -> Callable[[], None]:
+    """Start the deferred graph leg of `key`, detached; see `schedule_graph_leg`."""
+
+    def start() -> None:
+        from app.services.side_effect_coordinator import get_side_effect_coordinator
+
+        get_side_effect_coordinator().schedule_graph_leg(key, settings=settings)
+
+    return start
 
 
 def _canonical_failure(reason: str) -> dict[str, Any]:

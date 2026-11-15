@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Converge results reach CEG, detached from the answer (2026-11-15).** A
+  `completed` canonical converge now syncs its admitted `fields` (v2: exactly
+  the `field_evidence` entries with `admitted: true`; v1: `fields` after the
+  schema cut) for the resolved identity through the existing Gate `sync` path.
+  The graph leg is deferred by the side-effect coordinator
+  (`defer_graph_sync`) and started only after the answer is decided
+  `completed` (`schedule_graph_leg`), outside the request deadline, so E14
+  holds: zero awaited Graph calls on the converge path. A sync failure never
+  changes the answer and leaves the key pending for its graph leg; one leg per
+  key is in flight at a time, so a retry never double-syncs. Failed, degraded
+  and non-durable converges sync nothing. Flag `converge_graph_sync_enabled`
+  (env `CONVERGE_GRAPH_SYNC_ENABLED`), default on.
 - **D-9 verified label for observed relationships (2026-11-11).** CEG's
   cross-check has merged (Cognitive.Engine.Graphs #422, closing #386): CEG
   refuses an observed row whose `observed_association` its own `observedfrom`

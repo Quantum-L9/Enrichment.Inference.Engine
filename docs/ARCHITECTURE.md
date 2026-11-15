@@ -88,6 +88,8 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
    c. Inference bridge fires deterministic rules
    d. Confidence tracker updates per-field scores
 6. Graph sync sends the enriched entity to CEG as a `sync` TransportPacket via Gate
+   (canonical `converge`: started detached only after the answer is decided
+   `completed`, never awaited on the converge path — E14)
 7. Response is returned through the runtime/app surface
 ```
 

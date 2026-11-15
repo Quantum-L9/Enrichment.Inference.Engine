@@ -17,6 +17,12 @@ from app.engines.domain_yaml_reader import DomainPublicationError
 from app.services import domain_spec_workflow as workflow
 from scripts import domain_spec_operator as operator
 
+# Captured at import: some tests patch os.fstat to inject failures, and the
+# bookkeeping below must never consume or be affected by those injections.
+_REAL_FSTAT = os.fstat
+# File identity (st_dev, st_ino) of every descriptor the tracked open handed out.
+_OPENED_IDENTITY: dict[int, tuple[int, int]] = {}
+
 
 def _fd_snapshot() -> set[int]:
     """Open directory and regular-file descriptors of this process.
@@ -42,11 +48,24 @@ def _fd_snapshot() -> set[int]:
 
 
 def _assert_closed(opened: list[int], before: set[int]) -> None:
+    """Every descriptor the code under test opened is closed.
+
+    A closed descriptor NUMBER can be reused at once by any other thread of
+    the process (the OpenTelemetry exporter's sockets, for one), so a bare
+    fstat on the old number can succeed on an unrelated descriptor. A number
+    counts as closed when fstat reports EBADF, or when it now names a
+    different file than the one it was opened on.
+    """
     assert _fd_snapshot() == before
     for descriptor in opened:
-        with pytest.raises(OSError) as failure:
-            os.fstat(descriptor)
-        assert failure.value.errno == errno.EBADF
+        try:
+            st = _REAL_FSTAT(descriptor)
+        except OSError as exc:
+            assert exc.errno == errno.EBADF
+        else:
+            assert (st.st_dev, st.st_ino) != _OPENED_IDENTITY[descriptor], (
+                f"descriptor {descriptor} still open on the file it was opened on"
+            )
 
 
 def _track_open(monkeypatch: pytest.MonkeyPatch, opened: list[int], fail_at: int = 0) -> None:
@@ -59,6 +78,8 @@ def _track_open(monkeypatch: pytest.MonkeyPatch, opened: list[int], fail_at: int
         if calls == fail_at:
             raise OSError(errno.EACCES, "injected native descriptor open failure")
         descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        st = _REAL_FSTAT(descriptor)
+        _OPENED_IDENTITY[descriptor] = (st.st_dev, st.st_ino)
         opened.append(descriptor)
         return descriptor
 
