@@ -81,9 +81,10 @@
 **Severity**: CRITICAL | **Enforcement**: PARTIAL
 **Rule**: All dynamic Cypher labels must use `sanitize_label()`. All values must be parameterized.
 
-### INV-8: Gate-Then-Score Architecture
+### INV-8: No EIE-Owned Match Gates or Scoring (CEG Owns Gate-Then-Score)
 **Severity**: CRITICAL | **Enforcement**: PARTIAL
-**Rule**: Gate compilation must precede scoring; these stages must not be merged or reversed.
+**Rule**: Gate-then-score (gate compilation precedes scoring) is Cognitive.Engine.Graphs' matching architecture, not an EIE stage. EIE owns no match gates, ranking rules, or scoring dimensions (ADR-010). A domain spec EIE loads may carry only `gates: []` and `scoring: {dimensions: []}`; `app/engines/domain_spec_schema.py` `_reject_ceg()` refuses any CEG-owned key, and `domains/plasticos/spec.yaml` declares the same split.
+**Correction (2026-11-14)**: this id previously stated gate-then-score as an EIE invariant. The id is kept stable; the rule above supersedes that wording.
 
 ### INV-9: Coverage Threshold >= 71%
 **Severity**: HIGH | **Enforcement**: COVERED

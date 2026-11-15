@@ -33,7 +33,6 @@ def test_required_directories_exist() -> None:
         "app/models",
         "app/services",
         "app/score",
-        "app/health",
         "tests",
         "tests/ci",
         "tests/compliance",
@@ -53,7 +52,6 @@ def test_required_init_files() -> None:
         "app/models/__init__.py",
         "app/services/__init__.py",
         "app/score/__init__.py",
-        "app/health/__init__.py",
     ]
     missing = [path for path in required if not (REPO_ROOT / path).exists()]
     assert not missing, f"Missing __init__.py files: {missing}"

@@ -40,7 +40,6 @@ ENGINE (Business logic — transport-agnostic):
 - `engine/`
 - `app/engines/` (except transport-adjacent registration/wiring files)
 - `app/score/`
-- `app/health/`
 - `app/services/`
 
 MUST NOT import:
@@ -74,8 +73,7 @@ These are not part of the active production dispatch path.
 | app/engines/packet_router.py | Gate-only egress (graph `sync`, score invalidation) | Platform | T4 | @cryptoxdog |
 | app/services/gate_client.py | Signed GateClient factory (sole outbound config site) | Platform | T4 | @cryptoxdog |
 | app/models/ | Pydantic v2 schemas (frozen) | Schema team | T5 | @cryptoxdog |
-| app/score/ | Scoring engine | Score team | T3+ | @cryptoxdog |
-| app/health/ | Health check logic | Health team | T3+ | @cryptoxdog |
+| app/score/ | Parked RevOps lead/ICP scoring (`revopsos-score-engine`); not EIE-owned, wired to no Gate action (its `/score` REST router is mounted by `app/main.py`); disposition pending operator decision | Unassigned (pending operator decision) | T3+ | @cryptoxdog |
 | app/services/ | External service clients and support services | Services team | T3+ | @cryptoxdog |
 | app/services/chassis_handlers.py | Supplemental SDK inbound handler registrations | Platform | T4 | @cryptoxdog |
 | engine/ | Chassis-agnostic engine utilities | Engine team | T3+ | @cryptoxdog |

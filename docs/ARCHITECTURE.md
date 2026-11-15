@@ -80,7 +80,7 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
 ```text
 1. API receives an enrichment request via `/api/v1/*` OR SDK runtime receives `/v1/execute`
 2. SDK runtime dispatches the allowed action to registered handlers
-3. EntropyEngine scores data completeness (1–5)
+3. (Corrected 2026-11-14) No EIE runtime step scores data completeness: the `EntropyEngine` named here exists only in the Odoo addon `odoo_modules/plasticos_research_enrichment/models/entropy_engine.py`, not in `app/`
 4. KBResolver adds domain-relevant KB context to prompts
 5. Convergence loop runs multi-pass enrichment:
    a. Meta-prompt planner selects fields to enrich

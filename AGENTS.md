@@ -395,3 +395,24 @@ Durable, non-obvious notes for running this service in the Cursor Cloud VM. The 
 > `make test` is now the full suite with the 71% coverage floor (C-15); the
 > pre-V2 quick run is `make test-quick`. Wherever a line above says
 > "the `Makefile`" selects or defines a target, read `Repo.mk`.
+
+> **2026-11-14 correction (additive; append-only):** `app/health/` is deleted.
+> It had no importer from `app/main.py` or `app/services/chassis_handlers.py`,
+> and its `/v1/health/assess` and `/v1/health/ai-readiness` routes were never
+> mounted. Record readiness (`health-assess`) is owned by Cognitive.Engine.Graphs
+> (operator decision 2026-11-14). Wherever a line above names `app/health/` —
+> the T3 tier row, the `app/health/health_models.py` T5 "Health schema
+> contract" row, and the "Health team" ownership row — it no longer applies.
+> The liveness route `GET /api/v1/health` in `app/main.py` is unrelated and
+> unchanged.
+
+> **2026-11-14 correction (additive; append-only):** `app/score/` is parked
+> RevOps lead/ICP scoring (`revopsos-score-engine`). It is not EIE-owned engine
+> logic and is wired to no Gate action (its `/score` REST router is still
+> mounted by `app/main.py`); its disposition is pending an operator decision.
+> Read the T3 tier row's `app/score/`, the `app/score/score_models.py` "Score
+> schema contract" row and the "Score team" ownership row above accordingly:
+> they describe no EIE contract or owner. Candidate ranking, match gates and
+> scoring dimensions are owned by Cognitive.Engine.Graphs (ADR-010; enforced by
+> `app/engines/domain_spec_schema.py` `_reject_ceg()`; see `docs/INVARIANTS.md`
+> INV-8). The T5 protection on `score_models.py` is not lifted by this note.
