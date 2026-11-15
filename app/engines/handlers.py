@@ -177,15 +177,27 @@ def admitted_fields(result: Mapping[str, Any]) -> dict[str, Any]:
     their values. A v1 body admits its `fields`, already cut to the request's
     schema (`restrict_fields_to_schema`). Observed, unknown, conflicting or
     otherwise unadmitted entries are never returned.
+
+    A `None` value is never returned either. CEG writes `SET n += row.node`
+    and keeps a declared key even when null, so a key sent as null DELETES
+    that property on the graph node, while an omitted key leaves it untouched.
+    A converge that has no value for a field has learned nothing about it and
+    must not clear what the graph holds. This is the converge sync path's own
+    rule: `project_graph_sync_row` still sends a `None` as a clear for its
+    other callers.
     """
     evidence = result.get("field_evidence")
     if isinstance(evidence, Mapping):
         return {
             name: entry["value"]
             for name, entry in evidence.items()
-            if isinstance(entry, Mapping) and entry.get("admitted") is True and "value" in entry
+            if isinstance(entry, Mapping)
+            and entry.get("admitted") is True
+            and entry.get("value") is not None
         }
-    return dict(result.get("fields") or {})
+    return {
+        name: value for name, value in (result.get("fields") or {}).items() if value is not None
+    }
 
 
 def _operation_id(packet: Any) -> str | None:

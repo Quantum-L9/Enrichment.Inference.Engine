@@ -238,3 +238,49 @@ def test_v2_admitted_fields_are_exactly_the_admitted_entries():
 def test_v1_admitted_fields_are_the_fields():
     assert admitted_fields({"fields": {"a": 1}}) == {"a": 1}
     assert admitted_fields({"fields": None}) == {}
+
+
+async def test_sync_row_omits_unset_and_null_fields_never_sends_null(probes):
+    """CEG writes `SET n += row.node`: a null key deletes the graph property.
+
+    A completed converge whose admitted fields leave declared row properties
+    unset (`email`) or valueless (`size: None`) must produce a row with those
+    keys ABSENT, so the graph keeps what it holds.
+    """
+    from app.engines.packet_router import GraphSyncContract, project_graph_sync_row
+
+    probes["loop"].return_value = _completed(
+        fields={"website": "https://example.test", "size": None}
+    )
+
+    result = await handle_converge(TENANT, _request())
+    await probes["coordinator"].drain_graph_legs()
+
+    assert result["state"] == "completed"
+    fields = probes["router"].notify_graph_sync.await_args.kwargs["fields"]
+    contract = GraphSyncContract(
+        entity_type="entity",
+        id_property="entity_id",
+        source="test",
+        row_schema={
+            "entity_id": {"type": "string"},
+            "website": {"type": "string"},
+            "size": {"type": "int"},
+            "email": {"type": "string"},
+        },
+    )
+    row = project_graph_sync_row(entity_id=ENTITY_ID, fields=fields, contract=contract).row
+
+    assert row == {"entity_id": ENTITY_ID, "website": "https://example.test"}
+    assert None not in row.values()
+
+
+def test_admitted_fields_never_carry_a_null():
+    v2 = {
+        "field_evidence": {
+            "a": {"state": "inferred", "admitted": True, "value": 1},
+            "b": {"state": "inferred", "admitted": True, "value": None},
+        }
+    }
+    assert admitted_fields(v2) == {"a": 1}
+    assert admitted_fields({"fields": {"a": 1, "b": None}}) == {"a": 1}
