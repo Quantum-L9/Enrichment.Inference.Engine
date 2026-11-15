@@ -78,29 +78,23 @@ class SweepStore(Protocol):
 
     async def create_sweep(self, record: SweepRecord) -> tuple[SweepRecord, bool]:
         """Insert `record`, or return the existing sweep for (tenant, key) and False."""
-        ...
 
     async def get_sweep(self, tenant_id: str, sweep_id: str) -> SweepRecord | None:
         """The tenant's sweep, or None (another tenant's sweep is None too)."""
-        ...
 
     async def reserve(self, tenant_id: str, day: date, amount: Decimal, cap: Decimal) -> bool:
         """Atomically reserve `amount` when spent + reserved + amount <= cap."""
-        ...
 
     async def settle(self, tenant_id: str, day: date, reserved: Decimal, actual: Decimal) -> None:
         """Release a reservation and record the actual cost against the day."""
-        ...
 
     async def ledger(self, tenant_id: str, day: date) -> LedgerState:
         """The tenant's spend and reservations for `day` (zero when no row exists)."""
-        ...
 
     async def add_result(
         self, sweep_id: str, seq: int, entity_id: str, response: dict[str, Any], cost: Decimal
     ) -> None:
         """Store one converge response body, as returned."""
-        ...
 
     async def save_progress(
         self,
@@ -111,15 +105,12 @@ class SweepStore(Protocol):
         completed_at: datetime | None = None,
     ) -> None:
         """Persist skips and counters; a `completed_at` also marks the sweep completed."""
-        ...
 
     async def results_page(self, sweep_id: str, after_seq: int, limit: int) -> list[SweepResultRow]:
         """Up to `limit` results after `after_seq`, in order."""
-        ...
 
     async def purge_expired(self, now: datetime, ttl: timedelta) -> int:
         """Delete sweeps completed more than `ttl` ago, with their results."""
-        ...
 
 
 def _record(row: EnrichmentSweepRecord) -> SweepRecord:
