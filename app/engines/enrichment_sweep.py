@@ -124,6 +124,8 @@ def utc_day(now: datetime) -> date:
 
 @dataclass(frozen=True)
 class ValidatedRequest:
+    """A sweep request that passed envelope validation, split into accepted and rejected."""
+
     idempotency_key: str
     requested_budget_usd: Decimal
     accepted: tuple[dict[str, Any], ...]
@@ -140,6 +142,34 @@ def validate_request(
     The request as a whole is refused (`SweepRefusedError`) when its envelope is
     wrong. Individual candidates are rejected with a reason and the rest go on.
     """
+    key, budget, candidates = _envelope(payload)
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(candidates):
+        entity_id = raw.get("entity_id") if isinstance(raw, Mapping) else None
+        label = entity_id if isinstance(entity_id, str) and entity_id else f"#{index}"
+        if len(accepted) >= max_candidates:
+            rejected.append({"entity_id": label, "reason": "candidate_cap_exceeded"})
+            continue
+        reason, candidate = _candidate(raw, config)
+        if candidate is not None and candidate["entity_id"] in seen:
+            reason, candidate = "duplicate_entity_id", None
+        if candidate is None:
+            rejected.append({"entity_id": label, "reason": reason})
+            continue
+        seen.add(candidate["entity_id"])
+        accepted.append(candidate)
+    return ValidatedRequest(
+        idempotency_key=key,
+        requested_budget_usd=budget,
+        accepted=tuple(accepted),
+        rejected=tuple(rejected),
+    )
+
+
+def _envelope(payload: object) -> tuple[str, Decimal, list[Any]]:
+    """The request envelope: (idempotency_key, requested budget, raw candidates)."""
     if not isinstance(payload, Mapping):
         raise SweepRefusedError("invalid_request", "payload must be an object")
     unknown = sorted(str(k) for k in payload.keys() - _REQUEST_KEYS)
@@ -161,30 +191,7 @@ def validate_request(
     candidates = payload.get("candidates")
     if not isinstance(candidates, list) or not candidates:
         raise SweepRefusedError("invalid_request", "candidates must be a nonempty list")
-
-    accepted: list[dict[str, Any]] = []
-    rejected: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for index, raw in enumerate(candidates):
-        entity_id = raw.get("entity_id") if isinstance(raw, Mapping) else None
-        label = entity_id if isinstance(entity_id, str) and entity_id else f"#{index}"
-        if len(accepted) >= max_candidates:
-            rejected.append({"entity_id": label, "reason": "candidate_cap_exceeded"})
-            continue
-        reason, candidate = _candidate(raw, config)
-        if candidate is not None and candidate["entity_id"] in seen:
-            reason, candidate = "duplicate_entity_id", None
-        if candidate is None:
-            rejected.append({"entity_id": label, "reason": reason})
-            continue
-        seen.add(candidate["entity_id"])
-        accepted.append(candidate)
-    return ValidatedRequest(
-        idempotency_key=key,
-        requested_budget_usd=money(budget),
-        accepted=tuple(accepted),
-        rejected=tuple(rejected),
-    )
+    return key, money(budget), candidates
 
 
 def _candidate(raw: object, config: DomainEnrichmentConfig) -> tuple[str, dict[str, Any] | None]:
@@ -422,6 +429,7 @@ class _Run:
         default_factory=lambda: {"enriched": 0, "targets_dropped_undeclared": 0}
     )
     enriched: list[str] = field(default_factory=list)
+    seq: int = 0
 
     def skip(self, entity_id: str, reason: str) -> None:
         self.skipped.append({"entity_id": entity_id, "reason": reason})
@@ -474,21 +482,44 @@ class SweepRunner:
         )
 
     async def _run(self, record: SweepRecord, run: _Run) -> None:
-        tenant = record.tenant_id
-        candidates = {c["entity_id"]: c for c in record.candidates}
         try:
-            config = self._load(tenant)
+            config = self._load(record.tenant_id)
         except Exception as exc:
-            logger.warning("enrichment_sweep.cartridge_unavailable", tenant=tenant, error=str(exc))
-            for entity_id in candidates:
-                run.skip(entity_id, "cartridge_unavailable")
+            logger.warning(
+                "enrichment_sweep.cartridge_unavailable", tenant=record.tenant_id, error=str(exc)
+            )
+            for candidate in record.candidates:
+                run.skip(candidate["entity_id"], "cartridge_unavailable")
             return
 
+        assessed = await self._assess_all(record, run)
+        for readiness in assessed:
+            if not readiness.has_gaps:
+                run.skip(readiness.entity_id, "no_readiness_gaps")
+        ranked = rank(assessed)
+
+        candidates = {c["entity_id"]: c for c in record.candidates}
+        estimate = reservation_estimate(self._settings)
+        for index, readiness in enumerate(ranked):
+            candidate = candidates[readiness.entity_id]
+            targets = self._declared_targets(record, config, candidate, readiness, run)
+            if not targets:
+                run.skip(readiness.entity_id, "no_declared_targets")
+                continue
+            stop = await self._enrich_one(record, config, candidate, targets, estimate, run)
+            if stop is not None:
+                for remaining in ranked[index:]:
+                    run.skip(remaining.entity_id, stop)
+                return
+            await self._save(record, run)
+
+    async def _assess_all(self, record: SweepRecord, run: _Run) -> list[Readiness]:
+        """CEG readiness for every candidate, batch by batch; the rest are skipped."""
         assessed: list[Readiness] = []
         for batch_index, batch in enumerate(batches(record.candidates)):
             key = f"{record.sweep_id}:assess:{batch_index}"
             try:
-                reply = await self._assess(tenant, assessment_payload(batch), key)
+                reply = await self._assess(record.tenant_id, assessment_payload(batch), key)
             except Exception as exc:
                 logger.warning(
                     "enrichment_sweep.readiness_failed",
@@ -503,85 +534,85 @@ class SweepRunner:
             for skip in skipped:
                 run.skip(skip["entity_id"], skip["reason"])
             if isinstance(reply, Mapping):
-                for flag in ("total_truncated", "cost_ceiling_reached", "total_skipped"):
-                    if reply.get(flag):
-                        logger.info(
-                            "enrichment_sweep.readiness_partial",
-                            sweep_id=record.sweep_id,
-                            batch=batch_index,
-                            flag=flag,
-                            value=reply.get(flag),
-                        )
-            assessed.extend(found[c["entity_id"]] for c in batch if c["entity_id"] in found)
-
-        for readiness in assessed:
-            if not readiness.has_gaps:
-                run.skip(readiness.entity_id, "no_readiness_gaps")
-        ranked = rank(assessed)
-
-        estimate = reservation_estimate(self._settings)
-        cap = record.effective_budget_usd
-        seq = 0
-        for index, readiness in enumerate(ranked):
-            candidate = candidates[readiness.entity_id]
-            declared = {
-                p["name"] for p in node_properties(config.raw_spec, candidate["node_label"]) or []
-            }
-            targets, dropped = targets_for(readiness, declared)
-            if dropped:
-                run.stats["targets_dropped_undeclared"] += len(dropped)
-                logger.info(
-                    "enrichment_sweep.targets_dropped_undeclared",
-                    sweep_id=record.sweep_id,
-                    entity_id=readiness.entity_id,
-                    dropped=dropped,
-                )
-            if not targets:
-                run.skip(readiness.entity_id, "no_declared_targets")
-                continue
-
-            stop = await self._reserve(record, estimate, cap)
-            if stop is not None:
-                for remaining in ranked[index:]:
-                    run.skip(remaining.entity_id, stop)
-                return
-
-            body = converge_body(tenant, config, candidate, targets, record.sweep_id)
-            try:
-                response = await self._converge(tenant, body)
-                cost = actual_cost(response, self._settings, estimate)
-            except Exception as exc:
-                logger.exception(
-                    "enrichment_sweep.converge_failed",
-                    sweep_id=record.sweep_id,
-                    entity_id=readiness.entity_id,
-                    error=str(exc),
-                )
-                response, cost = None, estimate
-
-            try:
-                await self._store.settle(tenant, record.day, estimate, cost)
-                if response is not None:
-                    seq += 1
-                    await self._store.add_result(
-                        record.sweep_id, seq, readiness.entity_id, response, cost
+                partial = {
+                    flag: reply.get(flag)
+                    for flag in ("total_truncated", "cost_ceiling_reached", "total_skipped")
+                    if reply.get(flag)
+                }
+                if partial:
+                    logger.info(
+                        "enrichment_sweep.readiness_partial",
+                        sweep_id=record.sweep_id,
+                        batch=batch_index,
+                        **partial,
                     )
-            except Exception as exc:
-                logger.error(
-                    "enrichment_sweep.ledger_unavailable",
-                    sweep_id=record.sweep_id,
-                    error=str(exc),
-                )
-                for remaining in ranked[index:]:
-                    run.skip(remaining.entity_id, "budget_ledger_unavailable")
-                return
+            assessed.extend(found[c["entity_id"]] for c in batch if c["entity_id"] in found)
+        return assessed
 
-            if response is None:
-                run.skip(readiness.entity_id, "converge_failed")
-            else:
-                run.stats["enriched"] += 1
-                run.enriched.append(readiness.entity_id)
-            await self._save(record, run)
+    @staticmethod
+    def _declared_targets(
+        record: SweepRecord,
+        config: DomainEnrichmentConfig,
+        candidate: Mapping[str, Any],
+        readiness: Readiness,
+        run: _Run,
+    ) -> list[str]:
+        """CEG's targets the candidate's node declares; the others are counted and dropped."""
+        properties = node_properties(config.raw_spec, candidate["node_label"]) or []
+        targets, dropped = targets_for(readiness, {p["name"] for p in properties})
+        if dropped:
+            run.stats["targets_dropped_undeclared"] += len(dropped)
+            logger.info(
+                "enrichment_sweep.targets_dropped_undeclared",
+                sweep_id=record.sweep_id,
+                entity_id=readiness.entity_id,
+                dropped=dropped,
+            )
+        return targets
+
+    async def _enrich_one(
+        self,
+        record: SweepRecord,
+        config: DomainEnrichmentConfig,
+        candidate: Mapping[str, Any],
+        targets: Sequence[str],
+        estimate: Decimal,
+        run: _Run,
+    ) -> str | None:
+        """Reserve, converge, settle, store. Returns a stop reason, or None to go on."""
+        stop = await self._reserve(record, estimate, record.effective_budget_usd)
+        if stop is not None:
+            return stop
+        entity_id = candidate["entity_id"]
+        body = converge_body(record.tenant_id, config, candidate, targets, record.sweep_id)
+        response: dict[str, Any] | None
+        try:
+            response = await self._converge(record.tenant_id, body)
+            cost = actual_cost(response, self._settings, estimate)
+        except Exception as exc:
+            logger.exception(
+                "enrichment_sweep.converge_failed",
+                sweep_id=record.sweep_id,
+                entity_id=entity_id,
+                error=str(exc),
+            )
+            response, cost = None, estimate
+        try:
+            await self._store.settle(record.tenant_id, record.day, estimate, cost)
+            if response is not None:
+                run.seq += 1
+                await self._store.add_result(record.sweep_id, run.seq, entity_id, response, cost)
+        except Exception as exc:
+            logger.error(
+                "enrichment_sweep.ledger_unavailable", sweep_id=record.sweep_id, error=str(exc)
+            )
+            return "budget_ledger_unavailable"
+        if response is None:
+            run.skip(entity_id, "converge_failed")
+        else:
+            run.stats["enriched"] += 1
+            run.enriched.append(entity_id)
+        return None
 
     async def _reserve(self, record: SweepRecord, estimate: Decimal, cap: Decimal) -> str | None:
         """None when reserved; otherwise the reason every remaining candidate is skipped."""

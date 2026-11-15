@@ -34,7 +34,14 @@ from typing import Any
 import structlog
 
 from ..core.config import get_settings
-from ..services.sweep_store import COMPLETED, PgSweepStore, SweepRecord, SweepStore
+from ..services.sweep_store import (
+    COMPLETED,
+    LedgerState,
+    PgSweepStore,
+    SweepRecord,
+    SweepResultRow,
+    SweepStore,
+)
 from .domain_yaml_reader import DomainEnrichmentConfig, DomainYamlReader
 from .enrichment_sweep import (
     ASSESS_ACTION,
@@ -172,17 +179,7 @@ async def handle_enrichment_sweep(
             "rejected": list(stored.rejected),
         }
 
-    runner = SweepRunner(
-        store=store,
-        assess=_wiring.assess or _gate_assess,
-        converge=_wiring.converge or _canonical_converge,
-        load_cartridge=lambda t: _load_cartridge(t),
-        settings=settings,
-        clock=_wiring.clock,
-    )
-    task = asyncio.create_task(runner.run(stored), name=f"enrichment-sweep:{sweep_id}")
-    _background.add(task)
-    task.add_done_callback(_background.discard)
+    _start(store, stored, settings)
     logger.info(
         "enrichment_sweep.accepted",
         tenant=tenant,
@@ -194,6 +191,21 @@ async def handle_enrichment_sweep(
     return {"sweep_id": sweep_id, "accepted": accepted_ids, "rejected": list(request.rejected)}
 
 
+def _start(store: SweepStore, record: SweepRecord, settings: Any) -> None:
+    """Run `record` in the background; the task is held until it finishes."""
+    runner = SweepRunner(
+        store=store,
+        assess=_wiring.assess or _gate_assess,
+        converge=_wiring.converge or _canonical_converge,
+        load_cartridge=_load_cartridge,
+        settings=settings,
+        clock=_wiring.clock,
+    )
+    task = asyncio.create_task(runner.run(record), name=f"enrichment-sweep:{record.sweep_id}")
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+
 async def handle_enrichment_sweep_results(
     tenant: str,
     payload: dict[str, Any],
@@ -202,30 +214,15 @@ async def handle_enrichment_sweep_results(
     """One page of a sweep's results, its budget and its skips."""
     settings = get_settings()
     _require_enabled(settings)
-    if not isinstance(payload, dict) or payload.keys() - _RESULTS_KEYS:
-        raise SweepRefusedError("invalid_request", "payload must be {sweep_id, cursor?}")
-    sweep_id = payload.get("sweep_id")
-    if not isinstance(sweep_id, str) or not sweep_id:
-        raise SweepRefusedError("invalid_request", "sweep_id must be a nonempty string")
-    after = _cursor(payload.get("cursor"))
-
+    sweep_id, after = _results_request(payload)
     store = _store()
     now = _wiring.clock()
     try:
         await store.purge_expired(now, timedelta(hours=settings.l9_sweep_result_ttl_hours))
     except Exception as exc:
         logger.warning("enrichment_sweep.purge_failed", error=str(exc))
-    try:
-        record = await store.get_sweep(tenant, sweep_id)
-        if record is None:
-            raise SweepRefusedError("sweep_not_found", sweep_id)
-        limit = settings.l9_sweep_results_page_size
-        rows = await store.results_page(sweep_id, after, limit)
-        ledger = await store.ledger(tenant, record.day)
-    except SweepRefusedError:
-        raise
-    except Exception as exc:
-        raise SweepRefusedError("sweep_store_unavailable", str(exc)) from exc
+    limit = settings.l9_sweep_results_page_size
+    record, rows, ledger = await _read(store, tenant, sweep_id, after, limit)
 
     last = rows[-1].seq if rows else after
     finished = record.state == COMPLETED and len(rows) < limit
@@ -249,6 +246,33 @@ async def handle_enrichment_sweep_results(
         "skipped": list(record.skipped),
         "stats": dict(record.stats),
     }
+
+
+def _results_request(payload: object) -> tuple[str, int]:
+    """(sweep_id, position after which to read) from a results request."""
+    if not isinstance(payload, dict) or payload.keys() - _RESULTS_KEYS:
+        raise SweepRefusedError("invalid_request", "payload must be {sweep_id, cursor?}")
+    sweep_id = payload.get("sweep_id")
+    if not isinstance(sweep_id, str) or not sweep_id:
+        raise SweepRefusedError("invalid_request", "sweep_id must be a nonempty string")
+    return sweep_id, _cursor(payload.get("cursor"))
+
+
+async def _read(
+    store: SweepStore, tenant: str, sweep_id: str, after: int, limit: int
+) -> tuple[SweepRecord, list[SweepResultRow], LedgerState]:
+    """The sweep, one page of its results and its day's ledger, or a refusal."""
+    try:
+        record = await store.get_sweep(tenant, sweep_id)
+        if record is None:
+            raise SweepRefusedError("sweep_not_found", sweep_id)
+        rows = await store.results_page(sweep_id, after, limit)
+        ledger = await store.ledger(tenant, record.day)
+    except SweepRefusedError:
+        raise
+    except Exception as exc:
+        raise SweepRefusedError("sweep_store_unavailable", str(exc)) from exc
+    return record, rows, ledger
 
 
 def _cursor(value: object) -> int:

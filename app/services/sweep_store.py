@@ -58,6 +58,8 @@ class SweepRecord:
 
 @dataclass(frozen=True)
 class SweepResultRow:
+    """One stored converge response body and its position in the sweep."""
+
     seq: int
     entity_id: str
     response: dict[str, Any]
@@ -65,16 +67,22 @@ class SweepResultRow:
 
 @dataclass(frozen=True)
 class LedgerState:
+    """A tenant's sweep spend for one UTC day."""
+
     spent_usd: Decimal
     reserved_usd: Decimal
 
 
 class SweepStore(Protocol):
+    """What the sweep engine needs from persistence. Every method may raise."""
+
     async def create_sweep(self, record: SweepRecord) -> tuple[SweepRecord, bool]:
         """Insert `record`, or return the existing sweep for (tenant, key) and False."""
         ...
 
-    async def get_sweep(self, tenant_id: str, sweep_id: str) -> SweepRecord | None: ...
+    async def get_sweep(self, tenant_id: str, sweep_id: str) -> SweepRecord | None:
+        """The tenant's sweep, or None (another tenant's sweep is None too)."""
+        ...
 
     async def reserve(self, tenant_id: str, day: date, amount: Decimal, cap: Decimal) -> bool:
         """Atomically reserve `amount` when spent + reserved + amount <= cap."""
@@ -84,11 +92,15 @@ class SweepStore(Protocol):
         """Release a reservation and record the actual cost against the day."""
         ...
 
-    async def ledger(self, tenant_id: str, day: date) -> LedgerState: ...
+    async def ledger(self, tenant_id: str, day: date) -> LedgerState:
+        """The tenant's spend and reservations for `day` (zero when no row exists)."""
+        ...
 
     async def add_result(
         self, sweep_id: str, seq: int, entity_id: str, response: dict[str, Any], cost: Decimal
-    ) -> None: ...
+    ) -> None:
+        """Store one converge response body, as returned."""
+        ...
 
     async def save_progress(
         self,
@@ -101,9 +113,9 @@ class SweepStore(Protocol):
         """Persist skips and counters; a `completed_at` also marks the sweep completed."""
         ...
 
-    async def results_page(
-        self, sweep_id: str, after_seq: int, limit: int
-    ) -> list[SweepResultRow]: ...
+    async def results_page(self, sweep_id: str, after_seq: int, limit: int) -> list[SweepResultRow]:
+        """Up to `limit` results after `after_seq`, in order."""
+        ...
 
     async def mark_fetched(self, sweep_id: str, now: datetime) -> None:
         """Start the retention clock of a completed sweep on its first fetch."""
