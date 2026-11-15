@@ -133,6 +133,14 @@ class Settings(BaseSettings):
     # older CEG refuses any unknown row key. Turn on before CEG's
     # OBSERVED_ASSOCIATION_REQUIRED.
     observed_association_send_enabled: bool = False
+    # A completed canonical converge result is synced to CEG through the Gate
+    # `sync` path, detached from the converge answer: the sync is scheduled
+    # only after the answer is decided `completed`, runs outside the request
+    # deadline, and its failure never changes the answer (the key stays pending
+    # for the graph leg). Only the admitted `fields` of a completed result are
+    # synced. Off restores the converge path with no graph sync at all. Env
+    # CONVERGE_GRAPH_SYNC_ENABLED.
+    converge_graph_sync_enabled: bool = True
     graph_sync_entity_type: str = ""
     graph_sync_id_property: str = ""
 

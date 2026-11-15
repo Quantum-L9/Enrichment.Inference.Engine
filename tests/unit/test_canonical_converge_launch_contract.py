@@ -438,7 +438,13 @@ async def test_canonical_fields_are_not_truncated_to_the_partner_allowlist(
 async def test_successful_canonical_convergence_makes_zero_graph_calls(
     canonical_converge_probes,
 ):
-    """EIE14 — the launch invariant, on the branch production actually takes."""
+    """EIE14 — the launch invariant, on the branch production actually takes.
+
+    Zero AWAITED Graph calls: the answer is decided before any Graph call is
+    made. A completed result still reaches CEG, but through a graph leg the
+    coordinator starts detached after the answer (tests/unit/
+    test_converge_graph_sync.py); none of it may run on the converge path.
+    """
     await handle_converge("acme", _odoo_request())
 
     assert canonical_converge_probes["router"].notify_graph_sync.await_count == 0

@@ -45,6 +45,7 @@ from app.services.graph_return_channel import (
     handle_graph_inference_result,
     validate_graph_inference_packet,
 )
+from app.services.side_effect_coordinator import SideEffectReport
 
 TENANT = "acme"
 
@@ -192,8 +193,9 @@ def live_runtime() -> Iterator[_RecordingEnricher]:
     saved = (eie_handlers._kb, eie_handlers._idem, eie_handlers._domain_reader)
     enricher = _RecordingEnricher()
 
-    async def _no_persist(*args: Any, **kwargs: Any) -> None:
-        return None
+    async def _no_persist(*args: Any, **kwargs: Any) -> SideEffectReport:
+        # `_persist_and_sync` returns the coordinator's report; nothing deferred.
+        return SideEffectReport(key="no-persist")
 
     GraphReturnChannel.reset_instance()
     try:
