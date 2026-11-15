@@ -1,0 +1,234 @@
+# --- L9_META ---
+# l9_schema: 1
+# repo: Quantum-L9/Enrichment.Inference.Engine
+# path: .l9/deployment.yaml
+# layer: deployment
+# owner: platform
+# status: candidate
+# updated: 2026-11-15
+# --- /L9_META ---
+#
+# EIE's deployment contract (l9.deployment-profile/v2, Quantum-L9/l9-deploy
+# ADR-0008), rendered from l9-deploy templates/consumer/stateful-container. The
+# candidate names its own target. A committed profile deploys nothing by
+# itself: only a release request for an allowed source ref reaches l9-deploy,
+# and l9-deploy still requires its protected-environment approval.
+#
+# Supersedes .github/workflows/k8s-deploy.yml (it needs a KUBECONFIG secret
+# that does not exist, and its chart path does not exist); that workflow is
+# left in place until this path has shipped a release.
+#
+# Human go-live steps: Quantum-L9/Constellation.Gate
+# docs/runbooks/l9-deploy-go-live.md.
+schema: l9.deployment-profile/v2
+project:
+  # Compose project name on the host; on the l9-runtime network the container
+  # answers as enrichment-inference-engine-app-1, the address Gate's
+  # node_registry.l9-runtime.yaml routes to.
+  id: enrichment-inference-engine
+  repository: Quantum-L9/Enrichment.Inference.Engine
+  owner_team: platform
+  # Durable state (converge results, sweeps, budget ledger) lives in an
+  # external PostgreSQL; the container holds none.
+  runtime_profile: stateful-container
+artifact:
+  registry: ghcr.io
+  image: ghcr.io/quantum-l9/enrichment.inference.engine
+runtime:
+  architecture: linux/amd64
+  container_port: 8000
+  user: non_root
+  read_only_root_filesystem: false
+  stop_grace_seconds: 30
+  # Non-secret, environment-invariant settings only. Compose gives these
+  # precedence over the rendered runtime.env, so a store entry cannot change
+  # them. Every secret and every environment-specific value (L9_ENVIRONMENT,
+  # L9_SIGNING_KEY_ID, L9_GATE_SIGNING_KEY_IDS, DATABASE_URL) comes from
+  # Infisical.
+  environment:
+    L9_NODE_NAME: enrichment-engine
+    # Gate and this node on the l9-runtime network (l9-deploy containers
+    # answer at <project.id>-app-1).
+    GATE_URL: http://constellation-gate-app-1:9000
+    GATE_INTERNAL_URL: http://enrichment-inference-engine-app-1:8000
+    GATE_REGISTRATION_ENABLED: "true"
+    L9_REQUIRE_SIGNATURE: "true"
+    L9_SIGNING_ALGORITHM: hmac-sha256
+    L9_ENFORCE_GATE_ONLY_INGRESS: "true"
+    L9_ENRICHMENT_PROVIDER: perplexity
+    # The operator-provisioned Redis (no credentials) on l9-runtime.
+    REDIS_URL: redis://eie-redis:6379/0
+    # Off until Gate owns both sweep actions and the flip is separately
+    # authorized (docs/contracts/enrichment-sweep.md, "Rollout"). Pinned here,
+    # not in Infisical, so turning it on is a reviewed change to this file.
+    L9_ENRICHMENT_SWEEP_ENABLED: "false"
+health:
+  # No published ingress: EIE is reached only by Gate. HTTP probes run on the
+  # deployment runner and need published ingress, so these run on the host and
+  # call the liveness route from inside the release container.
+  startup:
+    type: command
+    command:
+      - docker
+      - exec
+      - enrichment-inference-engine-app-1
+      - python
+      - -c
+      - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"
+    timeout_seconds: 15
+    interval_seconds: 5
+    attempts: 24
+  post_deploy:
+    type: command
+    command:
+      - docker
+      - exec
+      - enrichment-inference-engine-app-1
+      - python
+      - -c
+      - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"
+    timeout_seconds: 15
+    interval_seconds: 5
+    attempts: 12
+release:
+  strategy: replace
+  automatic_rollback: true
+  stabilization_seconds: 30
+migrations:
+  # Alembic (migrations/versions). l9-deploy runs it with the release image on
+  # l9-runtime and the rendered runtime.env before the new container starts,
+  # after a verified backup. The image entrypoint also runs `alembic upgrade
+  # head` when DATABASE_URL is set; the second run is a no-op.
+  enabled: true
+  command:
+    - alembic
+    - upgrade
+    - head
+  mode: pre_start
+  use_release_image: true
+  backup_required: true
+  timeout_seconds: 900
+  # A schema upgrade is not reversed by restoring the previous image.
+  rollback_safe: false
+storage:
+  persistent_volumes: []
+services:
+  # Both are operator-provisioned containers on the external network
+  # l9-runtime with named volumes and no published host port (runbook,
+  # "Databases"). mode external: l9-deploy never creates them. The probes run
+  # inside the release container, which is on that network.
+  postgres:
+    mode: external
+    required: true
+    probe:
+      type: database
+      command:
+        - docker
+        - exec
+        - enrichment-inference-engine-app-1
+        - python
+        - -c
+        - "import socket; socket.create_connection(('eie-postgres', 5432), 5).close()"
+      timeout_seconds: 15
+      interval_seconds: 5
+      attempts: 6
+  redis:
+    mode: external
+    required: true
+    probe:
+      type: command
+      command:
+        - docker
+        - exec
+        - enrichment-inference-engine-app-1
+        - python
+        - -c
+        - "import socket; socket.create_connection(('eie-redis', 6379), 5).close()"
+      timeout_seconds: 15
+      interval_seconds: 5
+      attempts: 6
+backup:
+  # Argument vectors l9-deploy runs on the host over SSH after str.format_map
+  # with project, environment and request_id (a literal brace would have to be
+  # doubled; these use none). The pre-deploy backup runs before the release
+  # container exists, so it dumps through the database container itself: the
+  # official postgres image trusts local-socket connections, so no credential
+  # is on any command line, and its pg_dump matches the server version.
+  # Database and role are both `enrich` (runbook, "Databases").
+  command:
+    - sh
+    - -c
+    - |-
+      set -eu
+      umask 077
+      dir=/srv/l9/backups/{project}/{environment}
+      out="$dir/{request_id}.sql.gz"
+      mkdir -p "$dir"
+      trap 'rm -f "$out.tmp"' EXIT
+      # sh has no pipefail: the trailer check below is what refuses a dump
+      # that pg_dump did not finish.
+      docker exec eie-postgres pg_dump --format=plain --no-owner --no-privileges -U enrich -d enrich | gzip > "$out.tmp"
+      test -s "$out.tmp"
+      gzip -dc "$out.tmp" | tail -n 5 | grep -q 'PostgreSQL database dump complete'
+      mv "$out.tmp" "$out"
+      sha256sum "$out" > "$out.sha256"
+      printf '%s\n' "$out"
+  verify_command:
+    - sh
+    - -c
+    - >-
+      f="$(ls -1t /srv/l9/backups/{project}/{environment}/*.sql.gz | head -n 1)"
+      && test -n "$f"
+      && exec /usr/local/sbin/l9-backup-verify "$f"
+  # Isolated restore: the newest verified dump is loaded into a throwaway,
+  # network-less PostgreSQL 16 container, never into the live database, and
+  # must yield the alembic-created convergence_runs table.
+  restore_test_command:
+    - sh
+    - -c
+    - >-
+      set -eu;
+      f="$(ls -1t /srv/l9/backups/{project}/{environment}/*.sql.gz | head -n 1)";
+      /usr/local/sbin/l9-backup-verify "$f";
+      c="l9-restore-{project}-{environment}";
+      docker rm -f "$c" >/dev/null 2>&1 || true;
+      docker run -d --rm --name "$c" --network none -e POSTGRES_HOST_AUTH_METHOD=trust
+      postgres:16@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97 >/dev/null;
+      trap 'docker rm -f "$c" >/dev/null 2>&1' EXIT;
+      i=0; until docker exec "$c" pg_isready -U postgres -q; do i=$((i+1)); test "$i" -lt 60; sleep 1; done;
+      gzip -dc "$f" | docker exec -i "$c" psql -v ON_ERROR_STOP=1 -q -U postgres -d postgres >/dev/null;
+      docker exec "$c" psql -U postgres -d postgres -tAc
+      "select count(*) from information_schema.tables where table_name = 'convergence_runs'" | grep -qx '[1-9][0-9]*'
+  timeout_seconds: 1800
+secrets:
+  authority: infisical
+  runtime_mode: deploy_render
+  # Proposed slug; an Infisical project gets its slug at creation. If it
+  # differs, this value changes to match.
+  project_slug: enrichment-inference-engine
+targets:
+  # PROPOSAL, not yet operator-confirmed: the shared host C1 named by
+  # Quantum-L9/l9-graphiti-memory's production target (protected; host key is
+  # an evidence lead to re-verify over a trusted channel before any release).
+  # docker: verify never changes the host's Docker. ingress: none publishes
+  # nothing; only Gate reaches EIE, over l9-runtime. backup_tools: postgres
+  # installs /usr/local/sbin/l9-backup-verify, which the backup commands call.
+  # staging: not declared. l9-deploy names the Compose project after
+  # project.id alone, so staging and production of one project cannot share a
+  # host; the staging server is a human decision.
+  production:
+    server:
+      address: 46.62.243.82
+      ssh:
+        user: actions
+        port: 22
+      host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICMwpLXB2J962/OrrUqXNGwiHb39e7f9jSKixo97xJxU
+    host:
+      docker: verify
+      backup_tools: postgres
+    ingress:
+      mode: none
+      hostnames: []
+    allowed_source_refs:
+      - refs/tags/v*
+    secrets_environment: prod
