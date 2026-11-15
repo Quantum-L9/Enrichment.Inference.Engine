@@ -145,6 +145,10 @@ _LEGACY_NODE_BODY = {
 }
 
 
+# Actions advertised after the bespoke client was deleted, each by contract.
+_ACTIONS_ADVERTISED_SINCE = ["enrichment-sweep", "enrichment-sweep-results"]
+
+
 def test_sdk_payload_is_semantically_equivalent_to_the_deleted_client():
     """Every field the Gate resolved identity/routing from is unchanged.
 
@@ -155,8 +159,15 @@ def test_sdk_payload_is_semantically_equivalent_to_the_deleted_client():
     """
     node = build_node_registration(_settings()).to_payload()["enrichment-engine"]
 
-    for key in ("internal_url", "supported_actions", "health_endpoint"):
+    for key in ("internal_url", "health_endpoint"):
         assert node[key] == _LEGACY_NODE_BODY[key], f"{key} drifted"
+    # The legacy actions, unchanged and in order, then only the actions added
+    # deliberately since (docs/contracts/enrichment-sweep.md). Any other change
+    # to what Gate routes here is drift.
+    assert node["supported_actions"] == [
+        *_LEGACY_NODE_BODY["supported_actions"],
+        *_ACTIONS_ADVERTISED_SINCE,
+    ], "supported_actions drifted"
     for key in ("owner", "version", "type"):
         assert node["metadata"][key] == _LEGACY_NODE_BODY["metadata"][key], (
             f"metadata.{key} drifted"
