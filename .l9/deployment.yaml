@@ -53,8 +53,10 @@ runtime:
     GATE_INTERNAL_URL: http://enrichment-inference-engine-app-1:8000
     GATE_REGISTRATION_ENABLED: "true"
     L9_REQUIRE_SIGNATURE: "true"
-    L9_SIGNING_ALGORITHM: hmac-sha256
     L9_ENFORCE_GATE_ONLY_INGRESS: "true"
+    # The SDK node config defaults HOST to loopback; inside the container it
+    # must bind all interfaces. ingress none publishes no host port.
+    HOST: 0.0.0.0
     L9_ENRICHMENT_PROVIDER: perplexity
     # The operator-provisioned Redis (no credentials) on l9-runtime.
     REDIS_URL: redis://eie-redis:6379/0
