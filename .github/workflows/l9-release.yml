@@ -1,13 +1,11 @@
 # --- L9_META ---
 # l9_schema: 1
-# origin: l9-deployment-platform
-# layer:
-# - repository
-# tags:
-# - L9_META
-# - deployment-platform
+# origin: engine-specific
+# engine: enrichment
+# layer: [ci]
+# tags: [l9-deploy, release]
 # owner: platform
-# status: candidate
+# status: active
 # --- /L9_META ---
 #
 # Thin l9-deploy release caller (Quantum-L9/l9-deploy templates/consumer, Core

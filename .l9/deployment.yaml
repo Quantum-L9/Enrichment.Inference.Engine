@@ -1,11 +1,11 @@
 # --- L9_META ---
 # l9_schema: 1
-# repo: Quantum-L9/Enrichment.Inference.Engine
-# path: .l9/deployment.yaml
-# layer: deployment
+# origin: engine-specific
+# engine: enrichment
+# layer: [config]
+# tags: [l9-deploy, deployment-profile]
 # owner: platform
-# status: candidate
-# updated: 2026-11-15
+# status: active
 # --- /L9_META ---
 #
 # EIE's deployment contract (l9.deployment-profile/v2, Quantum-L9/l9-deploy
