@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENRICHMENT_PROVIDERS: frozenset[str] = frozenset({"perplexity", "deterministic"})
@@ -155,6 +155,16 @@ class Settings(BaseSettings):
     max_budget_tokens: int = 50_000
     max_budget_tokens_default: int = 50_000
     token_rate_usd_per_1k: float = 0.005
+
+    # Enrichment sweep (docs/contracts/enrichment-sweep.md). Off by default:
+    # with the flag off both sweep actions refuse with `disabled`. The ceiling
+    # bounds whatever daily budget a consumer requests; the effective daily
+    # budget per tenant per UTC day is min(request, ceiling). C-09: L9_ names.
+    l9_enrichment_sweep_enabled: bool = False
+    l9_sweep_max_daily_budget_usd: float = Field(default=5.0, gt=0)
+    l9_sweep_max_candidates_per_request: int = Field(default=500, gt=0)
+    l9_sweep_result_ttl_hours: float = Field(default=72.0, gt=0)
+    l9_sweep_results_page_size: int = Field(default=50, gt=0)
 
     cb_failure_threshold: int = 5
     cb_cooldown_seconds: int = 60
