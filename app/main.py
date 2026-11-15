@@ -223,6 +223,8 @@ ADVERTISED_ACTIONS: tuple[str, ...] = (
     "graph-inference-result",
     "enrich",
     "enrich-and-sync",
+    "enrichment-sweep",
+    "enrichment-sweep-results",
 )
 # Cluster-internal service address, reached over the container network rather
 # than the public internet, and Gate's registration schema accepts both schemes

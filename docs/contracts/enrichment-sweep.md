@@ -24,9 +24,23 @@ The tenant is the one the chassis resolved from the packet. Node labels and
 field names come from the tenant's cartridge (tenant id == cartridge id) or
 from CEG's answer. Shared code names no tenant, domain, node or field.
 
-Both actions refuse with `disabled` while `L9_ENRICHMENT_SWEEP_ENABLED` is
-false (the default). Gate routing for both actions, and Gate permission for
-EIE to call `health-assess`, are not in this repository (Gate #43).
+Both actions are registered with the SDK runtime, listed in
+`app.main.RUNTIME_ALLOWED_ACTIONS` and advertised in `app.main.ADVERTISED_ACTIONS`
+(advertised ⊆ implemented ⊆ runtime_allowed). Both refuse with `disabled` while
+`L9_ENRICHMENT_SWEEP_ENABLED` is false (the default). Gate routing for both
+actions, and Gate permission for EIE to call `health-assess`, are not in this
+repository (Gate #43).
+
+### 1.1 Payload field names (exact)
+
+| Action | Top-level members | Required |
+| --- | --- | --- |
+| `enrichment-sweep` | `candidates`, `daily_budget_usd`, `idempotency_key` | all three |
+| `enrichment-sweep` candidate | `entity_id`, `entity`, `node_label`, `field_confidences` | `entity_id`, `entity` |
+| `enrichment-sweep-results` | `sweep_id`, `cursor` | `sweep_id` |
+
+Any other member is refused (`invalid_request` for the envelope, `invalid_candidate`
+for a candidate). `enrichment-sweep-results` takes no `idempotency_key`.
 
 ## 2. Settings
 
@@ -35,7 +49,7 @@ EIE to call `health-assess`, are not in this repository (Gate #43).
 | `L9_ENRICHMENT_SWEEP_ENABLED` | `false` | Feature flag. |
 | `L9_SWEEP_MAX_DAILY_BUDGET_USD` | `5.0` | Deployment ceiling on any requested daily budget. |
 | `L9_SWEEP_MAX_CANDIDATES_PER_REQUEST` | `500` | Candidates accepted per request; the rest are rejected. |
-| `L9_SWEEP_RESULT_TTL_HOURS` | `72` | How long a sweep is kept after its results are fetched. |
+| `L9_SWEEP_RESULT_TTL_HOURS` | `72` | How long a sweep is kept after it completes. |
 | `L9_SWEEP_RESULTS_PAGE_SIZE` | `50` | Results per page. |
 
 ## 3. `enrichment-sweep`
@@ -67,14 +81,28 @@ EIE to call `health-assess`, are not in this repository (Gate #43).
 {"sweep_id": "<32 hex>", "accepted": ["<entity_id>"], "rejected": [{"entity_id": "...", "reason": "..."}]}
 ```
 
-`sweep_id` is deterministic per (tenant, `idempotency_key`). Repeating a
-request with the same key returns the existing sweep and starts nothing.
+### 3.3 Idempotency
+
+`enrichment-sweep` is idempotent on the top-level string `idempotency_key`,
+per tenant (the chassis-resolved tenant, never a payload field):
+
+* The key → `sweep_id` mapping is persisted (`enrichment_sweeps`, unique on
+  `(tenant_id, idempotency_key)`), including for a sweep in which no candidate
+  was accepted (recorded already `completed`).
+* A replay with the same key returns the original `{sweep_id, accepted,
+  rejected}` exactly, whatever the replayed `candidates` or `daily_budget_usd`
+  say. It starts no new work, re-assesses nothing, and reserves no budget.
+* `sweep_id` is deterministic per (tenant, `idempotency_key`).
+* The envelope is validated before the lookup: a replay whose envelope is
+  invalid is refused `invalid_request`, as the original would have been.
+* The mapping lives as long as the sweep (section 6.3). A key reused after its
+  sweep has been deleted starts a new sweep.
 
 Rejection reasons: `invalid_candidate`, `invalid_entity_id`, `invalid_entity`,
 `invalid_field_confidences`, `node_label_required`, `node_not_declared`,
 `duplicate_entity_id`, `candidate_cap_exceeded`.
 
-### 3.3 The background run
+### 3.4 The background run
 
 1. **Readiness.** Accepted candidates are sent to CEG through Gate, action
    `health-assess`, in batches of at most 100:
@@ -167,8 +195,19 @@ stands in for it: there is no local readiness estimate.
   effective budget. `remaining_usd` also subtracts reservations in flight.
 * `stats` is additive to the lane's response shape: counters by skip reason
   plus `enriched` and `targets_dropped_undeclared`.
-* A sweep is retained until its last page has been fetched, then for
-  `L9_SWEEP_RESULT_TTL_HOURS`. After that it is `sweep_not_found`.
+
+### 6.3 Read-only and retention
+
+`enrichment-sweep-results` is strictly read-only. It writes nothing (no ledger,
+no sweep, no result, no fetch marker), never starts or resumes a sweep, and a
+replayed request — same `sweep_id`, same `cursor` — returns the same page. A
+page changes only because the background run of `enrichment-sweep` added
+results or completed in between.
+
+A sweep is retained for `L9_SWEEP_RESULT_TTL_HOURS` after it completes. Past
+that, `enrichment-sweep-results` answers `sweep_not_found` without deleting
+anything; the expired rows are deleted by the next `enrichment-sweep` call,
+the only action that writes. A running sweep does not expire.
 
 ## 7. Refusals
 

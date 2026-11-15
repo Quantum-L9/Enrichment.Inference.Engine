@@ -53,7 +53,7 @@ class SweepRecord:
     state: str = RUNNING
     skipped: tuple[dict[str, Any], ...] = ()
     stats: dict[str, Any] = field(default_factory=dict)
-    fetched_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -117,12 +117,8 @@ class SweepStore(Protocol):
         """Up to `limit` results after `after_seq`, in order."""
         ...
 
-    async def mark_fetched(self, sweep_id: str, now: datetime) -> None:
-        """Start the retention clock of a completed sweep on its first fetch."""
-        ...
-
     async def purge_expired(self, now: datetime, ttl: timedelta) -> int:
-        """Delete sweeps fetched more than `ttl` ago, with their results."""
+        """Delete sweeps completed more than `ttl` ago, with their results."""
         ...
 
 
@@ -138,7 +134,7 @@ def _record(row: EnrichmentSweepRecord) -> SweepRecord:
         state=row.state,
         skipped=tuple(row.skipped or ()),
         stats=dict(row.stats or {}),
-        fetched_at=row.fetched_at,
+        completed_at=row.completed_at,
     )
 
 
@@ -160,6 +156,7 @@ class PgSweepStore:
                     rejected=list(record.rejected),
                     skipped=list(record.skipped),
                     stats=dict(record.stats),
+                    completed_at=record.completed_at,
                 )
                 .on_conflict_do_nothing(constraint="uq_enrichment_sweeps_tenant_key")
                 .returning(EnrichmentSweepRecord.sweep_id)
@@ -270,25 +267,13 @@ class PgSweepStore:
                 for r in rows.scalars()
             ]
 
-    async def mark_fetched(self, sweep_id: str, now: datetime) -> None:
-        async with pg_store.get_session() as session:
-            await session.execute(
-                update(EnrichmentSweepRecord)
-                .where(
-                    EnrichmentSweepRecord.sweep_id == sweep_id,
-                    EnrichmentSweepRecord.state == COMPLETED,
-                    EnrichmentSweepRecord.fetched_at.is_(None),
-                )
-                .values(fetched_at=now)
-            )
-
     async def purge_expired(self, now: datetime, ttl: timedelta) -> int:
         async with pg_store.get_session() as session:
             purged = await session.execute(
                 delete(EnrichmentSweepRecord)
                 .where(
-                    EnrichmentSweepRecord.fetched_at.is_not(None),
-                    EnrichmentSweepRecord.fetched_at < now - ttl,
+                    EnrichmentSweepRecord.completed_at.is_not(None),
+                    EnrichmentSweepRecord.completed_at < now - ttl,
                 )
                 .returning(EnrichmentSweepRecord.sweep_id)
             )

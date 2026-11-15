@@ -332,7 +332,6 @@ class EnrichmentSweepRecord(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "idempotency_key", name="uq_enrichment_sweeps_tenant_key"),

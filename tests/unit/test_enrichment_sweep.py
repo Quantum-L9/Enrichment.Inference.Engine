@@ -138,23 +138,18 @@ class MemoryStore:
         record = self.sweeps[sweep_id]
         changes: dict[str, Any] = {"skipped": tuple(skipped), "stats": dict(stats)}
         if completed_at is not None:
-            changes["state"] = COMPLETED
+            changes.update(state=COMPLETED, completed_at=completed_at)
         self.sweeps[sweep_id] = replace(record, **changes)
 
     async def results_page(self, sweep_id: str, after_seq: int, limit: int) -> list[SweepResultRow]:
         rows = [r for r in self.results.get(sweep_id, []) if r.seq > after_seq]
         return sorted(rows, key=lambda r: r.seq)[:limit]
 
-    async def mark_fetched(self, sweep_id: str, now: datetime) -> None:
-        record = self.sweeps[sweep_id]
-        if record.state == COMPLETED and record.fetched_at is None:
-            self.sweeps[sweep_id] = replace(record, fetched_at=now)
-
     async def purge_expired(self, now: datetime, ttl: timedelta) -> int:
         expired = [
             k
             for k, r in self.sweeps.items()
-            if r.fetched_at is not None and r.fetched_at < now - ttl
+            if r.completed_at is not None and r.completed_at < now - ttl
         ]
         for key in expired:
             del self.sweeps[key]
@@ -488,11 +483,10 @@ async def test_invalid_candidates_are_rejected_and_the_cap_applies() -> None:
     assert {r["reason"] for r in reply["rejected"]} == {"candidate_cap_exceeded"}
 
 
-async def test_results_are_purged_ttl_after_fetch() -> None:
+async def test_sweeps_expire_ttl_after_completion_and_are_deleted_by_the_sweep_action() -> None:
     store = MemoryStore()
     wire(store, Graph(), Converge())
     out = await sweep(1, budget=50, key="ttl")
-    await fetch_all(out["sweep_id"])
     later = NOW + timedelta(hours=get_settings().l9_sweep_result_ttl_hours + 1)
     sweep_handlers.init_sweep(
         reader=READER, store=store, assess=Graph(), converge=Converge(), clock=lambda: later
@@ -500,6 +494,91 @@ async def test_results_are_purged_ttl_after_fetch() -> None:
     with pytest.raises(SweepRefusedError) as refused:
         await sweep_handlers.handle_enrichment_sweep_results(TENANT, {"sweep_id": out["sweep_id"]})
     assert refused.value.code == "sweep_not_found"
+    assert out["sweep_id"] in store.sweeps, "the read-only results action deletes nothing"
+    await sweep(1, budget=50, key="later")
+    assert out["sweep_id"] not in store.sweeps
+
+
+# ── Idempotency and read-only results (CTO directive) ──────────────────────
+
+
+def _snapshot(store: MemoryStore) -> tuple[Any, ...]:
+    return (
+        dict(store.sweeps),
+        {k: list(v) for k, v in store.results.items()},
+        dict(store.ledgers),
+    )
+
+
+async def test_sweep_replay_returns_the_original_answer_without_new_work_or_budget() -> None:
+    store, graph, converge = MemoryStore(), Graph(), Converge()
+    wire(store, graph, converge)
+    rows = [*candidates(2), {"entity_id": "bad", "entity": "x"}]
+    body = {"candidates": rows, "daily_budget_usd": 50, "idempotency_key": "replay"}
+    first = await sweep_handlers.handle_enrichment_sweep(TENANT, body)
+    await sweep_handlers.wait_for_background_sweeps()
+    before = (_snapshot(store), len(graph.calls), len(converge.bodies))
+
+    changed = {"candidates": candidates(5), "daily_budget_usd": 1, "idempotency_key": "replay"}
+    for replay in (body, changed):
+        again = await sweep_handlers.handle_enrichment_sweep(TENANT, replay)
+        assert sweep_handlers._background == set(), "a replay starts no work"
+        await sweep_handlers.wait_for_background_sweeps()
+        assert again == first
+    assert (_snapshot(store), len(graph.calls), len(converge.bodies)) == before
+
+
+async def test_sweep_replay_with_nothing_accepted_keeps_its_original_answer() -> None:
+    store = MemoryStore()
+    wire(store, Graph(), Converge())
+    body = {"candidates": [{"entity_id": "bad"}], "daily_budget_usd": 5, "idempotency_key": "none"}
+    first = await sweep_handlers.handle_enrichment_sweep(TENANT, body)
+    assert first["accepted"] == [] and first["rejected"]
+    other = {"candidates": candidates(1), "daily_budget_usd": 5, "idempotency_key": "none"}
+    assert await sweep_handlers.handle_enrichment_sweep(TENANT, other) == first
+    assert sweep_handlers._background == set()
+
+
+async def test_results_are_read_only_and_a_replayed_page_is_the_same_page() -> None:
+    store = MemoryStore()
+    wire(store, Graph(), Converge())
+    with patch.dict(os.environ, {"L9_SWEEP_RESULTS_PAGE_SIZE": "2"}):
+        get_settings.cache_clear()
+        out = await sweep(3, budget=50, key="pages")
+        before = _snapshot(store)
+        request = {"sweep_id": out["sweep_id"]}
+        first = await sweep_handlers.handle_enrichment_sweep_results(TENANT, request)
+        assert await sweep_handlers.handle_enrichment_sweep_results(TENANT, request) == first
+        cursor = {"sweep_id": out["sweep_id"], "cursor": first["next_cursor"]}
+        second = await sweep_handlers.handle_enrichment_sweep_results(TENANT, cursor)
+        assert await sweep_handlers.handle_enrichment_sweep_results(TENANT, cursor) == second
+    assert len(first["results"]) == 2 and len(second["results"]) == 1
+    assert second["next_cursor"] is None
+    assert _snapshot(store) == before
+    assert sweep_handlers._background == set()
+
+
+async def test_results_of_a_running_sweep_never_start_or_resume_it() -> None:
+    store, converge = MemoryStore(), Converge()
+    wire(store, Graph(), converge)
+    record = SweepRecord(
+        sweep_id="s" * 32,
+        tenant_id=TENANT,
+        idempotency_key="interrupted",
+        day=NOW.date(),
+        effective_budget_usd=Decimal("50"),
+        candidates=tuple(candidates(2)),
+    )
+    await store.create_sweep(record)
+    page = await sweep_handlers.handle_enrichment_sweep_results(TENANT, {"sweep_id": "s" * 32})
+    assert page["state"] == "running" and page["results"] == []
+    assert page["next_cursor"] == "0"
+    assert sweep_handlers._background == set() and converge.bodies == []
+    with pytest.raises(SweepRefusedError) as refused:
+        await sweep_handlers.handle_enrichment_sweep_results(
+            TENANT, {"sweep_id": "s" * 32, "idempotency_key": "k"}
+        )
+    assert refused.value.code == "invalid_request"
 
 
 # ── Flag ───────────────────────────────────────────────────────────────────
@@ -535,10 +614,11 @@ def test_both_actions_are_registered_in_lockstep() -> None:
 
     handlers = get_handler_map()
     for action in ("enrichment-sweep", "enrichment-sweep-results"):
+        assert action in ADVERTISED_ACTIONS
         assert action in RUNTIME_ALLOWED_ACTIONS
         assert action in handlers
-        # Gate does not route these yet; they are not advertised.
-        assert action not in ADVERTISED_ACTIONS
+    # advertised ⊆ implemented ⊆ runtime_allowed
+    assert set(ADVERTISED_ACTIONS) <= set(RUNTIME_ALLOWED_ACTIONS)
 
 
 # ── Persistence shape ──────────────────────────────────────────────────────

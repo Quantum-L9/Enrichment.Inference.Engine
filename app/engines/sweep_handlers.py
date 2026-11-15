@@ -36,6 +36,7 @@ import structlog
 from ..core.config import get_settings
 from ..services.sweep_store import (
     COMPLETED,
+    RUNNING,
     LedgerState,
     PgSweepStore,
     SweepRecord,
@@ -49,6 +50,7 @@ from .enrichment_sweep import (
     ConvergeFn,
     SweepRefusedError,
     SweepRunner,
+    ValidatedRequest,
     effective_budget,
     money,
     sweep_id_for,
@@ -150,36 +152,26 @@ async def handle_enrichment_sweep(
     request = validate_request(payload, config, settings.l9_sweep_max_candidates_per_request)
     sweep_id = sweep_id_for(tenant, request.idempotency_key)
     accepted_ids = [c["entity_id"] for c in request.accepted]
-    if not request.accepted:
-        return {"sweep_id": sweep_id, "accepted": [], "rejected": list(request.rejected)}
-
     now = _wiring.clock()
-    record = SweepRecord(
-        sweep_id=sweep_id,
-        tenant_id=tenant,
-        idempotency_key=request.idempotency_key,
-        day=utc_day(now),
-        effective_budget_usd=effective_budget(
-            request.requested_budget_usd, settings.l9_sweep_max_daily_budget_usd
-        ),
-        candidates=request.accepted,
-        rejected=request.rejected,
-    )
+    record = _new_record(tenant, sweep_id, request, settings, now)
     store = _store()
+    await _purge(store, settings, now)
     try:
         stored, created = await store.create_sweep(record)
     except Exception as exc:
         logger.error("enrichment_sweep.store_unavailable", tenant=tenant, error=str(exc))
         raise SweepRefusedError("sweep_store_unavailable", str(exc)) from exc
     if not created:
-        # Same (tenant, idempotency_key): the sweep already exists; nothing restarts.
+        # Same (tenant, idempotency_key): the original answer, no new work and
+        # no new reservation, whatever the replayed body says.
         return {
             "sweep_id": stored.sweep_id,
             "accepted": [c["entity_id"] for c in stored.candidates],
             "rejected": list(stored.rejected),
         }
 
-    _start(store, stored, settings)
+    if stored.state != COMPLETED:
+        _start(store, stored, settings)
     logger.info(
         "enrichment_sweep.accepted",
         tenant=tenant,
@@ -189,6 +181,36 @@ async def handle_enrichment_sweep(
         effective_budget_usd=str(record.effective_budget_usd),
     )
     return {"sweep_id": sweep_id, "accepted": accepted_ids, "rejected": list(request.rejected)}
+
+
+def _new_record(
+    tenant: str, sweep_id: str, request: ValidatedRequest, settings: Any, now: datetime
+) -> SweepRecord:
+    """The sweep to persist. One with nothing accepted is recorded already completed,
+    so the key -> sweep_id mapping and the original answer survive a replay."""
+    done = not request.accepted
+    return SweepRecord(
+        sweep_id=sweep_id,
+        tenant_id=tenant,
+        idempotency_key=request.idempotency_key,
+        day=utc_day(now),
+        effective_budget_usd=effective_budget(
+            request.requested_budget_usd, settings.l9_sweep_max_daily_budget_usd
+        ),
+        candidates=request.accepted,
+        rejected=request.rejected,
+        state=COMPLETED if done else RUNNING,
+        completed_at=now if done else None,
+    )
+
+
+async def _purge(store: SweepStore, settings: Any, now: datetime) -> None:
+    """Delete expired sweeps. Retention is enforced by the one action that writes;
+    the results action only reads (contract section 6)."""
+    try:
+        await store.purge_expired(now, timedelta(hours=settings.l9_sweep_result_ttl_hours))
+    except Exception as exc:
+        logger.warning("enrichment_sweep.purge_failed", error=str(exc))
 
 
 def _start(store: SweepStore, record: SweepRecord, settings: Any) -> None:
@@ -211,26 +233,23 @@ async def handle_enrichment_sweep_results(
     payload: dict[str, Any],
     packet: Any = None,
 ) -> dict[str, Any]:
-    """One page of a sweep's results, its budget and its skips."""
+    """One page of a sweep's results, its budget and its skips.
+
+    Strictly read-only: it writes nothing, starts or resumes nothing, and the
+    same request returns the same page. A sweep past its retention is answered
+    `sweep_not_found` here and deleted later by `enrichment-sweep`.
+    """
     settings = get_settings()
     _require_enabled(settings)
     sweep_id, after = _results_request(payload)
-    store = _store()
-    now = _wiring.clock()
-    try:
-        await store.purge_expired(now, timedelta(hours=settings.l9_sweep_result_ttl_hours))
-    except Exception as exc:
-        logger.warning("enrichment_sweep.purge_failed", error=str(exc))
     limit = settings.l9_sweep_results_page_size
-    record, rows, ledger = await _read(store, tenant, sweep_id, after, limit)
+    record, rows, ledger = await _read(_store(), tenant, sweep_id, after, limit)
+    ttl = timedelta(hours=settings.l9_sweep_result_ttl_hours)
+    if record.completed_at is not None and record.completed_at < _wiring.clock() - ttl:
+        raise SweepRefusedError("sweep_not_found", sweep_id)
 
     last = rows[-1].seq if rows else after
     finished = record.state == COMPLETED and len(rows) < limit
-    if finished:
-        try:
-            await store.mark_fetched(sweep_id, now)
-        except Exception as exc:
-            logger.warning("enrichment_sweep.fetch_not_recorded", error=str(exc))
     effective = record.effective_budget_usd
     remaining = max(effective - ledger.spent_usd - ledger.reserved_usd, money(0))
     return {

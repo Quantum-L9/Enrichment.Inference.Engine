@@ -48,7 +48,6 @@ def upgrade() -> None:
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=True),
         sa.UniqueConstraint("tenant_id", "idempotency_key", name="uq_enrichment_sweeps_tenant_key"),
         sa.CheckConstraint("state IN ('running', 'completed')", name="ck_enrichment_sweeps_state"),
     )
