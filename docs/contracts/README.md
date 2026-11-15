@@ -43,6 +43,8 @@ The **Enrichment Inference Engine** is a **Hybrid** (AI Agent Framework + Data P
 | `GET /v1/score/{entity_id}/explain` | REST API | `app/score/score_api.py` | Score explainability |
 | `POST /v1/health/assess` | REST API | `app/health/health_api.py` | Full CRM health assessment |
 | `GET /v1/health/ai-readiness` | REST API | `app/health/health_api.py` | AI readiness score |
+| `enrichment-sweep` | SDK Action | `app/engines/sweep_handlers.py` | Readiness-driven, budgeted converge sweep ([contract](enrichment-sweep.md)); off unless `L9_ENRICHMENT_SWEEP_ENABLED` |
+| `enrichment-sweep-results` | SDK Action | `app/engines/sweep_handlers.py` | Page a sweep's converge v2 results, budget and skips ([contract](enrichment-sweep.md)) |
 | `enrich_contact` | MCP Tool | `app/agents/mcp_server.py:35` | Waterfall entity enrichment |
 | `lead_router` | MCP Tool | `app/agents/mcp_server.py:46` | Lead routing via scores |
 | `deal_risk` | MCP Tool | `app/agents/mcp_server.py:55` | Opportunity risk assessment |
@@ -51,6 +53,7 @@ The **Enrichment Inference Engine** is a **Hybrid** (AI Agent Framework + Data P
 | `EnrichmentResult` | Data Model | `app/services/pg_models.py:43` | Persisted enrichment output |
 | `ConvergenceRun` | Data Model | `app/services/pg_models.py:93` | Multi-pass loop state |
 | `FieldConfidenceHistory` | Data Model | `app/services/pg_models.py:137` | Per-field confidence time-series |
+| `SweepBudgetLedger` / `EnrichmentSweepRecord` / `EnrichmentSweepResult` | Data Model | `app/services/pg_models.py` | Sweep budget ledger, sweeps, results (migration 004) |
 | `SchemaProposalRecord` | Data Model | `app/services/pg_models.py:165` | Schema proposals + approval |
 | `EnrichRequest` / `EnrichResponse` | Pydantic Schema | `app/models/schemas.py:26` | Primary enrichment wire contract |
 | `EnrichmentEvent` | Event Schema | `app/services/event_emitter.py:32` | Redis Streams event envelope |

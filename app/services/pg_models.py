@@ -8,6 +8,9 @@ Tables:
   convergence_runs        — one row per convergence loop run (multi-pass)
   field_confidence_history — time-series per-field confidence values
   schema_proposals        — schema proposals with human approval workflow
+  sweep_budget_ledger     — per tenant per UTC day enrichment-sweep spend
+  enrichment_sweeps       — accepted enrichment-sweep requests
+  enrichment_sweep_results — converge v2 bodies a sweep produced
 
 All tables use:
   - UUID primary keys (PostgreSQL native UUID type)
@@ -19,10 +22,12 @@ All tables use:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -277,4 +282,82 @@ class SchemaProposalRecord(Base):
             "created_at",
         ),
         Index("ix_schema_proposals_domain_status", "domain", "approval_status"),
+    )
+
+
+# ── Enrichment sweep (docs/contracts/enrichment-sweep.md) ──────────────────
+
+
+class SweepBudgetLedger(Base):
+    """Per tenant, per UTC day: what sweeps have spent and hold reserved (USD).
+
+    One row per (tenant_id, day). A reservation is taken with a single
+    conditional UPDATE (`spent + reserved + estimate <= cap`), so two sweeps of
+    one tenant can never together pass the day's cap. Settling moves the
+    estimate out of `reserved_usd` and the actual cost into `spent_usd`.
+    """
+
+    __tablename__ = "sweep_budget_ledger"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    spent_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False, default=0)
+    reserved_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("spent_usd >= 0", name="ck_sweep_ledger_spent_nonnegative"),
+        CheckConstraint("reserved_usd >= 0", name="ck_sweep_ledger_reserved_nonnegative"),
+    )
+
+
+class EnrichmentSweepRecord(Base):
+    """One accepted sweep request: its candidates, state, skips and counters."""
+
+    __tablename__ = "enrichment_sweeps"
+
+    sweep_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_budget_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
+    candidates: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    rejected: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    skipped: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    stats: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_enrichment_sweeps_tenant_key"),
+        CheckConstraint("state IN ('running', 'completed')", name="ck_enrichment_sweeps_state"),
+    )
+
+
+class EnrichmentSweepResult(Base):
+    """One converge v2 response body produced by a sweep, stored as returned."""
+
+    __tablename__ = "enrichment_sweep_results"
+
+    sweep_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("enrichment_sweeps.sweep_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entity_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    response: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("sweep_id", "entity_id", name="uq_enrichment_sweep_results_entity"),
     )

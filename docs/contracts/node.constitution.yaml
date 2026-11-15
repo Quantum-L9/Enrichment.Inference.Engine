@@ -112,6 +112,35 @@ actions:
       - inference_version
       - kb_fragment_ids
 
+  enrichment-sweep:
+    # docs/contracts/enrichment-sweep.md. Off unless L9_ENRICHMENT_SWEEP_ENABLED.
+    # Enriches through the canonical converge path; writes nothing to the
+    # consumer, whose human review gates any write there.
+    mutation_class: internal_state
+    approval_mode: autonomous
+    idempotency_mode: required_for_safe_replay
+    replay_safe: true
+    required_dependencies:
+      - PerplexitySONAR
+      - PostgreSQL
+      - ConstellationGate
+    optional_dependencies:
+      - Redis
+    event_class: governance
+    required_provenance:
+      - inference_version
+
+  enrichment-sweep-results:
+    mutation_class: read_only
+    approval_mode: autonomous
+    idempotency_mode: naturally_idempotent
+    replay_safe: true
+    required_dependencies:
+      - PostgreSQL
+    optional_dependencies: []
+    event_class: telemetry
+    required_provenance: []
+
   writeback:
     mutation_class: external_mutation
     approval_mode: threshold_or_human

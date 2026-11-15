@@ -735,10 +735,15 @@ async def handle_writeback(
 def get_handler_map() -> dict[str, Any]:
     # PREVIEW-01: `simulate` is deliberately absent — it is a demo fixture, not
     # a runtime action (see handle_simulate and app.main.RUNTIME_ALLOWED_ACTIONS).
+    # The sweep handlers import this module lazily, so this import stays local.
+    from .sweep_handlers import handle_enrichment_sweep, handle_enrichment_sweep_results
+
     return {
         "enrich": handle_enrich,
         "enrichbatch": handle_enrichbatch,
         "converge": handle_converge,
         "discover": handle_discover,
         "writeback": handle_writeback,
+        "enrichment-sweep": handle_enrichment_sweep,
+        "enrichment-sweep-results": handle_enrichment_sweep_results,
     }

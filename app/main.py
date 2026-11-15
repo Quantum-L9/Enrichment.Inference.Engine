@@ -349,6 +349,8 @@ RUNTIME_ALLOWED_ACTIONS: tuple[str, ...] = (
     "enrich",
     "enrich-and-sync",
     "enrichbatch",
+    "enrichment-sweep",
+    "enrichment-sweep-results",
     "graph-inference-result",
     "schema-proposal",
     "writeback",
