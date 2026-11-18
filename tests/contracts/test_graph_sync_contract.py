@@ -516,4 +516,15 @@ async def test_coordinator_forwards_the_node_label_to_the_router() -> None:
             node_label="Facility",
         )
     assert report.graph_synced is True
+    assert report.score_invalidated is False
+    assert router.notify_score_invalidate.await_count == 0
     assert router.notify_graph_sync.await_args.kwargs["node_label"] == "Facility"
+
+
+@pytest.mark.unit
+def test_packet_router_does_not_dispatch_score_invalidate() -> None:
+    """score-invalidate has no Gate owner, so the router exposes no sender for it."""
+    router = PacketRouter(gate_url=GATE)
+    assert not hasattr(router, "notify_score_invalidate")
+    score_methods = [name for name in dir(PacketRouter) if "score" in name]
+    assert score_methods == []

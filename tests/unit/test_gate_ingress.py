@@ -6,6 +6,9 @@ the SDK route with its body intact, and the C-21 ownership check on the live app
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from collections.abc import Iterator
 from typing import Any
 
@@ -143,12 +146,105 @@ def test_rejects_hmac_where_trust_is_required(seen: list[dict[str, Any]]) -> Non
     _rejected(response, "hmac-sha256 cannot prove Gate authorship", seen)
 
 
+@pytest.mark.parametrize("environment", ["local", "test", "dev"])
+def test_key_binding_stays_optional_outside_staging_and_prod(environment: str) -> None:
+    assert resolve_gate_key_binding(environment, "") == (None, False)
+    assert resolve_gate_key_binding(environment, "gate-v1") == (frozenset({"gate-v1"}), False)
+
+
 @pytest.mark.parametrize("environment", ["staging", "prod"])
-def test_key_binding_applies_only_when_gate_key_ids_are_configured(environment: str) -> None:
-    # Unset in staging/prod is the stated residual: claim checks only, no binding.
-    assert resolve_gate_key_binding(environment, " , ") == (None, False)
-    assert resolve_gate_key_binding(environment, "gate-v1") == (frozenset({"gate-v1"}), True)
-    assert resolve_gate_key_binding("local", "") == (None, False)
+def test_configured_gate_key_ids_bind_where_trust_is_required(environment: str) -> None:
+    assert resolve_gate_key_binding(environment, "gate-v1, gate-v2") == (
+        frozenset({"gate-v1", "gate-v2"}),
+        True,
+    )
+
+
+@pytest.mark.parametrize("raw_key_ids", ["", " ", " , "])
+@pytest.mark.parametrize("environment", ["staging", "prod"])
+def test_missing_gate_key_ids_refuse_startup_before_serving(
+    environment: str, raw_key_ids: str
+) -> None:
+    """GATE-KEY-01: staging/prod raise before middleware is installed or the lifespan runs."""
+    config = NodeRuntimeConfig(
+        environment=environment,
+        node_name=NODE,
+        service_name=NODE,
+        service_version="test",
+        dev_mode=False,
+        allowed_actions=("enrich",),
+    )
+    app = create_node_app(config=config, auto_register_with_gate=False)
+    with pytest.raises(RuntimeError, match="L9_GATE_SIGNING_KEY_IDS"):
+        install_gate_only_ingress(app, config=config, gate_signing_key_ids=raw_key_ids)
+    assert not any(m.cls is GateOnlyIngressMiddleware for m in app.user_middleware)
+    # Construction leaves the runtime stopped. The lifespan that would accept
+    # connections never runs, so it never flips lifecycle_started on.
+    assert app.state.lifecycle_started is False
+    assert app.state.runtime_ready is False
+
+
+@pytest.mark.parametrize("environment", ["staging", "prod"])
+def test_disabled_gate_only_ingress_refuses_startup_before_serving(environment: str) -> None:
+    """Policy requires the boundary in staging/prod; a disabled flag must not reach serving."""
+    config = NodeRuntimeConfig(
+        environment=environment,
+        node_name=NODE,
+        service_name=NODE,
+        service_version="test",
+        dev_mode=False,
+        allowed_actions=("enrich",),
+        enforce_gate_only_ingress=False,
+    )
+    app = create_node_app(config=config, auto_register_with_gate=False)
+    with pytest.raises(RuntimeError, match="L9_ENFORCE_GATE_ONLY_INGRESS"):
+        install_gate_only_ingress(app, config=config, gate_signing_key_ids="gate-v1")
+    assert not any(m.cls is GateOnlyIngressMiddleware for m in app.user_middleware)
+    assert app.state.lifecycle_started is False
+    assert app.state.runtime_ready is False
+
+
+def _import_app_main(
+    environment: str, *, key_ids: str, enforce: str
+) -> subprocess.CompletedProcess[str]:
+    """Import the live ASGI module the way uvicorn does, without starting a server."""
+    env = os.environ.copy()
+    env["L9_ENVIRONMENT"] = environment
+    env["L9_GATE_SIGNING_KEY_IDS"] = key_ids
+    env["L9_ENFORCE_GATE_ONLY_INGRESS"] = enforce
+    env["L9_DEV_MODE"] = "false"
+    return subprocess.run(
+        [sys.executable, "-c", "import app.main"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+@pytest.mark.parametrize("environment", ["staging", "prod"])
+def test_live_app_import_refuses_missing_key_ids_before_serving(environment: str) -> None:
+    result = _import_app_main(environment, key_ids="", enforce="true")
+    assert result.returncode != 0
+    assert "L9_GATE_SIGNING_KEY_IDS" in result.stderr
+    assert "Uvicorn running" not in result.stderr
+    assert "Uvicorn running" not in result.stdout
+
+
+@pytest.mark.parametrize("environment", ["staging", "prod"])
+def test_live_app_import_refuses_disabled_gate_only_ingress_before_serving(
+    environment: str,
+) -> None:
+    result = _import_app_main(environment, key_ids="gate-v1", enforce="false")
+    assert result.returncode != 0
+    assert "L9_ENFORCE_GATE_ONLY_INGRESS" in result.stderr
+    assert "Uvicorn running" not in result.stderr
+
+
+def test_live_app_import_still_loads_in_local_without_gate_key_ids() -> None:
+    result = _import_app_main("local", key_ids="", enforce="true")
+    assert result.returncode == 0, result.stderr
+    assert "Uvicorn running" not in result.stdout
 
 
 def test_malformed_bodies_and_other_routes_are_left_to_the_sdk(seen: list[dict[str, Any]]) -> None:

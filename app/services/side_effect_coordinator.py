@@ -11,11 +11,13 @@ status: active
 
 Single side-effect coordinator for EIE post-enrichment work (TASK-021).
 
-Guarantees at most one persistence, one score invalidation, and one
-enrichment-completed event per semantic request key, and records the graph
-sync as done only once CEG acknowledges it — an unacknowledged graph leg is
-the one effect a retry of the same key may attempt again (RV-DOMAIN-RD-07).
-All egress is Gate-only via PacketRouter / event emitter.
+Guarantees at most one persistence and one enrichment-completed event per
+semantic request key, and records the graph sync as done only once CEG
+acknowledges it — an unacknowledged graph leg is the one effect a retry of
+the same key may attempt again (RV-DOMAIN-RD-07). Score invalidation is not
+an effect: Gate does not own ``score-invalidate``, so this coordinator does
+not dispatch it and never reports ``score_invalidated``. All egress is
+Gate-only via PacketRouter / event emitter.
 
 A latency-bounded caller may DEFER the graph leg (`defer_graph_sync=True`):
 the key is left pending for its graph leg exactly as an unacknowledged sync
@@ -156,6 +158,8 @@ class SideEffectReport:
     persisted: bool = False
     graph_synced: bool = False
     graph_skipped: bool = False
+    # Kept so the report shape stays stable. Always False: Gate does not own
+    # score-invalidate, so no invalidation is dispatched or acknowledged.
     score_invalidated: bool = False
     event_emitted: bool = False
     skipped: bool = False
@@ -176,8 +180,8 @@ class SideEffectCoordinator:
 
     * ``_completed`` — every effect the call asked for either ran or was
       explicitly excluded. A later call for the key is a duplicate and skips.
-    * ``_graph_pending`` — persistence, score invalidation and the completion
-      event ran, but CEG did not acknowledge the graph sync. A later call for
+    * ``_graph_pending`` — persistence and the completion event ran, but CEG
+      did not acknowledge the graph sync. A later call for
       the key re-attempts the graph leg ONLY, so a legitimate retry can finish
       the sync without duplicating effects that already happened. The entry
       holds the ``entity_id``, ``fields`` and ``domain`` that WERE persisted and
@@ -307,20 +311,18 @@ class SideEffectCoordinator:
         21 s worst case, which a 30 s synchronous caller budget cannot absorb
         on top of the enrichment itself.
 
-        EIE-004 read the score-invalidation call below as escaping this guard.
-        It does not need the guard, and the distinction is the reason the flag
-        is named `graph_sync` rather than `side_effects`:
+        The flag is named `graph_sync` rather than `side_effects` because it
+        excludes only the awaited Gate->GRAPH hop:
 
         * `notify_graph_sync` is **awaited**, and goes to GRAPH (CEG's `sync`).
           Its latency lands on the caller. That is what the flag excludes.
-        * `notify_score_invalidate` is **fire-and-forget** (`route_fire_and_forget`
-          schedules a task and returns), and goes to SCORE, a different node. It
-          adds no measurable time to a bounded path, and suppressing it would
-          leave a stale score behind for an entity that was just enriched —
-          a correctness loss bought for no latency.
+        * Score invalidation is not dispatched. Gate does not own
+          `score-invalidate` (non-canonical; no node is registered), so there
+          is no acknowledgment to record. `score_invalidated` stays False.
+          This is not a skipped success.
 
-        So a bounded caller still invalidates scores. Anything that becomes an
-        awaited Gate hop must move inside the guard, or take a flag of its own.
+        Anything that becomes an awaited Gate hop must move inside the guard,
+        or take a flag of its own.
 
         `require_persistence=True` makes durability a precondition of the answer
         rather than a side effect of it: the persist failure is re-raised, and
@@ -549,44 +551,25 @@ class SideEffectCoordinator:
                 report.errors.append(f"graph_sync:{exc}")
                 logger.warning("side_effect_graph_sync_failed", entity_id=entity_id, error=str(exc))
 
-        if not graph_retry:
-            # 3) Score invalidation once — deliberately OUTSIDE the graph_sync guard.
-            # Fire-and-forget to SCORE, not an awaited hop to GRAPH: it costs a
-            # bounded caller nothing, and skipping it would leave a stale score on an
-            # entity that was just enriched. See the docstring (EIE-004).
+        # Event emit once, and never on a graph-only retry. Score invalidation
+        # is not a step: Gate does not own score-invalidate, and a dispatch
+        # without an acknowledgment must not set score_invalidated.
+        if not graph_retry and emit_event:
             try:
-                from app.engines.packet_router import get_router
+                from app.services.event_emitter import get_emitter
 
-                router = get_router(settings)
-                await router.notify_score_invalidate(
+                await get_emitter(settings).emit_enrichment_completed(
                     tenant_id=tenant,
                     entity_id=entity_id,
                     domain=domain,
+                    fields=response_dict.get("fields", {}),
+                    confidence=float(response_dict.get("confidence", 0.0) or 0.0),
+                    tokens_used=int(response_dict.get("tokens_used", 0) or 0),
                 )
-                report.score_invalidated = True
+                report.event_emitted = True
             except Exception as exc:  # noqa: BLE001
-                report.errors.append(f"score_invalidate:{exc}")
-                logger.warning(
-                    "side_effect_score_invalidate_failed", entity_id=entity_id, error=str(exc)
-                )
-
-            # 4) Event emit once
-            if emit_event:
-                try:
-                    from app.services.event_emitter import get_emitter
-
-                    await get_emitter(settings).emit_enrichment_completed(
-                        tenant_id=tenant,
-                        entity_id=entity_id,
-                        domain=domain,
-                        fields=response_dict.get("fields", {}),
-                        confidence=float(response_dict.get("confidence", 0.0) or 0.0),
-                        tokens_used=int(response_dict.get("tokens_used", 0) or 0),
-                    )
-                    report.event_emitted = True
-                except Exception as exc:  # noqa: BLE001
-                    report.errors.append(f"event:{exc}")
-                    logger.warning("side_effect_event_failed", entity_id=entity_id, error=str(exc))
+                report.errors.append(f"event:{exc}")
+                logger.warning("side_effect_event_failed", entity_id=entity_id, error=str(exc))
 
         if (graph_sync or graph_retry or report.graph_deferred) and not report.graph_synced:
             # The graph leg was asked for (on this call, or on the earlier one

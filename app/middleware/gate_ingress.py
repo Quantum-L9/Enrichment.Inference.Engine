@@ -72,19 +72,23 @@ def resolve_gate_key_binding(
     id is refused, and in staging/prod hmac-sha256 is refused as well: every
     verifier of a shared HMAC key can mint it.
 
-    Unset, the claim checks still run and the binding does not. In staging/prod
-    that is a stated residual, logged at error level on every start: a peer
-    whose key this node verifies can then claim Gate authorship. It is not a
-    startup failure because no deployment sets the variable yet, and refusing
-    to start would take the node down on a change its deploy config has not
-    made (CEG fails closed here; EIE can follow once the variable is deployed).
+    Unset outside staging/prod, the claim checks still run and the binding does
+    not. In staging/prod the binding is required: a peer whose key this node
+    verifies must not be able to claim Gate authorship. This raises before the
+    caller installs middleware or serves.
     """
     key_ids = frozenset(part.strip() for part in raw_key_ids.split(",") if part.strip())
     trust_required = environment in TRUST_REQUIRED_ENVIRONMENTS
     if key_ids:
         return key_ids, trust_required
-    log = logger.error if trust_required else logger.warning
-    log("gate_signing_key_binding_unset", environment=environment, trust_required=trust_required)
+    if trust_required:
+        msg = (
+            "L9_GATE_SIGNING_KEY_IDS is required in staging/prod (GATE-KEY-01): "
+            "without it any peer whose key this node verifies can claim Gate "
+            "authorship. Startup is refused before the server accepts connections"
+        )
+        raise RuntimeError(msg)
+    logger.warning("gate_signing_key_binding_unset", environment=environment, trust_required=False)
     return None, False
 
 
@@ -141,7 +145,19 @@ class GateOnlyIngressMiddleware:
 def install_gate_only_ingress(
     app: Starlette, *, config: NodeRuntimeConfig, gate_signing_key_ids: str
 ) -> bool:
-    """Put the boundary in front of the SDK route; honors ``L9_ENFORCE_GATE_ONLY_INGRESS``."""
+    """Put the boundary in front of the SDK route; honors ``L9_ENFORCE_GATE_ONLY_INGRESS``.
+
+    ``app.main`` calls this at import, before the ASGI lifespan starts and
+    before the server accepts connections. In staging/prod a missing Gate key
+    id list, or Gate-only ingress switched off, raises here and the process
+    never serves.
+    """
+    if config.environment in TRUST_REQUIRED_ENVIRONMENTS and not config.enforce_gate_only_ingress:
+        msg = (
+            "L9_ENFORCE_GATE_ONLY_INGRESS is required in staging/prod (GATE-KEY-01): "
+            "refusing startup before serving with Gate-only ingress disabled"
+        )
+        raise RuntimeError(msg)
     if not config.enforce_gate_only_ingress:
         logger.warning("gate_only_ingress_disabled", node=config.node_name)
         return False
