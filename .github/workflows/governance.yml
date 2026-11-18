@@ -40,11 +40,13 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: Quantum-L9/.github/.github/workflows/governance-pr.yml@02ea092a098563b27970d21416fabc47dd005fb0  # merge of #176
+    uses: Quantum-L9/.github/.github/workflows/governance-pr.yml@d632486ed5f2d4f7515eb89242b3a7a9123a41cb  # merge of #176
+    secrets:
+      L9_GITHUB_READ_TOKEN: ${{ secrets.L9_GITHUB_READ_TOKEN }}
 
   issue:
     if: github.event_name == 'issues'
     permissions:
       contents: read
       issues: write
-    uses: Quantum-L9/.github/.github/workflows/governance-issue.yml@02ea092a098563b27970d21416fabc47dd005fb0  # merge of #176
+    uses: Quantum-L9/.github/.github/workflows/governance-issue.yml@d632486ed5f2d4f7515eb89242b3a7a9123a41cb  # merge of #176
