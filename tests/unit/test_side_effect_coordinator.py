@@ -72,7 +72,8 @@ async def test_commit_once_per_key() -> None:
     assert second.skipped is True
     assert persist.await_count == 1
     assert router.notify_graph_sync.await_count == 1
-    assert router.notify_score_invalidate.await_count == 1
+    assert router.notify_score_invalidate.await_count == 0
+    assert first.score_invalidated is False
     assert emitter.emit_enrichment_completed.await_count == 1
 
 
@@ -96,12 +97,11 @@ def test_semantic_key_prefers_the_callers_idempotency_key_over_the_packet_id() -
 
 @pytest.mark.asyncio
 async def test_graph_sync_false_excludes_only_the_awaited_graph_hop() -> None:
-    """EIE-004: `graph_sync` means the Gate->GRAPH round trip, nothing wider.
+    """`graph_sync` means the Gate->GRAPH round trip, nothing wider.
 
     The awaited hop to GRAPH is what a latency-bounded caller cannot absorb, so
-    that is what the flag excludes. Score invalidation is fire-and-forget to
-    SCORE and stays on: suppressing it would leave a stale score on an entity
-    that was just enriched, in exchange for no measurable time.
+    that is what the flag excludes. Score invalidation is not requested: Gate
+    does not own score-invalidate, and the report must not claim it succeeded.
     """
     coord = SideEffectCoordinator()
     router, emitter = _collaborators()
@@ -111,10 +111,8 @@ async def test_graph_sync_false_excludes_only_the_awaited_graph_hop() -> None:
     assert report.graph_skipped is True
     assert report.graph_synced is False
     assert router.notify_graph_sync.await_count == 0, "the awaited GRAPH hop must be excluded"
-    assert report.score_invalidated is True
-    assert router.notify_score_invalidate.await_count == 1, (
-        "score invalidation is fire-and-forget to SCORE and is deliberately not gated"
-    )
+    assert report.score_invalidated is False
+    assert router.notify_score_invalidate.await_count == 0
     assert report.event_emitted is True
 
     # Exclusion is a resolved leg, not a failed one: the key completes and the
@@ -159,7 +157,7 @@ async def test_router_none_is_not_a_synchronization() -> None:
     assert report.key not in coord._completed, "an unsynced key must not read as completed"
     # Independent effects keep their own semantics: they still ran once.
     assert report.persisted is True
-    assert report.score_invalidated is True
+    assert report.score_invalidated is False
     assert report.event_emitted is True
 
 
@@ -245,7 +243,7 @@ async def test_permitted_retry_completes_only_the_failed_graph_leg() -> None:
 
     # Already-completed effects were not duplicated by the retry.
     assert persist.await_count == 1
-    assert router.notify_score_invalidate.await_count == 1
+    assert router.notify_score_invalidate.await_count == 0
     assert emitter.emit_enrichment_completed.await_count == 1
     assert router.notify_graph_sync.await_count == 1, "the recovered router was awaited once"
 
@@ -332,7 +330,7 @@ async def test_retry_that_fails_again_stays_pending_without_duplicating_effects(
     assert second.key not in coord._completed
     assert router.notify_graph_sync.await_count == 2
     assert persist.await_count == 1
-    assert router.notify_score_invalidate.await_count == 1
+    assert router.notify_score_invalidate.await_count == 0
     assert emitter.emit_enrichment_completed.await_count == 1
 
 
@@ -368,7 +366,7 @@ async def test_graph_sync_false_on_a_pending_key_keeps_the_leg_pending() -> None
     # Nothing ran twice, and the excluded leg was not attempted.
     assert router.notify_graph_sync.await_count == 1
     assert persist.await_count == 1
-    assert router.notify_score_invalidate.await_count == 1
+    assert router.notify_score_invalidate.await_count == 0
     assert emitter.emit_enrichment_completed.await_count == 1
 
     # A later call that asks for the graph leg completes it.
@@ -709,3 +707,20 @@ async def test_graph_retry_without_a_durable_result_is_refused_under_required_pe
                 idempotency_key="k",
                 require_persistence=True,
             )
+
+
+@pytest.mark.asyncio
+async def test_accepted_graph_sync_does_not_request_or_claim_score_invalidation() -> None:
+    """Gate does not own score-invalidate. A CEG sync ack is not an invalidation."""
+    coord = SideEffectCoordinator()
+    router, emitter = _collaborators()
+
+    report = await _commit(coord, router, emitter, idempotency_key="k-no-score")
+
+    assert report.graph_synced is True
+    assert report.event_emitted is True
+    assert report.score_invalidated is False
+    assert report.errors == []
+    assert router.notify_graph_sync.await_count == 1
+    assert router.notify_score_invalidate.await_count == 0
+    router.route_fire_and_forget.assert_not_called()

@@ -13,6 +13,9 @@ Seam contract (seam audit 2026-09-02):
   contract -- ``{"entity_type": <sync endpoint>, "batch": [row, ...]}`` where
   each row carries the endpoint's id property -- instead of the retired
   ``graph-sync`` dialect that no node owned and no Gate route resolved.
+  ``score-invalidate`` is not dispatched: Gate does not own that action
+  (non-canonical; no node is registered), so there is no acknowledgment to
+  record and this router does not send it.
 * Typed rows (owner decision 2026-11-11): the row schema an endpoint accepts is
   the tenant spec's declared types -- the target node's properties that are not
   ``evidenceonly``, its childsync fields included (``app.engines.spec_types``).
@@ -1212,20 +1215,6 @@ class PacketRouter:
             )
         return RelationshipSyncResult(
             RelationshipSyncOutcome.ACKNOWLEDGED, "acknowledged by CEG", ack
-        )
-
-    async def notify_score_invalidate(
-        self,
-        tenant_id: str,
-        entity_id: str,
-        domain: str | None = None,
-    ) -> None:
-        """Fire-and-forget score invalidation after entity enrichment."""
-        self.route_fire_and_forget(
-            NodeTarget.SCORE,
-            "score-invalidate",
-            tenant_id,
-            {"entity_id": entity_id, "domain": domain or ""},
         )
 
     async def close(self) -> None:
