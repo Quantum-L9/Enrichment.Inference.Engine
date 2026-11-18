@@ -1,0 +1,106 @@
+# --- L9_META ---
+# l9_schema: 1
+# origin: engine-specific
+# engine: enrichment
+# layer: [ci]
+# tags: [l9-deploy, release]
+# owner: platform
+# status: active
+# --- /L9_META ---
+#
+# Thin l9-deploy release caller (Quantum-L9/l9-deploy templates/consumer, Core
+# pins taken from Quantum-L9/l9-graphiti-memory release-container.yml, the one
+# consumer that has reached l9-deploy). It runs Core's canonical analysis, then
+# Core's container-release action builds one immutable image, binds it to that
+# analysis and sends l9.deployment-request/v2 (event l9.release.requested.v2)
+# to Quantum-L9/l9-deploy. l9-deploy validates the request against
+# .l9/deployment.yaml and still requires its protected-environment approval.
+# Nothing here deploys, approves or reaches a server.
+#
+# The template's reusable container-release.yml@v1 does not exist in
+# l9-ci-core; the composite action below is the published interface.
+name: L9 Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment target named in .l9/deployment.yaml
+        required: true
+        type: choice
+        options:
+          - production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l9-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    name: Require an allowed source ref
+    runs-on: ubuntu-latest
+    steps:
+      # Mirrors the profile's allowed_source_refs so a wrong ref fails here,
+      # before an image is published, rather than at l9-deploy.
+      - name: Production releases only from a v<MAJOR.MINOR.PATCH> tag
+        shell: bash
+        env:
+          TARGET: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET" == production && ! "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "dispatch a production release on a v<MAJOR.MINOR.PATCH> tag, not $GITHUB_REF" >&2
+            exit 1
+          fi
+
+  analysis:
+    name: Canonical release analysis
+    needs: source
+    uses: Quantum-L9/l9-ci-core/.github/workflows/analyze-semgrep.yml@89c9bc4e5ceafab932c92a2fdca2d3739fccf95f
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      security-events: write
+    with:
+      # Explicit class: Core maps workflow_dispatch to `nightly` otherwise,
+      # which the `release` profile does not admit.
+      event: release
+      profile: release
+      matrix-id: release-semgrep
+      language: python
+
+  release:
+    name: Publish immutable image and request deployment
+    needs: [source, analysis]
+    if: needs.analysis.outputs.gate-status == 'pass'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Publish and request deployment
+        uses: Quantum-L9/l9-ci-core/.github/actions/container-release@89c9bc4e5ceafab932c92a2fdca2d3739fccf95f
+        with:
+          deployment-profile: .l9/deployment.yaml
+          image-repository: ghcr.io/quantum-l9/enrichment.inference.engine
+          environment: ${{ inputs.environment }}
+          analysis-artifact: ${{ needs.analysis.outputs.artifact-name }}
+          matrix-id: release-semgrep
+          # The same root Dockerfile docker-build.yml publishes today.
+          docker-context: .
+          dockerfile: Dockerfile
+          github-token: ${{ github.token }}
+          # Organization secret; it must be able to POST repository_dispatch to
+          # Quantum-L9/l9-deploy.
+          deployment-broker-token: ${{ secrets.GH_TOKEN }}
