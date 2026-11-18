@@ -125,7 +125,8 @@ def _prod_probe(domains_dir: Path) -> dict[str, Any]:
 
     Substituted: Gate registration is switched off (`GATE_REGISTRATION_ENABLED`
     false), so the Gate half of readiness reads `disabled`, not `registered`;
-    the signing key is a test literal; no Redis, PostgreSQL or Gate is running
+    the signing key and the Gate signing-key id are test literals; no Redis,
+    PostgreSQL or Gate is running
     (startup opens no connection to them, and the native registry replays no
     PostgreSQL rows); OpenTelemetry export is disabled (`OTEL_SDK_DISABLED`), which
     only spares the exporter's shutdown wait on an unreachable collector.
@@ -137,6 +138,7 @@ def _prod_probe(domains_dir: Path) -> dict[str, Any]:
         "L9_REQUIRE_SIGNATURE": "true",
         "L9_SIGNING_KEY": "test-only-not-a-secret",
         "L9_SIGNING_KEY_ID": "test",
+        "L9_GATE_SIGNING_KEY_IDS": "test",
         "GATE_REGISTRATION_ENABLED": "false",
         "DOMAINS_DIR": str(domains_dir),
         "OTEL_SDK_DISABLED": "true",
