@@ -78,9 +78,15 @@ def probes() -> Iterator[dict[str, Any]]:
         persist.return_value = None
         router = router_factory.return_value
         router.notify_graph_sync = AsyncMock(return_value=ACK)
-        router.notify_score_invalidate = AsyncMock(return_value=None)
-        emitter_factory.return_value.emit_enrichment_completed = AsyncMock(return_value=None)
-        yield {"loop": loop, "persist": persist, "router": router, "coordinator": coordinator}
+        emitter = emitter_factory.return_value
+        emitter.emit_enrichment_completed = AsyncMock(return_value=None)
+        yield {
+            "loop": loop,
+            "persist": persist,
+            "router": router,
+            "emitter": emitter,
+            "coordinator": coordinator,
+        }
     coordinator.reset_for_tests()
 
 
@@ -151,17 +157,23 @@ async def test_non_durable_converge_schedules_no_sync(probes):
 
 
 async def test_converge_that_times_out_after_persisting_schedules_no_sync(probes):
-    """A degraded answer is decided by the deadline; nothing is synced for it."""
+    """A degraded answer is decided by the deadline; nothing is synced for it.
 
-    async def _slow_score(**_kwargs: Any) -> None:
+    Persistence returns. The completion event, which ``_persist_and_sync`` still
+    awaits inside the deadline, then outlasts the budget, so the answer is
+    degraded and the deferred graph leg is never started.
+    """
+
+    async def _slow_event(**_kwargs: Any) -> None:
         await asyncio.sleep(5.0)
 
-    probes["router"].notify_score_invalidate = AsyncMock(side_effect=_slow_score)
+    probes["emitter"].emit_enrichment_completed = AsyncMock(side_effect=_slow_event)
     from app.engines import handlers
 
     result = await handlers._handle_canonical_converge(TENANT, _request(), budget_seconds=1.0)
     await probes["coordinator"].drain_graph_legs()
 
+    assert probes["persist"].call_count == 1
     assert result["state"] == "degraded"
     probes["router"].notify_graph_sync.assert_not_awaited()
 
