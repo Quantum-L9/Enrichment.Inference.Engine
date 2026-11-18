@@ -18,7 +18,7 @@ jobs:
     name: Documentation Consistency Gates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4.4.0
         with:
           fetch-depth: 2
 
