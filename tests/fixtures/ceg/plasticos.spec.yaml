@@ -1,7 +1,7 @@
 # --- EIE TEST SNAPSHOT of a Cognitive.Engine.Graphs tenant spec ---
 # source:   Quantum-L9/Cognitive.Engine.Graphs tests/fixtures/design_packs/plasticos/spec.yaml
-# commit:   075ab6f7014c186b987a9256037114e3235c1641 (CEG-W design-pack specimen)
-# source sha256: f9b74c127a5004506dec3746153262c9cbf5e9509076b24210dc8ecbecadc4e7
+# commit:   21cd50bc69a4182be7f8c874c73d22f4f6516b3e (CEG-W design-pack specimen)
+# source sha256: 82d6859324301eb79aaea0c06be00435b9c3db9195537490099753042abf5719
 # overlay:  none -- the bytes below this header are the source commit's, unmodified.
 # REFRESH REQUIRED whenever the pinned CEG revision moves: replace the bytes below
 # with that commit's, keep this header, and update plasticos.spec.provenance.json,
@@ -30,7 +30,7 @@
 domain:
   id: plasticos
   name: PlasticOS Recycling Marketplace
-  version: 1.5.0
+  version: 1.6.0
   description: 'Domain specification for matching material intake requests (RFQs)
     from buyers to recycling facilities (suppliers) based on polymer compatibility,
     geographic proximity, capacity, certifications, and historical transaction success.
@@ -48,6 +48,12 @@ ontology:
       type: string
       required: true
       description: Unique facility identifier
+    - name: entity_ref
+      type: string
+      required: false
+      description: >
+        Stored buyer identity. Match returns it only when it is res.partner:<integer>.
+        A bare facility id is not rewritten into one.
     - name: name
       type: string
       required: true
@@ -362,10 +368,13 @@ gates:
   candidateprop: contamination_tolerance
   queryparam: contamination_pct
   operator: '>='
-  nullbehavior: fail
+  nullbehavior: pass
   matchdirections:
   - supply_opportunity_to_buyer_facility
-  description: Facility must tolerate the material's contamination level
+  description: >
+    A missing contamination tolerance stays eligible so it can be enriched.
+    When both the tolerance and the load contamination are known, a failed
+    comparison still excludes the buyer.
 - name: food_grade_check
   # An implication, not an equality (CEG-COR-005): Cypher orders false < true,
   # so `certified >= required` admits every facility when certification is not
@@ -378,15 +387,6 @@ gates:
   matchdirections:
   - supply_opportunity_to_buyer_facility
   description: If food-grade required, facility must be certified
-- name: capacity_check
-  type: threshold
-  candidateprop: capacity_tons_month
-  queryparam: volume_tons
-  operator: '>='
-  nullbehavior: pass
-  matchdirections:
-  - supply_opportunity_to_buyer_facility
-  description: Facility must have capacity for requested volume
 - name: exclusion_check
   type: exclusion
   edgetype: EXCLUDED_FROM
