@@ -2,9 +2,9 @@
   "schema": "eie.ceg-spec-snapshot/v1",
   "source_repository": "Quantum-L9/Cognitive.Engine.Graphs",
   "source_path": "tests/fixtures/design_packs/plasticos/spec.yaml",
-  "source_commit": "0cc78276430a428d881df2f7fa2c36c9de3df990",
+  "source_commit": "26206e1b41fb27304b158bb6a42cd287aa2a7350",
   "source_sha256": "825e98d143a60db6eabb84c2a00f12a9fe827f0f58250d3cf35e449147fdd863",
-  "snapshot_sha256": "e2a8ec6ffcabc8cdc4b9ee4db7caaece7af5333540f4f467acfe6749c78eccdb",
+  "snapshot_sha256": "c6a07fac80d50d1d204ad42777217a72a55eb90e77753697177f6ee9ec27d350",
   "overlay": [],
   "refresh_required": "replace with the pinned CEG revision's bytes whenever CEG_REVISION moves (tests/contracts/ceg_revision.py)"
 }

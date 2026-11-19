@@ -11,5 +11,5 @@ L9_META:
   authority: ceg-w peer pin
 """
 
-CEG_REVISION = "0cc78276430a428d881df2f7fa2c36c9de3df990"
+CEG_REVISION = "26206e1b41fb27304b158bb6a42cd287aa2a7350"
 CEG_SPECIMEN = "tests/fixtures/design_packs/plasticos/spec.yaml"

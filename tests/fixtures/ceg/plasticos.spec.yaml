@@ -1,6 +1,6 @@
 # --- EIE TEST SNAPSHOT of a Cognitive.Engine.Graphs tenant spec ---
 # source:   Quantum-L9/Cognitive.Engine.Graphs tests/fixtures/design_packs/plasticos/spec.yaml
-# commit:   0cc78276430a428d881df2f7fa2c36c9de3df990 (CEG-W design-pack specimen)
+# commit:   26206e1b41fb27304b158bb6a42cd287aa2a7350 (CEG-W design-pack specimen)
 # source sha256: 825e98d143a60db6eabb84c2a00f12a9fe827f0f58250d3cf35e449147fdd863
 # overlay:  none -- the bytes below this header are the source commit's, unmodified.
 # REFRESH REQUIRED whenever the pinned CEG revision moves: replace the bytes below
