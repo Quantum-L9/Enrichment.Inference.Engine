@@ -187,15 +187,22 @@ def test_candidate_is_a_valid_0_6_0_in_exactly_one_coherent_state() -> None:
         assert pointer["sha256"] == PUBLISHED_0_5_0
         assert not revision.exists()
     else:
-        # Activated: the reviewed bytes are the current revision, chained on
-        # 0.5.0, approved by a reviewer who is not this suite's fixture, and the
-        # authoring copy equals them.
-        assert pointer["sha256"] == CANDIDATE_SHA
+        # 0.6.0 stays the immutable activated candidate, chained on 0.5.0.
+        # A later publication may move current.json; it does not rewrite 0.6.0.
         receipt = json.loads((revision / "receipt.json").read_text(encoding="utf-8"))
         assert receipt["previous_sha256"] == PUBLISHED_0_5_0
         assert receipt["version"] == "0.6.0"
         assert "test-fixture" not in receipt["reviewed_by"]
-        assert (TENANT_DIR / "spec.yaml").read_bytes() == CANDIDATE_BYTES
+        assert (revision / "spec.yaml").read_bytes() == CANDIDATE_BYTES
+        current = pointer["sha256"]
+        if current == CANDIDATE_SHA:
+            assert (TENANT_DIR / "spec.yaml").read_bytes() == CANDIDATE_BYTES
+        else:
+            successor = TENANT_DIR / "revisions" / current
+            assert (successor / "spec.yaml").read_bytes() == (TENANT_DIR / "spec.yaml").read_bytes()
+            successor_receipt = json.loads((successor / "receipt.json").read_text(encoding="utf-8"))
+            assert successor_receipt["previous_sha256"] == CANDIDATE_SHA
+            assert successor_receipt["version"] != "0.6.0"
 
 
 def test_exactly_the_27_odoo_fields_are_added_all_evidence_only() -> None:
@@ -336,9 +343,14 @@ def test_ceg_sync_row_is_identical_to_0_5_0() -> None:
 
 
 def test_candidate_passes_the_eie_ceg_sync_contract() -> None:
-    result = check_compatibility(CANDIDATE, CEG)
+    current = yaml.safe_load((TENANT_DIR / "spec.yaml").read_bytes())
+    result = check_compatibility(current, CEG)
     assert result["verdict"] == "pass", result["defects"]
-    assert result["eie_version"] == "0.6.0"
+    # 0.6.0 declared only code. The pinned specimen's map also names the line.
+    historical = check_compatibility(CANDIDATE, CEG)
+    assert historical["eie_version"] == "0.6.0"
+    assert historical["verdict"] == "fail"
+    assert any("line_id" in defect for defect in historical["defects"])
 
 
 # ── Request v2 against the candidate once published ─────────────────────────
@@ -353,9 +365,17 @@ def _baseline_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("store")
     tenant = root / TENANT
     (tenant / "revisions").mkdir(parents=True)
-    for revision in (TENANT_DIR / "revisions").iterdir():
-        if revision.name != CANDIDATE_SHA:
-            shutil.copytree(revision, tenant / "revisions" / revision.name)
+    # Only the chain that ends at 0.5.0. Later publications (0.6.0, 0.6.1, ...)
+    # stay out, so this isolated store can still publish the 0.6.0 candidate.
+    sha: str | None = PUBLISHED_0_5_0
+    seen: set[str] = set()
+    while sha is not None and sha not in seen:
+        seen.add(sha)
+        revision = TENANT_DIR / "revisions" / sha
+        shutil.copytree(revision, tenant / "revisions" / sha)
+        receipt = json.loads((revision / "receipt.json").read_text(encoding="utf-8"))
+        previous = receipt["previous_sha256"]
+        sha = previous if isinstance(previous, str) else None
     pointer = {"schema": "eie.domain-current/v1", "sha256": PUBLISHED_0_5_0}
     (tenant / "current.json").write_text(json.dumps(pointer, separators=(",", ":")))
     return root

@@ -105,7 +105,15 @@ def test_declared_subject_resolves_as_opaque_strings(subject_reader: DomainYamlR
 
 LIST_OF_MAPS = {
     "type": "list",
-    "items": {"type": "map", "properties": [{"name": "code", "type": "string", "required": True}]},
+    "items": {
+        "type": "map",
+        "properties": [
+            {"name": "code", "type": "string", "required": True},
+            {"name": "line_id", "type": "string"},
+            {"name": "direction", "type": "string"},
+            {"name": "form", "type": "string"},
+        ],
+    },
 }
 
 REFUSALS: list[tuple[str, dict[str, Any]]] = [

@@ -1,7 +1,7 @@
 # --- EIE TEST SNAPSHOT of a Cognitive.Engine.Graphs tenant spec ---
-# source:   Quantum-L9/Cognitive.Engine.Graphs domains/plasticos/spec.yaml
-# commit:   e9e6ceb669d37bd75dc9bded206105b5875a9c60 (CEG #453, typed spec contract)
-# source sha256: 4394284b46f0b52cd79caf8bc73c7122cd0726faab96de9402ddf4e969b59b43
+# source:   Quantum-L9/Cognitive.Engine.Graphs tests/fixtures/design_packs/plasticos/spec.yaml
+# commit:   075ab6f7014c186b987a9256037114e3235c1641 (CEG-W design-pack specimen)
+# source sha256: f9b74c127a5004506dec3746153262c9cbf5e9509076b24210dc8ecbecadc4e7
 # overlay:  none -- the bytes below this header are the source commit's, unmodified.
 # REFRESH REQUIRED whenever the pinned CEG revision moves: replace the bytes below
 # with that commit's, keep this header, and update plasticos.spec.provenance.json,
@@ -30,7 +30,7 @@
 domain:
   id: plasticos
   name: PlasticOS Recycling Marketplace
-  version: 1.4.0
+  version: 1.5.0
   description: 'Domain specification for matching material intake requests (RFQs)
     from buyers to recycling facilities (suppliers) based on polymer compatibility,
     geographic proximity, capacity, certifications, and historical transaction success.
@@ -97,11 +97,13 @@ ontology:
       type: datetime
       description: Date of most recent transaction
     # Wire-only (list<map>): consumed by the facilities endpoint's childsync,
-    # never stored on Facility. Each element names one PolymerFamily by code;
-    # the row carries a JSON array of objects, not a JSON-encoded string.
+    # never stored on Facility. Each element names one PolymerFamily by code
+    # and, when line_id is present, one PROCESSES relationship. direction and
+    # form may sit on the element or on the facility row (the element wins).
+    # The row carries a JSON array of objects, not a JSON-encoded string.
     - name: processed_polymers
       type: list
-      description: Polymer families this facility processes (one PROCESSES edge each)
+      description: Capability lines (one PROCESSES relationship each) and the polymer each line accepts
       items:
         type: map
         properties:
@@ -109,6 +111,15 @@ ontology:
           type: string
           required: true
           description: PolymerFamily.code
+        - name: line_id
+          type: string
+          description: Capability line identity. Two lines with one polymer stay two relationships.
+        - name: direction
+          type: string
+          description: in is material entering (buyer acceptance); out is material leaving
+        - name: form
+          type: string
+          description: Physical form this line accepts or ships. Blank is not a form.
   - label: MaterialIntake
     managedby: api
     queryentity: true
@@ -221,7 +232,17 @@ ontology:
     direction: DIRECTED
     category: capability
     managedby: sync
-    description: Facility can process this polymer type
+    description: One capability line that accepts or ships this polymer. The relationship is the line.
+    properties:
+    - name: line_id
+      type: string
+      description: Capability line identity
+    - name: direction
+      type: string
+      description: in or out. Blank stays blank and is not buyer acceptance.
+    - name: form
+      type: string
+      description: Physical form of this line. Blank is not eligible.
   - type: ACCEPTS_FORM
     from: Facility
     to: MaterialForm
@@ -415,7 +436,12 @@ gates:
   nullbehavior: fail
   matchdirections:
   - supply_opportunity_to_buyer_facility
-  description: Facility must PROCESS the requested polymer family
+  description: One PROCESSES line must accept the requested polymer, store direction in, and store a form
+  edgepredicates:
+  - property: direction
+    equals: in
+  - property: form
+    present: true
 - name: fulfills_polymer_gate
   type: traversal
   edgetype: FULFILLS_POLYMER
@@ -434,6 +460,8 @@ scoring:
     computation: geodecay
     candidateprop: lat
     queryprop: lat
+    candidateprop_lon: lon
+    queryprop_lon: lon
     decayconstant: 800000.0
     weightkey: w_geo
     defaultweight: 0.25
@@ -508,6 +536,8 @@ scoring:
     computation: geodecay
     candidateprop: lat
     queryprop: lat
+    candidateprop_lon: lon
+    queryprop_lon: lon
     decayconstant: 800000.0
     weightkey: w_active_geo
     defaultweight: 0.5
@@ -529,10 +559,12 @@ sync:
   # require PROCESSES / FULFILLS_POLYMER, so engine-synced nodes without them
   # could never match.
   # facilities: `processed_polymers` is declared on Facility as
-  # list<map{code: string required}>. childsync MERGEs one PolymerFamily per
-  # element by code and links it with PROCESSES; PolymerFamily is a static
-  # taxonomy, so an existing node is never overwritten (properties are written
-  # only when the MERGE creates it).
+  # list<map{code required, line_id, direction, form}>. childsync MERGEs one
+  # PolymerFamily per element by code (static taxonomy: written only when the
+  # MERGE creates it). A line_id MERGEs a distinct PROCESSES relationship and
+  # stores direction, form and line_id on that relationship. direction and
+  # form on the facility row fill a line that omits them. A missing line_id
+  # keeps the unkeyed polymer link and is not a buyer line.
   - path: /v1/sync/facilities
     targetnode: Facility
     idproperty: facility_id
@@ -543,6 +575,14 @@ sync:
       targetid: code
       edgetype: PROCESSES
       edgedirection: parenttochild
+      edgeidentity: line_id
+      edgeproperties:
+      - line_id
+      - direction
+      - form
+      fromrow:
+      - direction
+      - form
   - path: /v1/sync/polymerfamilies
     targetnode: PolymerFamily
     idproperty: code

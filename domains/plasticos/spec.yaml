@@ -1,5 +1,5 @@
 name: plasticos
-version: "0.6.0"
+version: "0.6.1"
 description: >
   PlasticOS evidence and inference domain for EIE.
   Candidate ranking, matching gates, and scoring dimensions are owned by CEG
@@ -23,8 +23,8 @@ ontology:
     # Row contract of /v1/sync/facilities (eie-ceg-sync/v2): every property
     # below that is not `evidenceonly` is one EIE produces, declared exactly as
     # CEG's Facility declares it (Cognitive.Engine.Graphs
-    # domains/plasticos/spec.yaml), name for name and typed shape for typed
-    # shape. CEG-owned properties EIE never produces (lat, lon, credit_score,
+    # tests/fixtures/design_packs/plasticos/spec.yaml), name for name and typed
+    # shape for typed shape. CEG-owned properties EIE never produces (lat, lon, credit_score,
     # food_grade_certified, community_id -- written by CEG's GDS job --
     # rate_per_ton, rate_confidence, last_transaction_date) are deliberately
     # not declared, so EIE can never send or overwrite them. packet_router
@@ -41,13 +41,20 @@ ontology:
     # t = metric tonne (1000 kg), per the operator's decision of 2026-11-13.
     - {name: capacity_tons_month, type: float, unit: t/month}
     - {name: tier, type: string}
-    # Wire-only shape: the childsync field below (PROCESSES -> PolymerFamily).
+    # Wire-only shape: one element is one Odoo capability line
+    # (plasticos.capability) and the polymer code that line names. direction
+    # is the profile's stored direction (in enters a buyer). form is copied
+    # only when Odoo stored one. Capacity, contamination, grade, and color
+    # stay off this element; CEG owns those decisions.
     - name: processed_polymers
       type: list
       items:
         type: map
         properties:
         - {name: code, type: string, required: true}
+        - {name: line_id, type: string}
+        - {name: direction, type: string}
+        - {name: form, type: string}
     # EIE-only evidence: enrichment, inference and resolution inputs. CEG does
     # not declare them, so they are never projected onto a sync row.
     - {name: city, type: string, evidenceonly: true}

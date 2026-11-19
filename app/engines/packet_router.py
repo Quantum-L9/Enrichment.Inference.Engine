@@ -60,6 +60,7 @@ from constellation_node_sdk.gate import (
 )
 
 from app.engines.domain_yaml_reader import DomainPublicationError, DomainYamlReader
+from app.engines.polymer_capability import prepare_processed_polymers
 from app.engines.spec_types import (
     TypeDefect,
     encode_value,
@@ -356,6 +357,8 @@ def project_graph_sync_row(
         if decl is None:
             dropped.append(key)
             continue
+        if key == "processed_polymers":
+            value = prepare_processed_polymers(value)
         found = value_defects(value, decl, key)
         if found:
             defects.extend(found)
