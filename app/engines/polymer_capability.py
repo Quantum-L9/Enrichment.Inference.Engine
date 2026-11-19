@@ -22,6 +22,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+PLASTICOS_CARTRIDGE = "plasticos"
+
+
+def shape_graph_fields(domain: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """Shape one cartridge's graph fields. Every other domain is returned unchanged."""
+    if domain != PLASTICOS_CARTRIDGE:
+        return fields
+    polymers = fields.get("processed_polymers")
+    if polymers is None:
+        return fields
+    shaped = dict(fields)
+    shaped["processed_polymers"] = prepare_processed_polymers(polymers)
+    return shaped
+
 
 def prepare_processed_polymers(value: Any) -> Any:
     """Return wire elements when ``value`` is a list of Odoo material profiles.

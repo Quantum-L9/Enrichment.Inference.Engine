@@ -21,12 +21,13 @@ from typing import Any
 import pytest
 import yaml
 
+from app.engines.handlers import admitted_fields
 from app.engines.packet_router import (
     GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
     GraphSyncContract,
     project_graph_sync_row,
 )
-from app.engines.polymer_capability import prepare_processed_polymers
+from app.engines.polymer_capability import prepare_processed_polymers, shape_graph_fields
 from app.engines.spec_types import row_properties
 
 pytestmark = pytest.mark.unit
@@ -138,3 +139,20 @@ def test_a_wire_element_keeps_line_id_and_direction() -> None:
         {"code": "HDPE", "line_id": "17", "direction": "in"},
         {"code": "HDPE", "line_id": "18", "direction": "in"},
     ]
+
+
+def test_only_the_plasticos_cartridge_shapes_capability_lines() -> None:
+    profiles = [{"polymer": "HDPE", "capability_id": 17, "direction": "in", "form": "regrind"}]
+    other = shape_graph_fields(
+        "orbital-logistics", {"processed_polymers": profiles, "name": "Depot"}
+    )
+    assert other == {"processed_polymers": profiles, "name": "Depot"}
+    shaped = shape_graph_fields("plasticos", {"processed_polymers": profiles, "name": "Buyer"})
+    assert shaped["name"] == "Buyer"
+    assert shaped["processed_polymers"] == [
+        {"code": "HDPE", "line_id": "17", "direction": "in", "form": "regrind"}
+    ]
+    assert (
+        admitted_fields({"fields": {"processed_polymers": profiles}})["processed_polymers"]
+        == profiles
+    )
