@@ -25,6 +25,7 @@ from tests.conftest import skip_or_fail_unavailable
 
 ROOT = Path(__file__).resolve().parents[2]
 CEG_ROOT = os.environ.get("CEG_REPO") or os.environ.get("L9_CEG_NATIVE_REPO")
+CEG_PLASTICOS_SPEC = Path("tests/fixtures/design_packs/plasticos/spec.yaml")
 CEG_PYTHON = os.environ.get("CEG_PYTHON") or os.environ.get("L9_CEG_NATIVE_PYTHON")
 pytestmark = [pytest.mark.integration]
 
@@ -44,7 +45,7 @@ def _inputs(tmp_path):
     eie.parent.mkdir(parents=True)
     ceg.parent.mkdir(parents=True)
     eie.write_bytes((ROOT / "domains/plasticos/spec.yaml").read_bytes())
-    ceg.write_bytes((Path(CEG_ROOT) / "domains/plasticos/spec.yaml").read_bytes())
+    ceg.write_bytes((Path(str(CEG_ROOT)) / CEG_PLASTICOS_SPEC).read_bytes())
     return eie, ceg
 
 

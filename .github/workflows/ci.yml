@@ -186,7 +186,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
-          ref: e9e6ceb669d37bd75dc9bded206105b5875a9c60
+          ref: 5d06649ed5587463c11b02594ce26b5ef4ad1733
           path: .ci-subjects/ceg
           token: ${{ secrets.SDK_TOKEN }}
           persist-credentials: false
@@ -195,7 +195,7 @@ jobs:
         run: |
           set -euo pipefail
           subject="$GITHUB_WORKSPACE/.ci-subjects/ceg"
-          test "$(git -C "$subject" rev-parse HEAD)" = "e9e6ceb669d37bd75dc9bded206105b5875a9c60"
+          test "$(git -C "$subject" rev-parse HEAD)" = "5d06649ed5587463c11b02594ce26b5ef4ad1733"
           python -m venv "$RUNNER_TEMP/ceg-native-venv"
           native_python="$RUNNER_TEMP/ceg-native-venv/bin/python"
           # CEG's own hash-locked runtime profile (uv sync --locked against its
@@ -244,8 +244,8 @@ jobs:
       contents: read
     env:
       # Peer subjects, pinned. Bump deliberately; each step verifies HEAD.
-      CEG_SUBJECT_SHA: e9e6ceb669d37bd75dc9bded206105b5875a9c60
-      GATE_SUBJECT_SHA: ab8fb674e65f2cafe4172178c1ce6de18b4bb0f4
+      CEG_SUBJECT_SHA: 5d06649ed5587463c11b02594ce26b5ef4ad1733
+      GATE_SUBJECT_SHA: b451b68b98b315f57f0c4f9b99090a437e9dac23
     services:
       redis:
         image: redis:7-alpine
@@ -379,7 +379,7 @@ jobs:
       contents: read
     env:
       # Same pinned Gate subject as `integration`. Bump both deliberately.
-      GATE_SUBJECT_SHA: ab8fb674e65f2cafe4172178c1ce6de18b4bb0f4
+      GATE_SUBJECT_SHA: b451b68b98b315f57f0c4f9b99090a437e9dac23
     steps:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
