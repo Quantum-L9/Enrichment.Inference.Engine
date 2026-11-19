@@ -1,5 +1,5 @@
 name: plasticos
-version: "0.6.1"
+version: "0.6.2"
 description: >
   PlasticOS evidence and inference domain for EIE.
   Candidate ranking, matching gates, and scoring dimensions are owned by CEG
@@ -24,7 +24,7 @@ ontology:
     # below that is not `evidenceonly` is one EIE produces, declared exactly as
     # CEG's Facility declares it (Cognitive.Engine.Graphs
     # tests/fixtures/design_packs/plasticos/spec.yaml), name for name and typed
-    # shape for typed shape. CEG-owned properties EIE never produces (lat, lon, credit_score,
+    # shape for typed shape. CEG-owned properties EIE never produces (entity_ref, lat, lon, credit_score,
     # food_grade_certified, community_id -- written by CEG's GDS job --
     # rate_per_ton, rate_confidence, last_transaction_date) are deliberately
     # not declared, so EIE can never send or overwrite them. packet_router
@@ -242,6 +242,7 @@ subjects:
     - rate_per_ton
     - rate_confidence
     - last_transaction_date
+    - entity_ref
   - name: material
     node: Facility
     fields:

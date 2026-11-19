@@ -200,9 +200,20 @@ def test_candidate_is_a_valid_0_6_0_in_exactly_one_coherent_state() -> None:
         else:
             successor = TENANT_DIR / "revisions" / current
             assert (successor / "spec.yaml").read_bytes() == (TENANT_DIR / "spec.yaml").read_bytes()
-            successor_receipt = json.loads((successor / "receipt.json").read_text(encoding="utf-8"))
-            assert successor_receipt["previous_sha256"] == CANDIDATE_SHA
-            assert successor_receipt["version"] != "0.6.0"
+            # Current may be several publications past 0.6.0. The frozen
+            # candidate stays on that chain; only its own receipt names 0.5.0.
+            chain: list[str] = []
+            sha: str | None = str(current)
+            while isinstance(sha, str) and sha not in chain:
+                chain.append(sha)
+                hop = json.loads(
+                    (TENANT_DIR / "revisions" / sha / "receipt.json").read_text(encoding="utf-8")
+                )
+                previous = hop["previous_sha256"]
+                sha = previous if isinstance(previous, str) else None
+            assert CANDIDATE_SHA in chain
+            current_receipt = json.loads((successor / "receipt.json").read_text(encoding="utf-8"))
+            assert current_receipt["version"] != "0.6.0"
 
 
 def test_exactly_the_27_odoo_fields_are_added_all_evidence_only() -> None:
@@ -321,11 +332,23 @@ def test_aliased_odoo_fields_are_not_duplicated() -> None:
 
 
 def test_food_grade_certified_stays_ceg_owned_and_undeclared() -> None:
+    """The frozen candidate's own ceg_owned lists stay as reviewed.
+
+    Equality with the live CEG specimen is asserted only for the live cartridge
+    in test_plasticos_subject_profiles.py. A later CEG property, such as
+    entity_ref, must not fail this frozen candidate.
+    """
     assert HELD_BACK not in _props(CANDIDATE)
     assert _subject(CANDIDATE, "material")["ceg_owned"] == [HELD_BACK]
-    eie, ceg = set(_props(CANDIDATE)), set(_props(CEG))
-    owned = [name for entry in CANDIDATE["subjects"]["types"] for name in entry["ceg_owned"]]
-    assert set(owned) == ceg - eie
+    assert _subject(CANDIDATE, "facility")["ceg_owned"] == [
+        "lat",
+        "lon",
+        "credit_score",
+        "community_id",
+        "rate_per_ton",
+        "rate_confidence",
+        "last_transaction_date",
+    ]
 
 
 # ── CEG sync row ────────────────────────────────────────────────────────────

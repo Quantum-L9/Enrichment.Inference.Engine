@@ -53,7 +53,13 @@ def test_ceg_owned_properties_are_cegs_and_never_declared_by_eie() -> None:
     owned = [name for entry in TYPES.values() for name in entry["ceg_owned"]]
     assert len(owned) == len(set(owned))
     # Exactly the properties CEG's Facility declares and EIE's does not.
+    # entity_ref is one of them: the published CEG specimen owns it. EIE does
+    # not declare it and does not put it on the sync row.
     assert set(owned) == ceg - eie
+    assert "entity_ref" in owned
+    row = row_properties(EIE, "Facility")
+    assert row is not None
+    assert "entity_ref" not in row
 
 
 def test_new_evidence_never_reaches_a_sync_row() -> None:
