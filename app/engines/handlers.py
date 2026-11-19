@@ -188,16 +188,23 @@ def admitted_fields(result: Mapping[str, Any]) -> dict[str, Any]:
     """
     evidence = result.get("field_evidence")
     if isinstance(evidence, Mapping):
-        return {
+        fields = {
             name: entry["value"]
             for name, entry in evidence.items()
             if isinstance(entry, Mapping)
             and entry.get("admitted") is True
             and entry.get("value") is not None
         }
-    return {
-        name: value for name, value in (result.get("fields") or {}).items() if value is not None
-    }
+    else:
+        fields = {
+            name: value for name, value in (result.get("fields") or {}).items() if value is not None
+        }
+    polymers = fields.get("processed_polymers")
+    if polymers is not None:
+        from app.engines.polymer_capability import prepare_processed_polymers
+
+        fields["processed_polymers"] = prepare_processed_polymers(polymers)
+    return fields
 
 
 def _operation_id(packet: Any) -> str | None:

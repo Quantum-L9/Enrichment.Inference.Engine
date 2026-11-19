@@ -1,7 +1,7 @@
 # --- EIE TEST SNAPSHOT of a Cognitive.Engine.Graphs tenant spec ---
 # source:   Quantum-L9/Cognitive.Engine.Graphs tests/fixtures/design_packs/plasticos/spec.yaml
-# commit:   21cd50bc69a4182be7f8c874c73d22f4f6516b3e (CEG-W design-pack specimen)
-# source sha256: 82d6859324301eb79aaea0c06be00435b9c3db9195537490099753042abf5719
+# commit:   d1e55f0c501173ce4b6689118363d8b72d3fdd0b (CEG-W design-pack specimen)
+# source sha256: 825e98d143a60db6eabb84c2a00f12a9fe827f0f58250d3cf35e449147fdd863
 # overlay:  none -- the bytes below this header are the source commit's, unmodified.
 # REFRESH REQUIRED whenever the pinned CEG revision moves: replace the bytes below
 # with that commit's, keep this header, and update plasticos.spec.provenance.json,
@@ -52,8 +52,8 @@ ontology:
       type: string
       required: false
       description: >
-        Stored buyer identity. Match returns it only when it is res.partner:<integer>.
-        A bare facility id is not rewritten into one.
+        Stored source identity. Match returns a namespaced ref unchanged.
+        A bare facility id is not given a namespace.
     - name: name
       type: string
       required: true

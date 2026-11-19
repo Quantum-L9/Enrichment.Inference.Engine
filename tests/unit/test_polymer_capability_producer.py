@@ -100,9 +100,16 @@ def test_odoo_capability_line_reaches_the_sync_row_and_policy_fields_do_not() ->
         {"code": "HDPE", "line_id": "17", "direction": "in", "form": "regrind"},
         {"code": "PP", "line_id": "18", "direction": "out"},
     ]
-    projection = project_graph_sync_row(
+    raw = project_graph_sync_row(
         entity_id="fac-1",
         fields={"processed_polymers": profiles},
+        contract=_contract(),
+    )
+    assert raw.row is None
+    assert raw.defects
+    projection = project_graph_sync_row(
+        entity_id="fac-1",
+        fields={"processed_polymers": prepared},
         contract=_contract(),
     )
     assert projection.defects == ()
