@@ -11,6 +11,8 @@
 
 Only the real prerequisite shell is executed, with absent/blank credentials.
 The scanner is never run, replaced with a stub, or given a synthetic gate result.
+A missing SONAR_TOKEN fails that preflight. This job does not run pytest, so
+the missing token cannot skip it, and the scanner does not run the full catalog.
 """
 
 from __future__ import annotations
@@ -183,20 +185,20 @@ def test_checkout_is_full_current_head_without_persisted_credentials() -> None:
     assert checkout["with"] == {"fetch-depth": 0, "persist-credentials": False}
 
 
-def test_existing_coverage_gate_and_no_new_service_are_preserved() -> None:
+def test_missing_token_does_not_skip_pytest_and_scanner_does_not_run_the_catalog() -> None:
+    """Pytest stays outside this job. A missing token fails the scan only."""
     job = _job()
-    assert job["env"]["COVERAGE_THRESHOLD"] == "${{ vars.COVERAGE_THRESHOLD || '71' }}"
     assert "services" not in job
-    coverage = next(
-        step for step in job["steps"] if step["name"] == "Tests with coverage (Cobertura XML)"
-    )
-    assert "--cov=app" in coverage["run"]
-    assert "--cov=engine" in coverage["run"]
-    assert "--cov-report=xml" in coverage["run"]
-    assert "--cov-fail-under=${{ env.COVERAGE_THRESHOLD }}" in coverage["run"]
-    assert 'pytest "${{ env.TEST_DIR }}"' in coverage["run"]
-    assert "|| true" not in coverage["run"]
-    assert job["steps"].index(coverage) < job["steps"].index(_scan())
+    source = WORKFLOW.read_text(encoding="utf-8")
+    assert "pytest" not in source
+    assert "TEST_DIR" not in source
+    assert "-n auto" not in source
+    assert "Tests with coverage (Cobertura XML)" not in source
+    token_at = job["steps"].index(_token_check())
+    for step in job["steps"][token_at:]:
+        assert "pytest" not in step.get("run", "")
+        assert "pytest" not in step.get("with", {}).get("args", "")
+    assert "|| true" not in source
 
 
 def test_every_declared_sonar_source_directory_exists() -> None:
