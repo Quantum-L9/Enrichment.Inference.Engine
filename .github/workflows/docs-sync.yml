@@ -50,28 +50,29 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Check Markdown Links
+        # Process substitution, not pipes: a `cmd | while read` loop runs in a
+        # subshell, so the BROKEN it incremented was discarded and this step
+        # could never fail. Links are checked without their #anchor or title.
         run: |
           echo "Checking internal links in documentation..."
           BROKEN=0
+          while IFS= read -r file; do
+            while IFS= read -r link; do
+              case "$link" in
+                ./*|../*) ;;
+                *) continue ;;
+              esac
+              path="${link%%#*}"
+              path="${path%% *}"
+              target="$(dirname "$file")/$path"
+              if [ ! -e "$target" ]; then
+                echo "  Broken link in $file: $link"
+                BROKEN=$((BROKEN + 1))
+              fi
+            done < <(grep -oP '\[.*?\]\(\K[^)]+' "$file" 2>/dev/null)
+          done < <(for dir in readme docs; do if [ -d "$dir" ]; then find "$dir" -name "*.md" -type f; fi; done)
 
-          for dir in readme docs; do
-            if [ -d "$dir" ]; then
-              find "$dir" -name "*.md" -type f | while read file; do
-                grep -oP '\[.*?\]\(\K[^)]+' "$file" 2>/dev/null | while read link; do
-                  if [[ "$link" =~ ^\./ ]] || [[ "$link" =~ ^\.\./ ]]; then
-                    base_dir=$(dirname "$file")
-                    target="$base_dir/$link"
-                    if [ ! -f "$target" ] && [ ! -d "$target" ]; then
-                      echo "  Broken link in $file: $link"
-                      BROKEN=$((BROKEN + 1))
-                    fi
-                  fi
-                done
-              done
-            fi
-          done
-
-          if [ $BROKEN -gt 0 ]; then
+          if [ "$BROKEN" -gt 0 ]; then
             echo "❌ Found $BROKEN broken internal link(s)"
             exit 1
           fi
