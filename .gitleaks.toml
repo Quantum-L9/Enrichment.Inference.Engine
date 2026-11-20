@@ -33,6 +33,15 @@ description = "Generic API Key"
 regex = '''(?i)(api[_-]?key|apikey|api[_-]?secret)\s*[=:]\s*['"][a-zA-Z0-9_\-]{20,}['"]'''
 tags = ["api", "generic"]
 
+  # Named fixture: a made-up key used only as a client-cache dictionary key in
+  # one unit test. It is the single finding the former `tests/` path allowlist
+  # was hiding (measured over full history with Gitleaks 8.24.3).
+  [rules.allowlist]
+  description = "Fake API key literal in the Odoo cross-repo contract test"
+  paths = [
+      '''^tests/unit/test_odoo_cross_repo_contract\.py$''',
+  ]
+
 [[rules]]
 id = "aws-access-key"
 description = "AWS Access Key ID"
@@ -76,22 +85,17 @@ regex = '''SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}'''
 tags = ["api", "sendgrid"]
 
 # ── Allowlist ─────────────────────────────────────────────────────────────
+#
+# No whole-directory or whole-extension path is exempt from scanning. The
+# former global `paths` list (tests/, docs/, readme/, kb/, .env.example,
+# .env.template, docker-compose.*.yml, requirements*.txt, *.md, *.sarif,
+# *.json) hid one finding in total across the full history; that one is now a
+# named exemption on its rule above. A new false positive gets the same
+# treatment: an exact file under the rule that fires, with a one-line reason.
+# Contract: tests/ci/test_gitleaks_config_contract.py
 
 [allowlist]
-description = "Global allowlist"
-paths = [
-    '''tests/''',
-    '''docs/''',
-    '''readme/''',
-    '''kb/''',
-    '''\.env\.example''',
-    '''\.env\.template''',
-    '''docker-compose\..*\.yml''',
-    '''requirements.*\.txt''',
-    '''.*\.md$''',
-    '''.*\.sarif$''',
-    '''.*\.json$''',
-]
+description = "Matches that name themselves as placeholders"
 regexTarget = "match"
 regexes = [
     '''(?i)example|placeholder|dummy|test|fake|mock|sample''',

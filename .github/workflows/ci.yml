@@ -567,12 +567,21 @@ jobs:
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           bash tools/deps/install_locked.sh full
       - name: Install gitleaks (binary — no org license required)
+        # Version and SHA-256 are the pin Quantum-L9/l9-ci-core selects
+        # (.github/actions/install-consumer-ci/tool-ownership.json,
+        # .github/workflows/security.yml); gitleaks.yml uses the same pair.
         env:
-          GITLEAKS_VERSION: "8.21.2"
+          GITLEAKS_VERSION: "8.24.3"
+          GITLEAKS_SHA256: "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c"
         run: |
           set -euo pipefail
           url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           curl --proto "=https" --tlsv1.2 -sSfL "$url" -o gitleaks.tar.gz
+          actual_sha="$(sha256sum gitleaks.tar.gz | awk '{print $1}')"
+          if [ "${actual_sha}" != "${GITLEAKS_SHA256}" ]; then
+            echo "::error::gitleaks checksum mismatch: got ${actual_sha}"
+            exit 1
+          fi
           tar -xzf gitleaks.tar.gz gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
           gitleaks version

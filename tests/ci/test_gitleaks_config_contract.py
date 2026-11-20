@@ -1,0 +1,276 @@
+"""Gitleaks configuration and install contracts (campaign finding T23).
+
+Two regressions this file fails on:
+
+1. A whole-directory or whole-extension path allowlist returns to
+   `.gitleaks.toml`. Such an entry exempts every present and future file under
+   it from secret scanning (l9.contract/validation-and-correctness@1:
+   no `silent_skip_of_applicable_required_validation`). An exemption names one
+   existing file, under the rule that fires, with a reason.
+2. A workflow installs the Gitleaks binary without verifying its SHA-256, or
+   the workflows disagree on the pinned version. The pin is the one
+   Quantum-L9/l9-ci-core selects.
+
+The literals that look like credentials in this file are assembled at run time
+so the file itself stays clean under the rules it tests.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+import tomllib
+from pathlib import Path
+
+import pytest
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+CONFIG = REPO_ROOT / ".gitleaks.toml"
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+
+RELEASE_URL_MARK = "gitleaks/gitleaks/releases/download"
+
+# The global path allowlist this repository carried until this contract.
+LEGACY_BROAD_PATHS = (
+    r"tests/",
+    r"docs/",
+    r"readme/",
+    r"kb/",
+    r"\.env\.example",
+    r"\.env\.template",
+    r"docker-compose\..*\.yml",
+    r"requirements.*\.txt",
+    r".*\.md$",
+    r".*\.sarif$",
+    r".*\.json$",
+)
+
+
+# ── Allowlist shape ───────────────────────────────────────────────────
+
+
+def _config() -> dict:
+    return tomllib.loads(CONFIG.read_text(encoding="utf-8"))
+
+
+def _as_list(value: object) -> list[dict]:
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def _allowlists(config: dict) -> list[tuple[str, dict]]:
+    """Every allowlist table in the config, global and per rule, in any spelling."""
+    found: list[tuple[str, dict]] = []
+    for key in ("allowlist", "allowlists"):
+        found += [("global", table) for table in _as_list(config.get(key))]
+    for rule in config.get("rules", []):
+        for key in ("allowlist", "allowlists"):
+            found += [(rule["id"], table) for table in _as_list(rule.get(key))]
+    return found
+
+
+def exact_file_or_reason(pattern: str) -> str | None:
+    """Return None when `pattern` names exactly one file, else why it is broad."""
+    if not (pattern.startswith("^") and pattern.endswith("$")):
+        return "not anchored with ^ and $, so it matches any path containing it"
+    literal = pattern[1:-1].replace(r"\.", "\x00")
+    if re.search(r"[.*+?\[\]()|{}\\]", literal):
+        return "contains a regex wildcard, class, group or alternation"
+    if literal.endswith("/"):
+        return "names a directory"
+    return None
+
+
+@pytest.mark.parametrize("pattern", LEGACY_BROAD_PATHS)
+def test_every_legacy_broad_path_is_rejected(pattern: str) -> None:
+    """Witness: each entry of the former global list fails the shape check."""
+    assert exact_file_or_reason(pattern) is not None
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [r"^tests/.*$", r"^docs/[^/]+\.md$", r"^(tests|docs)/a\.py$", r"^tests/$", r"^.*\.json$"],
+)
+def test_anchored_wildcards_are_still_rejected(pattern: str) -> None:
+    assert exact_file_or_reason(pattern) is not None
+
+
+def test_an_exact_file_pattern_is_accepted() -> None:
+    assert exact_file_or_reason(r"^tests/unit/test_example\.py$") is None
+
+
+def test_no_global_path_allowlist() -> None:
+    """A path exemption is never global: it belongs to the rule that fires."""
+    for owner, table in _allowlists(_config()):
+        if owner == "global":
+            assert not table.get("paths"), f"global allowlist exempts paths: {table.get('paths')}"
+
+
+def test_every_path_exemption_names_one_existing_file_with_a_reason() -> None:
+    for owner, table in _allowlists(_config()):
+        paths = table.get("paths", [])
+        if not paths:
+            continue
+        assert table.get("description", "").strip(), f"{owner}: path exemption without a reason"
+        for pattern in paths:
+            reason = exact_file_or_reason(pattern)
+            assert reason is None, f"{owner}: {pattern!r} {reason}"
+            named = pattern[1:-1].replace(r"\.", ".")
+            assert (REPO_ROOT / named).is_file(), f"{owner}: {named} does not exist"
+
+
+# ── Install steps ─────────────────────────────────────────────────────
+
+
+def _install_steps() -> list[tuple[str, dict, dict]]:
+    """(workflow, job, step) for every step that downloads a Gitleaks release."""
+    steps = []
+    for workflow in sorted(WORKFLOWS.glob("*.yml")):
+        data = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+        for job in (data.get("jobs") or {}).values():
+            for step in job.get("steps", []):
+                if RELEASE_URL_MARK in (step.get("run") or ""):
+                    steps.append((workflow.name, job, step))
+    return steps
+
+
+def _pin(job: dict, step: dict) -> dict[str, str]:
+    env = {**(job.get("env") or {}), **(step.get("env") or {})}
+    return {name: str(value) for name, value in env.items() if name.startswith("GITLEAKS_")}
+
+
+def test_the_binary_installs_are_found() -> None:
+    """Guard the discovery itself: an empty set would pass every check below."""
+    names = {workflow for workflow, _, _ in _install_steps()}
+    assert {"ci.yml", "pr-pipeline.yml", "gitleaks.yml"} <= names
+
+
+@pytest.mark.parametrize("entry", _install_steps(), ids=lambda entry: entry[0])
+def test_every_gitleaks_install_verifies_a_pinned_sha256(entry: tuple[str, dict, dict]) -> None:
+    workflow, job, step = entry
+    pin = _pin(job, step)
+    assert re.fullmatch(r"\d+\.\d+\.\d+", pin.get("GITLEAKS_VERSION", "")), workflow
+    assert re.fullmatch(r"[0-9a-f]{64}", pin.get("GITLEAKS_SHA256", "")), workflow
+    run = step["run"]
+    assert "sha256sum" in run, f"{workflow}: download is not hashed"
+    assert "GITLEAKS_SHA256" in run, f"{workflow}: hash is not compared with the pin"
+    assert run.index("sha256sum") < run.index("tar "), f"{workflow}: extracted before verified"
+    assert not step.get("continue-on-error"), workflow
+
+
+def test_all_gitleaks_installs_use_one_pin() -> None:
+    pins = {
+        (workflow, tuple(sorted(_pin(job, step).items())))
+        for workflow, job, step in _install_steps()
+    }
+    assert len({pin for _, pin in pins}) == 1, sorted(pins)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not installed")
+@pytest.mark.parametrize("workflow", ["ci.yml", "pr-pipeline.yml"])
+def test_install_step_refuses_a_download_with_the_wrong_checksum(
+    workflow: str, tmp_path: Path
+) -> None:
+    """Witness: a tampered download is not extracted and not installed."""
+    (job, step) = next((job, step) for name, job, step in _install_steps() if name == workflow)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    installed = tmp_path / "installed"
+    stubs = {
+        "curl": 'while [ "$#" -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done; echo tampered > "$out"',
+        "tar": f"touch {installed}",
+        "sudo": f"touch {installed}",
+    }
+    for name, body in stubs.items():
+        stub = bin_dir / name
+        stub.write_text(f"#!/bin/sh\n{body}\n")
+        stub.chmod(0o755)
+    script = tmp_path / "step.sh"
+    script.write_text(step["run"])
+    assert "${{" not in step["run"]
+    # A step with no `shell:` runs as `bash -e {0}` (workflow syntax reference).
+    proc = subprocess.run(
+        ["bash", "-e", str(script)],
+        cwd=tmp_path,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", **_pin(job, step)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    assert "checksum mismatch" in proc.stdout + proc.stderr
+    assert not installed.exists()
+
+
+# ── The real binary against the repository's rules ────────────────────
+
+_REAL_GITLEAKS = shutil.which("gitleaks")
+
+_AWS_KEY_ID = "AKIA" + "Q7W3E9R5T1Y8U2I6"  # synthetic: key-ID shape, not a credential
+_API_KEY_LINE = "api" + '_key = "' + "local-cache-slot-abcd" + '"\n'
+
+
+def _scan(repo: Path, relative: str, content: str) -> int:
+    shutil.copy(CONFIG, repo / ".gitleaks.toml")
+    target = repo / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+    git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+    for args in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "fixture"]):
+        subprocess.run(
+            ["git", "-c", "user.name=witness", "-c", "user.email=witness@example.invalid", *args],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            env=git_env,
+        )
+    assert _REAL_GITLEAKS is not None
+    proc = subprocess.run(
+        [_REAL_GITLEAKS, "git", ".", "--config", ".gitleaks.toml", "--no-banner", "--redact"],
+        cwd=repo,
+        capture_output=True,
+        check=False,
+    )
+    return proc.returncode
+
+
+@pytest.mark.skipif(_REAL_GITLEAKS is None, reason="gitleaks binary not installed")
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "tests/unit/test_new_module.py",
+        "docs/runbook.md",
+        "readme/SETUP.md",
+        "kb/plastics.yaml",
+        ".env.example",
+        ".env.template",
+        "docker-compose.prod.yml",
+        "requirements-dev.txt",
+        "reports/scan.sarif",
+        "config/settings.json",
+    ],
+)
+def test_formerly_exempt_paths_are_scanned(relative: str, tmp_path: Path) -> None:
+    """Witness: a key in each formerly exempt path class is now a finding."""
+    assert _scan(tmp_path, relative, f"aws_access_key_id: {_AWS_KEY_ID}\n") == 1
+
+
+@pytest.mark.skipif(_REAL_GITLEAKS is None, reason="gitleaks binary not installed")
+def test_the_named_fixture_exemption_covers_that_file_only(tmp_path: Path) -> None:
+    named = tmp_path / "named"
+    other = tmp_path / "other"
+    named.mkdir()
+    other.mkdir()
+    assert _scan(named, "tests/unit/test_odoo_cross_repo_contract.py", _API_KEY_LINE) == 0
+    assert _scan(other, "tests/unit/test_another_contract.py", _API_KEY_LINE) == 1
+
+
+@pytest.mark.skipif(_REAL_GITLEAKS is None, reason="gitleaks binary not installed")
+def test_the_named_fixture_exemption_is_bound_to_its_rule(tmp_path: Path) -> None:
+    """The exempt file is still scanned by every other rule."""
+    relative = "tests/unit/test_odoo_cross_repo_contract.py"
+    assert _scan(tmp_path, relative, f"aws_access_key_id: {_AWS_KEY_ID}\n") == 1
