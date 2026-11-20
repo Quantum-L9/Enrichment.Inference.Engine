@@ -1,6 +1,6 @@
 # Engine coding context (crib sheet)
 
-> **Non-authoritative.** SSOT for contracts is `.cursorrules` and [`AGENT.md`](../AGENT.md). This file preserves the prior root `CLAUDE.md` engine-focused summary before governance [`CLAUDE.md`](../CLAUDE.md) moved to repo root.
+> **Non-authoritative.** SSOT for contracts is `.cursorrules` and [`AGENTS.md`](../AGENTS.md). This file preserves the prior root `CLAUDE.md` engine-focused summary before governance [`CLAUDE.md`](../CLAUDE.md) moved to repo root.
 
 ---
 
