@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/cryptoxdog/Enrichment.Inference.Engine/docs/contracts/agents/tool-schemas/writeback.schema.json",
   "title": "Writeback",
-  "description": "Write enriched data back to the CRM system. Supports Odoo, Salesforce, and HubSpot.",
+  "description": "Write enriched data back to the CRM system. The target provider is any key registered in the CRM client registry by the trusted connector owner.",
   "type": "object",
   "properties": {
     "crm_type": {
       "type": "string",
-      "description": "CRM platform to write to.",
-      "enum": ["odoo", "salesforce", "hubspot"]
+      "description": "CRM provider key, as registered by the trusted connector owner (app/services/crm/base.py registry).",
+      "minLength": 1
     },
     "object_type": {
       "type": "string",
