@@ -174,3 +174,45 @@ def test_pr_size_check_is_advisory_and_says_so() -> None:
     assert "setFailed" not in script
     assert "never blocks merging" in script
     assert "Over limit (advisory)" in script
+
+
+_GITHUB_SCRIPT_HARNESS = """
+const failing = process.argv.slice(1).includes("fail");
+const warnings = [];
+const reject = async () => { throw new Error("Resource not accessible by integration"); };
+const ok = async () => ({ data: [] });
+const github = { rest: { issues: {
+  listComments: failing ? reject : ok, createComment: failing ? reject : ok,
+  updateComment: failing ? reject : ok } } };
+const core = { warning: (m) => warnings.push(m),
+               setFailed: (m) => { throw new Error("setFailed: " + m); } };
+const context = { repo: { owner: "o", repo: "r" },
+  payload: { pull_request: { number: 1, additions: 5000, deletions: 0, changed_files: 3 } } };
+const script = require("fs").readFileSync(0, "utf8");
+new (Object.getPrototypeOf(async function () {}).constructor)("github", "context", "core", script)(
+  github, context, core
+).then(() => console.log(JSON.stringify(warnings)), (e) => { console.error(e.message); process.exit(1); });
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+@pytest.mark.parametrize("api", ["ok", "fail"])
+def test_pr_size_check_never_fails_even_when_comment_api_rejects(api: str) -> None:
+    """Fork PRs get a read-only token; a comment API error must not fail the check."""
+    script = _step("pr-review-enforcement.yml", "Check PR Size")["with"]["script"]
+    script = (
+        script.replace("${{ env.PR_WARN_LINES }}", "300")
+        .replace("${{ env.PR_BLOCK_LINES }}", "1000")
+        .replace("${{ env.PR_MAX_FILES }}", "50")
+    )
+    result = subprocess.run(
+        ["node", "-e", _GITHUB_SCRIPT_HARNESS, "--", api],
+        input=script,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    warnings = result.stdout
+    assert "Advisory: PR exceeds size limits" in warnings
+    assert ("comment not published" in warnings) is (api == "fail")

@@ -108,35 +108,41 @@ jobs:
 
             const body = messages.join('\n');
 
-            const comments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pr.number
-            });
-
-            const botComment = comments.data.find(comment =>
-              comment.user.type === 'Bot' &&
-              comment.body.includes('PR Size Report')
-            );
-
-            if (botComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: botComment.id,
-                body: body
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pr.number,
-                body: body
-              });
-            }
-
             if (overLimit) {
               core.warning('Advisory: PR exceeds size limits — consider splitting this PR (this check does not block)');
+            }
+
+            // Publishing the report is best-effort: on fork PRs the token is
+            // read-only, and a comment API error must not fail an advisory check.
+            try {
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number
+              });
+
+              const botComment = comments.data.find(comment =>
+                comment.user.type === 'Bot' &&
+                comment.body.includes('PR Size Report')
+              );
+
+              if (botComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: botComment.id,
+                  body: body
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: body
+                });
+              }
+            } catch (error) {
+              core.warning(`PR size report comment not published (advisory): ${error.message}`);
             }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
