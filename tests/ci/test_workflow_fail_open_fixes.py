@@ -146,6 +146,27 @@ def test_docs_consistency_inv_1_is_not_satisfied_by_inv_10(tmp_path: Path) -> No
     assert "missing INV-1" in result.stdout
 
 
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not installed")
+@pytest.mark.parametrize("decoy", ["XINV-{i}", "INV-{i}x", "INV_{i}", "INV-{i}0"])
+def test_docs_consistency_inv_needs_identifier_boundaries(tmp_path: Path, decoy: str) -> None:
+    step = _step("docs-consistency.yml", "Verify docs/INVARIANTS.md contains INV-1 through INV-20")
+    lines = [f"| INV-{i} |" for i in range(2, 21)] + [decoy.format(i=1)]  # INV-1 only as decoy
+    _docs_tree(tmp_path, {"docs/INVARIANTS.md": "\n".join(lines) + "\n"})
+    result = _bash(step["run"], tmp_path, step)
+    assert result.returncode == 1, result.stdout
+    assert "missing INV-1" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not installed")
+@pytest.mark.parametrize("form", ["INV-{i}", "### INV-{i}: title", "| INV-{i} |", "**INV-{i}**"])
+def test_docs_consistency_inv_accepts_standalone_and_headings(tmp_path: Path, form: str) -> None:
+    step = _step("docs-consistency.yml", "Verify docs/INVARIANTS.md contains INV-1 through INV-20")
+    body = "\n".join(form.format(i=i) for i in range(1, 21))
+    _docs_tree(tmp_path, {"docs/INVARIANTS.md": body + "\n"})
+    result = _bash(step["run"], tmp_path, step)
+    assert result.returncode == 0, result.stdout
+
+
 def test_pr_size_check_is_advisory_and_says_so() -> None:
     script = _step("pr-review-enforcement.yml", "Check PR Size")["with"]["script"]
     assert "blocked from merging" not in script

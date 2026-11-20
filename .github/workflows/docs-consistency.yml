@@ -60,8 +60,9 @@ jobs:
             exit 1
           fi
           for i in $(seq 1 20); do
-            # Whole identifier: INV-1 must not be satisfied by INV-10.
-            if ! grep -qE "INV-$i([^0-9]|$)" docs/INVARIANTS.md; then
+            # Whole identifier on both sides: INV-1 is not satisfied by INV-10,
+            # INV-1x or XINV-1.
+            if ! grep -qE "(^|[^A-Za-z0-9_])INV-$i([^A-Za-z0-9_]|$)" docs/INVARIANTS.md; then
               echo "FAIL: docs/INVARIANTS.md missing INV-$i"
               exit 1
             fi
