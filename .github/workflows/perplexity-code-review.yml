@@ -168,6 +168,10 @@ jobs:
         if: steps.diff.outputs.empty != 'true'
         env:
           DIFF_PR_NUMBER: ${{ steps.diff.outputs.pr_number }}
+          REF_NAME: ${{ github.ref_name }}
+          CONTEXT_LABEL: ${{ github.event.inputs.include_context == 'true' && 'L9 contracts included' || 'Generic review' }}
+          BLOCKING_INPUT: ${{ github.event.inputs.blocking }}
+          ACTOR: ${{ github.actor }}
         run: |
           PR_NUM="$DIFF_PR_NUMBER"
 
@@ -180,11 +184,11 @@ jobs:
           if [ -n "$PR_NUM" ]; then
             echo "**PR:** #$PR_NUM" >> review_comment.md
           else
-            echo "**Branch:** ${{ github.ref_name }}" >> review_comment.md
+            echo "**Branch:** $REF_NAME" >> review_comment.md
           fi
 
-          echo "**Context:** ${{ github.event.inputs.include_context == 'true' && 'L9 contracts included' || 'Generic review' }}" >> review_comment.md
-          echo "**Blocking:** ${{ github.event.inputs.blocking }}" >> review_comment.md
+          echo "**Context:** $CONTEXT_LABEL" >> review_comment.md
+          echo "**Blocking:** $BLOCKING_INPUT" >> review_comment.md
           # The verdict goes in the header, before the (truncated) review body,
           # so truncation cannot drop it and nothing in the model's output can
           # precede it; scripts/pr_review_gate.py reads the FIRST verdict line.
@@ -201,17 +205,19 @@ jobs:
 
           echo '```' >> review_comment.md
           echo "" >> review_comment.md
-          echo "_Triggered by: @${{ github.actor }} · Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_" >> review_comment.md
+          echo "_Triggered by: @$ACTOR · Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_" >> review_comment.md
 
       - name: Post PR Comment
         if: steps.diff.outputs.empty != 'true' && steps.diff.outputs.pr_number != ''
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          PR_NUMBER: ${{ steps.diff.outputs.pr_number }}
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- ai-code-review-perplexity -->';
             const body = fs.readFileSync('review_comment.md', 'utf8');
-            const prNumber = parseInt('${{ steps.diff.outputs.pr_number }}', 10);
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
 
             if (!prNumber) {
               core.info('No PR number — skipping comment');
