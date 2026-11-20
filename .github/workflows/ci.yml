@@ -31,7 +31,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Set up Python
@@ -100,7 +100,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -137,7 +137,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
       # Semgrep is Core-owned: its version is Quantum-L9/l9-ci-core
       # toolchain-lock.json's, installed hash-locked by Core's installer (on by
       # default). The lock is built for CPython 3.12.
@@ -167,7 +167,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -183,7 +183,7 @@ jobs:
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           bash tools/deps/install_locked.sh full
       - name: Checkout pinned native CEG subject
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
           ref: e9e6ceb669d37bd75dc9bded206105b5875a9c60
@@ -274,7 +274,7 @@ jobs:
           --health-start-period 20s
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up Python
@@ -286,7 +286,7 @@ jobs:
             uv.lock
             pyproject.toml
       - name: Checkout pinned Cognitive.Engine.Graphs peer
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
           ref: ${{ env.CEG_SUBJECT_SHA }}
@@ -294,7 +294,7 @@ jobs:
           token: ${{ secrets.SDK_TOKEN }}
           persist-credentials: false
       - name: Checkout pinned Constellation.Gate peer
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Quantum-L9/Constellation.Gate
           ref: ${{ env.GATE_SUBJECT_SHA }}
@@ -382,7 +382,7 @@ jobs:
       GATE_SUBJECT_SHA: ab8fb674e65f2cafe4172178c1ce6de18b4bb0f4
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up Python
@@ -405,7 +405,7 @@ jobs:
           fi
       - name: Checkout pinned Constellation.Gate (rail + Gate image source)
         if: steps.cred.outputs.present == 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Quantum-L9/Constellation.Gate
           ref: ${{ env.GATE_SUBJECT_SHA }}
@@ -448,7 +448,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Set up Python
@@ -504,7 +504,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
       - name: Generate Software Bill of Materials
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
@@ -533,7 +533,7 @@ jobs:
       checks: read
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Run OpenSSF Scorecard
@@ -555,7 +555,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up Python

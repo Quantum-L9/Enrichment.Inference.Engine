@@ -80,7 +80,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -146,7 +146,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -193,7 +193,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
 
       # Semgrep is Core-owned: its version is Quantum-L9/l9-ci-core
       # toolchain-lock.json's, installed hash-locked by Core's installer (on by
@@ -256,7 +256,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -275,7 +275,7 @@ jobs:
           bash tools/deps/install_locked.sh full
 
       - name: Checkout pinned native CEG subject
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
           ref: e9e6ceb669d37bd75dc9bded206105b5875a9c60
@@ -339,7 +339,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -405,7 +405,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -476,7 +476,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -505,7 +505,7 @@ jobs:
           bash tools/deps/install_locked.sh full
 
       - name: Checkout pinned native CEG subject
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
           ref: e9e6ceb669d37bd75dc9bded206105b5875a9c60
@@ -590,7 +590,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
