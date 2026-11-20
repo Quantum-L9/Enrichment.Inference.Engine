@@ -274,3 +274,17 @@ def test_the_named_fixture_exemption_is_bound_to_its_rule(tmp_path: Path) -> Non
     """The exempt file is still scanned by every other rule."""
     relative = "tests/unit/test_odoo_cross_repo_contract.py"
     assert _scan(tmp_path, relative, f"aws_access_key_id: {_AWS_KEY_ID}\n") == 1
+
+
+_DSN_PREFIX = "postgresql://" + "svc:" + "Zq8mK2vL9x" + "@"
+
+
+@pytest.mark.skipif(_REAL_GITLEAKS is None, reason="gitleaks binary not installed")
+def test_connection_string_template_is_quiet_and_a_real_host_is_not(tmp_path: Path) -> None:
+    """The `host:port` template is exempt; the same URL with a host is a finding."""
+    template = tmp_path / "template"
+    real = tmp_path / "real"
+    template.mkdir()
+    real.mkdir()
+    assert _scan(template, "CONFIG.md", f"- Format: `{_DSN_PREFIX}host:port/dbname`\n") == 0
+    assert _scan(real, "CONFIG.md", f"- Format: `{_DSN_PREFIX}db.internal.corp:5432/app`\n") == 1
