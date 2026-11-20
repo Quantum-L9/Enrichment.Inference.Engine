@@ -181,7 +181,8 @@ def test_checkout_is_full_current_head_without_persisted_credentials() -> None:
     checkout = next(
         step for step in _job()["steps"] if step.get("uses", "").startswith("actions/checkout@")
     )
-    assert checkout["uses"] == "actions/checkout@v7"
+    # actions/checkout v7.0.1, pinned by commit SHA (the tag is the trailing comment in the workflow).
+    assert checkout["uses"] == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     assert checkout["with"] == {"fetch-depth": 0, "persist-credentials": False}
 
 

@@ -274,7 +274,8 @@ def test_hosted_native_jobs_provision_pinned_real_ceg_subject(workflow_name, job
     ]
     assert len(checkouts) == 1
     checkout = checkouts[0]
-    assert checkout["uses"] == "actions/checkout@v7"
+    # actions/checkout v7.0.1, pinned by commit SHA (the tag is the trailing comment in the workflow).
+    assert checkout["uses"] == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     assert checkout["with"]["ref"] == "${{ steps.ceg_pin.outputs.sha }}"
     pin = next(step for step in steps if step.get("id") == "ceg_pin")
     assert steps.index(pin) < steps.index(checkout)

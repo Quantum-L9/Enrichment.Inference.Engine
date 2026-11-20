@@ -60,7 +60,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
 
@@ -78,7 +78,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
           cache: pip
@@ -93,8 +93,17 @@ jobs:
         id: diff
         env:
           GH_TOKEN: ${{ github.token }}
+          # Inputs reach the script through env, never by ${{ }} interpolation.
+          PR_NUMBER_INPUT: ${{ github.event.inputs.pr_number }}
         run: |
-          PR_NUM="${{ github.event.inputs.pr_number }}"
+          PR_NUM="$PR_NUMBER_INPUT"
+
+          # gh pr diff also accepts a branch name, and parseInt in the comment
+          # step reads a numeric prefix: accept only a whole PR number.
+          if [ -n "$PR_NUM" ] && ! [[ "$PR_NUM" =~ ^[0-9]+$ ]]; then
+            echo "::error::pr_number must be a numeric PR number"
+            exit 1
+          fi
 
           if [ -n "$PR_NUM" ]; then
             echo "Fetching diff for PR #$PR_NUM..."
@@ -132,14 +141,16 @@ jobs:
         shell: bash
         env:
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+          INCLUDE_CONTEXT_INPUT: ${{ github.event.inputs.include_context }}
+          BLOCKING_INPUT: ${{ github.event.inputs.blocking }}
         run: |
           CONTEXT_FLAG=""
-          if [ "${{ github.event.inputs.include_context }}" = "false" ]; then
+          if [ "$INCLUDE_CONTEXT_INPUT" = "false" ]; then
             CONTEXT_FLAG="--no-context"
           fi
 
           BLOCK_FLAG="--no-block"
-          if [ "${{ github.event.inputs.blocking }}" = "true" ]; then
+          if [ "$BLOCKING_INPUT" = "true" ]; then
             BLOCK_FLAG=""
           fi
 
@@ -156,14 +167,20 @@ jobs:
 
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
 
-          if [ $EXIT_CODE -ne 0 ] && [ "${{ github.event.inputs.blocking }}" = "true" ]; then
+          if [ $EXIT_CODE -ne 0 ] && [ "$BLOCKING_INPUT" = "true" ]; then
             echo "::error::AI review found blocking issues"
           fi
 
       - name: Generate Markdown Report
         if: steps.diff.outputs.empty != 'true'
+        env:
+          DIFF_PR_NUMBER: ${{ steps.diff.outputs.pr_number }}
+          REF_NAME: ${{ github.ref_name }}
+          CONTEXT_LABEL: ${{ github.event.inputs.include_context == 'true' && 'L9 contracts included' || 'Generic review' }}
+          BLOCKING_INPUT: ${{ github.event.inputs.blocking }}
+          ACTOR: ${{ github.actor }}
         run: |
-          PR_NUM="${{ steps.diff.outputs.pr_number }}"
+          PR_NUM="$DIFF_PR_NUMBER"
 
           cat > review_comment.md << 'HEADER'
           <!-- ai-code-review-perplexity -->
@@ -174,11 +191,11 @@ jobs:
           if [ -n "$PR_NUM" ]; then
             echo "**PR:** #$PR_NUM" >> review_comment.md
           else
-            echo "**Branch:** ${{ github.ref_name }}" >> review_comment.md
+            echo "**Branch:** $REF_NAME" >> review_comment.md
           fi
 
-          echo "**Context:** ${{ github.event.inputs.include_context == 'true' && 'L9 contracts included' || 'Generic review' }}" >> review_comment.md
-          echo "**Blocking:** ${{ github.event.inputs.blocking }}" >> review_comment.md
+          echo "**Context:** $CONTEXT_LABEL" >> review_comment.md
+          echo "**Blocking:** $BLOCKING_INPUT" >> review_comment.md
           # The verdict goes in the header, before the (truncated) review body,
           # so truncation cannot drop it and nothing in the model's output can
           # precede it; scripts/pr_review_gate.py reads the FIRST verdict line.
@@ -195,17 +212,19 @@ jobs:
 
           echo '```' >> review_comment.md
           echo "" >> review_comment.md
-          echo "_Triggered by: @${{ github.actor }} · Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_" >> review_comment.md
+          echo "_Triggered by: @$ACTOR · Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_" >> review_comment.md
 
       - name: Post PR Comment
         if: steps.diff.outputs.empty != 'true' && steps.diff.outputs.pr_number != ''
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          PR_NUMBER: ${{ steps.diff.outputs.pr_number }}
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- ai-code-review-perplexity -->';
             const body = fs.readFileSync('review_comment.md', 'utf8');
-            const prNumber = parseInt('${{ steps.diff.outputs.pr_number }}', 10);
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
 
             if (!prNumber) {
               core.info('No PR number — skipping comment');
@@ -243,7 +262,7 @@ jobs:
 
       - name: Upload Review Artifact
         if: steps.diff.outputs.empty != 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: ai-review-output
           path: |
