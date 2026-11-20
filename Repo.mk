@@ -37,6 +37,16 @@ IMAGE_NAME ?= enrichment-api
 SERVICE_NAME ?= enrichment-api
 COMPOSE_FILE ?= docker-compose.prod.yml
 COVERAGE_MIN ?= 71
+# Cobertura path for the PR-fast selection's coverage, read by the SonarCloud
+# job in ci.yml. Empty (the default) measures nothing, so `make test` in
+# Analyze (central Core) and locally is unchanged. When set, the same single
+# PR-fast pytest run also records coverage of app/: no second test run.
+# The C-15 floor (COVERAGE_MIN, .coveragerc fail_under) governs full-catalog
+# runs only; the PR-fast selection was never floored (.coveragerc [report]
+# comment), so this report passes --cov-fail-under=0 to keep that scope.
+# Sonar's own new-code gate judges the changed lines this report covers.
+PR_FAST_COVERAGE_XML ?=
+PR_FAST_COVERAGE_ARGS = $(if $(PR_FAST_COVERAGE_XML),--cov=app --cov-report=xml:$(PR_FAST_COVERAGE_XML) --cov-fail-under=0)
 
 PYTHON := $(shell if [ -x "$(CURDIR)/.venv/bin/python" ]; then printf '%s' "$(CURDIR)/.venv/bin/python"; else command -v python3; fi)
 PYTEST := $(PYTHON) -m pytest
@@ -94,6 +104,7 @@ repo-test:  ## PR-fast contracts on GitHub Actions; local full catalog with the 
 	    -p no:xdist \
 	    --timeout=120 \
 	    --tb=short -q \
+	    $(PR_FAST_COVERAGE_ARGS) \
 	    --junitxml="$${report}"; \
 	  status=$$?; \
 	  set -e; \

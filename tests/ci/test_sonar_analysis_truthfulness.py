@@ -68,16 +68,76 @@ def _analysis_properties() -> dict[str, str]:
     return properties
 
 
+CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+COVERAGE_ARTIFACT = "coverage-pr-fast"
+
+
+def _ci_jobs() -> dict:
+    return yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+
+
 def test_only_approved_triggers_and_read_permissions_remain() -> None:
+    """Sonar is called by ci.yml only, after the job that measures coverage."""
     workflow = _workflow()
     # PyYAML's YAML 1.1 resolver treats GitHub's unquoted `on` as True.
     triggers = workflow[True] if True in workflow else workflow["on"]
-    assert triggers == {
-        "push": {"branches": ["main"]},
-        "pull_request": {"types": ["opened", "synchronize", "reopened"]},
-    }
+    assert list(triggers) == ["workflow_call"]
+    assert list(triggers["workflow_call"]["secrets"]) == ["SONAR_TOKEN"]
     assert workflow["permissions"] == {"contents": "read"}
     assert "permissions" not in _job()
+
+    ci_triggers = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))[True]
+    assert ci_triggers["push"] == {"branches": ["main"]}
+    assert "pull_request" in ci_triggers
+    caller = _ci_jobs()["sonar"]
+    assert caller["uses"] == "./.github/workflows/sonarcloud.yml"
+    assert caller["needs"] == "test"
+    assert caller["secrets"] == {"SONAR_TOKEN": "${{ secrets.SONAR_TOKEN }}"}
+    assert caller["permissions"] == {"contents": "read"}
+    # Same events as the old standalone workflow: no deep-plan dispatch scan.
+    assert caller["if"] == "${{ github.event_name != 'workflow_dispatch' }}"
+    # Sonar is not a required check; ci-gate must not wait on it.
+    assert "sonar" not in _ci_jobs()["ci-gate"]["needs"]
+
+
+def test_coverage_comes_from_the_single_test_run_and_is_required() -> None:
+    """0% coverage was imported because no job produced coverage.xml.
+
+    The Test Suite job's one ``make test`` run writes it; Sonar downloads it and
+    fails closed when it is absent. No second test run is made for Sonar.
+    """
+    test_steps = _ci_jobs()["test"]["steps"]
+    runs = [step.get("run", "") for step in test_steps]
+    assert sum(run.strip().startswith("make test") for run in runs) == 1
+    assert "make test PR_FAST_COVERAGE_XML=coverage.xml" in runs
+    upload = next(
+        step for step in test_steps if step.get("uses", "").startswith("actions/upload-artifact@")
+    )
+    assert upload["with"]["name"] == COVERAGE_ARTIFACT
+    assert upload["with"]["path"] == "coverage.xml"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert test_steps.index(upload) > runs.index("make test PR_FAST_COVERAGE_XML=coverage.xml")
+
+    steps = _job()["steps"]
+    download = next(
+        step for step in steps if step.get("uses", "").startswith("actions/download-artifact@")
+    )
+    assert download["with"] == {"name": COVERAGE_ARTIFACT, "path": "."}
+    require = next(step for step in steps if "coverage.xml" in step.get("run", ""))
+    assert "exit 1" in require["run"]
+    assert steps.index(download) < steps.index(require) < steps.index(_scan())
+
+    properties = (ROOT / "sonar-project.properties").read_text(encoding="utf-8")
+    assert "sonar.python.coverage.reportPaths=coverage.xml" in properties
+
+
+def test_pr_fast_coverage_is_opt_in_and_full_catalog_floor_is_unchanged() -> None:
+    """Analyze (central Core) runs plain ``make test``; it must not change."""
+    repo_mk = (ROOT / "Repo.mk").read_text(encoding="utf-8")
+    assert "PR_FAST_COVERAGE_XML ?=\n" in repo_mk
+    assert "$(if $(PR_FAST_COVERAGE_XML)," in repo_mk
+    assert "COVERAGE_MIN ?= 71" in repo_mk
+    assert "--cov-fail-under=$(COVERAGE_MIN)" in repo_mk
 
 
 def test_fork_pull_requests_are_excluded_before_any_secret_step() -> None:
