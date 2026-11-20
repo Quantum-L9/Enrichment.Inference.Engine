@@ -12,14 +12,21 @@
 # CodeRabbit — paid tier: install the GitHub App + enable repo in dashboard.
 # This file tunes review behavior; see https://docs.coderabbit.ai/reference/configuration
 # Delta context: CODERABBIT.md
+#
+# inheritance: true merges this file with the Quantum-L9 organization review
+# policy: a value set here wins, a value left out is inherited, and lists are
+# this file's entries followed by the organization's
+# (https://docs.coderabbit.ai/configuration/configuration-inheritance).
+# Review profile, approval / request-changes behaviour and summary placement
+# come from the organization policy and are not set here. Only EIE-specific
+# settings belong in this file.
+
+inheritance: true
 
 language: en-US
 early_access: false
 
 reviews:
-  profile: assertive
-  request_changes_workflow: true
-  high_level_summary: true
   poem: false
   review_status: true
   collapse_walkthrough: false
@@ -37,7 +44,6 @@ reviews:
       - "renovate[bot]"
 
   path_filters:
-    - "!docs/**"
     - "!readme/**"
     - "!reports/**"
     - "!htmlcov/**"
