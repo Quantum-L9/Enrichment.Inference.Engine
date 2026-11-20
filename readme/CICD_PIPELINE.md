@@ -66,7 +66,7 @@ The local validation counterpart is `make pr-check` (agent-check plus the `local
 | `release.yml` | Tags / manual | Releases | Varies |
 | `perplexity-code-review.yml` | PR (optional) | Perplexity-assisted review | No |
 | `sonarcloud.yml` | Push, PR | SonarQube Cloud analysis + coverage | No (skips if unset) |
-| `gitguardian.yml` | Push, PR | GitGuardian ggshield secret scan | No (skips if no API key) |
+| `gitguardian.yml` | Push, PR | GitGuardian ggshield secret scan | Fails with `NOT_EXECUTED` when the API key is missing or rejected, or the API is unreachable |
 | `coderabbit-notify.yml` | PR review | CodeRabbit review notifications | No |
 
 ### PR Pipeline Phases (pr-pipeline.yml)

@@ -11,8 +11,15 @@
 #
 # Configure:
 #   Repository secret: GITGUARDIAN_API_KEY (service account or PAT with scan scope).
+#   Dependabot events read the Dependabot secrets store, not Actions secrets. The
+#   scan step ran on a Dependabot event (PR #363, run 44302687811), so a key is
+#   present in that store as well.
 #
-# If the API key is unset, the workflow succeeds without scanning.
+# This job ends green only when ggshield ran and reported no secrets. A missing
+# key, a key GitGuardian rejects (invalid or expired) and an unreachable
+# GitGuardian API each end the job red with status NOT_EXECUTED and the reason.
+# The last step writes one status line to the run summary.
+# Contract: tests/ci/test_secret_scan_truthfulness.py
 
 name: GitGuardian
 
@@ -33,35 +40,103 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Decide whether to run GitGuardian
-        id: gate
+      # Preflight: prove a scan can run before claiming one. GET /v1/health
+      # authenticates the key and returns 200 for a valid one and 401 for an
+      # invalid or expired one (GitGuardian public API reference, "Health").
+      - name: Verify GitGuardian can scan
+        id: preflight
+        shell: bash
         env:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+          GITGUARDIAN_HEALTH_URL: https://api.gitguardian.com/v1/health
         run: |
-          if [ -n "$GITGUARDIAN_API_KEY" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::GitGuardian skipped — add Actions secret GITGUARDIAN_API_KEY."
+          not_executed() {
+            echo "status=NOT_EXECUTED" >> "$GITHUB_OUTPUT"
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
+            echo "::error::NOT_EXECUTED ($1): $2 No GitGuardian scan ran."
+            exit 1
+          }
+          if [ -z "${GITGUARDIAN_API_KEY:-}" ]; then
+            not_executed token_missing "GITGUARDIAN_API_KEY is not available to this event."
           fi
+          http_code="$(curl --proto "=https" --tlsv1.2 -sS -o /dev/null -w '%{http_code}' \
+            --max-time 20 --retry 2 \
+            -H "Authorization: Token ${GITGUARDIAN_API_KEY}" \
+            "$GITGUARDIAN_HEALTH_URL")" || http_code="000"
+          case "$http_code" in
+            200)
+              echo "status=READY" >> "$GITHUB_OUTPUT"
+              echo "GitGuardian accepted the API key; the scan will run."
+              ;;
+            401 | 403)
+              not_executed token_rejected "GitGuardian rejected GITGUARDIAN_API_KEY (HTTP ${http_code}): the key is invalid, revoked or expired."
+              ;;
+            *)
+              not_executed api_unavailable "The GitGuardian API did not answer the health check (HTTP ${http_code})."
+              ;;
+          esac
 
       - name: Checkout
-        if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Pull request metadata for ggshield
-        if: steps.gate.outputs.run == 'true' && github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: echo "GITHUB_PULL_BASE_SHA=${BASE_SHA}" >> "$GITHUB_ENV"
 
       - name: GitGuardian scan
-        if: steps.gate.outputs.run == 'true'
+        id: scan
         uses: GitGuardian/ggshield-action@5cc1ed2be3e8bf625d354c7170731880670f74de # v1.56.1
         env:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
           GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
           GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
           GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+
+      - name: Report scan status
+        if: always()
+        shell: bash
+        env:
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PREFLIGHT_STATUS: ${{ steps.preflight.outputs.status }}
+          PREFLIGHT_REASON: ${{ steps.preflight.outputs.reason }}
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          if [ "$PREFLIGHT_STATUS" != "READY" ]; then
+            status=NOT_EXECUTED
+            detail="preflight: ${PREFLIGHT_REASON:-no_result}"
+          else
+            case "$SCAN_OUTCOME" in
+              success)
+                status=EXECUTED_CLEAN
+                detail="ggshield scan step: success"
+                ;;
+              failure)
+                status=FAILED
+                detail="ggshield scan step: failure after a healthy preflight — secrets were reported, or ggshield stopped on an error; the step log states which. This is not a pass."
+                ;;
+              *)
+                status=NOT_EXECUTED
+                detail="the ggshield scan step did not run (step: ${SCAN_OUTCOME:-not run})"
+                ;;
+            esac
+          fi
+          {
+            echo "### Secret scanning — GitGuardian"
+            echo
+            echo "- **Status:** \`${status}\`"
+            echo "- **Detail:** ${detail}"
+            echo "- **Actor / event:** \`${ACTOR}\` / \`${EVENT_NAME}\`"
+            echo "- **Commit:** \`${HEAD_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "GitGuardian status: ${status} (${detail})"
+          # A job that did not execute a scan never ends green.
+          if [ "$status" = "NOT_EXECUTED" ]; then
+            echo "::error::NOT_EXECUTED: no GitGuardian scan ran for this event (${detail})."
+            exit 1
+          fi
