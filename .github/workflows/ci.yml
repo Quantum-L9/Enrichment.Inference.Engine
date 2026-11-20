@@ -30,9 +30,16 @@ on:
         required: false
         type: string
 
+# Keyed on the event: a workflow_dispatch deep run (up to 90 minutes, see
+# integration) never shares a group with push or pull_request runs on the same
+# ref, so a push to main cannot cancel it. Each dispatch gets its own group
+# (its run id): GitHub keeps one pending run per group and a newer one replaces
+# it, so a shared dispatch group would silently drop a queued deep run. Two
+# dispatches of the same slot are still serialized by integration's own
+# concurrency. Push and pull_request runs still cancel their superseded runs.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 permissions:
   contents: read
