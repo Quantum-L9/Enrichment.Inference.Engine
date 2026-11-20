@@ -1,7 +1,7 @@
 """Typed property declarations — the syntax EIE and CEG share for a tenant spec.
 
-One declaration grammar (owner decision 2026-11-11; Cognitive.Engine.Graphs adopts
-the identical syntax in its typed-contract change)::
+One declaration grammar (owner decision 2026-11-11; Cognitive.Engine.Graphs uses
+the identical syntax since its typed spec contract, #453)::
 
     - {name: certifications, type: list, items: {type: string}}
     - name: processed_polymers

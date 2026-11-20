@@ -1,0 +1,10 @@
+{
+  "example": "response.v2.failed.json",
+  "status": "no_valid_responses",
+  "final_fields": {},
+  "partner_writeback": {},
+  "never_as_value": [
+    "polymer_type",
+    "material_form"
+  ]
+}

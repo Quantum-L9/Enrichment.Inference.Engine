@@ -274,11 +274,28 @@ jobs:
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           bash tools/deps/install_locked.sh full
 
+      - name: Read pinned CEG revision
+        id: ceg_pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha=$(python - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("tests/contracts/ceg_revision.py").read_text(encoding="utf-8")
+          found = re.search(r'^CEG_REVISION = "([0-9a-f]{40})"$', text, re.M)
+          if found is None:
+              raise SystemExit("CEG_REVISION is not one 40-character revision")
+          print(found.group(1))
+          PY
+          )
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "CEG_SUBJECT_SHA=$sha" >> "$GITHUB_ENV"
       - name: Checkout pinned native CEG subject
         uses: actions/checkout@v7
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
-          ref: e9e6ceb669d37bd75dc9bded206105b5875a9c60
+          ref: ${{ steps.ceg_pin.outputs.sha }}
           path: .ci-subjects/ceg
           token: ${{ secrets.SDK_TOKEN }}
           persist-credentials: false
@@ -288,7 +305,7 @@ jobs:
         run: |
           set -euo pipefail
           subject="$GITHUB_WORKSPACE/.ci-subjects/ceg"
-          test "$(git -C "$subject" rev-parse HEAD)" = "e9e6ceb669d37bd75dc9bded206105b5875a9c60"
+          test "$(git -C "$subject" rev-parse HEAD)" = "$CEG_SUBJECT_SHA"
           python -m venv "$RUNNER_TEMP/ceg-native-venv"
           native_python="$RUNNER_TEMP/ceg-native-venv/bin/python"
           # CEG's own hash-locked runtime profile (uv sync --locked against its
@@ -504,11 +521,28 @@ jobs:
           # [project] dependencies, so the locked install always carries them.
           bash tools/deps/install_locked.sh full
 
+      - name: Read pinned CEG revision
+        id: ceg_pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha=$(python - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("tests/contracts/ceg_revision.py").read_text(encoding="utf-8")
+          found = re.search(r'^CEG_REVISION = "([0-9a-f]{40})"$', text, re.M)
+          if found is None:
+              raise SystemExit("CEG_REVISION is not one 40-character revision")
+          print(found.group(1))
+          PY
+          )
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "CEG_SUBJECT_SHA=$sha" >> "$GITHUB_ENV"
       - name: Checkout pinned native CEG subject
         uses: actions/checkout@v7
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
-          ref: e9e6ceb669d37bd75dc9bded206105b5875a9c60
+          ref: ${{ steps.ceg_pin.outputs.sha }}
           path: .ci-subjects/ceg
           token: ${{ secrets.SDK_TOKEN }}
           persist-credentials: false
@@ -518,7 +552,7 @@ jobs:
         run: |
           set -euo pipefail
           subject="$GITHUB_WORKSPACE/.ci-subjects/ceg"
-          test "$(git -C "$subject" rev-parse HEAD)" = "e9e6ceb669d37bd75dc9bded206105b5875a9c60"
+          test "$(git -C "$subject" rev-parse HEAD)" = "$CEG_SUBJECT_SHA"
           python -m venv "$RUNNER_TEMP/ceg-native-venv"
           native_python="$RUNNER_TEMP/ceg-native-venv/bin/python"
           # CEG's own hash-locked runtime profile (uv sync --locked against its

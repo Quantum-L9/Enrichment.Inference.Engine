@@ -182,11 +182,28 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
           bash tools/deps/install_locked.sh full
+      - name: Read pinned CEG revision
+        id: ceg_pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha=$(python - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("tests/contracts/ceg_revision.py").read_text(encoding="utf-8")
+          found = re.search(r'^CEG_REVISION = "([0-9a-f]{40})"$', text, re.M)
+          if found is None:
+              raise SystemExit("CEG_REVISION is not one 40-character revision")
+          print(found.group(1))
+          PY
+          )
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "CEG_SUBJECT_SHA=$sha" >> "$GITHUB_ENV"
       - name: Checkout pinned native CEG subject
         uses: actions/checkout@v7
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
-          ref: e9e6ceb669d37bd75dc9bded206105b5875a9c60
+          ref: ${{ steps.ceg_pin.outputs.sha }}
           path: .ci-subjects/ceg
           token: ${{ secrets.SDK_TOKEN }}
           persist-credentials: false
@@ -195,7 +212,7 @@ jobs:
         run: |
           set -euo pipefail
           subject="$GITHUB_WORKSPACE/.ci-subjects/ceg"
-          test "$(git -C "$subject" rev-parse HEAD)" = "e9e6ceb669d37bd75dc9bded206105b5875a9c60"
+          test "$(git -C "$subject" rev-parse HEAD)" = "$CEG_SUBJECT_SHA"
           python -m venv "$RUNNER_TEMP/ceg-native-venv"
           native_python="$RUNNER_TEMP/ceg-native-venv/bin/python"
           # CEG's own hash-locked runtime profile (uv sync --locked against its
@@ -243,9 +260,9 @@ jobs:
     permissions:
       contents: read
     env:
-      # Peer subjects, pinned. Bump deliberately; each step verifies HEAD.
-      CEG_SUBJECT_SHA: e9e6ceb669d37bd75dc9bded206105b5875a9c60
-      GATE_SUBJECT_SHA: ab8fb674e65f2cafe4172178c1ce6de18b4bb0f4
+      # Gate peer, pinned. The CEG peer is tests/contracts/ceg_revision.py,
+      # read in the step below; the checkout verifies HEAD.
+      GATE_SUBJECT_SHA: b451b68b98b315f57f0c4f9b99090a437e9dac23
     services:
       redis:
         image: redis:7-alpine
@@ -285,11 +302,28 @@ jobs:
           cache-dependency-path: |
             uv.lock
             pyproject.toml
+      - name: Read pinned CEG revision
+        id: ceg_pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha=$(python - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("tests/contracts/ceg_revision.py").read_text(encoding="utf-8")
+          found = re.search(r'^CEG_REVISION = "([0-9a-f]{40})"$', text, re.M)
+          if found is None:
+              raise SystemExit("CEG_REVISION is not one 40-character revision")
+          print(found.group(1))
+          PY
+          )
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "CEG_SUBJECT_SHA=$sha" >> "$GITHUB_ENV"
       - name: Checkout pinned Cognitive.Engine.Graphs peer
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Quantum-L9/Cognitive.Engine.Graphs
-          ref: ${{ env.CEG_SUBJECT_SHA }}
+          ref: ${{ steps.ceg_pin.outputs.sha }}
           path: .ci-subjects/ceg-peer
           token: ${{ secrets.SDK_TOKEN }}
           persist-credentials: false
@@ -358,6 +392,84 @@ jobs:
             --tb=short \
             -rfEs \
             -v
+
+  # Advisory, like `integration`: not in ci-gate's needs and not a required check.
+  # Odoo's `converge` request through a REAL Gate in Docker (tests/e2e/README.md):
+  # client -> Gate -> EIE -> Gate -> client, EIE on its deterministic provider.
+  # ONE documented exception (CTO decision 2026-11-13): the job runs only when
+  # the Constellation.Gate checkout credential is present.
+  #   condition: secrets.SDK_TOKEN is empty (fork PRs, or the secret unprovisioned);
+  #   why no mock: the proof is a real Gate image built from that private repo;
+  #   owner / removal trigger: the operator provisions the secret.
+  # It is announced, never silent: the first step emits a warning annotation and
+  # a job-summary line saying the e2e did NOT run. With the credential present a
+  # missing checkout, image or rail is a red job; tests/e2e itself never skips.
+  e2e-converge:
+    name: E2E (Odoo converge through a real Gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: validate
+    permissions:
+      contents: read
+    env:
+      # Same pinned Gate subject as `integration`. Bump both deliberately.
+      GATE_SUBJECT_SHA: b451b68b98b315f57f0c4f9b99090a437e9dac23
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Is the Constellation.Gate checkout credential present?
+        id: cred
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SDK_TOKEN}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            msg="converge e2e did NOT run: no Constellation.Gate checkout credential (secrets.SDK_TOKEN)"
+            echo "::warning title=E2E NOT RUN::${msg}"
+            echo "### E2E NOT RUN — ${msg}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Checkout pinned Constellation.Gate (rail + Gate image source)
+        if: steps.cred.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Quantum-L9/Constellation.Gate
+          ref: ${{ env.GATE_SUBJECT_SHA }}
+          path: .ci-subjects/gate-peer
+          token: ${{ secrets.SDK_TOKEN }}
+          persist-credentials: false
+      - name: Build EIE virtualenv (.venv)
+        if: steps.cred.outputs.present == 'true'
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
+          python -m venv .venv
+          PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" bash tools/deps/install_locked.sh full
+          git config --global --remove-section "url.https://x-access-token:${SDK_TOKEN}@github.com/"
+      - name: Build Gate and EIE images from their own Dockerfiles
+        if: steps.cred.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          gate="$GITHUB_WORKSPACE/.ci-subjects/gate-peer"
+          test "$(git -C "$gate" rev-parse HEAD)" = "$GATE_SUBJECT_SHA"
+          docker build -t l9e2e/gate:local "$gate/constellation-gate"
+          docker build -t l9e2e/eie:local .
+      - name: Run converge e2e
+        if: steps.cred.outputs.present == 'true'
+        env:
+          L9_E2E_GATE_RAIL: ${{ github.workspace }}/.ci-subjects/gate-peer/constellation-gate/tests/e2e/docker
+          L9_E2E_STATE_DIR: ${{ runner.temp }}/l9e2e
+        run: bash tests/e2e/run_converge_e2e.sh
 
   security:
     name: Security Scanning
@@ -428,7 +540,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v7
       - name: Generate Software Bill of Materials
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           format: spdx-json
           output-file: sbom.spdx.json

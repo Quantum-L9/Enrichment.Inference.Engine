@@ -42,6 +42,7 @@ This document defines the rules of engagement for AI agents (Manus, Copilot, Cur
 | `app/engines/graph_sync_client.py` | T4 | Gate transport contract |
 | `app/engines/packet_router.py` | T4 | Gate-only egress for graph `sync` / score invalidation (retry discipline) |
 | `app/services/gate_client.py` | T4 | Single signed GateClient factory — the only place outbound Gate config is built |
+| `app/middleware/gate_ingress.py` | T4 | Gate-only ingress boundary in front of the SDK `/v1/execute` route (C-21, GATE-KEY-01); in the C-13 lockstep set |
 | `app/models/` (all files) | T5 | Pydantic schema — downstream breaking change risk (`app/models/loop_schemas.py`, `app/models/field_confidence.py`) |
 | `app/score/score_models.py` | T5 | Score schema contract |
 | `app/health/health_models.py` | T5 | Health schema contract |
@@ -174,7 +175,7 @@ All PRs must pass:
 | C-10 | Zero hardcoded credentials — env vars via pydantic-settings only | CRITICAL |
 | C-11 | `TransportPacket` and SDK transport objects are immutable at boundaries — never mutate in place. Deprecated local chassis dict envelopes are not part of production dispatch. | CRITICAL |
 | C-12 | No `Field(alias=...)` in Pydantic models | HIGH |
-| C-13 | Transport contract lockstep: `app/main.py`, `app/api/v1/chassis_endpoint.py`, `app/services/chassis_handlers.py`, `app/engines/orchestration_layer.py`, `app/engines/handlers.py`, `app/engines/graph_sync_client.py`, `app/engines/packet_router.py`, and `app/services/gate_client.py` must stay aligned | CRITICAL |
+| C-13 | Transport contract lockstep: `app/main.py`, `app/api/v1/chassis_endpoint.py`, `app/services/chassis_handlers.py`, `app/engines/orchestration_layer.py`, `app/engines/handlers.py`, `app/engines/graph_sync_client.py`, `app/engines/packet_router.py`, `app/services/gate_client.py`, and `app/middleware/gate_ingress.py` must stay aligned | CRITICAL |
 | C-14 | New SDK action registration requires corresponding handler + test in same PR | HIGH |
 | C-15 | Coverage >= 71% — never lower the threshold | HIGH |
 | C-16 | Python 3.12+ — no backports, no 3.11-only APIs | CRITICAL |
@@ -394,3 +395,24 @@ Durable, non-obvious notes for running this service in the Cursor Cloud VM. The 
 > `make test` is now the full suite with the 71% coverage floor (C-15); the
 > pre-V2 quick run is `make test-quick`. Wherever a line above says
 > "the `Makefile`" selects or defines a target, read `Repo.mk`.
+
+> **2026-11-14 correction (additive; append-only):** `app/health/` is deleted.
+> It had no importer from `app/main.py` or `app/services/chassis_handlers.py`,
+> and its `/v1/health/assess` and `/v1/health/ai-readiness` routes were never
+> mounted. Record readiness (`health-assess`) is owned by Cognitive.Engine.Graphs
+> (operator decision 2026-11-14). Wherever a line above names `app/health/` —
+> the T3 tier row, the `app/health/health_models.py` T5 "Health schema
+> contract" row, and the "Health team" ownership row — it no longer applies.
+> The liveness route `GET /api/v1/health` in `app/main.py` is unrelated and
+> unchanged.
+
+> **2026-11-14 correction (additive; append-only):** `app/score/` is parked
+> RevOps lead/ICP scoring (`revopsos-score-engine`). It is not EIE-owned engine
+> logic and is wired to no Gate action (its `/score` REST router is still
+> mounted by `app/main.py`); its disposition is pending an operator decision.
+> Read the T3 tier row's `app/score/`, the `app/score/score_models.py` "Score
+> schema contract" row and the "Score team" ownership row above accordingly:
+> they describe no EIE contract or owner. Candidate ranking, match gates and
+> scoring dimensions are owned by Cognitive.Engine.Graphs (ADR-010; enforced by
+> `app/engines/domain_spec_schema.py` `_reject_ceg()`; see `docs/INVARIANTS.md`
+> INV-8). The T5 protection on `score_models.py` is not lifted by this note.

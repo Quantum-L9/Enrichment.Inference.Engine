@@ -18,6 +18,7 @@ Integration fixes applied (PR#21/PR#22 merge pass):
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import aiofiles
@@ -25,14 +26,28 @@ import structlog
 import yaml
 
 from ..core.config import get_settings
+from ..engines.converge_contract import (
+    COMPLETED_STATE,
+    degraded_response,
+    mark_deadline_degraded,
+    restrict_fields_to_schema,
+)
+from ..engines.converge_request_v2 import (
+    ConvergeRequestRefusedError,
+    ResolvedConvergeRequest,
+    attach_resolution,
+    resolve_converge_request_v2,
+)
 from ..engines.convergence.convergence_config import ConvergenceConfig
-from ..engines.convergence_controller import run_convergence_loop
+from ..engines.convergence.field_evidence import RESPONSE_CONTRACT_V2
+from ..engines.convergence_controller import deadline_response_v2, run_convergence_loop
 from ..engines.domain_yaml_reader import (
     DomainEnrichmentConfig,
     DomainPublicationError,
     DomainYamlReader,
     default_node_label,
     enrichment_hints_for,
+    resolve_cartridge_id,
 )
 from ..engines.enrichment_orchestrator import enrich_batch, enrich_entity
 from ..engines.native_yaml import parse_native_yaml
@@ -54,7 +69,7 @@ from ..services.request_deadline import (
     effective_budget_seconds,
     packet_timeout_ms,
 )
-from ..services.side_effect_coordinator import PersistenceRequiredError
+from ..services.side_effect_coordinator import PersistenceRequiredError, SideEffectReport
 from ..services.simulation_bridge import (
     analyze_leverage,
     brief_to_dict,
@@ -66,7 +81,7 @@ logger = structlog.get_logger("handlers")
 
 # One operation budget for converge: Odoo waits 30 s on the Gate hop.
 DEFAULT_CONVERGE_TIMEOUT_SECONDS = CANONICAL_CONVERGE_BUDGET_SECONDS
-_COMPLETED_STATE = "completed"
+_COMPLETED_STATE = COMPLETED_STATE
 
 _kb: KBResolver | None = None
 _idem: IdempotencyStore | None = None
@@ -93,7 +108,9 @@ async def _persist_and_sync(
     graph_sync: bool = True,
     require_persistence: bool = False,
     operation_id: str | None = None,
-) -> None:
+    defer_graph_sync: bool = False,
+    graph_fields: Mapping[str, Any] | None = None,
+) -> SideEffectReport:
     """
     Delegate post-enrich side effects to the single SideEffectCoordinator (TASK-021).
 
@@ -114,6 +131,11 @@ async def _persist_and_sync(
     fire-and-forget to SCORE and costs the caller nothing, so a bounded path
     still leaves no stale score behind (EIE-004; see
     app/services/side_effect_coordinator.py for the full reasoning).
+
+    `defer_graph_sync=True` keeps the Graph leg off the caller's path WITHOUT
+    dropping it: the key is left pending for its graph leg (with `graph_fields`
+    pinned), and the caller starts it detached via the returned report's key
+    once its answer is decided.
     """
     settings = get_settings()
     # SEAM-02: identity resolves top-level entity_id, then entity.id, then
@@ -124,10 +146,12 @@ async def _persist_and_sync(
     if entity_id is None:
         msg = f"entity identity required: one of {', '.join(ENTITY_IDENTITY_ORDER)}"
         raise ValueError(msg)
-    domain = payload.get("domain", settings.default_domain)
+    domain = resolve_cartridge_id(
+        tenant, requested=payload.get("domain"), configured_default=settings.default_domain
+    )
     from app.services.side_effect_coordinator import get_side_effect_coordinator
 
-    await get_side_effect_coordinator().commit_after_enrich(
+    return await get_side_effect_coordinator().commit_after_enrich(
         tenant=tenant,
         entity_id=entity_id,
         object_type=object_type,
@@ -140,7 +164,42 @@ async def _persist_and_sync(
         graph_sync=graph_sync,
         require_persistence=require_persistence,
         node_label=payload.get("node_label") or object_type,
+        defer_graph_sync=defer_graph_sync,
+        graph_fields=graph_fields,
     )
+
+
+def admitted_fields(result: Mapping[str, Any]) -> dict[str, Any]:
+    """The fields a converge result admits — the only ones that may reach CEG.
+
+    A v2 body (docs/contracts/converge/response.v2.md) names admission per
+    field: exactly the `field_evidence` entries with `admitted: true`, with
+    their values. A v1 body admits its `fields`, already cut to the request's
+    schema (`restrict_fields_to_schema`). Observed, unknown, conflicting or
+    otherwise unadmitted entries are never returned.
+
+    A `None` value is never returned either. CEG writes `SET n += row.node`
+    and keeps a declared key even when null, so a key sent as null DELETES
+    that property on the graph node, while an omitted key leaves it untouched.
+    A converge that has no value for a field has learned nothing about it and
+    must not clear what the graph holds. This is the converge sync path's own
+    rule: `project_graph_sync_row` still sends a `None` as a clear for its
+    other callers.
+    """
+    evidence = result.get("field_evidence")
+    if isinstance(evidence, Mapping):
+        fields = {
+            name: entry["value"]
+            for name, entry in evidence.items()
+            if isinstance(entry, Mapping)
+            and entry.get("admitted") is True
+            and entry.get("value") is not None
+        }
+    else:
+        fields = {
+            name: value for name, value in (result.get("fields") or {}).items() if value is not None
+        }
+    return fields
 
 
 def _operation_id(packet: Any) -> str | None:
@@ -251,6 +310,19 @@ async def _handle_canonical_converge(
         budget_seconds = DEFAULT_CONVERGE_TIMEOUT_SECONDS
     deadline = Deadline.start(budget_seconds)
 
+    # Request v2 (docs/contracts/converge/request.v2.md) resolves completely
+    # against the cartridge it names, or is refused whole: nothing runs, and
+    # nothing falls back to v1 resolution. A v1 body resolves to None here and
+    # continues exactly as before.
+    cartridge: DomainEnrichmentConfig | None = None
+    try:
+        resolved = resolve_converge_request_v2(tenant, payload, _domain_reader)
+    except ConvergeRequestRefusedError as exc:
+        logger.warning("handlers.converge_v2_refused", tenant=tenant, code=exc.code)
+        return _canonical_failure(str(exc))
+    if resolved is not None:
+        payload, cartridge = resolved.body, resolved.config
+
     try:
         request = EnrichRequest.model_validate(payload)
     except Exception as exc:
@@ -264,11 +336,22 @@ async def _handle_canonical_converge(
     # one row; a body that names no identity is refused by `_persist_and_sync`.
     entity_id = resolve_converge_identity(payload)
 
+    # Work that runs only once the answer is decided `completed`, outside the
+    # deadline (the detached graph leg). A timeout or failure discards it.
+    after_completed: list[Callable[[], None]] = []
     try:
         with deadline_scope(deadline):
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 _run_canonical_converge(
-                    tenant, payload, request, deadline, entity_id, operation_id
+                    tenant,
+                    payload,
+                    request,
+                    deadline,
+                    entity_id,
+                    operation_id,
+                    cartridge,
+                    resolved,
+                    after_completed=after_completed,
                 ),
                 timeout=max(deadline.remaining(), 0.0),
             )
@@ -282,8 +365,17 @@ async def _handle_canonical_converge(
         # The response reserve exists so a timing-out request still answers in
         # EnrichResponse semantics. Odoo's mapper derives status from `state`,
         # so a non-completed state routes it to its own degraded handling —
-        # no Odoo-specific error envelope is invented here.
-        return _canonical_failure(f"converge exceeded {budget_seconds:.0f}s budget for {entity_id}")
+        # no Odoo-specific error envelope is invented here. Contract v1 names
+        # the state: `degraded`, with no partial result attached.
+        reason = f"converge exceeded {budget_seconds:.0f}s budget for {entity_id}"
+        if resolved is None:
+            return degraded_response(reason)
+        # A v2 request is answered in v2 even here (response.v2 section 6).
+        body = deadline_response_v2(
+            request, resolved.subject, entity_id, resolved.observations, reason
+        ).model_dump()
+        attach_resolution(body, resolved)
+        return body
     except Exception as exc:
         logger.exception(
             "handlers.converge_failed",
@@ -292,6 +384,10 @@ async def _handle_canonical_converge(
             error=str(exc),
         )
         raise
+    if result.get("state") == _COMPLETED_STATE:
+        for action in after_completed:
+            action()
+    return result
 
 
 async def _run_canonical_converge(
@@ -301,8 +397,18 @@ async def _run_canonical_converge(
     deadline: Deadline,
     entity_id: str | None,
     operation_id: str | None = None,
+    cartridge: DomainEnrichmentConfig | None = None,
+    resolved: ResolvedConvergeRequest | None = None,
+    *,
+    after_completed: list[Callable[[], None]] | None = None,
 ) -> dict[str, Any]:
     """The complete canonical operation, run under the outer deadline.
+
+    `after_completed` collects what the caller runs once the answer is decided
+    `completed`, outside the deadline: here, the detached graph leg.
+
+    `cartridge` is the revision a v2 request was resolved and pinned against;
+    hints, rules and spec are then taken from it, never from a second read.
 
     `entity_id` is the identity the caller resolved once from the body
     (`resolve_converge_identity`; None when the body names none); it is not
@@ -320,15 +426,24 @@ async def _run_canonical_converge(
         or request.kb_context
         or request.object_type
     )
-    domain_hints, inference_rules = await _load_domain_convergence_context(
+    domain_hints, inference_rules, domain_spec = await _load_domain_converge_bundle(
         domain_id=domain_id,
         node_label=payload.get("node_label"),
+        config=cartridge,
     )
 
     loop_kwargs: dict[str, Any] = {}
     max_passes = payload.get("max_passes")
     if max_passes is not None:
         loop_kwargs["convergence_config"] = ConvergenceConfig(max_passes=int(max_passes))
+    if resolved is not None:
+        # A v2 request is answered in v2: per-field evidence for its subject,
+        # with its observations folded in as evidence only.
+        loop_kwargs.update(
+            response_contract=RESPONSE_CONTRACT_V2,
+            subject=resolved.subject,
+            observations=resolved.observations,
+        )
 
     # EIE-POST-F001: identity lets each pass consume this entity's
     # graph-inference-result targets from GraphReturnChannel.
@@ -339,11 +454,23 @@ async def _run_canonical_converge(
         idem_store=_idem,
         inference_rules=inference_rules,
         domain_hints=domain_hints,
+        # The effective revision's full spec, from the same single read as the
+        # hints and rules, so field classification and planning see the domain.
+        domain_spec=domain_spec,
         tenant_id=tenant,
         entity_id=entity_id,
         **loop_kwargs,
     )
     result = response.model_dump()
+    # Contract v1, applied before persistence so the durable record and the
+    # answer are the same object: fields ⊆ request.schema, and a deadline stop
+    # is `degraded`, never `completed`.
+    dropped = restrict_fields_to_schema(result, request.schema_)
+    if dropped:
+        logger.info("handlers.converge_fields_outside_schema_dropped", dropped=dropped)
+    mark_deadline_degraded(result)
+    if resolved is not None:
+        attach_resolution(result, resolved)
 
     if response.state == _COMPLETED_STATE:
         # The top-level `entity_id` is the first key of the SEAM-02 order that
@@ -353,13 +480,21 @@ async def _run_canonical_converge(
         persist_payload = {
             **payload,
             "entity_id": entity_id,
-            "domain": domain_id or settings.default_domain,
+            "domain": resolve_cartridge_id(
+                tenant, requested=domain_id, configured_default=settings.default_domain
+            ),
         }
-        # E14: zero Graph calls on the canonical path. Graph sync awaits up to
-        # two Gate attempts at 10 s each with a 1 s backoff between them
-        # (packet_router._MAX_ATTEMPTS / _ROUTE_TIMEOUT) — 21 s in the worst
-        # case, most of a caller's 30 s budget. Persistence stays synchronous
-        # because the response depends on it; Graph does not.
+        # E14: zero AWAITED Graph calls on the canonical path. Graph sync
+        # awaits up to two Gate attempts at 10 s each with a 1 s backoff
+        # between them (packet_router._MAX_ATTEMPTS / _ROUTE_TIMEOUT) — 21 s in
+        # the worst case, most of a caller's 30 s budget. Persistence stays
+        # synchronous because the response depends on it; Graph does not.
+        #
+        # Converge results still reach CEG (converge_graph_sync_enabled): the
+        # graph leg is deferred — the key is left pending for it with only the
+        # admitted fields pinned — and started detached by the caller after the
+        # answer is decided `completed`, outside the deadline. Its failure
+        # leaves the key pending for the graph leg; the answer never changes.
         #
         # require_persistence=True is what makes `completed` mean durable. The
         # producer treats a completed EnrichResponse as the authoritative record
@@ -367,8 +502,19 @@ async def _run_canonical_converge(
         # a result no store holds loses the work silently — the enrichment is
         # gone, and the once-per-key guard suppresses the retry that would have
         # recovered it.
+        defer_graph = settings.converge_graph_sync_enabled
+        graph_fields = None
+        if defer_graph:
+            from app.engines.polymer_capability import shape_graph_fields
+
+            graph_fields = shape_graph_fields(
+                resolve_cartridge_id(
+                    tenant, requested=domain_id, configured_default=settings.default_domain
+                ),
+                admitted_fields(result),
+            )
         try:
-            await _persist_and_sync(
+            report = await _persist_and_sync(
                 tenant,
                 persist_payload,
                 result,
@@ -376,6 +522,8 @@ async def _run_canonical_converge(
                 graph_sync=False,
                 require_persistence=True,
                 operation_id=operation_id,
+                defer_graph_sync=defer_graph,
+                graph_fields=graph_fields,
             )
         except PersistenceRequiredError as exc:
             logger.error(
@@ -388,6 +536,8 @@ async def _run_canonical_converge(
             # state != "completed" and routes the run to its own degraded
             # handling, leaving the logical operation retryable.
             return _canonical_failure(f"result not durable: {exc}")
+        if report.graph_deferred and after_completed is not None:
+            after_completed.append(_graph_leg_starter(report.key, settings))
 
     logger.info(
         "handlers.converge_ok",
@@ -401,6 +551,17 @@ async def _run_canonical_converge(
     return result
 
 
+def _graph_leg_starter(key: str, settings: Any) -> Callable[[], None]:
+    """Start the deferred graph leg of `key`, detached; see `schedule_graph_leg`."""
+
+    def start() -> None:
+        from app.services.side_effect_coordinator import get_side_effect_coordinator
+
+        get_side_effect_coordinator().schedule_graph_leg(key, settings=settings)
+
+    return start
+
+
 def _canonical_failure(reason: str) -> dict[str, Any]:
     """A non-completed EnrichResponse — the canonical way to report failure."""
     return EnrichResponse(state="failed", failure_reason=reason).model_dump()
@@ -411,7 +572,23 @@ async def _load_domain_convergence_context(
     domain_id: str | None,
     node_label: str | None,
 ) -> tuple[dict[str, Any], Any]:
-    """Load optional domain hints + inference rules for converge.
+    """Domain hints + inference rules; see `_load_domain_converge_bundle`."""
+    hints, rules, _spec = await _load_domain_converge_bundle(
+        domain_id=domain_id, node_label=node_label
+    )
+    return hints, rules
+
+
+async def _load_domain_converge_bundle(
+    *,
+    domain_id: str | None,
+    node_label: str | None,
+    config: DomainEnrichmentConfig | None = None,
+) -> tuple[dict[str, Any], Any, dict[str, Any] | None]:
+    """Load optional domain hints + inference rules + the full spec for converge.
+
+    The third element is the effective revision's raw spec, or None when no
+    domain resolved; all three come from one `DomainYamlReader.load`.
 
     An unknown domain converges without inference. A loaded domain's rules come
     from `inference_rules_path`, else the spec's own `inference_rules`; they are
@@ -433,12 +610,13 @@ async def _load_domain_convergence_context(
     domain_hints: dict[str, Any] = {}
     inference_rules: Any = []
     if not domain_id or not _domain_reader:
-        return domain_hints, inference_rules
+        return domain_hints, inference_rules, None
 
     # Resolve once: pointer publication between two reads must never pair old
     # enrichment hints with a different revision's rules.
+    # A v2 request hands in the revision it was pinned against: no second read.
     try:
-        config = _domain_reader.load(domain_id)
+        config = config if config is not None else _domain_reader.load(domain_id)
     except DomainPublicationError:
         raise
     except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:
@@ -449,7 +627,7 @@ async def _load_domain_convergence_context(
             domain_id=domain_id,
             error=str(exc),
         )
-        return domain_hints, inference_rules
+        return domain_hints, inference_rules, None
     domain_hints = _node_hints(config, domain_id, node_label)
     logger.info(
         "handlers.converge_effective_revision",
@@ -464,7 +642,7 @@ async def _load_domain_convergence_context(
     else:
         inference_rules = config.raw_spec.get("inference_rules") or []
 
-    return domain_hints, inference_rules
+    return domain_hints, inference_rules, config.raw_spec or None
 
 
 def _node_hints(
@@ -568,7 +746,7 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
     """
     settings = get_settings()
     crm_field_names: list[str] = payload.get("crm_field_names", [])
-    domain_id: str = payload.get("domain_id", "plastics")
+    domain_id = payload.get("domain_id")
     customer_name = payload.get("customer_name")
     query_profile: dict[str, Any] | None = payload.get("query_profile")
     entity_count: int = int(payload.get("entity_count", 20))
@@ -580,6 +758,8 @@ async def handle_simulate(tenant: str, payload: dict[str, Any]) -> dict[str, Any
         raise ValueError("simulate: crm_field_names is required and must be non-empty")
     if not isinstance(customer_name, str) or not customer_name.strip():
         raise ValueError("simulate: customer_name is required; it does not default to the tenant")
+    if not isinstance(domain_id, str) or not domain_id:
+        raise ValueError("simulate: domain_id is required; no cartridge is assumed")
 
     domain_spec: dict[str, Any] = {}
     if _domain_reader:
@@ -643,10 +823,15 @@ async def handle_writeback(
 def get_handler_map() -> dict[str, Any]:
     # PREVIEW-01: `simulate` is deliberately absent — it is a demo fixture, not
     # a runtime action (see handle_simulate and app.main.RUNTIME_ALLOWED_ACTIONS).
+    # The sweep handlers import this module lazily, so this import stays local.
+    from .sweep_handlers import handle_enrichment_sweep, handle_enrichment_sweep_results
+
     return {
         "enrich": handle_enrich,
         "enrichbatch": handle_enrichbatch,
         "converge": handle_converge,
         "discover": handle_discover,
         "writeback": handle_writeback,
+        "enrichment-sweep": handle_enrichment_sweep,
+        "enrichment-sweep-results": handle_enrichment_sweep_results,
     }

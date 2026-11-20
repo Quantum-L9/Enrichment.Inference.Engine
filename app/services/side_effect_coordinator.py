@@ -11,11 +11,20 @@ status: active
 
 Single side-effect coordinator for EIE post-enrichment work (TASK-021).
 
-Guarantees at most one persistence, one score invalidation, and one
-enrichment-completed event per semantic request key, and records the graph
-sync as done only once CEG acknowledges it — an unacknowledged graph leg is
-the one effect a retry of the same key may attempt again (RV-DOMAIN-RD-07).
-All egress is Gate-only via PacketRouter / event emitter.
+Guarantees at most one persistence and one enrichment-completed event per
+semantic request key, and records the graph sync as done only once CEG
+acknowledges it — an unacknowledged graph leg is the one effect a retry of
+the same key may attempt again (RV-DOMAIN-RD-07). Score invalidation is not
+an effect: Gate does not own ``score-invalidate``, so this coordinator does
+not dispatch it and never reports ``score_invalidated``. All egress is
+Gate-only via PacketRouter / event emitter.
+
+A latency-bounded caller may DEFER the graph leg (`defer_graph_sync=True`):
+the key is left pending for its graph leg exactly as an unacknowledged sync
+leaves it, and the caller later starts that leg detached from its own request
+with `schedule_graph_leg`. At most one graph leg per key is in flight at a
+time, awaited or detached, so a retry of the same operation never sends a
+second sync while one is outstanding.
 """
 
 from __future__ import annotations
@@ -25,10 +34,13 @@ import hashlib
 import json
 import threading
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
+
+from app.services.request_deadline import detached_context
 
 logger = structlog.get_logger("side_effect_coordinator")
 
@@ -146,12 +158,18 @@ class SideEffectReport:
     persisted: bool = False
     graph_synced: bool = False
     graph_skipped: bool = False
+    # Kept so the report shape stays stable. Always False: Gate does not own
+    # score-invalidate, so no invalidation is dispatched or acknowledged.
     score_invalidated: bool = False
     event_emitted: bool = False
     skipped: bool = False
     # True when this call re-attempted ONLY the Gate->GRAPH leg of a key whose
     # other effects already completed on an earlier attempt (RV-DOMAIN-RD-07).
     graph_retry: bool = False
+    # True when the graph leg was not awaited by this call: the caller deferred
+    # it, or a detached leg for the key was already in flight. The key is left
+    # pending for its graph leg; `graph_synced` stays False.
+    graph_deferred: bool = False
     errors: list[str] = field(default_factory=list)
 
 
@@ -162,8 +180,8 @@ class SideEffectCoordinator:
 
     * ``_completed`` — every effect the call asked for either ran or was
       explicitly excluded. A later call for the key is a duplicate and skips.
-    * ``_graph_pending`` — persistence, score invalidation and the completion
-      event ran, but CEG did not acknowledge the graph sync. A later call for
+    * ``_graph_pending`` — persistence and the completion event ran, but CEG
+      did not acknowledge the graph sync. A later call for
       the key re-attempts the graph leg ONLY, so a legitimate retry can finish
       the sync without duplicating effects that already happened. The entry
       holds the ``entity_id``, ``fields`` and ``domain`` that WERE persisted and
@@ -184,12 +202,87 @@ class SideEffectCoordinator:
         # Reserved before the first await (F-024): a concurrent call for the
         # same key waits for the holder and then re-evaluates.
         self._in_flight: dict[str, asyncio.Event] = {}
+        # Keys whose detached graph leg is scheduled or running. Added when the
+        # task is created, not when it starts, so no call can slip a second
+        # sync for the key in between.
+        self._graph_leg_in_flight: set[str] = set()
+        self._graph_leg_tasks: set[asyncio.Task[SideEffectReport]] = set()
 
     def reset_for_tests(self) -> None:
+        for task in self._graph_leg_tasks:
+            task.cancel()
+        self._graph_leg_tasks.clear()
+        self._graph_leg_in_flight.clear()
         self._completed.clear()
         self._persisted.clear()
         self._graph_pending.clear()
         self._in_flight.clear()
+
+    def schedule_graph_leg(self, key: str, *, settings: Any) -> bool:
+        """Start the pending graph leg of `key` detached from the caller.
+
+        The leg runs as its own task, outside any request deadline
+        (`detached_context`), and syncs exactly what the pending entry pinned:
+        the entity, admitted fields, domain and node label that were persisted.
+        Its outcome is the graph leg's alone: acknowledged by CEG, the key is
+        completed; anything else leaves it pending for a later graph leg, as an
+        unacknowledged awaited sync would. Nothing it does reaches the caller.
+
+        Returns False, starting nothing, when the key has no pending graph leg
+        (already synced, or never deferred) or a leg for it is already in
+        flight — one sync per key at a time.
+        """
+        if key not in self._graph_pending or key in self._graph_leg_in_flight:
+            return False
+        self._graph_leg_in_flight.add(key)
+        task = asyncio.create_task(self._run_graph_leg(key, settings), context=detached_context())
+        self._graph_leg_tasks.add(task)
+        task.add_done_callback(self._graph_leg_tasks.discard)
+        logger.info("side_effects_graph_leg_scheduled", key=key)
+        return True
+
+    async def drain_graph_legs(self) -> None:
+        """Wait for every detached graph leg in flight (tests, graceful shutdown)."""
+        while self._graph_leg_tasks:
+            await asyncio.gather(*list(self._graph_leg_tasks), return_exceptions=True)
+
+    async def _run_graph_leg(self, key: str, settings: Any) -> SideEffectReport:
+        """The detached graph leg; see `schedule_graph_leg`."""
+        report = SideEffectReport(key=key, graph_retry=True)
+        try:
+            pending = self._graph_pending.get(key)
+            if pending is None:
+                return report
+            from app.engines.packet_router import get_router, graph_sync_acknowledged
+
+            ack = await get_router(settings).notify_graph_sync(
+                tenant_id=pending["tenant"],
+                entity_id=pending["entity_id"],
+                fields=pending["fields"],
+                domain=pending["domain"],
+                node_label=pending.get("node_label"),
+            )
+            if graph_sync_acknowledged(ack):
+                report.graph_synced = True
+                self._graph_pending.pop(key, None)
+                self._completed.add(key)
+                logger.info(
+                    "side_effects_graph_leg_synced", key=key, entity_id=pending["entity_id"]
+                )
+            else:
+                report.errors.append(f"graph_sync:unacknowledged:{_ack_summary(ack)}")
+                logger.warning(
+                    "side_effects_graph_leg_unacknowledged",
+                    key=key,
+                    entity_id=pending["entity_id"],
+                    ack=_ack_summary(ack),
+                )
+        except Exception as exc:  # noqa: BLE001 — the leg's failure stays the leg's
+            report.errors.append(f"graph_sync:{exc}")
+            logger.warning("side_effects_graph_leg_failed", key=key, error=str(exc))
+        finally:
+            self._graph_leg_in_flight.discard(key)
+        return report
 
     async def commit_after_enrich(
         self,
@@ -206,6 +299,8 @@ class SideEffectCoordinator:
         graph_sync: bool = True,
         require_persistence: bool = False,
         node_label: str | None = None,
+        defer_graph_sync: bool = False,
+        graph_fields: Mapping[str, Any] | None = None,
     ) -> SideEffectReport:
         """Commit post-enrich side effects once per semantic key.
 
@@ -216,20 +311,18 @@ class SideEffectCoordinator:
         21 s worst case, which a 30 s synchronous caller budget cannot absorb
         on top of the enrichment itself.
 
-        EIE-004 read the score-invalidation call below as escaping this guard.
-        It does not need the guard, and the distinction is the reason the flag
-        is named `graph_sync` rather than `side_effects`:
+        The flag is named `graph_sync` rather than `side_effects` because it
+        excludes only the awaited Gate->GRAPH hop:
 
         * `notify_graph_sync` is **awaited**, and goes to GRAPH (CEG's `sync`).
           Its latency lands on the caller. That is what the flag excludes.
-        * `notify_score_invalidate` is **fire-and-forget** (`route_fire_and_forget`
-          schedules a task and returns), and goes to SCORE, a different node. It
-          adds no measurable time to a bounded path, and suppressing it would
-          leave a stale score behind for an entity that was just enriched —
-          a correctness loss bought for no latency.
+        * Score invalidation is not dispatched. Gate does not own
+          `score-invalidate` (non-canonical; no node is registered), so there
+          is no acknowledgment to record. `score_invalidated` stays False.
+          This is not a skipped success.
 
-        So a bounded caller still invalidates scores. Anything that becomes an
-        awaited Gate hop must move inside the guard, or take a flag of its own.
+        Anything that becomes an awaited Gate hop must move inside the guard,
+        or take a flag of its own.
 
         `require_persistence=True` makes durability a precondition of the answer
         rather than a side effect of it: the persist failure is re-raised, and
@@ -244,6 +337,19 @@ class SideEffectCoordinator:
         skipped as ambiguous rather than sent to another entity type's
         endpoint. A graph-leg retry re-sends the label of the first attempt,
         like the fields and domain it pins.
+
+        `defer_graph_sync=True` is the flag of its own that an awaited Gate hop
+        needs to leave a bounded caller's path without being dropped: the graph
+        leg is not awaited here, the key is left pending for it with this call's
+        entity, fields, domain and label pinned, and `report.graph_deferred` is
+        set. The caller starts the leg with `schedule_graph_leg(report.key)`
+        once its own answer is decided, or never, leaving the key pending for a
+        later call. A key whose detached leg is already in flight is never sent
+        a second sync by any call.
+
+        `graph_fields` is what the graph leg syncs, when it differs from the
+        response's `fields` (a caller syncing only its admitted fields); the
+        persisted record and the event still carry the response unchanged.
         """
         key = semantic_side_effect_key(
             tenant=tenant,
@@ -287,6 +393,8 @@ class SideEffectCoordinator:
                 graph_sync=graph_sync,
                 require_persistence=require_persistence,
                 node_label=node_label,
+                defer_graph_sync=defer_graph_sync,
+                graph_fields=graph_fields,
             )
         finally:
             del self._in_flight[key]
@@ -307,6 +415,8 @@ class SideEffectCoordinator:
         graph_sync: bool,
         require_persistence: bool,
         node_label: str | None,
+        defer_graph_sync: bool = False,
+        graph_fields: Mapping[str, Any] | None = None,
     ) -> SideEffectReport:
         """Run the effects for a key this call holds the reservation for."""
         report = SideEffectReport(key=key)
@@ -326,13 +436,17 @@ class SideEffectCoordinator:
         report.graph_retry = graph_retry
         # What the graph leg syncs: on a retry, the entity, fields and domain
         # that were persisted and emitted on the first attempt, never this call's.
+        graph_tenant = tenant
         graph_entity_id = entity_id
-        graph_fields: dict[str, Any] = response_dict.get("fields", {})
+        synced_fields: Mapping[str, Any] = (
+            graph_fields if graph_fields is not None else response_dict.get("fields", {})
+        )
         graph_domain = domain
         graph_node_label = node_label
         if pending is not None:
+            graph_tenant = pending.get("tenant", tenant)
             graph_entity_id = pending["entity_id"]
-            graph_fields = pending["fields"]
+            synced_fields = pending["fields"]
             graph_domain = pending["domain"]
             graph_node_label = pending.get("node_label")
             logger.info("side_effects_graph_retry", key=key, entity_id=entity_id)
@@ -376,7 +490,18 @@ class SideEffectCoordinator:
         # (`graph_sync_acknowledged`): None, a failure or rejected answer, a
         # malformed answer, or an exception each leave it False. Anything else
         # recorded a sync the graph never confirmed (RV-DOMAIN-RD-07).
-        if not graph_sync:
+        if key in self._graph_leg_in_flight:
+            # A detached leg for this key is already sending its sync. A second
+            # one would double-sync the same operation; the in-flight leg owns
+            # the outcome, and the key stays pending until it is acknowledged.
+            report.graph_deferred = True
+            logger.info("side_effect_graph_leg_already_in_flight", key=key, entity_id=entity_id)
+        elif defer_graph_sync:
+            # Not awaited here: the caller starts the leg detached once its own
+            # answer is decided (`schedule_graph_leg`).
+            report.graph_deferred = True
+            logger.info("side_effect_graph_sync_deferred", key=key, entity_id=entity_id)
+        elif not graph_sync:
             report.graph_skipped = True
             logger.info("side_effect_graph_sync_excluded", entity_id=entity_id, key=key)
             if graph_retry:
@@ -406,9 +531,9 @@ class SideEffectCoordinator:
 
                 router = get_router(settings)
                 ack = await router.notify_graph_sync(
-                    tenant_id=tenant,
+                    tenant_id=graph_tenant,
                     entity_id=graph_entity_id,
-                    fields=graph_fields,
+                    fields=dict(synced_fields),
                     domain=graph_domain,
                     node_label=graph_node_label,
                 )
@@ -426,46 +551,27 @@ class SideEffectCoordinator:
                 report.errors.append(f"graph_sync:{exc}")
                 logger.warning("side_effect_graph_sync_failed", entity_id=entity_id, error=str(exc))
 
-        if not graph_retry:
-            # 3) Score invalidation once — deliberately OUTSIDE the graph_sync guard.
-            # Fire-and-forget to SCORE, not an awaited hop to GRAPH: it costs a
-            # bounded caller nothing, and skipping it would leave a stale score on an
-            # entity that was just enriched. See the docstring (EIE-004).
+        # Event emit once, and never on a graph-only retry. Score invalidation
+        # is not a step: Gate does not own score-invalidate, and a dispatch
+        # without an acknowledgment must not set score_invalidated.
+        if not graph_retry and emit_event:
             try:
-                from app.engines.packet_router import get_router
+                from app.services.event_emitter import get_emitter
 
-                router = get_router(settings)
-                await router.notify_score_invalidate(
+                await get_emitter(settings).emit_enrichment_completed(
                     tenant_id=tenant,
                     entity_id=entity_id,
                     domain=domain,
+                    fields=response_dict.get("fields", {}),
+                    confidence=float(response_dict.get("confidence", 0.0) or 0.0),
+                    tokens_used=int(response_dict.get("tokens_used", 0) or 0),
                 )
-                report.score_invalidated = True
+                report.event_emitted = True
             except Exception as exc:  # noqa: BLE001
-                report.errors.append(f"score_invalidate:{exc}")
-                logger.warning(
-                    "side_effect_score_invalidate_failed", entity_id=entity_id, error=str(exc)
-                )
+                report.errors.append(f"event:{exc}")
+                logger.warning("side_effect_event_failed", entity_id=entity_id, error=str(exc))
 
-            # 4) Event emit once
-            if emit_event:
-                try:
-                    from app.services.event_emitter import get_emitter
-
-                    await get_emitter(settings).emit_enrichment_completed(
-                        tenant_id=tenant,
-                        entity_id=entity_id,
-                        domain=domain,
-                        fields=response_dict.get("fields", {}),
-                        confidence=float(response_dict.get("confidence", 0.0) or 0.0),
-                        tokens_used=int(response_dict.get("tokens_used", 0) or 0),
-                    )
-                    report.event_emitted = True
-                except Exception as exc:  # noqa: BLE001
-                    report.errors.append(f"event:{exc}")
-                    logger.warning("side_effect_event_failed", entity_id=entity_id, error=str(exc))
-
-        if (graph_sync or graph_retry) and not report.graph_synced:
+        if (graph_sync or graph_retry or report.graph_deferred) and not report.graph_synced:
             # The graph leg was asked for (on this call, or on the earlier one
             # that left it pending) and did not complete. Recording the key as
             # completed would suppress the retry that can finish it, so the
@@ -474,11 +580,13 @@ class SideEffectCoordinator:
             # above and keeps its own semantics. The pending entry pins the
             # fields the retry must sync — those of the first attempt.
             self._graph_pending[key] = {
-                "fields": graph_fields,
+                "tenant": graph_tenant,
+                "fields": dict(synced_fields),
                 "domain": graph_domain,
                 "node_label": graph_node_label,
             }
-            logger.warning(
+            log = logger.info if report.graph_deferred else logger.warning
+            log(
                 "side_effects_graph_pending",
                 key=key,
                 entity_id=entity_id,
@@ -486,6 +594,7 @@ class SideEffectCoordinator:
                 score_invalidated=report.score_invalidated,
                 event_emitted=report.event_emitted,
                 graph_retry=graph_retry,
+                graph_deferred=report.graph_deferred,
             )
             # The entry also pins the entity those fields were persisted for: an
             # idem:{tenant}:{idempotency_key} key omits entity_id, so a retry can

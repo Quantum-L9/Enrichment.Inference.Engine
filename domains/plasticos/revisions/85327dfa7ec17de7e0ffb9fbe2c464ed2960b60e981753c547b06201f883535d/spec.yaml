@@ -1,0 +1,302 @@
+name: plasticos
+version: "0.6.1"
+description: >
+  PlasticOS evidence and inference domain for EIE.
+  Candidate ranking, matching gates, and scoring dimensions are owned by CEG
+  (TASK-020). This contract is evidence-only.
+
+authority:
+  owns:
+  - feature evidence extraction
+  - enrichment target schema
+  - inference rules with provenance
+  - entity resolution hints
+  does_not_own:
+  - candidate ranking
+  - match gates / scoring dimensions
+  - match/outcomes chassis actions
+
+ontology:
+  nodes:
+  - label: Facility
+    description: Plastics recycling or processing facility
+    # Row contract of /v1/sync/facilities (eie-ceg-sync/v2): every property
+    # below that is not `evidenceonly` is one EIE produces, declared exactly as
+    # CEG's Facility declares it (Cognitive.Engine.Graphs
+    # tests/fixtures/design_packs/plasticos/spec.yaml), name for name and typed
+    # shape for typed shape. CEG-owned properties EIE never produces (lat, lon, credit_score,
+    # food_grade_certified, community_id -- written by CEG's GDS job --
+    # rate_per_ton, rate_confidence, last_transaction_date) are deliberately
+    # not declared, so EIE can never send or overwrite them. packet_router
+    # builds each sync row from exactly these declarations and refuses a value
+    # that does not match one.
+    properties:
+    - {name: facility_id, type: string, required: true}
+    - {name: name, type: string, required: true}
+    - {name: min_density, type: float, unit: g/cm3}
+    - {name: max_density, type: float, unit: g/cm3}
+    - {name: min_mfi, type: float, unit: g/10min}
+    - {name: max_mfi, type: float, unit: g/10min}
+    - {name: contamination_tolerance, type: float, unit: percent}
+    # t = metric tonne (1000 kg), per the operator's decision of 2026-11-13.
+    - {name: capacity_tons_month, type: float, unit: t/month}
+    - {name: tier, type: string}
+    # Wire-only shape: one element is one Odoo capability line
+    # (plasticos.capability) and the polymer code that line names. direction
+    # is the profile's stored direction (in enters a buyer). form is copied
+    # only when Odoo stored one. Capacity, contamination, grade, and color
+    # stay off this element; CEG owns those decisions.
+    - name: processed_polymers
+      type: list
+      items:
+        type: map
+        properties:
+        - {name: code, type: string, required: true}
+        - {name: line_id, type: string}
+        - {name: direction, type: string}
+        - {name: form, type: string}
+    # EIE-only evidence: enrichment, inference and resolution inputs. CEG does
+    # not declare them, so they are never projected onto a sync row.
+    - {name: city, type: string, evidenceonly: true}
+    - {name: state, type: string, evidenceonly: true}
+    - {name: zip_code, type: string, evidenceonly: true}
+    - {name: material_grade, type: string, evidenceonly: true}
+    - {name: certifications, type: list, items: {type: string}, evidenceonly: true}
+    # Facility-profile contact evidence (0.5.0). EIE-only, never on a sync row.
+    - {name: street, type: string, evidenceonly: true}
+    - {name: street2, type: string, evidenceonly: true}
+    - {name: website, type: string, evidenceonly: true}
+    - {name: email, type: string, evidenceonly: true}
+    - {name: phone, type: string, evidenceonly: true}
+    # Material-profile evidence (0.5.0): the physical forms the facility
+    # handles, e.g. Regrind, Pellet, Flake. EIE-only, never on a sync row.
+    - {name: material_forms, type: list, items: {type: string}, evidenceonly: true}
+    # Odoo facility-profile evidence (0.6.0): every stored data field of
+    # plasticos.facility.profile (IB-Odoo_19) that 0.5.0 did not already declare
+    # under another name, declared under the Odoo field's own name. EIE-only,
+    # never on a sync row, so CEG's Facility shape and eie-ceg-sync/v2 are
+    # unchanged. Units are the ones Odoo stores, declared in each quantity's
+    # `unit` key: response v2 serves it as field_evidence[*].declaration.unit
+    # (response.v2.md section 10.2). `unit` is not part of the typed shape
+    # (spec_types.shape), so the CEG sync row is unchanged by it.
+    # Codes:
+    - name: equipment_type_ids
+      type: list
+      items:
+        type: enum
+        values: [horizontal_baler, downstroke_baler, shredder, granulator, wash_line, pelletizer, extruder, compounder, sorting_line, bales, regrind, pellet, flake, rollstock, metal_removal, moisture_reduction, fr_filtration, fines_screening]
+      evidenceonly: true
+      description: Odoo equipment-type codes the facility operates
+    - {name: form_preference_id, type: string, evidenceonly: true, description: "Odoo material-form code the facility prefers"}
+    - {name: process_type, type: string, evidenceonly: true, description: "Odoo process-type code"}
+    - {name: feedstock_type, type: enum, values: [post_industrial, post_consumer, mixed, virgin, unknown], evidenceonly: true}
+    - {name: application_class, type: string, evidenceonly: true, description: "End-use class; expected food, medical, automotive, packaging, agricultural or construction, open to any further value"}
+    # Capabilities:
+    - {name: handles_bales, type: bool, evidenceonly: true}
+    - {name: handles_regrind, type: bool, evidenceonly: true}
+    - {name: handles_pellet, type: bool, evidenceonly: true}
+    - {name: handles_flake, type: bool, evidenceonly: true}
+    - {name: handles_rollstock, type: bool, evidenceonly: true}
+    - {name: can_remove_metal, type: bool, evidenceonly: true}
+    - {name: can_reduce_moisture, type: bool, evidenceonly: true}
+    - {name: can_filter_fr, type: bool, evidenceonly: true}
+    - {name: can_screen_fines, type: bool, evidenceonly: true}
+    - {name: iso_certified, type: bool, evidenceonly: true}
+    - {name: medical_grade_capable, type: bool, evidenceonly: true}
+    - {name: accepts_spot, type: bool, evidenceonly: true}
+    - {name: prefers_contract, type: bool, evidenceonly: true}
+    - {name: accepts_filled_materials, type: bool, evidenceonly: true}
+    # Quantities, in the unit Odoo stores:
+    - {name: avg_truckload_lbs, type: float, evidenceonly: true, unit: lb, description: "Average truckload, in lb"}
+    - {name: min_lot_size_lbs, type: float, evidenceonly: true, unit: lb, description: "Minimum lot size, in lb"}
+    - {name: max_lot_size_lbs, type: float, evidenceonly: true, unit: lb, description: "Maximum lot size, in lb"}
+    - {name: moisture_tolerance_pct, type: float, evidenceonly: true, unit: percent, description: "Moisture tolerance, in percent (0-100)"}
+    - {name: pcr_pct_min, type: float, evidenceonly: true, unit: percent, description: "Minimum post-consumer recycled content, in percent (0-100)"}
+    - {name: pcr_pct_max, type: float, evidenceonly: true, unit: percent, description: "Maximum post-consumer recycled content, in percent (0-100)"}
+    # Free text:
+    - {name: freeform_notes, type: string, evidenceonly: true}
+    - {name: application_notes, type: string, evidenceonly: true}
+    enrichment_hints:
+      objective_template: "Enrich plastics facility profile for evidence emission"
+      priority_fields:
+      - processed_polymers
+      - contamination_tolerance
+      - min_mfi
+      - max_mfi
+      - capacity_tons_month
+      - certifications
+      min_confidence: 0.75
+
+queryschema:
+  fields:
+  - {name: polymer_type, type: string, description: "e.g. HDPE, LDPE, PP"}
+  - {name: form, type: string, description: "e.g. Regrind, Pellet, Flake"}
+  - {name: density, type: float, description: "g/cm³"}
+  - {name: mfi, type: float, description: "melt flow index g/10min"}
+  - {name: contamination, type: float, description: "contamination, percent 0–100 (as CEG's contamination_pct)"}
+  - {name: required_certifications, type: list, items: {type: string}, description: "list of cert codes"}
+
+# Ranking/match authority removed (owned by CEG).
+gates: []
+scoring:
+  dimensions: []
+
+chassisbinding:
+  handleractions:
+  - {name: enrich, description: "Enrich facility fields for evidence"}
+  - {name: converge, description: "Run enrichment-inference convergence"}
+  - {name: discover, description: "Discover schema/fields for evidence"}
+  - {name: sync, description: "Sync facility record via Gate"}
+  - {name: resolve, description: "Resolve entity to canonical form"}
+  forbidden_actions:
+  - match
+  - outcomes
+
+# CEG `sync` endpoint EIE produces rows for (GRAPH-IDENT-02). The row schema an
+# endpoint accepts is this tenant spec's declared types: the target node's
+# properties that are not `evidenceonly`, including the childsync field. EIE's
+# packet_router projects every row onto that declaration (a list<map> travels as
+# a list of maps; a value whose type does not match is refused before sending;
+# an undeclared field is dropped). CEG validates the same rows against its own
+# tenant spec at ingress (flag sync_row_type_validation_enabled,
+# Cognitive.Engine.Graphs #454) and refuses the whole batch on any defect. The compatibility contract eie-ceg-sync/v2
+# (app/engines/domain_spec_compatibility.py) proves every property EIE sends is
+# declared by CEG with the identical typed shape, checked
+# against tests/fixtures/ceg/plasticos.spec.yaml; CEG's other endpoints
+# (polymerfamilies, materialforms, supply-opportunities, buyer-demands) target
+# nodes EIE does not enrich, so EIE declares and sends none of them.
+sync:
+  endpoints:
+  - path: /v1/sync/facilities
+    targetnode: Facility
+    idproperty: facility_id
+    batchstrategy: UNWINDMERGE
+    childsync:
+    - field: processed_polymers
+      targetnode: PolymerFamily
+      targetid: code
+      edgetype: PROCESSES
+      edgedirection: parenttochild
+
+# Subject vocabulary for converge request v2 (docs/contracts/converge/request.v2.md
+# `subject.type` / `subject.role`). The names are this cartridge's own; shared
+# runtime code compares them as opaque strings and gives them no meaning.
+#
+# Each type is one profile concern of a node. `fields` are the properties EIE
+# may enrich and propose for that concern; every Facility property except its
+# identity belongs to exactly one concern. `ceg_owned` names the properties of
+# CEG's node that CEG alone writes: EIE does not declare them, so they can
+# never be a converge target, and matching, ranking and scoring stay with CEG.
+# Both concerns bind to Facility: a second node would leave a request that
+# names no node (every v1 request) without an implicit one.
+subjects:
+  roles: [supplier, buyer]
+  types:
+  - name: facility
+    node: Facility
+    fields:
+    - name
+    - city
+    - state
+    - zip_code
+    - street
+    - street2
+    - website
+    - email
+    - phone
+    - capacity_tons_month
+    - tier
+    # Odoo facility-profile evidence (0.6.0).
+    - equipment_type_ids
+    - form_preference_id
+    - process_type
+    - feedstock_type
+    - application_class
+    - handles_bales
+    - handles_regrind
+    - handles_pellet
+    - handles_flake
+    - handles_rollstock
+    - can_remove_metal
+    - can_reduce_moisture
+    - can_filter_fr
+    - can_screen_fines
+    - iso_certified
+    - medical_grade_capable
+    - accepts_spot
+    - prefers_contract
+    - accepts_filled_materials
+    - avg_truckload_lbs
+    - min_lot_size_lbs
+    - max_lot_size_lbs
+    - moisture_tolerance_pct
+    - pcr_pct_min
+    - pcr_pct_max
+    - freeform_notes
+    - application_notes
+    ceg_owned:
+    - lat
+    - lon
+    - credit_score
+    - community_id
+    - rate_per_ton
+    - rate_confidence
+    - last_transaction_date
+  - name: material
+    node: Facility
+    fields:
+    - processed_polymers
+    - min_density
+    - max_density
+    - min_mfi
+    - max_mfi
+    - contamination_tolerance
+    - material_grade
+    - material_forms
+    - certifications
+    ceg_owned:
+    - food_grade_certified
+
+semantic_registry:
+  enabled: true
+  canonical_entities:
+  - entity_type: Facility
+    resolution_strategy: hybrid
+    resolution_threshold: 0.85
+    key_fields: [name, city, state, zip_code]
+
+inference_rules:
+# 0.6.0: contamination_tolerance is a percent (0-100), as CEG declares it, so the
+# grade thresholds are 3 and 7 percent. 0.5.0 tested a fraction (0.03, 0.07)
+# that a percent-valued field almost never satisfied.
+- rule_id: grade-assignment-hdpe-a
+  conditions:
+  - {field: processed_polymers, operator: CONTAINS, value: {code: HDPE}}
+  - {field: contamination_tolerance, operator: LT, value: 3}
+  outputs:
+  - {field: material_grade, value_expr: "A", derivation_type: classification}
+  confidence: 0.92
+  priority: 10
+  rule_or_model_version: plasticos-inference-0.6.0
+
+- rule_id: grade-assignment-hdpe-b
+  conditions:
+  - {field: processed_polymers, operator: CONTAINS, value: {code: HDPE}}
+  - {field: contamination_tolerance, operator: GTE, value: 3}
+  - {field: contamination_tolerance, operator: LTE, value: 7}
+  outputs:
+  - {field: material_grade, value_expr: "B", derivation_type: classification}
+  confidence: 0.85
+  priority: 5
+  rule_or_model_version: plasticos-inference-0.6.0
+
+- rule_id: tier-1-high-capacity
+  conditions:
+  # 5000 t/year expressed in CEG's monthly capacity unit (5000 / 12).
+  - {field: capacity_tons_month, operator: GTE, value: 416.67}
+  - {field: material_grade, operator: IN, value: ["A", "A+"]}
+  outputs:
+  - {field: tier, value_expr: "tier_1", derivation_type: classification}
+  confidence: 0.90
+  priority: 8
+  rule_or_model_version: plasticos-inference-0.4.0

@@ -80,7 +80,7 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
 ```text
 1. API receives an enrichment request via `/api/v1/*` OR SDK runtime receives `/v1/execute`
 2. SDK runtime dispatches the allowed action to registered handlers
-3. EntropyEngine scores data completeness (1–5)
+3. (Corrected 2026-11-14) No EIE runtime step scores data completeness: the `EntropyEngine` named here exists only in the Odoo addon `odoo_modules/plasticos_research_enrichment/models/entropy_engine.py`, not in `app/`
 4. KBResolver adds domain-relevant KB context to prompts
 5. Convergence loop runs multi-pass enrichment:
    a. Meta-prompt planner selects fields to enrich
@@ -88,6 +88,8 @@ Enriches CRM entity records (Odoo + Salesforce) with structured intelligence ext
    c. Inference bridge fires deterministic rules
    d. Confidence tracker updates per-field scores
 6. Graph sync sends the enriched entity to CEG as a `sync` TransportPacket via Gate
+   (canonical `converge`: started detached only after the answer is decided
+   `completed`, never awaited on the converge path — E14)
 7. Response is returned through the runtime/app surface
 ```
 
@@ -128,6 +130,7 @@ These files define the live production transport/runtime contract and must remai
 * `app/engines/graph_sync_client.py` — contract surface, **not** a live path
 * `app/engines/packet_router.py`
 * `app/services/gate_client.py`
+* `app/middleware/gate_ingress.py` — 403s non-Gate packets before the SDK `/v1/execute` route
 
 > EIE-006 / EIE-007: this list is the C-13 transport-contract lockstep set, not
 > the set of modules that carry traffic. Two of its entries carry none:

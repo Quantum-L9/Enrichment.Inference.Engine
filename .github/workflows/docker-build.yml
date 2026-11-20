@@ -185,7 +185,7 @@ jobs:
           TAG: ${{ needs.build.outputs.image_tag }}
 
       - name: Generate Container SBOM
-        uses: anchore/sbom-action@d94f46e13c6c62f59525ac9a1e147a99dc0b9bf5 # v0.17.0
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ steps.img.outputs.ref }}
           format: spdx-json

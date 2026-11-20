@@ -187,6 +187,18 @@ registered_handlers:
     source_file: app/engines/orchestration_layer.py
     description: Enrich then sync result to GRAPH node.
 
+  - action: enrichment-sweep
+    handler: handle_enrichment_sweep
+    source_file: app/engines/orchestration_layer.py
+    description: >
+      Accept candidate records and a daily budget, assess readiness through Gate
+      (CEG health-assess), converge the ranked ones within budget, in the background.
+
+  - action: enrichment-sweep-results
+    handler: handle_enrichment_sweep_results
+    source_file: app/engines/orchestration_layer.py
+    description: Page a sweep's converge v2 results, budget and skips for consumer review.
+
   - action: writeback
     handler: handle_writeback
     source_file: app/engines/orchestration_layer.py

@@ -21,7 +21,9 @@ Produces: Final EnrichResponse with merged fields from all passes + inference re
 from __future__ import annotations
 
 import hashlib
+import json
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,6 +40,7 @@ from ..models.schemas import (
 from ..services.graph_return_channel import EnrichmentTarget, GraphReturnChannel
 from ..services.idempotency import IdempotencyStore
 from ..services.request_deadline import current_deadline
+from .convergence.acquisition_order import latest_withheld
 from .convergence.confidence_tracker import (
     UNCERTAINTY_POLICY,
     UNCERTAINTY_SCALE,
@@ -46,6 +49,15 @@ from .convergence.confidence_tracker import (
 )
 from .convergence.convergence_config import ConvergenceConfig  # NEW
 from .convergence.cost_tracker import CostTracker
+from .convergence.field_evidence import (
+    RESPONSE_CONTRACT_V2,
+    EvidenceContractError,
+    build_field_evidence,
+    build_proposals,
+    check_response_v2,
+    merge_observation_evidence,
+)
+from .convergence.observation_evidence import observation_evidence
 from .field_classifier import DomainClassification, auto_classify_domain
 from .inference.rule_loader import build_unlock_index
 from .inference_bridge_adapter import InferenceBridge
@@ -69,18 +81,15 @@ _classification_cache: dict[str, DomainClassification] = {}
 
 
 def _cache_key(domain_spec: dict[str, Any]) -> str:
-    """Deterministic hash of a domain spec for caching."""
-    domain_name = domain_spec.get("domain") or domain_spec.get("metadata", {}).get(
-        "domain", "unknown"
-    )
-    # Include field count for collision avoidance
-    ontology = domain_spec.get("ontology", domain_spec)
-    nodes = ontology.get("nodes", ontology.get("entities", {}))
-    node_count = len(nodes) if isinstance(nodes, (dict, list)) else 0
-    raw = f"{domain_name}:{node_count}"
-    # Non-security cache key only; usedforsecurity=False marks this hash as
-    # non-cryptographic to satisfy weak-hashing scanners (CWE-327/328).
-    return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
+    """Content digest of the loaded spec.
+
+    A classification is valid only for the exact spec it was computed from: two
+    cartridges, or two revisions of one, never share an entry. (The former key,
+    declared-domain-name plus node count, was `unknown:1` for every one-node
+    native cartridge.)
+    """
+    canonical = json.dumps(domain_spec, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def get_or_classify_domain(domain_spec: dict[str, Any]) -> DomainClassification:
@@ -110,6 +119,8 @@ INFERENCE_SOURCE = "inference"
 # Convergence stopped because the shared request deadline ran out. Not a
 # successful convergence — see _assemble_convergence_response.
 DEADLINE_EXHAUSTED_REASON = "deadline_exhausted"
+# Stop reason when the planner authorized no provider variation for a pass.
+NO_VARIATIONS_AUTHORIZED = "no_variations_authorized"
 
 
 @dataclass
@@ -127,6 +138,8 @@ class PassResult:
     per_field_confidence: dict[str, float] = field(default_factory=dict)  # NEW
     graph_seeded_fields: dict[str, Any] = field(default_factory=dict)
     inference_provenance: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Fields valid replies spoke to and this pass did not admit (response v2).
+    withheld_fields: dict[str, dict[str, Any]] = field(default_factory=dict)
     # The enrichment pass's own outcome (F-003): a failed pass must not be
     # folded into a "completed" converge as though it had merely found nothing.
     state: str = "completed"
@@ -176,6 +189,9 @@ async def run_convergence_loop(
     convergence_config: ConvergenceConfig | None = None,  # NEW
     tenant_id: str | None = None,
     entity_id: str | None = None,
+    response_contract: str | None = None,
+    subject: Mapping[str, str] | None = None,
+    observations: tuple[Mapping[str, Any], ...] = (),
 ) -> EnrichResponse:
     """
     Multi-pass convergence loop.
@@ -206,7 +222,18 @@ async def run_convergence_loop(
         graph-inference-result values CEG sent back through Gate — so graph
         inference feeds the pass it precedes. Without both, no tenant's queue
         is read: a target is never applied across a tenant or entity boundary.
+    response_contract : str | None
+        None answers in v1. ``eie.converge.response/v2`` adds per-field evidence
+        (docs/contracts/converge/response.v2.md). Any other value is refused.
+    subject : Mapping[str, str] | None
+        The request's resolved ``subject`` (``type``, ``role``), echoed into
+        every evidence entry's identity. Never derived here.
+    observations : tuple of mappings
+        Request v2.1 observations, already validated against the cartridge. They
+        are evidence only, folded into a v2 response; they never steer the loop.
     """
+    if response_contract not in (None, RESPONSE_CONTRACT_V2):
+        raise ValueError(f"unsupported_contract: {response_contract!r}")
     start = time.monotonic()
     state = ConvergenceState()
     bridge = InferenceBridge(
@@ -257,6 +284,8 @@ async def run_convergence_loop(
         # A per-run cap can only lower the deployment's budget (F-007).
         max_budget = min(max_budget, config.max_budget_tokens)
     cost_tracker = CostTracker(max_budget_tokens=max_budget)
+    # Only the default enricher takes the planner's authorization keyword.
+    default_enricher = enricher is None
 
     # Seed known_fields from the entity's existing data
     state.known_fields = {k: v for k, v in request.entity.items() if v is not None}
@@ -317,6 +346,8 @@ async def run_convergence_loop(
             required_fields=required_fields,
             field_thresholds=request.field_thresholds,
             deciding_fields=confidence_tracker.deciding_fields(),
+            # Tie-break only: what earlier passes' replies said and withheld.
+            withheld_fields=latest_withheld(pr.withheld_fields for pr in state.pass_results),
         )
 
         # ── Inference-unlock target prioritization ─────────
@@ -335,6 +366,15 @@ async def run_convergence_loop(
                 pass_number=pass_num,
                 top_targets=search_plan.priority_fields[:3],
             )
+
+        # ── Variation authority (post-#320 F2) ────────────
+        # The planner's pass budget, capped by the caller, is the only count.
+        # A zero is a real zero: no provider call, and the loop says why.
+        pass_cap = _pass_variation_cap(request, search_plan)
+        if pass_cap <= 0:
+            logger.info("no_variations_authorized", pass_number=pass_num)
+            state.convergence_reason = NO_VARIATIONS_AUTHORIZED
+            break
 
         # ── Resolve optimal Sonar config for this pass ────
         sonar_config: SonarConfig | None = None
@@ -355,16 +395,19 @@ async def run_convergence_loop(
                 pass_number=pass_num,
                 allocated_tokens=cost_tracker.budget_remaining(),
             )
+            # The planner owns the count (post-#320 F2): the optimizer picks
+            # model, context, filters and tokens for the authorized count and
+            # the cost estimate is computed for it. cap_variations stays as the
+            # mechanical hard cap (#320); with one owner it never changes it.
             sonar_config = resolve_from_classification(
                 search_plan_mode=search_plan.mode,
                 target_fields=search_plan.priority_fields or [],
                 signals=signals,
                 classification=domain_classification,
                 budget_tokens=cost_tracker.budget_remaining(),
+                authorized_variations=pass_cap,
             )
-            # The optimizer only recommends a count. The pass budget (from
-            # U_action) and the caller's max_variations bound what runs.
-            sonar_config = cap_variations(sonar_config, _pass_variation_cap(request, search_plan))
+            sonar_config = cap_variations(sonar_config, pass_cap)
             logger.info(
                 "sonar_config_resolved",
                 pass_number=pass_num,
@@ -390,17 +433,26 @@ async def run_convergence_loop(
         )
 
         # --- SINGLE-PASS ENRICHMENT ---
+        # The default enricher receives the planner's authorization so its
+        # single-pass heuristic never re-decides the count. An injected
+        # enricher keeps its existing call contract.
+        enrich_kwargs: dict[str, Any] = {"sonar_config": sonar_config}
         if enricher is None:
             from ..engines.enrichment_orchestrator import enrich_entity
 
             enricher = enrich_entity
+        if default_enricher:
+            enrich_kwargs["authorized_variations"] = pass_cap
+            if response_contract is not None:
+                # Only a v2 answer needs it; a v1 call is exactly what it was.
+                enrich_kwargs["report_withheld"] = True
 
         pass_response: EnrichResponse = await enricher(
             pass_request,
             settings,
             kb_resolver,
             idem_store,
-            sonar_config=sonar_config,
+            **enrich_kwargs,
         )
         if search_plan is not None:
             search_plan.variation_count = pass_response.variation_count
@@ -436,6 +488,9 @@ async def run_convergence_loop(
         if pass_response.feature_vector:
             per_field_conf = pass_response.feature_vector.get("per_field_confidence", {})
         pass_result.per_field_confidence = per_field_conf
+        pass_result.withheld_fields = (pass_response.feature_vector or {}).get(
+            "withheld_fields"
+        ) or {}
 
         # Merge into accumulated state with per-field confidence
         for field_name, value in pass_result.enriched_fields.items():
@@ -567,6 +622,10 @@ async def run_convergence_loop(
         cost_tracker,
         confidence_tracker,
         inference_context=bridge.describe(),
+        response_contract=response_contract,
+        subject=subject,
+        entity_id=entity_id,
+        observations=observations,
     )
 
 
@@ -676,6 +735,10 @@ def _assemble_convergence_response(
     cost_tracker: CostTracker | None = None,
     confidence_tracker: ConfidenceTracker | None = None,  # NEW
     inference_context: dict[str, Any] | None = None,
+    response_contract: str | None = None,
+    subject: Mapping[str, str] | None = None,
+    entity_id: str | None = None,
+    observations: tuple[Mapping[str, Any], ...] = (),
 ) -> EnrichResponse:
     """Build the final EnrichResponse from accumulated convergence state."""
     enriched_or_inferred: set[str] = set()
@@ -736,6 +799,11 @@ def _assemble_convergence_response(
     if state.convergence_reason == DEADLINE_EXHAUSTED_REASON:
         response_state = "failed"
         failure_reason: str | None = DEADLINE_EXHAUSTED_REASON
+    elif state.convergence_reason == NO_VARIATIONS_AUTHORIZED:
+        # No provider call was authorized for a pass: a bounded failure,
+        # never "completed" with nothing enriched.
+        response_state = "failed"
+        failure_reason = NO_VARIATIONS_AUTHORIZED
     elif state.pass_results and all(pr.state == "failed" for pr in state.pass_results):
         # Every enrichment pass failed: the loop stopped on a bounded failure,
         # not on convergence (F-003). Name the last pass's own reason so the
@@ -747,7 +815,7 @@ def _assemble_convergence_response(
         response_state = "completed"
         failure_reason = None
 
-    return EnrichResponse(
+    response = EnrichResponse(
         fields=final_fields,
         confidence=round(avg_confidence, 4),
         # Variations are provider calls, not tokens: each pass ran the number
@@ -768,6 +836,163 @@ def _assemble_convergence_response(
         convergence_reason=state.convergence_reason or None,
         inferences=pass_inferences,
         feature_vector=feature_vector if feature_vector else None,
+    )
+    if response_contract is None:
+        return response
+    if confidence_tracker is None:
+        raise ValueError("a v2 response needs the loop's confidence tracker")
+    return _as_response_v2(
+        response, state, request, confidence_tracker, subject, entity_id, observations
+    )
+
+
+def _unknown_reason(state: ConvergenceState) -> str:
+    """Why a requested field has no evidence, from how the loop stopped."""
+    if not state.pass_results:
+        return "not_attempted"
+    if all(pr.state == "failed" for pr in state.pass_results):
+        return "source_unavailable"
+    if state.convergence_reason == "budget_exhausted":
+        return "budget_exhausted"
+    return "no_evidence"
+
+
+def _subject_identity(
+    request: EnrichRequest, subject: Mapping[str, str] | None, entity_id: str | None
+) -> dict[str, Any]:
+    return {
+        "subject_ref": entity_id or request.entity.get("id"),
+        "subject_type": (subject or {}).get("type"),
+        "role": (subject or {}).get("role"),
+    }
+
+
+def deadline_response_v2(
+    request: EnrichRequest,
+    subject: Mapping[str, str] | None,
+    entity_id: str | None,
+    observations: tuple[Mapping[str, Any], ...],
+    reason: str,
+) -> EnrichResponse:
+    """A v2 request stopped by the outer deadline, answered in v2 (response.v2 section 6).
+
+    The loop's own record did not survive the cancellation, so nothing was
+    produced: `fields` and `proposals` are empty, every requested field the
+    request did not itself supply is `unknown` with `budget_exhausted`, and
+    the request's values and observations stay evidence only.
+    """
+    requested = _required_fields(request) or []
+    identity = _subject_identity(request, subject, entity_id)
+    try:
+        if not identity["subject_ref"]:
+            raise EvidenceContractError("the request names no subject identity")
+        evidence = build_field_evidence(
+            requested=requested,
+            fields={},
+            produced={},
+            provenance={},
+            withheld={},
+            entity=request.entity,
+            identity=identity,
+            unknown_reason="budget_exhausted",
+        )
+        if observations:
+            evidence = merge_observation_evidence(
+                evidence, observation_evidence(observations, identity)
+            )
+        body = {"state": "degraded", "fields": {}, "field_evidence": evidence, "proposals": []}
+        check_response_v2(body, requested)
+    except EvidenceContractError as exc:
+        logger.warning("response_v2_evidence_refused", error=str(exc))
+        return EnrichResponse(state="failed", failure_reason=f"evidence_contract_violation: {exc}")
+    return EnrichResponse(
+        state="degraded",
+        failure_reason=reason,
+        contract_version=RESPONSE_CONTRACT_V2,
+        field_evidence=evidence,
+        proposals=[],
+    )
+
+
+def _as_response_v2(
+    response: EnrichResponse,
+    state: ConvergenceState,
+    request: EnrichRequest,
+    confidence_tracker: ConfidenceTracker,
+    subject: Mapping[str, str] | None,
+    entity_id: str | None,
+    observations: tuple[Mapping[str, Any], ...] = (),
+) -> EnrichResponse:
+    """Attach response v2 evidence, or fail the response when it cannot be stated."""
+    requested = _required_fields(request) or []
+    # A failed response admits nothing (response.v2 section 6).
+    fields = dict(response.fields) if response.state == "completed" else {}
+    if request.schema_ is not None:
+        # Contract v1's cut to the request schema (restrict_fields_to_schema),
+        # made here, before the evidence is built: cutting `fields` afterwards
+        # would leave admitted entries that `fields` no longer carries.
+        fields = {name: value for name, value in fields.items() if name in request.schema_}
+    provenance: dict[str, dict[str, Any]] = {}
+    withheld: dict[str, dict[str, Any]] = {}
+    for pr in state.pass_results:
+        provenance.update(pr.inference_provenance)
+        for name, record in pr.withheld_fields.items():
+            withheld[name] = {**record, "pass_number": pr.pass_number}
+    produced = {
+        name: {
+            "value": tracked.current_value,
+            "confidence": tracked.confidence,
+            "source": tracked.source_variation,
+            "pass_number": tracked.pass_number,
+        }
+        for name, tracked in confidence_tracker.fields.items()
+    }
+    identity = _subject_identity(request, subject, entity_id)
+    try:
+        if not identity["subject_ref"]:
+            raise EvidenceContractError("the request names no subject identity")
+        evidence = build_field_evidence(
+            requested=requested,
+            fields=fields,
+            produced=produced,
+            provenance=provenance,
+            withheld=withheld,
+            entity=request.entity,
+            identity=identity,
+            unknown_reason=_unknown_reason(state),
+        )
+        if observations:
+            evidence = merge_observation_evidence(
+                evidence, observation_evidence(observations, identity)
+            )
+            # A disagreement turns a produced value into a conflict, which is
+            # never admitted, so `fields` is rebuilt from what stays admitted.
+            fields = {name: e["value"] for name, e in evidence.items() if e["admitted"]}
+        proposals = build_proposals(evidence, identity) if response.state == "completed" else []
+        body = {
+            "state": response.state,
+            "fields": fields,
+            "field_evidence": evidence,
+            "proposals": proposals,
+        }
+        check_response_v2(body, requested)
+    except EvidenceContractError as exc:
+        # Never a partial v2 body, and never a v1 body passed off as v2.
+        logger.warning("response_v2_evidence_refused", error=str(exc))
+        return response.model_copy(
+            update={
+                "state": "failed",
+                "failure_reason": f"evidence_contract_violation: {exc}",
+                "fields": {},
+            }
+        )
+    return response.model_copy(
+        update={
+            "fields": fields,
+            "contract_version": RESPONSE_CONTRACT_V2,
+            "field_evidence": evidence,
+            "proposals": proposals,
+        }
     )
 
 
@@ -826,5 +1051,8 @@ def _build_pass_request(
 
 
 def _pass_variation_cap(original: EnrichRequest, plan: PromptPlan) -> int:
-    """Variations this pass may run: the plan's budget, never above the caller's."""
-    return min(plan.variation_count or original.max_variations, original.max_variations)
+    """Variations this pass may run: the plan's budget, never above the caller's.
+
+    A plan budget of 0 is a real 0, not a cue to fall back to the caller's cap.
+    """
+    return max(min(plan.variation_count, original.max_variations), 0)

@@ -616,6 +616,24 @@ def test_startup_replays_approved_rows_batch_by_batch() -> None:
     assert spec == _spec("plasticos")
 
 
+def _live_version(bumps: int = 0) -> str:
+    """The live plasticos version, or that version with its minor bumped `bumps` times.
+
+    Discovery revisions are minor bumps over the live cartridge, so the expected
+    versions follow whatever revision is current rather than a pinned literal.
+    A zero bump is the live version unchanged, patch included. A positive bump
+    is the minor increment the publisher emits, with the patch reset to 0.
+    """
+    spec = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "domains/plasticos/spec.yaml").read_bytes()
+    )
+    version = str(spec["version"])
+    if bumps == 0:
+        return version
+    major, minor, _patch = (int(part) for part in version.split("."))
+    return f"{major}.{minor + bumps}.0"
+
+
 @requires_db_runtime
 @pytest.mark.unit
 def test_bound_startup_replay_preserves_original_discovery_and_associations() -> None:
@@ -662,7 +680,7 @@ def test_bound_startup_replay_preserves_original_discovery_and_associations() ->
     revised = _converge().apply_approved_records(spec, [row], discovery_specs={digest: discovery})
     names = {p["name"] for p in revised["ontology"]["nodes"][0]["properties"]}
     assert names == original_names | {"capacity_tons_month"}
-    assert revised["version"] == "0.5.0-discovered"
+    assert revised["version"] == f"{_live_version(1)}-discovered"
     assert revised["sync"] == spec["sync"]
     assert revised["semantic_registry"] == spec["semantic_registry"]
     assert vars(row) == before

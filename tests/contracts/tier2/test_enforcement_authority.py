@@ -70,6 +70,8 @@ ACTION_AUTHORITY = {
         "mutation_class": "internal_plus_graph_sync",
         "approval": "autonomous",
     },
+    "enrichment-sweep": {"mutation_class": "internal_state", "approval": "autonomous"},
+    "enrichment-sweep-results": {"mutation_class": "read_only", "approval": "autonomous"},
     "writeback": {
         "mutation_class": "external_mutation",
         "approval": "threshold_or_human",

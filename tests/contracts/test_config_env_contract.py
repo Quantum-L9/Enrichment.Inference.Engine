@@ -42,6 +42,7 @@ REQUIRED_ENV_VARS = {
         "required": False,
         "sensitive": False,
     },
+    "L9_GATE_SIGNING_KEY_IDS": {"type": "string", "required": False, "sensitive": False},
     "L9_ENVIRONMENT": {"type": "string", "required": False, "sensitive": False},
     "GRAPH_SYNC_ENTITY_TYPE": {"type": "string", "required": False, "sensitive": False},
     "GRAPH_SYNC_ID_PROPERTY": {"type": "string", "required": False, "sensitive": False},

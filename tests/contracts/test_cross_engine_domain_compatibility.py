@@ -32,6 +32,7 @@ from app.engines.domain_spec_compatibility import (
     row_contract_summary,
     verify_pair_record,
 )
+from tests.contracts.ceg_revision import CEG_REVISION, CEG_SPECIMEN
 
 ROOT = Path(__file__).resolve().parents[2]
 EIE_SPEC = ROOT / "domains/plasticos/spec.yaml"
@@ -64,7 +65,10 @@ def test_rule_set_is_v2() -> None:
 
 def test_snapshot_is_pinned_to_its_source_commit_and_digest() -> None:
     provenance = json.loads(CEG_PROVENANCE.read_text())
+
     assert provenance["source_repository"] == "Quantum-L9/Cognitive.Engine.Graphs"
+    assert provenance["source_commit"] == CEG_REVISION
+    assert provenance["source_path"] == CEG_SPECIMEN
     assert len(provenance["source_commit"]) == 40
     assert hashlib.sha256(CEG_SNAPSHOT.read_bytes()).hexdigest() == provenance["snapshot_sha256"]
     header = CEG_SNAPSHOT.read_text().split("--- end header ---", 1)[0]
@@ -83,7 +87,7 @@ def test_checked_in_plasticos_spec_matches_cegs_typed_row_contract() -> None:
 
 def test_row_contract_carries_the_typed_childsync_field() -> None:
     summary = row_contract_summary(_eie(), "Facility", eie=True)
-    assert summary["processed_polymers"] == "list<map{code}>"
+    assert summary["processed_polymers"] == "list<map{code,line_id,direction,form}>"
     assert summary["min_density"] == "float"
     # EIE-only evidence never rides a sync row.
     assert "city" not in summary and "material_grade" not in summary

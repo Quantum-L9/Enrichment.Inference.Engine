@@ -4,7 +4,7 @@ tests/test_pr21_packet_router.py
 Proves GAP-1 and GAP-6:
   - dispatch_to_score does NOT exist in packet_router (confirms broken ref is gone)
   - notify_graph_sync speaks CEG's `sync` contract and sends it through Gate
-  - notify_score_invalidate fires a Gate-routed fire-and-forget packet with correct action
+  - notify_score_invalidate is absent: Gate does not own score-invalidate
   - get_router() returns a singleton PacketRouter
   - orchestration_layer no longer imports the non-existent dispatch_to_score
 """
@@ -106,10 +106,7 @@ def test_dispatch_to_score_symbol_absent():
     """GAP-1: dispatch_to_score must not exist in packet_router."""
     import app.engines.packet_router as pr
 
-    assert not hasattr(pr, "dispatch_to_score"), (
-        "dispatch_to_score must be absent — orchestration_layer must use "
-        "get_router().notify_score_invalidate() instead"
-    )
+    assert not hasattr(pr, "dispatch_to_score"), "dispatch_to_score must be absent"
 
 
 def test_orchestration_layer_does_not_import_dispatch_to_score():
@@ -446,27 +443,11 @@ async def test_unknown_route_fails_closed_without_direct_fallback():
         assert mock_exec.await_count == 1
 
 
-def test_notify_score_invalidate_is_fire_and_forget():
-    """GAP-1: notify_score_invalidate must call route_fire_and_forget (non-blocking)."""
+def test_notify_score_invalidate_is_absent():
+    """Gate does not own score-invalidate, so PacketRouter has no sender for it."""
     router = PacketRouter(gate_url="https://gate-node:8080")
-
-    fired: list = []
-
-    def capture_fff(target, action, tenant_id, payload, correlation_id=None):
-        fired.append({"target": target, "action": action, "tenant_id": tenant_id})
-
-    router.route_fire_and_forget = capture_fff
-
-    import asyncio
-
-    asyncio.run(
-        router.notify_score_invalidate(tenant_id="tenant-x", entity_id="ent-007", domain="plastics")
-    )
-
-    assert len(fired) == 1
-    assert fired[0]["action"] == "score-invalidate"
-    assert fired[0]["tenant_id"] == "tenant-x"
-    assert fired[0]["target"] == NodeTarget.SCORE
+    assert not hasattr(PacketRouter, "notify_score_invalidate")
+    assert not hasattr(router, "notify_score_invalidate")
 
 
 def test_get_router_returns_singleton():

@@ -436,6 +436,7 @@ def resolve(
     ambiguous_fields: set[str] | None = None,
     budget_tokens: int | None = None,
     force_model: SonarModel | None = None,
+    authorized_variations: int | None = None,
 ) -> SonarConfig:
     """Deterministic resolver: (mode, fields, signals, classification) → SonarConfig
 
@@ -449,10 +450,15 @@ def resolve(
         domain_filters: {difficulty: [domains]} from DomainClassification
         time_sensitive_fields: field names that need recency filter
         ambiguous_fields: field names that trigger reasoning models
-        budget_tokens: token budget for this call
+        budget_tokens: token budget for this call; 0 is a real zero
         force_model: override model selection
+        authorized_variations: the count the caller already owns. The
+            convergence loop passes its D-9 v2 pass budget (capped by the
+            request's max_variations): the optimizer then chooses model,
+            context, filters and tokens, and has no vote on the count. None
+            keeps the optimizer's own recommendation for other callers.
     """
-    budget = budget_tokens or signals.allocated_tokens
+    budget = budget_tokens if budget_tokens is not None else signals.allocated_tokens
     d_filters = domain_filters or {}
     ts_fields = time_sensitive_fields or set()
     amb_fields = ambiguous_fields or set()
@@ -492,13 +498,16 @@ def resolve(
     # 6. Recency — from YAML time_sensitive_fields
     recency = _select_recency(searchable, ts_fields)
 
-    # 7. Variations
-    variations = _compute_variations(
-        search_plan_mode,
-        difficulty,
-        signals,
-        budget,
-    )
+    # 7. Variations — one owner: the caller's authorization when given
+    if authorized_variations is not None:
+        variations = max(authorized_variations, 0)
+    else:
+        variations = _compute_variations(
+            search_plan_mode,
+            difficulty,
+            signals,
+            budget,
+        )
 
     # 8. Message strategy
     msg_strategy = _select_message_strategy(search_plan_mode, signals)
@@ -552,6 +561,7 @@ def resolve_from_classification(
     classification: Any,  # DomainClassification from field_classifier
     budget_tokens: int | None = None,
     force_model: SonarModel | None = None,
+    authorized_variations: int | None = None,
 ) -> SonarConfig:
     """Shorthand: resolve() with DomainClassification unpacked."""
     return resolve(
@@ -564,6 +574,7 @@ def resolve_from_classification(
         ambiguous_fields=classification.ambiguous_fields,
         budget_tokens=budget_tokens,
         force_model=force_model,
+        authorized_variations=authorized_variations,
     )
 
 

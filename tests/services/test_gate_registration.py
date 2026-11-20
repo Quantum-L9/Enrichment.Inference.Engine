@@ -472,3 +472,21 @@ def test_malformed_verifying_keys_fail_closed(monkeypatch, fresh_runtime_config)
     monkeypatch.setenv("L9_VERIFYING_KEYS_JSON", '["not", "a", "map"]')
     with pytest.raises(ValueError, match="L9_VERIFYING_KEYS_JSON"):
         _build_runtime_config()
+
+
+def test_sweep_actions_are_advertised_only_while_the_sweep_is_enabled():
+    """Gate refuses a registration naming an action it does not own, whole
+    (GATE-OWN-01), so the sweep is advertised only once a deployment enables
+    it: off, the registration is exactly the legacy one; on, the two sweep
+    actions follow it.
+    """
+    off = build_node_registration(_settings()).to_payload()["enrichment-engine"]
+    assert off["supported_actions"] == _LEGACY_NODE_BODY["supported_actions"]
+
+    on = _settings(l9_enrichment_sweep_enabled=True)
+    node = build_node_registration(on).to_payload()["enrichment-engine"]
+    assert node["supported_actions"] == [
+        *_LEGACY_NODE_BODY["supported_actions"],
+        "enrichment-sweep",
+        "enrichment-sweep-results",
+    ]

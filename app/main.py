@@ -51,6 +51,7 @@ from .core.telemetry import setup_telemetry
 from .engines.domain_yaml_reader import DomainYamlReader
 from .engines.enrichment_orchestrator import breaker, enrich_batch, enrich_entity
 from .engines.orchestration_layer import register as register_orchestration
+from .middleware.gate_ingress import install_gate_only_ingress
 from .middleware.rate_limiter import RateLimitMiddleware
 from .models.schemas import (
     BatchEnrichRequest,
@@ -217,12 +218,34 @@ HEALTH_ENDPOINT = "/api/v1/health"
 # HEALTH_ENDPOINT (liveness, and what Gate polls) so a Gate outage takes this
 # pod out of Service rotation without restarting it.
 READINESS_ENDPOINT = "/api/v1/ready"
+# The enrichment sweep's two consumer actions (docs/contracts/enrichment-sweep.md).
+SWEEP_ACTIONS: tuple[str, ...] = ("enrichment-sweep", "enrichment-sweep-results")
+# Everything EIE can serve. advertised_actions() decides what a given
+# deployment actually advertises to Gate.
 ADVERTISED_ACTIONS: tuple[str, ...] = (
     "converge",
     "graph-inference-result",
     "enrich",
     "enrich-and-sync",
+    *SWEEP_ACTIONS,
 )
+
+
+def advertised_actions(settings: Settings) -> tuple[str, ...]:
+    """What this deployment advertises to Gate.
+
+    The sweep actions are advertised only while the sweep is enabled. Gate
+    refuses a registration that names any action it has no canonical owner
+    for (GATE-OWN-01), and refuses it whole, converge included. So a
+    deployment must not advertise the sweep before its Gate owns those
+    actions; with the sweep off (the default) the registration is exactly the
+    one Gate already accepts.
+    """
+    if settings.l9_enrichment_sweep_enabled:
+        return ADVERTISED_ACTIONS
+    return tuple(a for a in ADVERTISED_ACTIONS if a not in SWEEP_ACTIONS)
+
+
 # Cluster-internal service address, reached over the container network rather
 # than the public internet, and Gate's registration schema accepts both schemes
 # for exactly that reason. A deployment terminating TLS between nodes sets
@@ -249,7 +272,7 @@ def build_node_registration(settings: Settings) -> NodeRegistration:
     return NodeRegistration(
         node_name=NODE_NAME,
         internal_url=internal_url,
-        supported_actions=ADVERTISED_ACTIONS,
+        supported_actions=advertised_actions(settings),
         health_endpoint=HEALTH_ENDPOINT,
         version=NODE_VERSION,
         node_type=NODE_TYPE,
@@ -348,6 +371,8 @@ RUNTIME_ALLOWED_ACTIONS: tuple[str, ...] = (
     "enrich",
     "enrich-and-sync",
     "enrichbatch",
+    "enrichment-sweep",
+    "enrichment-sweep-results",
     "graph-inference-result",
     "schema-proposal",
     "writeback",
@@ -450,14 +475,22 @@ def _fallback_loop_store():
     return _InMemory()
 
 
+_runtime_config = _build_runtime_config()
 app = create_node_app(
     service_name="enrichment-engine",
     version="2.3.0",
     lifecycle_hook=EnrichmentLifecycle(),
-    config=_build_runtime_config(),
+    config=_runtime_config,
     auto_register_with_gate=False,
 )
 
+# C-21: the SDK owns /v1/execute; this only refuses non-Gate packets in front of
+# it. Installed before the rate limiter so a refused packet is still counted.
+install_gate_only_ingress(
+    app,
+    config=_runtime_config,
+    gate_signing_key_ids=get_settings().l9_gate_signing_key_ids,
+)
 app.add_middleware(RateLimitMiddleware, requests_per_minute=120)
 setup_telemetry(app)
 

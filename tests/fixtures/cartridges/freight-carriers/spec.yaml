@@ -1,0 +1,100 @@
+name: freight-carriers
+version: "0.1.0"
+description: >
+  TEST-ONLY cartridge for tests/contracts/test_cross_cartridge_runtime_contract.py.
+  Shares no entity, field, unit or rule with domains/plasticos. Not a tenant, not
+  under `domains/`, never published, no CEG sync endpoint. Do not add an industry
+  branch to shared code to make it pass.
+
+ontology:
+  nodes:
+  # Two nodes on purpose: a spec with several nodes has no implicit owner, so
+  # a converge request against this cartridge must name `node_label`.
+  - label: Carrier
+    description: Motor carrier operating a fleet of power units
+    properties:
+    - {name: carrier_id, type: string, required: true}
+    - {name: legal_name, type: string, required: true}
+    # Units: vehicle counts, statute miles, fraction 0-1.
+    - {name: power_units, type: int}
+    - {name: avg_haul_miles, type: float}
+    - {name: on_time_pct, type: float}
+    - {name: hazmat_endorsed, type: bool}
+    - name: safety_rating
+      type: enum
+      values: [satisfactory, conditional, unsatisfactory, unrated]
+    - {name: fleet_class, type: string}
+    - {name: haul_profile, type: string}
+    - {name: hazmat_qualified, type: string}
+    - {name: service_tier, type: string}
+    enrichment_hints:
+      objective_template: "Enrich motor carrier fleet and service profile"
+      priority_fields:
+      - power_units
+      - on_time_pct
+      - hazmat_endorsed
+      - safety_rating
+      - avg_haul_miles
+      min_confidence: 0.7
+  - label: Lane
+    description: Origin-destination freight lane
+    properties:
+    - {name: lane_id, type: string, required: true}
+    - {name: distance_miles, type: float}
+    - {name: transit_hours, type: float}
+    enrichment_hints:
+      objective_template: "Enrich freight lane distance and transit profile"
+      priority_fields:
+      - distance_miles
+      - transit_hours
+      min_confidence: 0.6
+
+inference_rules:
+- rule_id: fleet-class-enterprise
+  conditions:
+  - {field: power_units, operator: GTE, value: 500}
+  outputs:
+  - {field: fleet_class, value_expr: "enterprise", derivation_type: classification}
+  confidence: 0.95
+  priority: 20
+  rule_or_model_version: freight-carriers-inference-0.1.0
+
+- rule_id: fleet-class-regional
+  conditions:
+  - {field: power_units, operator: GTE, value: 50}
+  - {field: power_units, operator: LT, value: 500}
+  outputs:
+  - {field: fleet_class, value_expr: "regional", derivation_type: classification}
+  confidence: 0.9
+  priority: 15
+  rule_or_model_version: freight-carriers-inference-0.1.0
+
+- rule_id: haul-profile-long
+  conditions:
+  - {field: avg_haul_miles, operator: GT, value: 450}
+  outputs:
+  - {field: haul_profile, value_expr: "long_haul", derivation_type: classification}
+  confidence: 0.88
+  priority: 12
+  rule_or_model_version: freight-carriers-inference-0.1.0
+
+- rule_id: hazmat-qualified
+  conditions:
+  - {field: hazmat_endorsed, operator: ISTRUE}
+  - {field: safety_rating, operator: NOTIN, value: [conditional, unsatisfactory, unrated]}
+  outputs:
+  - {field: hazmat_qualified, value_expr: "qualified", derivation_type: classification}
+  confidence: 0.86
+  priority: 10
+  rule_or_model_version: freight-carriers-inference-0.1.0
+
+# Second-level rule: fires only on a derived field, so the cascade is exercised.
+- rule_id: service-tier-preferred
+  conditions:
+  - {field: fleet_class, operator: EQUALS, value: enterprise}
+  - {field: on_time_pct, operator: GTE, value: 0.95}
+  outputs:
+  - {field: service_tier, value_expr: "preferred", derivation_type: classification}
+  confidence: 0.8
+  priority: 5
+  rule_or_model_version: freight-carriers-inference-0.1.0

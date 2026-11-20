@@ -39,14 +39,15 @@
 | C-16 (Python 3.12+) | INV-11 | COVERED |
 | C-18 (frozen ruff ignores) | INV-17 | GAP |
 | C-20 (L9_META header) | INV-10 | PARTIAL |
-| C-21 (SDK owns `/v1/execute`) | INV-1 | GAP |
+| C-21 (SDK owns `/v1/execute`) | INV-1 | PARTIAL |
 
 ---
 
 ## Part A — Architectural Invariants
 
 ### INV-1: SDK Transport Ingress Governance
-**Severity**: CRITICAL | **Enforcement**: GAP — human review + static scans
+**Severity**: CRITICAL | **Enforcement**: PARTIAL — C-21 by test, C-13 lockstep by human review
+**C-21 enforcement**: `tests/unit/test_gate_ingress.py` (the live app's one `/v1/execute` route is the SDK's; a packet that is not Gate-authored, not Gate-resolved, not from Gate, for another node, or outside the GATE-KEY-01 key binding gets 403 before any handler) and `tests/architecture/test_no_bespoke_gate_transport.py` (no local route or transport). Residual: the key binding is off until `L9_GATE_SIGNING_KEY_IDS` is deployed (staging/prod start without it and log `gate_signing_key_binding_unset` at error level), no test drives a real Gate signature through the boundary, and C-13 lockstep has no mechanical check.
 **Rule**: Production transport ingress is owned by the SDK runtime in `app/main.py`. `/v1/execute` must not be implemented or re-routed through deprecated local chassis dispatch artifacts. The active transport/runtime bundle is:
 - `app/main.py`
 - `app/api/v1/chassis_endpoint.py`
@@ -54,6 +55,7 @@
 - `app/engines/orchestration_layer.py`
 - `app/engines/handlers.py`
 - `app/engines/graph_sync_client.py`
+- `app/middleware/gate_ingress.py`
 
 ### INV-2: API / Engine Import Boundary
 **Severity**: CRITICAL | **Enforcement**: COVERED
@@ -79,9 +81,10 @@
 **Severity**: CRITICAL | **Enforcement**: PARTIAL
 **Rule**: All dynamic Cypher labels must use `sanitize_label()`. All values must be parameterized.
 
-### INV-8: Gate-Then-Score Architecture
+### INV-8: No EIE-Owned Match Gates or Scoring (CEG Owns Gate-Then-Score)
 **Severity**: CRITICAL | **Enforcement**: PARTIAL
-**Rule**: Gate compilation must precede scoring; these stages must not be merged or reversed.
+**Rule**: Gate-then-score (gate compilation precedes scoring) is Cognitive.Engine.Graphs' matching architecture, not an EIE stage. EIE owns no match gates, ranking rules, or scoring dimensions (ADR-010). A domain spec EIE loads may carry only `gates: []` and `scoring: {dimensions: []}`; `app/engines/domain_spec_schema.py` `_reject_ceg()` refuses any CEG-owned key, and `domains/plasticos/spec.yaml` declares the same split.
+**Correction (2026-11-14)**: this id previously stated gate-then-score as an EIE invariant. The id is kept stable; the rule above supersedes that wording.
 
 ### INV-9: Coverage Threshold >= 71%
 **Severity**: HIGH | **Enforcement**: COVERED
@@ -154,5 +157,5 @@ Any PR that attempts to reintroduce them into production dispatch violates INV-1
 | Status | Count | Invariants |
 |---|---|---|
 | COVERED | 4 | INV-2, INV-9, INV-11, INV-19 |
-| PARTIAL | 11 | INV-4, INV-6, INV-7, INV-8, INV-10, INV-12, INV-13, INV-14, INV-15, INV-18, INV-20 |
-| GAP | 5 | INV-1, INV-3, INV-5, INV-16, INV-17 |
+| PARTIAL | 12 | INV-1, INV-4, INV-6, INV-7, INV-8, INV-10, INV-12, INV-13, INV-14, INV-15, INV-18, INV-20 |
+| GAP | 4 | INV-3, INV-5, INV-16, INV-17 |

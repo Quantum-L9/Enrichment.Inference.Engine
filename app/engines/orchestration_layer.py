@@ -23,6 +23,11 @@ from app.engines.handlers import (
     handle_writeback,
     init_handlers,
 )
+from app.engines.sweep_handlers import (
+    handle_enrichment_sweep,
+    handle_enrichment_sweep_results,
+    init_sweep,
+)
 
 # PREVIEW-01: `simulate` is not registered. app.engines.handlers.handle_simulate
 # is a demo/test driver over app/services/simulation_bridge.py (synthetic
@@ -37,6 +42,9 @@ def register(kb, idem_store=None, domain_reader=None) -> None:
     settings = get_settings()
 
     init_handlers(kb=kb, idem=idem_store, domain_reader=domain_reader)
+    # The sweep reads the same cartridge reader converge resolves against, so
+    # the revision a sweep pins is the one converge checks the pin with.
+    init_sweep(reader=domain_reader)
 
     register_handler("enrich", handle_enrich)
     register_handler("enrichbatch", handle_enrichbatch)
@@ -44,6 +52,8 @@ def register(kb, idem_store=None, domain_reader=None) -> None:
     register_handler("discover", handle_discover)
     register_handler("writeback", handle_writeback)
     register_handler("enrich-and-sync", _make_enrich_and_sync_handler(kb, idem_store))
+    register_handler("enrichment-sweep", handle_enrichment_sweep)
+    register_handler("enrichment-sweep-results", handle_enrichment_sweep_results)
 
     logger.info(
         "orchestration.registered",
@@ -54,6 +64,8 @@ def register(kb, idem_store=None, domain_reader=None) -> None:
             "discover",
             "writeback",
             "enrich-and-sync",
+            "enrichment-sweep",
+            "enrichment-sweep-results",
         ],
         gate_url=settings.gate_url,
     )

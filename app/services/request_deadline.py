@@ -21,7 +21,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass
 
 # Odoo caller budget is 30 s. EIE keeps 25 s so Gate hop + error propagation fit.
@@ -141,6 +141,18 @@ def deadline_scope(deadline: Deadline) -> Iterator[Deadline]:
         yield deadline
     finally:
         _deadline.reset(token)
+
+
+def detached_context() -> Context:
+    """A copy of the current context with no request deadline installed.
+
+    For work that must outlive the request that scheduled it (a detached graph
+    sync): a task created in this context is bounded by its own timeouts, never
+    by what is left of a caller's budget.
+    """
+    ctx = copy_context()
+    ctx.run(_deadline.set, None)
+    return ctx
 
 
 def provider_attempt_timeout(fallback_seconds: float) -> float | None:

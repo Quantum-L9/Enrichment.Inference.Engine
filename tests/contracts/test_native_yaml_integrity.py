@@ -23,14 +23,18 @@ import pytest
 import yaml
 
 from app.engines.domain_yaml_reader import DomainPublicationError, DomainYamlReader
+from tests.contracts.ceg_revision import CEG_REVISION, CEG_SPECIMEN
 
 pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[2]
-CEG_REVISION = "e9e6ceb669d37bd75dc9bded206105b5875a9c60"
 GOOD = (ROOT / "domains/plasticos/spec.yaml").read_bytes()
+# The specimen's own version line, whatever revision it is at: the anchor must
+# not go stale each time the cartridge version is bumped.
+VERSION_LINE = next(line for line in GOOD.splitlines() if line.startswith(b"version: "))
+SPEC_VERSION = VERSION_LINE.split(b'"')[1].decode()
 DUPLICATES = {
     "name": GOOD.replace(b"name: plasticos", b"name: other\nname: plasticos", 1),
-    "version": GOOD.replace(b'version: "0.4.0"', b'version: "9.0.0"\nversion: "0.4.0"', 1),
+    "version": GOOD.replace(VERSION_LINE, b'version: "9.0.0"\n' + VERSION_LINE, 1),
     "sync": GOOD.replace(b"sync:\n", b"sync: {}\nsync:\n", 1),
     "properties": GOOD.replace(b"    properties:\n", b"    properties: []\n    properties:\n", 1),
     "type": GOOD.replace(
@@ -60,7 +64,7 @@ def _publish(root: Path, content: bytes) -> Path:
     receipt = {
         "schema": "eie.domain-approval/v1",
         "tenant_id": "plasticos",
-        "version": "0.4.0",
+        "version": SPEC_VERSION,
         "sha256": digest,
         "reviewed_input_sha256": digest,
         "reviewed_by": "test-only-reviewer",
@@ -93,7 +97,7 @@ def test_reader_refuses_duplicate_without_cache_or_legacy_fallback(
     else:
         (tmp_path / "plasticos.yaml").write_bytes(GOOD)
     reader = DomainYamlReader(tmp_path)
-    assert reader.load("plasticos").version == "0.4.0"
+    assert reader.load("plasticos").version == SPEC_VERSION
     if published:
         # Hash and receipt correctly bind the ambiguous bytes: hashing is not parsing.
         _publish(tmp_path, content)
@@ -240,7 +244,7 @@ def ceg_native_subject() -> tuple[Path, Path, bytes]:
         timeout=10,
     )
     assert revision.stdout.strip() == CEG_REVISION
-    for relative in ("domains/plasticos/spec.yaml", "tools/validate_domain.py"):
+    for relative in (CEG_SPECIMEN, "tools/validate_domain.py"):
         original = subprocess.run(
             ["git", "-C", str(repo), "show", f"{CEG_REVISION}:{relative}"],
             capture_output=True,
@@ -248,7 +252,7 @@ def ceg_native_subject() -> tuple[Path, Path, bytes]:
             timeout=10,
         ).stdout
         assert (repo / relative).read_bytes() == original
-    return repo, python, (repo / "domains/plasticos/spec.yaml").read_bytes()
+    return repo, python, (repo / CEG_SPECIMEN).read_bytes()
 
 
 @pytest.mark.parametrize(
@@ -271,7 +275,10 @@ def test_hosted_native_jobs_provision_pinned_real_ceg_subject(workflow_name, job
     assert len(checkouts) == 1
     checkout = checkouts[0]
     assert checkout["uses"] == "actions/checkout@v7"
-    assert checkout["with"]["ref"] == CEG_REVISION
+    assert checkout["with"]["ref"] == "${{ steps.ceg_pin.outputs.sha }}"
+    pin = next(step for step in steps if step.get("id") == "ceg_pin")
+    assert steps.index(pin) < steps.index(checkout)
+    assert "tests/contracts/ceg_revision.py" in pin["run"]
     assert checkout["with"]["path"] == ".ci-subjects/ceg"
     assert checkout["with"]["persist-credentials"] is False
     preparation = next(step for step in steps if step.get("name") == "Prepare native CEG validator")
@@ -281,11 +288,43 @@ def test_hosted_native_jobs_provision_pinned_real_ceg_subject(workflow_name, job
     # hash-verified path (uv sync --locked; uv bootstrapped with --require-hashes).
     assert 'PYTHON="$native_python" bash "$subject/tools/deps/install_locked.sh" runtime' in run
     assert "requirements-runtime.lock" not in run
+    assert 'test "$(git -C "$subject" rev-parse HEAD)" = "$CEG_SUBJECT_SHA"' in run
     assert "L9_CEG_NATIVE_REPO=" in run and "L9_CEG_NATIVE_PYTHON=" in run
     assert "GITHUB_ENV" in run
     assert "validate_domain.py" in run
     assert not preparation.get("continue-on-error", False)
     assert "if" not in checkout and "if" not in preparation
+
+
+def test_ceg_revision_is_the_single_pin() -> None:
+    """Workflows read CEG_REVISION. They do not carry a second copy of it."""
+    assignment = (ROOT / "tests/contracts/ceg_revision.py").read_text(encoding="utf-8")
+    assert assignment.count(f'CEG_REVISION = "{CEG_REVISION}"') == 1
+    allowed = {
+        (ROOT / "tests/contracts/ceg_revision.py").resolve(),
+        (ROOT / "tests/fixtures/ceg/plasticos.spec.yaml").resolve(),
+        (ROOT / "tests/fixtures/ceg/plasticos.spec.provenance.json").resolve(),
+    }
+    retired = (
+        "e9e6ceb669d37bd75dc9bded206105b5875a9c60",
+        "5d06649ed5587463c11b02594ce26b5ef4ad1733",
+    )
+    skip_dirs = {".git", ".venv", "__pycache__"}
+    for path in ROOT.rglob("*"):
+        if not path.is_file() or any(part in skip_dirs for part in path.parts):
+            continue
+        if path.suffix not in {".py", ".yml", ".yaml", ".json", ".md"}:
+            continue
+        if path.resolve() in allowed:
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert CEG_REVISION not in text
+    for path in (ROOT / ".github/workflows").glob("*.yml"):
+        text = path.read_text(encoding="utf-8")
+        assert CEG_REVISION not in text
+        assert all(old not in text for old in retired)
+        if "Quantum-L9/Cognitive.Engine.Graphs" in text:
+            assert "tests/contracts/ceg_revision.py" in text
 
 
 def _compatible_ceg_bytes() -> bytes:

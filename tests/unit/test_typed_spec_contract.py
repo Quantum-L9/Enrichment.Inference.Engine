@@ -240,8 +240,13 @@ async def test_list_of_maps_is_sent_as_a_list_of_maps() -> None:
 @pytest.mark.parametrize(
     ("field", "value", "declared", "actual"),
     [
-        ("processed_polymers", '[{"code": "HDPE"}]', "list<map{code}>", "string"),
-        ("processed_polymers", ["HDPE", "PET"], "map{code}", "string"),
+        (
+            "processed_polymers",
+            '[{"code": "HDPE"}]',
+            "list<map{code,line_id,direction,form}>",
+            "string",
+        ),
+        ("processed_polymers", ["HDPE", "PET"], "map{code,line_id,direction,form}", "string"),
         ("processed_polymers", [{"name": "HDPE"}], "string", "missing"),
         ("min_density", "high", "float", "string"),
         ("capacity_tons_month", True, "float", "bool"),

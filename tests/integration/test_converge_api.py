@@ -250,6 +250,24 @@ def _discovery_bytes(spec: dict) -> bytes:
     return yaml.safe_dump(spec, sort_keys=False, allow_unicode=True).encode("utf-8")
 
 
+def _live_version(bumps: int = 0) -> str:
+    """The live plasticos version, or that version with its minor bumped `bumps` times.
+
+    Discovery revisions are minor bumps over the live cartridge, so the expected
+    versions follow whatever revision is current rather than a pinned literal.
+    A zero bump is the live version unchanged, patch included. A positive bump
+    is the minor increment the publisher emits, with the patch reset to 0.
+    """
+    spec = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "domains/plasticos/spec.yaml").read_bytes()
+    )
+    version = str(spec["version"])
+    if bumps == 0:
+        return version
+    major, minor, _patch = (int(part) for part in version.split("."))
+    return f"{major}.{minor + bumps}.0"
+
+
 def _native_discovery_spec() -> dict:
     """Complete NEW discovery input with the test additions not yet declared."""
     spec = yaml.safe_load(
@@ -815,7 +833,7 @@ async def test_concurrent_native_approvals_preserve_both_audits_without_activati
         assert all(r.reviewed_by == "test-fixture-only" for r in table.rows)
         assert all(
             r.json()["publication_status"] == "awaiting_operator_publication"
-            and r.json()["new_version"] == "0.4.0"
+            and r.json()["new_version"] == _live_version()
             for r in responses
         )
         assert converge_module._domain_specs is registry
@@ -963,7 +981,7 @@ def test_explicit_bound_replay_keeps_batch_fields_associations_and_historical_pa
     second_discovery["ontology"]["nodes"][0]["properties"].append(
         {"name": "capacity_tons_month", "type": "float", "source": "enrichment"}
     )
-    second_discovery["version"] = "0.5.0-discovered"
+    second_discovery["version"] = f"{_live_version()}-discovered"
     second_bytes = _discovery_bytes(second_discovery)
     second_digest = hashlib.sha256(second_bytes).hexdigest()
     rows = [
@@ -994,7 +1012,7 @@ def test_explicit_bound_replay_keeps_batch_fields_associations_and_historical_pa
         "capacity_tons_month",
         "tier",
     }
-    assert replayed["version"] == "0.6.0-discovered"
+    assert replayed["version"] == f"{_live_version(2)}-discovered"
     assert replayed["sync"] == base["sync"]
     assert replayed["semantic_registry"] == base["semantic_registry"]
     assert replayed["inference_rules"] == base["inference_rules"]
@@ -1197,7 +1215,10 @@ async def test_unapplied_approvals_publish_no_revision_so_replay_matches_live(ap
     assert responses[1].json()["detail"] == "Approval decision names an unproposed owner/field pair"
     bodies = [responses[0].json(), responses[2].json()]
     assert [b["approved"] for b in bodies] == [0, 1], "applied counts, not decided counts"
-    assert [b["new_version"] for b in bodies] == ["0.4.0", "0.5.0-discovered"]
+    assert [b["new_version"] for b in bodies] == [
+        _live_version(),
+        f"{_live_version(1)}-discovered",
+    ]
     assert all(b["unapplied"] == [] for b in bodies)
     assert len(table.rows) == 2 and all(
         row.field_name != "not_a_proposed_field" for row in table.rows

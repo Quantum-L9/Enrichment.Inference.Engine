@@ -1,15 +1,15 @@
 # ═══════════════════════════════════════════════════════════════
 # Contract: Unified OpenAPI Specification
 # Source:   app/main.py, app/api/v1/*, app/score/score_api.py, app/models/schemas.py
-# Version:  2.4.1
-# Updated:  2026-11-11
+# Version:  2.5.0
+# Updated:  2026-11-13
 # ═══════════════════════════════════════════════════════════════
 
 openapi: "3.1.0"
 
 info:
   title: L9 ENRICH — Domain Enrichment API
-  version: "2.4.1"
+  version: "2.5.0"
   description: |
     Universal domain-aware entity enrichment. Layer 2 of the L9 three-layer
     intelligence stack. Serves Salesforce Apex callouts, Odoo async_executor,
@@ -242,13 +242,44 @@ components:
           description: Error message if state is 'failed'.
         state:
           type: string
-          enum: [completed, failed, partial]
+          enum: [completed, degraded, failed, partial]
           default: completed
-          description: Enrichment outcome state.
+          description: >-
+            Enrichment outcome state. `degraded` is the converge action's
+            deadline stop (docs/contracts/converge/v1.md).
         convergence_reason:
           type: string
           nullable: true
           description: Why the convergence loop stopped (e.g. budget_exhausted, insufficient_improvement_delta_0.05, max_passes_reached). Null for single-pass enrich.
+        contract_version:
+          type: string
+          enum: [eie.converge.response/v2]
+          description: Present only on a converge response v2 (docs/contracts/converge/response.v2.md). Absent means v1; never null.
+        field_evidence:
+          type: object
+          additionalProperties:
+            type: object
+          description: Response v2 only. One evidence entry per requested field and per field in `fields` (state observed, inferred, external_claim, conflicting or unknown). Absent on v1.
+        proposals:
+          type: array
+          items:
+            type: object
+          description: Response v2 only. Reviewable groupings of evidence entries; always present on v2, possibly empty. Absent on v1.
+        resolution:
+          type: object
+          required: [cartridge_id, cartridge_version, cartridge_sha256, node]
+          properties:
+            cartridge_id:
+              type: string
+            cartridge_version:
+              type: string
+            cartridge_sha256:
+              type: string
+              nullable: true
+            node:
+              type: string
+          additionalProperties: false
+          description: Response v2 revision 1. The cartridge revision and node that actually governed the run, as loaded and pinned (response.v2.md section 10.1). Absent on v1 and on a refusal.
       x-source-file: app/models/schemas.py:68
       additionalProperties: false
 

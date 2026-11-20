@@ -106,11 +106,13 @@ async def test_the_canonical_branch_demands_durability_rather_than_hoping_for_it
     """The guarantee has to be requested at the call site, not left to chance."""
     from app.engines import handlers
     from app.models.schemas import EnrichResponse
+    from app.services.side_effect_coordinator import SideEffectReport
 
     seen: dict = {}
 
     async def _record(*_a, **kwargs):
         seen.update(kwargs)
+        return SideEffectReport(key="k")
 
     with (
         patch.object(handlers, "run_convergence_loop", new_callable=AsyncMock) as loop,

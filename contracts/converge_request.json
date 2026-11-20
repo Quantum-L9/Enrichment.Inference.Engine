@@ -1,5 +1,5 @@
 {
-  "_comment": "Exact shape IB-Odoo_19 plasticos_gate/services/gate_builders.py::build_converge_request emits (ConvergeRequest.to_dict). Validated directly as the canonical app.models.schemas.EnrichRequest by app/engines/handlers.py::handle_converge; the pre-canonical compatibility dialect is retired and fails closed. Enforced by tests/contracts/test_converge_request_fixture.py.",
+  "_comment": "Exact shape IB-Odoo_19 (Staging @ 3ad2328) plasticos_gate/services/gate_builders.py::build_converge_request emits (ConvergeRequest.to_dict), including kb_context, schema (the partner writeback allowlist) and idempotency_key (build_operation_id, first attempt). field_thresholds is optional and omitted when unset. Validated directly as the canonical app.models.schemas.EnrichRequest by app/engines/handlers.py::handle_converge; the pre-canonical compatibility dialect is retired and fails closed. Specified by docs/contracts/converge/v1.md; enforced by tests/contracts/test_converge_request_fixture.py.",
   "entity": {
     "name": "Acme Recycling",
     "city": "Charlotte",
@@ -9,7 +9,19 @@
   "object_type": "plasticos",
   "objective": "Full entity enrichment and inference",
   "max_variations": 5,
-  "consensus_threshold": 0.80,
+  "consensus_threshold": 0.8,
+  "kb_context": "plasticos",
+  "schema": {
+    "city": "string",
+    "email": "string",
+    "name": "string",
+    "phone": "string",
+    "street": "string",
+    "street2": "string",
+    "website": "string",
+    "zip": "string"
+  },
+  "idempotency_key": "odoo:enrichment:plasticos:plasticos.enrichment.run:7",
   "odoo": {
     "model": "plasticos.enrichment.run",
     "record_id": 7,

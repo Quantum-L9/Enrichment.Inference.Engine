@@ -405,7 +405,7 @@ surviving implementation of n-ary inference, so it is staged rather than cut.
 - [x] Suite green at 1451 passed / 4 xfailed, 69.37% coverage
 
 ### Previously Completed
-- [x] HEALTH service — 5 files in `app/health/`
+- [x] HEALTH service — 5 files in `app/health/` — deleted 2026-11-14: dead code (no importer, routes never mounted); record readiness (`health-assess`) is owned by Cognitive.Engine.Graphs
 - [x] SCORE service — 6 files in `app/score/`
 - [x] CI/CD pipelines — 22 workflow files
 - [x] CRM field scanner — `crm_field_scanner.py`
