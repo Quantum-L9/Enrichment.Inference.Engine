@@ -27,12 +27,11 @@ This file provides governance-layer context that supplements it.
 
 1. **GitHub App** — [coderabbit.ai](https://coderabbit.ai) → install the CodeRabbit app on your org or this repository.
 2. **Dashboard** — Grant repo access, pick plan, enable PR reviews (automatic reviews are driven by `.coderabbit.yaml`).
-3. **Tune behavior** — Edit [`.coderabbit.yaml`](.coderabbit.yaml) (`reviews.profile`, `auto_review`, `path_filters`, `chat`). Schema: [CodeRabbit configuration reference](https://docs.coderabbit.ai/reference/configuration).
+3. **Tune behavior** — [`.coderabbit.yaml`](../.coderabbit.yaml) sets `inheritance: true`, so the Quantum-L9 organization review policy applies to every value the file leaves out. The file holds only EIE-specific settings (`auto_review` title keywords, labels and ignored users, `path_filters`, review instructions, `chat`). Schema: [CodeRabbit configuration reference](https://docs.coderabbit.ai/reference/configuration); merge rules: [configuration inheritance](https://docs.coderabbit.ai/configuration/configuration-inheritance).
 
 ## Review Behavior
 
-- **Auto-approve**: PRs where all phases of AI_AGENT_REVIEW_CHECKLIST.md pass with 0 CRITICAL, 0 HIGH violations.
-- **Request changes**: Any CRITICAL violation (SEC-001, ARCH-001, C-10).
+- **Approval and request changes**: set by the organization policy, not by this repository. It does not auto-approve. Report a CRITICAL violation (SEC-001, ARCH-001, C-10) as a review comment in the structured template below.
 - **Escalation**: Tag `@cryptoxdog` on any C-01 chassis violation or credential exposure.
 
 ## Output Format
@@ -42,4 +41,4 @@ Do NOT emit free-form prose for contract violations — always use the structure
 
 ## Paths to Skip
 
-Skip review on: `docs/`, `readme/`, `reports/`, `*.json` (generated), `htmlcov/`, `coverage.xml`.
+`.coderabbit.yaml` excludes `readme/`, `reports/`, `htmlcov/` and `.cursor/`. The organization policy adds dependencies, build output, caches, lockfiles and archives. `docs/` and tests are reviewed.
