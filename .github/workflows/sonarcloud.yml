@@ -13,6 +13,11 @@
 # owner prerequisite, not established by the public component's visibility.
 # Fork pull requests skip this entire secret-bearing job. A skipped job is
 # not a quality-gate PASS and provides no analysis proof.
+#
+# This job does not run the test catalog. The pull-request selection is
+# `make test`. The catalog, peers, and e2e are the deep plan in ci.yml.
+# A missing SONAR_TOKEN fails this scan. It does not decide whether the
+# catalog ran.
 
 name: SonarCloud
 
@@ -33,11 +38,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    env:
-      PYTHON_VERSION: ${{ vars.PYTHON_VERSION || '3.12' }}
-      TEST_DIR: ${{ vars.TEST_DIR || 'tests/' }}
-      COVERAGE_THRESHOLD: ${{ vars.COVERAGE_THRESHOLD || '71' }}
-
     steps:
       - name: Require SonarCloud analysis token
         shell: bash
@@ -54,40 +54,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: uv.lock
-
-      - name: Install dependencies
-        env:
-          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
-        run: |
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          bash tools/deps/install_locked.sh full
-
-      - name: Tests with coverage (Cobertura XML)
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: postgresql://${{ vars.POSTGRES_USER || 'test_user' }}:test_password@localhost:5432/${{ vars.POSTGRES_DB || 'test_db' }}
-          REDIS_URL: redis://localhost:6379/0
-          TESTING: "true"
-        run: |
-          mapfile -t QUARANTINE_DESELECTS < <(python tools/pytest_quarantine_deselects.py)
-          echo "Deselecting ${#QUARANTINE_DESELECTS[@]} quarantined tests from baseline ledger"
-          pytest "${{ env.TEST_DIR }}" \
-            -n auto \
-            "${QUARANTINE_DESELECTS[@]}" \
-            --cov=app \
-            --cov=engine \
-            --cov-report=xml \
-            --cov-report=term-missing \
-            --cov-fail-under=${{ env.COVERAGE_THRESHOLD }} \
-            --timeout=300 \
-            -q
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1

@@ -10,10 +10,13 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # DORA META: Refactoring Safety Gate (BLOCKING)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PURPOSE: HARD GATE for refactoring PRs — zero false positives allowed
-# DEPENDENCIES: Ruff, Mypy, Pytest
+# PURPOSE: HARD GATE for refactoring PRs — ruff and mypy block
+# DEPENDENCIES: Ruff, Mypy
 # DEPLOYMENT: Runs on refactor/* branches only
-# DORA METRICS: Zero regressions | Test coverage maintained
+# DORA METRICS: Lint and types block on this gate
+# The full catalog is not this pull-request or push job. ci.yml's deep plan
+# owns it (`make test-deep`, step "Run the full catalog once"). A missing
+# database, peer, or Gate checkout is NOT_RUN or a failure inside that plan.
 # SIBLING PARITY: Cognitive.Engine.Graphs/refactoring-validation.yml
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -77,18 +80,9 @@ jobs:
         run: |
           mypy ${{ env.SOURCE_DIR }}/ --show-error-codes --pretty --ignore-missing-imports
 
-      - name: Run Full Test Suite (BLOCKING)
-        run: |
-          PYTHONPATH=. pytest -n auto \
-            --cov=${{ env.SOURCE_DIR }} \
-            --cov-report=term-missing \
-            --cov-fail-under=71 \
-            -v
-
       - name: Refactoring Gate Passed
         run: |
-          echo "✅ All refactoring safety checks passed"
-          echo "Safe to merge"
+          echo "Ruff and mypy passed"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # END OF REFACTORING VALIDATION
