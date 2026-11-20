@@ -245,10 +245,40 @@ jobs:
           echo "L9_CEG_NATIVE_REPO=$subject" >> "$GITHUB_ENV"
           echo "L9_CEG_NATIVE_PYTHON=$native_python" >> "$GITHUB_ENV"
       - name: Run PR-fast tests
-        # Codecov upload deferred. This job no longer builds a full-catalog
-        # coverage.xml, and Codecov authentication is out of scope. The full
-        # catalog runs only from the deep plan (`make test-deep`).
-        run: make test
+        # Codecov upload deferred. The full catalog runs only from the deep
+        # plan (`make test-deep`). This one run also records PR-fast coverage
+        # of app/ for the SonarCloud job below (Repo.mk PR_FAST_COVERAGE_XML);
+        # no second test run is made for Sonar.
+        run: make test PR_FAST_COVERAGE_XML=coverage.xml
+      - name: Require the PR-fast coverage report
+        run: |
+          set -euo pipefail
+          if [ ! -s coverage.xml ]; then
+            echo "::error::make test wrote no coverage.xml; SonarCloud would read 0% coverage" >&2
+            exit 1
+          fi
+      - name: Upload PR-fast coverage report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: coverage-pr-fast
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 3
+
+  # SonarCloud analysis. It reads the coverage the Test Suite job above
+  # measured, so it runs after it in this workflow (it was a separate
+  # workflow with no test run and imported 0% coverage). It stays outside
+  # ci-gate's needs: Sonar is not a required check. Same events as before:
+  # push to main and same-repository pull requests; not workflow_dispatch.
+  sonar:
+    name: SonarCloud
+    needs: test
+    if: ${{ github.event_name != 'workflow_dispatch' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/sonarcloud.yml
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   # Deep plan only. Not in ci-gate's needs and not a pull_request or push job.
   # One workflow_dispatch with mode=apply runs this job: full catalog once,
