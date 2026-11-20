@@ -33,6 +33,15 @@ description = "Generic API Key"
 regex = '''(?i)(api[_-]?key|apikey|api[_-]?secret)\s*[=:]\s*['"][a-zA-Z0-9_\-]{20,}['"]'''
 tags = ["api", "generic"]
 
+  # Named fixture: a made-up key used only as a client-cache dictionary key in
+  # one unit test. It is the single finding the former `tests/` path allowlist
+  # was hiding (measured over every ref with Gitleaks 8.24.3).
+  [rules.allowlist]
+  description = "Fake API key literal in the Odoo cross-repo contract test"
+  paths = [
+      '''^tests/unit/test_odoo_cross_repo_contract\.py$''',
+  ]
+
 [[rules]]
 id = "aws-access-key"
 description = "AWS Access Key ID"
@@ -50,6 +59,17 @@ id = "postgres-connection-string"
 description = "PostgreSQL Connection String with Password"
 regex = '''postgres(?:ql)?://[^:]+:[^@]+@[^/]+/[^\s'"]+'''
 tags = ["database", "postgres"]
+
+  # A URL whose host is the literal text `host:port` is a format template in
+  # documentation, not a reachable database. This is the single finding the
+  # former `*.md` path allowlist was hiding (CONFIG_ENV_CONTRACT.md on branch
+  # feat/enrich-gap-fixes-docs-pack; workflows scan every fetched ref).
+  [rules.allowlist]
+  description = "Connection-string format template with the literal host `host:port`"
+  regexTarget = "match"
+  regexes = [
+      '''^postgres(?:ql)?://[^:]+:[^@]+@host:port/''',
+  ]
 
 [[rules]]
 id = "redis-connection-string"
@@ -76,22 +96,18 @@ regex = '''SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}'''
 tags = ["api", "sendgrid"]
 
 # ── Allowlist ─────────────────────────────────────────────────────────────
+#
+# No whole-directory or whole-extension path is exempt from scanning. The
+# former global `paths` list (tests/, docs/, readme/, kb/, .env.example,
+# .env.template, docker-compose.*.yml, requirements*.txt, *.md, *.sarif,
+# *.json) hid two findings in total across every ref the workflows scan. Each
+# is now a named exemption on its own rule above. A new false positive gets
+# the same treatment: an exact file, or a pattern that cannot match a real
+# credential, under the rule that fires, with a one-line reason.
+# Contract: tests/ci/test_gitleaks_config_contract.py
 
 [allowlist]
-description = "Global allowlist"
-paths = [
-    '''tests/''',
-    '''docs/''',
-    '''readme/''',
-    '''kb/''',
-    '''\.env\.example''',
-    '''\.env\.template''',
-    '''docker-compose\..*\.yml''',
-    '''requirements.*\.txt''',
-    '''.*\.md$''',
-    '''.*\.sarif$''',
-    '''.*\.json$''',
-]
+description = "Matches that name themselves as placeholders"
 regexTarget = "match"
 regexes = [
     '''(?i)example|placeholder|dummy|test|fake|mock|sample''',
