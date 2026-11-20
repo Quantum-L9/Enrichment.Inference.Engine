@@ -20,7 +20,10 @@ from .base import (
     CRMWritePermit,
     CRMWriteState,
     WriteResult,
+    register_crm_client,
 )
+
+PROVIDER_KEY = "odoo"
 
 logger = structlog.get_logger("odoo_client")
 
@@ -312,3 +315,7 @@ class OdooClient(CRMClientBase):
             args,
             kwargs,
         )
+
+
+# Self-registration: importing this module makes the provider resolvable by key.
+register_crm_client(PROVIDER_KEY, OdooClient)

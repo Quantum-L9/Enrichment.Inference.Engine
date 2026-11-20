@@ -21,7 +21,12 @@ from app.services.crm.base import (
     CRMWriteReceipt,
     CRMWriteState,
     WriteResult,
+    register_crm_client,
+    registered_crm_providers,
+    resolve_crm_client,
+    unregister_crm_client,
 )
+from app.services.crm.field_mapper import FieldMapper
 from app.services.crm.writeback import (
     CRMActivationLevel,
     CRMJournalClaim,
@@ -165,7 +170,7 @@ crm: hubspot
 version: "2.0"
 objects:
   company:
-    hubspot_object: companies
+    object: companies
     mappings:
       company_id: hs_object_id
       company_name: name
@@ -199,12 +204,13 @@ def _approval(
     fields: dict[str, Any],
     *,
     record_id: str = "42",
+    object_type: str = "companies",
 ) -> TrustedWritebackApproval:
     reference = CRMRecordRef(
         tenant_id=connector.tenant_id,
         connector_id=connector.connector_id,
         crm_type=connector.crm_type,
-        object_type="companies",
+        object_type=object_type,
         record_id=record_id,
         provider_account_id=connector.provider_account_id,
     )
@@ -215,7 +221,7 @@ def _approval(
         tenant_id=connector.tenant_id,
         connector_id=connector.connector_id,
         provider_account_id=connector.provider_account_id,
-        object_type="companies",
+        object_type=object_type,
         record_id=record_id,
         operation_id=operation_id,
         payload_hash=payload_hash,
@@ -590,3 +596,245 @@ def test_mcp_writeback_refuses_without_dispatch_and_preserves_arguments() -> Non
     assert response["isError"] is True
     assert calls == []
     assert arguments["tenant"] == "forged-tenant"
+
+
+# ── Provider neutrality ─────────────────────────────────────────
+#
+# The orchestrator, mapper and contracts never name a provider. Adding a CRM is
+# one adapter module that registers itself plus one mapping file; these tests
+# drive such a fourth provider through the public registry with no other edit.
+
+FOURTH_PROVIDER = "fourthcrm"
+
+FOURTH_PROVIDER_MAPPING = """
+crm: fourthcrm
+version: "1.0"
+protected_fields:
+  - external_ref
+objects:
+  company:
+    object: organisations
+    mappings:
+      company_name: name
+      company_industry: industry
+      company_external_ref: external_ref
+""".strip()
+
+
+@pytest.fixture
+def fourth_provider() -> Any:
+    key = register_crm_client(FOURTH_PROVIDER, FakeProvider)
+    yield key
+    unregister_crm_client(key)
+
+
+@pytest.fixture
+def fourth_connector(tmp_path, fourth_provider: str) -> TrustedCRMConnector:
+    path = tmp_path / "fourthcrm.yaml"
+    path.write_text(FOURTH_PROVIDER_MAPPING, encoding="utf-8")
+    return TrustedCRMConnector(
+        tenant_id="tenant-b",
+        connector_id="fourth-sandbox-b",
+        provider_account_id="account-b",
+        crm_type=fourth_provider,
+        credentials={"token": "test-token"},
+        mapping_path=str(path),
+        allowed_objects=frozenset({"organisations"}),
+        # The owner allowlists external_ref, but the mapping file protects it.
+        allowed_fields={"organisations": frozenset({"name", "industry", "external_ref"})},
+        activation=CRMActivationLevel.LOCAL_TEST,
+    )
+
+
+def test_fourth_provider_writes_through_the_registry_with_no_other_edit(
+    fourth_connector: TrustedCRMConnector,
+) -> None:
+    journal = MemoryJournal()
+    orchestrator = WriteBackOrchestrator(fourth_connector, journal)  # no factory: registry
+
+    receipt = orchestrator.write_update_by_id(
+        domain="company",
+        record_id="42",
+        canonical={
+            "company_name": "Acme",
+            "company_industry": "Recycling",
+            "company_external_ref": "ext-1",
+        },
+        approval=_approval(
+            fourth_connector,
+            "op-fourth",
+            {"name": "Acme", "industry": "Recycling"},
+            object_type="organisations",
+        ),
+        operation_id="op-fourth",
+        correlation_id="correlation-fourth",
+    )
+
+    assert FOURTH_PROVIDER in registered_crm_providers()
+    assert resolve_crm_client(FOURTH_PROVIDER) is FakeProvider
+    assert receipt.status == CRMWriteState.CONFIRMED
+    assert receipt.provider_ack == "fake:update:confirmed"
+    assert receipt.applied_fields == ("industry", "name")
+    # protected_fields in the mapping file wins over the connector allowlist.
+    assert receipt.skipped_fields == ("company_external_ref",)
+    assert receipt.record_ref is not None
+    assert receipt.record_ref.crm_type == FOURTH_PROVIDER
+    assert journal.steps == ["prepare", "claim", "dispatched", "finalize"]
+
+
+def test_provider_key_spelling_is_normalized_end_to_end(
+    fourth_connector: TrustedCRMConnector,
+) -> None:
+    connector = replace(fourth_connector, crm_type=" FourthCRM ")
+    journal = MemoryJournal()
+    orchestrator = WriteBackOrchestrator(connector, journal)
+
+    receipt = orchestrator.write_update_by_id(
+        domain="company",
+        record_id="42",
+        canonical={"company_name": "Acme"},
+        approval=_approval(connector, "op-spelling", {"name": "Acme"}, object_type="organisations"),
+        operation_id="op-spelling",
+        correlation_id="correlation-spelling",
+    )
+
+    assert receipt.status == CRMWriteState.CONFIRMED
+
+
+def _connector_for(tmp_path, provider: str, base: TrustedCRMConnector) -> TrustedCRMConnector:
+    """Derive a connector for ``provider`` from the fourth-provider fixture shape."""
+    path = tmp_path / f"{provider}.yaml"
+    path.write_text(
+        FOURTH_PROVIDER_MAPPING.replace("crm: fourthcrm", f"crm: {provider}"),
+        encoding="utf-8",
+    )
+    return replace(base, crm_type=provider, mapping_path=str(path))
+
+
+def test_mapping_provider_must_match_the_trusted_connector(
+    fourth_connector: TrustedCRMConnector,
+) -> None:
+    connector = replace(fourth_connector, crm_type="nobodycrm")
+
+    with pytest.raises(ValueError, match="does not match trusted connector"):
+        WriteBackOrchestrator(connector, MemoryJournal())
+
+
+def test_unregistered_provider_is_rejected_before_journal_or_provider_io(
+    tmp_path, fourth_connector: TrustedCRMConnector
+) -> None:
+    connector = _connector_for(tmp_path, "nobodycrm", fourth_connector)
+    journal = MemoryJournal()
+    orchestrator = WriteBackOrchestrator(connector, journal)
+
+    receipt = orchestrator.write_update_by_id(
+        domain="company",
+        record_id="42",
+        canonical={"company_name": "Acme"},
+        approval=_approval(connector, "op-nobody", {"name": "Acme"}, object_type="organisations"),
+        operation_id="op-nobody",
+        correlation_id="correlation-nobody",
+    )
+
+    assert receipt.status == CRMWriteState.REJECTED
+    assert receipt.error_code == "provider_not_registered"
+    assert journal.steps == []
+
+
+def test_orchestrator_has_no_provider_name_gate(
+    tmp_path, fourth_connector: TrustedCRMConnector
+) -> None:
+    """Any registered provider may write once its connector is activated.
+
+    The former guard enabled exactly one hard-coded provider; a connector for
+    another shipped provider must now reach the adapter with the same checks.
+    """
+    journal = MemoryJournal()
+    other_connector = _connector_for(tmp_path, CRMType.ODOO, fourth_connector)
+    provider = FakeProvider(CRMCredentials(CRMType.ODOO, {}))
+    orchestrator = WriteBackOrchestrator(
+        other_connector, journal, client_factory=lambda credentials: provider
+    )
+
+    receipt = orchestrator.write_update_by_id(
+        domain="company",
+        record_id="42",
+        canonical={"company_name": "Acme"},
+        approval=_approval(
+            other_connector, "op-any", {"name": "Acme"}, object_type="organisations"
+        ),
+        operation_id="op-any",
+        correlation_id="correlation-any",
+    )
+
+    assert receipt.status == CRMWriteState.CONFIRMED
+    assert provider.update_calls[0][0:3] == ("organisations", "42", {"name": "Acme"})
+
+
+def test_disabled_activation_refuses_before_any_work(
+    fourth_connector: TrustedCRMConnector,
+) -> None:
+    connector = replace(fourth_connector, activation=CRMActivationLevel.DISABLED)
+    journal = MemoryJournal()
+    orchestrator = WriteBackOrchestrator(connector, journal)
+
+    receipt = orchestrator.write_update_by_id(
+        domain="company",
+        record_id="42",
+        canonical={"company_name": "Acme"},
+        approval=_approval(connector, "op-off", {"name": "Acme"}, object_type="organisations"),
+        operation_id="op-off",
+        correlation_id="correlation-off",
+    )
+
+    assert receipt.status == CRMWriteState.DISABLED
+    assert receipt.error_code == "connector_writeback_disabled"
+    assert journal.steps == []
+
+
+def test_registry_refuses_a_conflicting_registration(fourth_provider: str) -> None:
+    class AnotherProvider(FakeProvider):
+        pass
+
+    assert register_crm_client(fourth_provider, FakeProvider) == fourth_provider  # same: no-op
+    with pytest.raises(ValueError, match="already registered"):
+        register_crm_client(fourth_provider, AnotherProvider)
+    with pytest.raises(TypeError, match="must subclass CRMClientBase"):
+        register_crm_client("notaclient", object)  # type: ignore[arg-type]
+
+
+def test_shipped_adapters_self_register_on_import() -> None:
+    providers = registered_crm_providers()
+    assert {"odoo", "hubspot", "salesforce"} <= set(providers)
+
+
+def test_legacy_provider_specific_object_key_is_rejected(tmp_path) -> None:
+    path = tmp_path / "legacy.yaml"
+    path.write_text(
+        FOURTH_PROVIDER_MAPPING.replace("    object: organisations", "    fourthcrm_object: orgs"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="provider-specific object key 'fourthcrm_object'"):
+        FieldMapper(path)
+
+
+def test_mapper_requires_the_object_key(tmp_path) -> None:
+    path = tmp_path / "missing.yaml"
+    path.write_text(
+        FOURTH_PROVIDER_MAPPING.replace("    object: organisations\n", ""),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="lacks 'object'"):
+        FieldMapper(path)
+
+
+def test_shipped_mapping_files_load_with_the_neutral_shape() -> None:
+    from pathlib import Path
+
+    for name in ("odoo", "hubspot", "salesforce"):
+        mapper = FieldMapper(Path("config/crm") / f"{name}_mapping.yaml", expected_crm=name)
+        assert mapper.crm_type == name
+        assert mapper.object_for_domain("company")
+        assert mapper.protected_targets, f"{name} mapping declares no protected_fields"

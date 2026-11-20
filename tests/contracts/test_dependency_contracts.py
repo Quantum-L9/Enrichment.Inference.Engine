@@ -18,7 +18,9 @@ EXPECTED_DEPS = {
     "zoominfo": {"env_key": "ZOOMINFO_API_KEY", "type": "external"},
     "apollo": {"env_key": "APOLLO_API_KEY", "type": "external"},
     "hunter": {"env_key": "HUNTER_API_KEY", "type": "external"},
-    "odoo-crm": {"env_key": "ODOO_URL", "type": "external"},
+    # CRM connectors are provider-agnostic: no Settings field or env var names an
+    # Odoo connection; the TrustedCRMConnector carries the credentials.
+    "odoo-crm": {"env_key": None, "type": "external"},
     "salesforce-crm": {"env_key": "SALESFORCE_CLIENT_ID", "type": "external"},
     "hubspot-crm": {"env_key": "HUBSPOT_ACCESS_TOKEN", "type": "external"},
     "redis": {"env_key": "REDIS_URL", "type": "internal"},

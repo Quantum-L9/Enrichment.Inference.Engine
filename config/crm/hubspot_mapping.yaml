@@ -1,9 +1,16 @@
 crm: hubspot
 version: 2.0
 
+# Provider field names that identify, own or associate a record. The mapper
+# never writes these, whatever the trusted connector allowlists.
+protected_fields:
+  - hs_object_id
+  - hubspot_owner_id
+  - associatedcompanyid
+
 objects:
   company:
-    hubspot_object: companies
+    object: companies
     mappings:
       company_id: hs_object_id
       company_name: name
@@ -25,7 +32,7 @@ objects:
       enrichment_quality_score: data_quality_score
 
   contact:
-    hubspot_object: contacts
+    object: contacts
     mappings:
       contact_id: hs_object_id
       contact_email: email
@@ -43,7 +50,7 @@ objects:
       enrichment_quality_score: data_quality_score
 
   opportunity:
-    hubspot_object: deals
+    object: deals
     mappings:
       opportunity_id: hs_object_id
       opportunity_name: dealname

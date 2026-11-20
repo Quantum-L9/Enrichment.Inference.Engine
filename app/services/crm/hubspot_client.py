@@ -20,7 +20,10 @@ from .base import (
     CRMWritePermit,
     CRMWriteState,
     WriteResult,
+    register_crm_client,
 )
+
+PROVIDER_KEY = "hubspot"
 
 logger = structlog.get_logger("hubspot_client")
 
@@ -587,3 +590,7 @@ class HubSpotClient(CRMClientBase):
             provider_ack=provider_ack,
             reconciliation_state="required",
         )
+
+
+# Self-registration: importing this module makes the provider resolvable by key.
+register_crm_client(PROVIDER_KEY, HubSpotClient)

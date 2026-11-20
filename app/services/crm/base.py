@@ -15,13 +15,23 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from .providers import CRMType as CRMType
 
-class CRMType(StrEnum):
-    """Supported CRM platforms."""
 
-    ODOO = "odoo"
-    SALESFORCE = "salesforce"
-    HUBSPOT = "hubspot"
+def crm_provider_key(value: object) -> str:
+    """Normalize a provider identifier to the registry key form.
+
+    Adapters register under a lowercase key; connectors, mapping files and
+    record references may spell the same provider with any case or surrounding
+    whitespace, or as a ``CRMType`` member. Every comparison and digest in this
+    package goes through this function so the spelling never matters.
+    """
+    if value is None:
+        raise ValueError("CRM provider key must not be empty")
+    key = str(value).strip().casefold()
+    if not key:
+        raise ValueError("CRM provider key must not be empty")
+    return key
 
 
 class CRMErrorCode(StrEnum):
@@ -109,7 +119,7 @@ _PERMIT_ISSUER = object()
 class CRMCredentials:
     """Credential container supplied only by a trusted connector owner."""
 
-    crm_type: CRMType
+    crm_type: str
     credentials: dict[str, str]
     provider_account_id: str = ""
 
@@ -120,7 +130,7 @@ class CRMRecordRef:
 
     tenant_id: str
     connector_id: str
-    crm_type: CRMType
+    crm_type: str
     object_type: str
     record_id: str
     provider_account_id: str = ""
@@ -226,7 +236,7 @@ def crm_payload_digest(record_ref: CRMRecordRef, payload: dict[str, Any]) -> str
         "tenant_id": record_ref.tenant_id,
         "connector_id": record_ref.connector_id,
         "provider_account_id": record_ref.provider_account_id,
-        "crm_type": record_ref.crm_type.value,
+        "crm_type": crm_provider_key(record_ref.crm_type),
         "object_type": record_ref.object_type,
         "record_id": record_ref.record_id,
         "fields": payload,
@@ -446,7 +456,7 @@ class CRMClientBase(ABC):
             )
         ref = permit.record_ref
         if (
-            ref.crm_type != self.credentials.crm_type
+            crm_provider_key(ref.crm_type) != crm_provider_key(self.credentials.crm_type)
             or ref.object_type != object_type
             or ref.record_id != str(record_id).strip()
             or (
@@ -476,3 +486,51 @@ class CRMClientBase(ABC):
             error=f"{operation}_disabled",
             status=CRMWriteState.DISABLED,
         )
+
+
+# ── Provider registry ─────────────────────────────────────────
+#
+# The registry is the only place a provider key meets an adapter class. The
+# orchestrator and the mapper resolve providers through it and never name one.
+# An adapter module registers itself at import time; the package ``__init__``
+# imports the shipped adapters so their registrations run, and a new provider
+# is added by writing one adapter module that calls ``register_crm_client`` and
+# one mapping file whose ``crm`` key matches.
+
+CLIENT_REGISTRY: dict[str, type[CRMClientBase]] = {}
+
+
+def register_crm_client(provider: object, client_class: type[CRMClientBase]) -> str:
+    """Register ``client_class`` under the normalized provider key and return that key.
+
+    Re-registering the same class under the same key is a no-op. Registering a
+    different class under a key that is already taken is refused, so one import
+    order cannot silently swap which adapter serves a provider.
+    """
+    key = crm_provider_key(provider)
+    if not isinstance(client_class, type) or not issubclass(client_class, CRMClientBase):
+        raise TypeError(f"CRM client for provider {key!r} must subclass CRMClientBase")
+    existing = CLIENT_REGISTRY.get(key)
+    if existing is not None and existing is not client_class:
+        raise ValueError(f"CRM provider {key!r} is already registered to {existing.__qualname__}")
+    CLIENT_REGISTRY[key] = client_class
+    return key
+
+
+def unregister_crm_client(provider: object) -> None:
+    """Remove a provider registration; absent keys are ignored (test teardown)."""
+    CLIENT_REGISTRY.pop(crm_provider_key(provider), None)
+
+
+def resolve_crm_client(provider: object) -> type[CRMClientBase]:
+    """Return the adapter class registered for ``provider`` or raise ``LookupError``."""
+    key = crm_provider_key(provider)
+    try:
+        return CLIENT_REGISTRY[key]
+    except KeyError as exc:
+        raise LookupError(f"no CRM client is registered for provider {key!r}") from exc
+
+
+def registered_crm_providers() -> tuple[str, ...]:
+    """Return the registered provider keys in sorted order."""
+    return tuple(sorted(CLIENT_REGISTRY))

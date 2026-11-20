@@ -91,7 +91,11 @@ TOOL_REGISTRY: dict[str, MCPTool] = {
         name="writeback",
         description="Write enriched data back to the CRM system",
         parameters=[
-            MCPToolParam("crm_type", "string", "CRM platform: odoo, salesforce, or hubspot"),
+            MCPToolParam(
+                "crm_type",
+                "string",
+                "CRM provider key, as registered by the trusted connector owner",
+            ),
             MCPToolParam("object_type", "string", "CRM object type to write to"),
             MCPToolParam("record_id", "string", "Target record ID"),
             MCPToolParam("enriched_data", "object", "Enriched data to write back"),

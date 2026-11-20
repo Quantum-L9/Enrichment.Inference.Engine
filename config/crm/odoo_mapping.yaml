@@ -1,9 +1,17 @@
 crm: odoo
 version: 2.0
 
+# Provider field names that identify, own or associate a record. The mapper
+# never writes these, whatever the trusted connector allowlists.
+protected_fields:
+  - id
+  - user_id
+  - parent_id
+  - partner_id
+
 objects:
   company:
-    odoo_model: res.partner
+    object: res.partner
     mappings:
       company_id: id
       company_name: name
@@ -24,9 +32,7 @@ objects:
       enrichment_quality_score: data_quality_score
 
   contact:
-    odoo_model: res.partner
-    extra_domain:
-      - [is_company, "=", false]
+    object: res.partner
     mappings:
       contact_id: id
       contact_email: email
@@ -43,9 +49,7 @@ objects:
       enrichment_quality_score: data_quality_score
 
   opportunity:
-    odoo_model: crm.lead
-    extra_domain:
-      - [type, "=", "opportunity"]
+    object: crm.lead
     mappings:
       opportunity_id: id
       opportunity_name: name
@@ -64,9 +68,7 @@ objects:
       enrichment_timestamp: enrichment_last_updated
 
   account:
-    odoo_model: res.partner
-    extra_domain:
-      - [is_company, "=", true]
+    object: res.partner
     mappings:
       account_id: id
       account_name: name

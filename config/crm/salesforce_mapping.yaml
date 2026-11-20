@@ -1,9 +1,16 @@
 crm: salesforce
 version: 2.0
 
+# Provider field names that identify, own or associate a record. The mapper
+# never writes these, whatever the trusted connector allowlists.
+protected_fields:
+  - Id
+  - OwnerId
+  - AccountId
+
 objects:
   company:
-    salesforce_object: Account
+    object: Account
     mappings:
       company_id: Id
       company_name: Name
@@ -23,7 +30,7 @@ objects:
       enrichment_quality_score: Data_Quality_Score__c
 
   contact:
-    salesforce_object: Contact
+    object: Contact
     mappings:
       contact_id: Id
       contact_email: Email
@@ -41,7 +48,7 @@ objects:
       enrichment_quality_score: Data_Quality_Score__c
 
   opportunity:
-    salesforce_object: Opportunity
+    object: Opportunity
     mappings:
       opportunity_id: Id
       opportunity_name: Name
