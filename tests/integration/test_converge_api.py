@@ -255,11 +255,16 @@ def _live_version(bumps: int = 0) -> str:
 
     Discovery revisions are minor bumps over the live cartridge, so the expected
     versions follow whatever revision is current rather than a pinned literal.
+    A zero bump is the live version unchanged, patch included. A positive bump
+    is the minor increment the publisher emits, with the patch reset to 0.
     """
     spec = yaml.safe_load(
         (Path(__file__).resolve().parents[2] / "domains/plasticos/spec.yaml").read_bytes()
     )
-    major, minor, _patch = (int(part) for part in str(spec["version"]).split("."))
+    version = str(spec["version"])
+    if bumps == 0:
+        return version
+    major, minor, _patch = (int(part) for part in version.split("."))
     return f"{major}.{minor + bumps}.0"
 
 

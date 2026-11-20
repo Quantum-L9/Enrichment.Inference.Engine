@@ -188,16 +188,18 @@ def admitted_fields(result: Mapping[str, Any]) -> dict[str, Any]:
     """
     evidence = result.get("field_evidence")
     if isinstance(evidence, Mapping):
-        return {
+        fields = {
             name: entry["value"]
             for name, entry in evidence.items()
             if isinstance(entry, Mapping)
             and entry.get("admitted") is True
             and entry.get("value") is not None
         }
-    return {
-        name: value for name, value in (result.get("fields") or {}).items() if value is not None
-    }
+    else:
+        fields = {
+            name: value for name, value in (result.get("fields") or {}).items() if value is not None
+        }
+    return fields
 
 
 def _operation_id(packet: Any) -> str | None:
@@ -501,6 +503,16 @@ async def _run_canonical_converge(
         # gone, and the once-per-key guard suppresses the retry that would have
         # recovered it.
         defer_graph = settings.converge_graph_sync_enabled
+        graph_fields = None
+        if defer_graph:
+            from app.engines.polymer_capability import shape_graph_fields
+
+            graph_fields = shape_graph_fields(
+                resolve_cartridge_id(
+                    tenant, requested=domain_id, configured_default=settings.default_domain
+                ),
+                admitted_fields(result),
+            )
         try:
             report = await _persist_and_sync(
                 tenant,
@@ -511,7 +523,7 @@ async def _run_canonical_converge(
                 require_persistence=True,
                 operation_id=operation_id,
                 defer_graph_sync=defer_graph,
-                graph_fields=admitted_fields(result) if defer_graph else None,
+                graph_fields=graph_fields,
             )
         except PersistenceRequiredError as exc:
             logger.error(
