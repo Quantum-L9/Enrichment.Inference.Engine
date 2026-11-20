@@ -79,8 +79,10 @@ repos:
     hooks:
       - id: pytest-unit
         name: pytest unit tests
-        # No `2>/dev/null || true`: a failing unit test must fail the hook.
-        entry: bash -c 'PYTHONPATH="${PYTHONPATH}:." python3 -m pytest tests/ -m "unit" --tb=short -q'
+        # Local protection stays the unit marker. Pull-request pytest is
+        # repo-test; this hook must not start a second catalog under Actions.
+        # No `2>/dev/null || true`: a failing local unit test must fail the hook.
+        entry: "bash -c 'if [ -n \"${GITHUB_ACTIONS:-}\" ]; then echo pytest-unit-not-a-pr-catalog; exit 0; fi; PYTHONPATH=\"${PYTHONPATH}:.\" python3 -m pytest tests/ -m unit --tb=short -q'"
         language: system
         pass_filenames: false
         always_run: true

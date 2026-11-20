@@ -8,6 +8,27 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact 40-hex revision the deep plan may run
+        required: false
+        type: string
+      utc_slot:
+        description: UTC day YYYY-MM-DD
+        required: false
+        type: string
+      deep_contract:
+        description: Deep contract name
+        required: false
+        type: string
+      dispatch_key:
+        description: Idempotency key for this UTC slot
+        required: false
+        type: string
+      mode:
+        description: plan or apply. Empty is a manual CI run, not a deep dispatch
+        required: false
+        type: string
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -223,40 +244,104 @@ jobs:
           "$native_python" "$subject/tools/validate_domain.py" --help
           echo "L9_CEG_NATIVE_REPO=$subject" >> "$GITHUB_ENV"
           echo "L9_CEG_NATIVE_PYTHON=$native_python" >> "$GITHUB_ENV"
-      - name: Run Tests with Coverage
-        env:
-          TESTING: "true"
-        run: |
-          mapfile -t QUARANTINE_DESELECTS < <(python tools/pytest_quarantine_deselects.py)
-          echo "Deselecting ${#QUARANTINE_DESELECTS[@]} quarantined tests from baseline ledger"
-          PYTHONPATH=. pytest ${{ env.TEST_DIR }} \
-            -n auto \
-            "${QUARANTINE_DESELECTS[@]}" \
-            --cov=${{ env.SOURCE_DIR }} \
-            --cov-report=xml \
-            --cov-report=term-missing \
-            --cov-fail-under=${{ env.COVERAGE_THRESHOLD }} \
-            --timeout=300 \
-            --tb=short \
-            -v
-      - name: Upload Coverage to Codecov
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          files: ./coverage.xml
-          flags: unittests
-          fail_ci_if_error: false
+      - name: Run PR-fast tests
+        # Codecov upload deferred. This job no longer builds a full-catalog
+        # coverage.xml, and Codecov authentication is out of scope. The full
+        # catalog runs only from the deep plan (`make test-deep`).
+        run: make test
 
-  # Advisory: not in ci-gate's needs and not a required check. It supplies every
-  # environment condition tests/integration skips on — Redis, Neo4j Enterprise,
-  # and pinned Cognitive.Engine.Graphs / Constellation.Gate checkouts with their
-  # own virtualenvs — and sets EIE_REQUIRE_INTEGRATION=1, under which
-  # tests/conftest.py turns any integration skip into a failure. Without the
-  # flag (the `test` jobs, local runs) skips are unchanged.
+  # Deep plan only. Not in ci-gate's needs and not a pull_request or push job.
+  # One workflow_dispatch with mode=apply runs this job: full catalog once,
+  # tests/integration once under EIE_REQUIRE_INTEGRATION, then the converge
+  # e2e. mode=plan and a manual dispatch with no mode run zero heavy steps.
+  # A missing Redis, Neo4j, or pinned peer fails the job (NOT_RUN). Durable
+  # slot admission is the Core scheduler's ledger; this job only refuses a
+  # malformed dispatch and will not overlap another run of the same slot key.
+  deep-admit:
+    name: Deep dispatch admission
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_heavy: ${{ steps.admit.outputs.run_heavy }}
+    permissions:
+      contents: read
+    steps:
+      - name: Admit deep dispatch before any install
+        id: admit
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          UTC_SLOT: ${{ inputs.utc_slot }}
+          DEEP_CONTRACT: ${{ inputs.deep_contract }}
+          DISPATCH_KEY: ${{ inputs.dispatch_key }}
+          DEEP_MODE: ${{ inputs.mode }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          mode="${DEEP_MODE:-}"
+          if [ -z "$mode" ]; then
+            echo "run_heavy=false" >> "$GITHUB_OUTPUT"
+            echo "workflow_dispatch without mode is manual CI; no deep plan"
+            exit 0
+          fi
+          if [ "${GITHUB_REPOSITORY:-}" != "Quantum-L9/Enrichment.Inference.Engine" ]; then
+            echo "NOT_RUN: repository is ${GITHUB_REPOSITORY:-unknown}"
+            exit 1
+          fi
+          if [ -z "${DEFAULT_BRANCH:-}" ]; then
+            echo "NOT_RUN: default branch is unknown"
+            exit 1
+          fi
+          if [ "${GITHUB_REF:-}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "NOT_RUN: ref ${GITHUB_REF:-unknown} is not refs/heads/${DEFAULT_BRANCH}"
+            exit 1
+          fi
+          if ! printf '%s' "${EXPECTED_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "NOT_RUN: expected_sha is not 40 lowercase hex"
+            exit 1
+          fi
+          if [ "${GITHUB_SHA:-}" != "${EXPECTED_SHA}" ]; then
+            echo "NOT_RUN: HEAD ${GITHUB_SHA:-unknown} does not match expected_sha"
+            exit 1
+          fi
+          if ! printf '%s' "${UTC_SLOT:-}" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+            echo "NOT_RUN: utc_slot is not YYYY-MM-DD"
+            exit 1
+          fi
+          if ! python3 -c 'import datetime,sys; datetime.date.fromisoformat(sys.argv[1])' "${UTC_SLOT}"; then
+            echo "NOT_RUN: utc_slot is not a calendar date"
+            exit 1
+          fi
+          if ! printf '%s' "${DEEP_CONTRACT:-}" | grep -Eq '^[A-Za-z0-9._:/-]{1,200}$'; then
+            echo "NOT_RUN: deep_contract is empty or not a bounded name"
+            exit 1
+          fi
+          if ! printf '%s' "${DISPATCH_KEY:-}" | grep -Eq '^[A-Za-z0-9._:-]{8,200}$'; then
+            echo "NOT_RUN: dispatch_key is empty or not a bounded token"
+            exit 1
+          fi
+          if [ "$mode" = "plan" ]; then
+            echo "run_heavy=false" >> "$GITHUB_OUTPUT"
+            echo "plan: zero heavy jobs for ${UTC_SLOT} ${DISPATCH_KEY}"
+            exit 0
+          fi
+          if [ "$mode" != "apply" ]; then
+            echo "NOT_RUN: mode must be plan or apply"
+            exit 1
+          fi
+          echo "run_heavy=true" >> "$GITHUB_OUTPUT"
+          echo "apply: ${UTC_SLOT} ${DEEP_CONTRACT} ${DISPATCH_KEY}"
+
   integration:
     name: Integration Tests (Redis + Neo4j Enterprise + Gate/CEG peers)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    needs: validate
+    timeout-minutes: 90
+    needs: [validate, deep-admit]
+    if: ${{ always() && needs.validate.result == 'success' && needs.deep-admit.result == 'success' && needs.deep-admit.outputs.run_heavy == 'true' }}
+    concurrency:
+      group: eie-deep-${{ inputs.utc_slot }}-${{ inputs.dispatch_key }}
+      cancel-in-progress: false
     permissions:
       contents: read
     env:
@@ -335,6 +420,38 @@ jobs:
           path: .ci-subjects/gate-peer
           token: ${{ secrets.SDK_TOKEN }}
           persist-credentials: false
+      - name: Require Redis, Neo4j, and pinned peers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import socket
+          import sys
+
+          def check(host, port, label):
+              try:
+                  with socket.create_connection((host, port), timeout=5):
+                      return
+              except OSError as exc:
+                  sys.exit(
+                      f"NOT_RUN: {label} is not accepting connections at {host}:{port} ({exc})"
+                  )
+
+          check("127.0.0.1", 6379, "Redis")
+          check("127.0.0.1", 7687, "Neo4j")
+          PY
+          ceg="$GITHUB_WORKSPACE/.ci-subjects/ceg-peer"
+          gate="$GITHUB_WORKSPACE/.ci-subjects/gate-peer"
+          if [ ! -d "$ceg" ]; then
+            echo "NOT_RUN: pinned CEG peer is missing"
+            exit 1
+          fi
+          if [ ! -d "$gate/constellation-gate" ]; then
+            echo "NOT_RUN: pinned Gate peer is missing"
+            exit 1
+          fi
+          test "$(git -C "$ceg" rev-parse HEAD)" = "$CEG_SUBJECT_SHA"
+          test "$(git -C "$gate" rev-parse HEAD)" = "$GATE_SUBJECT_SHA"
       - name: Build EIE virtualenv (.venv)
         # The seam harness and the cross-engine proof launch EIE from
         # <root>/.venv/bin/python, so EIE installs into a real .venv here.
@@ -364,6 +481,25 @@ jobs:
           "$gate/.venv/bin/python" -m pip install --disable-pip-version-check --require-hashes --no-deps -r "$gate/constellation-gate/requirements.lock"
           "$gate/.venv/bin/python" -m pip install --disable-pip-version-check --no-deps -e "$gate/constellation-gate"
           "$gate/.venv/bin/python" -c "import constellation_gate.api.main, uvicorn"
+      - name: Run the full catalog once
+        env:
+          TESTING: "true"
+          L9_CEG_NATIVE_REPO: ${{ github.workspace }}/.ci-subjects/ceg-peer
+          L9_CEG_NATIVE_PYTHON: ${{ github.workspace }}/.ci-subjects/ceg-peer/.venv/bin/python
+        run: |
+          mapfile -t QUARANTINE_DESELECTS < <(.venv/bin/python tools/pytest_quarantine_deselects.py)
+          echo "Deselecting ${#QUARANTINE_DESELECTS[@]} quarantined tests from baseline ledger"
+          PYTHONPATH=. .venv/bin/python -m pytest tests/ \
+            --ignore=tests/integration \
+            --ignore=tests/e2e \
+            -n auto \
+            "${QUARANTINE_DESELECTS[@]}" \
+            --cov=app \
+            --cov-report=term-missing \
+            --cov-fail-under=${{ env.COVERAGE_THRESHOLD }} \
+            --timeout=300 \
+            --tb=short \
+            -q
       - name: Run Integration Tests
         env:
           EIE_REQUIRE_INTEGRATION: '1'
@@ -392,72 +528,7 @@ jobs:
             --tb=short \
             -rfEs \
             -v
-
-  # Advisory, like `integration`: not in ci-gate's needs and not a required check.
-  # Odoo's `converge` request through a REAL Gate in Docker (tests/e2e/README.md):
-  # client -> Gate -> EIE -> Gate -> client, EIE on its deterministic provider.
-  # ONE documented exception (CTO decision 2026-11-13): the job runs only when
-  # the Constellation.Gate checkout credential is present.
-  #   condition: secrets.SDK_TOKEN is empty (fork PRs, or the secret unprovisioned);
-  #   why no mock: the proof is a real Gate image built from that private repo;
-  #   owner / removal trigger: the operator provisions the secret.
-  # It is announced, never silent: the first step emits a warning annotation and
-  # a job-summary line saying the e2e did NOT run. With the credential present a
-  # missing checkout, image or rail is a red job; tests/e2e itself never skips.
-  e2e-converge:
-    name: E2E (Odoo converge through a real Gate)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: validate
-    permissions:
-      contents: read
-    env:
-      # Same pinned Gate subject as `integration`. Bump both deliberately.
-      GATE_SUBJECT_SHA: b451b68b98b315f57f0c4f9b99090a437e9dac23
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Is the Constellation.Gate checkout credential present?
-        id: cred
-        env:
-          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -n "${SDK_TOKEN}" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            msg="converge e2e did NOT run: no Constellation.Gate checkout credential (secrets.SDK_TOKEN)"
-            echo "::warning title=E2E NOT RUN::${msg}"
-            echo "### E2E NOT RUN — ${msg}" >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Checkout pinned Constellation.Gate (rail + Gate image source)
-        if: steps.cred.outputs.present == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: Quantum-L9/Constellation.Gate
-          ref: ${{ env.GATE_SUBJECT_SHA }}
-          path: .ci-subjects/gate-peer
-          token: ${{ secrets.SDK_TOKEN }}
-          persist-credentials: false
-      - name: Build EIE virtualenv (.venv)
-        if: steps.cred.outputs.present == 'true'
-        env:
-          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
-        run: |
-          set -euo pipefail
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          python -m venv .venv
-          PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" bash tools/deps/install_locked.sh full
-          git config --global --remove-section "url.https://x-access-token:${SDK_TOKEN}@github.com/"
       - name: Build Gate and EIE images from their own Dockerfiles
-        if: steps.cred.outputs.present == 'true'
         run: |
           set -euo pipefail
           gate="$GITHUB_WORKSPACE/.ci-subjects/gate-peer"
@@ -465,7 +536,6 @@ jobs:
           docker build -t l9e2e/gate:local "$gate/constellation-gate"
           docker build -t l9e2e/eie:local .
       - name: Run converge e2e
-        if: steps.cred.outputs.present == 'true'
         env:
           L9_E2E_GATE_RAIL: ${{ github.workspace }}/.ci-subjects/gate-peer/constellation-gate/tests/e2e/docker
           L9_E2E_STATE_DIR: ${{ runner.temp }}/l9e2e

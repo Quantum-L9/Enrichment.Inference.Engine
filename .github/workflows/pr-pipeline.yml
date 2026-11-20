@@ -227,32 +227,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [validate, lint]
-    if: ${{ !inputs.skip_integration }}
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: test_user
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: test_db
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
       - name: Checkout Repository
@@ -317,33 +291,11 @@ jobs:
           echo "L9_CEG_NATIVE_REPO=$subject" >> "$GITHUB_ENV"
           echo "L9_CEG_NATIVE_PYTHON=$native_python" >> "$GITHUB_ENV"
 
-      - name: Run tests with coverage
-        env:
-          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
-          REDIS_URL: redis://localhost:6379/0
-          TESTING: "true"
-        run: |
-          echo "Running test suite..."
-          mapfile -t QUARANTINE_DESELECTS < <(python tools/pytest_quarantine_deselects.py)
-          echo "Deselecting ${#QUARANTINE_DESELECTS[@]} quarantined tests from baseline ledger"
-          PYTHONPATH=. pytest tests/ \
-            -n auto \
-            "${QUARANTINE_DESELECTS[@]}" \
-            --cov=app \
-            --cov-report=xml \
-            --cov-report=term-missing \
-            --cov-fail-under=${{ env.COVERAGE_THRESHOLD }} \
-            --timeout=300 \
-            --tb=short \
-            -v
-          echo "✅ All tests passed with coverage >=${{ env.COVERAGE_THRESHOLD }}%"
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          files: ./coverage.xml
-          flags: unittests
-          fail_ci_if_error: false
+      - name: Run PR-fast tests
+        # Codecov upload deferred. This job no longer builds a full-catalog
+        # coverage.xml, and Codecov authentication is out of scope. The full
+        # catalog runs only from ci.yml's deep plan.
+        run: make test
 
   # ────────────────────────────────────────────────────────────────────────
   # PHASE 5: SECURITY
@@ -568,12 +520,6 @@ jobs:
         run: |
           python scripts/verify_node_constitution.py
 
-      - name: Run Tier 2 constitution tests
-        run: |
-          pytest tests/contracts/tier2/test_node_constitution_contract.py \
-            tests/contracts/tier2/test_runtime_attestation_contract.py \
-            -q --disable-warnings --maxfail=1 -o addopts=""
-
       - name: Verify constitution (l9_contract_control)
         run: |
           python scripts/l9_contract_control.py verify-constitution
@@ -681,35 +627,35 @@ jobs:
 
           # Check for failures in required jobs
           FAILED=0
-          if [[ "${{ needs.validate.result }}" == "failure" ]]; then
+          if [[ "${{ needs.validate.result }}" != "success" ]]; then
             echo "❌ validate FAILED"
             FAILED=1
           fi
-          if [[ "${{ needs.lint.result }}" == "failure" ]]; then
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then
             echo "❌ lint FAILED"
             FAILED=1
           fi
-          if [[ "${{ needs.semgrep.result }}" == "failure" ]]; then
+          if [[ "${{ needs.semgrep.result }}" != "success" ]]; then
             echo "❌ semgrep FAILED"
             FAILED=1
           fi
-          if [[ "${{ needs.test.result }}" == "failure" ]]; then
+          if [[ "${{ needs.test.result }}" != "success" ]]; then
             echo "❌ test FAILED"
             FAILED=1
           fi
-          if [[ "${{ needs.security.result }}" == "failure" ]]; then
+          if [[ "${{ needs.security.result }}" != "success" ]]; then
             echo "❌ security FAILED"
             FAILED=1
           fi
-          if [[ "${{ needs.compliance.result }}" == "failure" ]]; then
+          if [[ "${{ needs.compliance.result }}" != "success" ]]; then
             echo "❌ compliance FAILED"
             FAILED=1
           fi
-          if [[ "${{ needs.l9.result }}" == "failure" ]]; then
+          if [[ "${{ needs.l9.result }}" != "success" ]]; then
             echo "❌ l9 FAILED"
             FAILED=1
           fi
-          if [[ "${{ needs.docs.result }}" == "failure" ]]; then
+          if [[ "${{ needs.docs.result }}" != "success" ]]; then
             echo "❌ docs FAILED"
             FAILED=1
           fi
@@ -750,7 +696,7 @@ jobs:
             };
 
             const icon = (r) => r === "success" ? "✅" : r === "skipped" ? "⏭️" : r === "failure" ? "❌" : "⚠️";
-            const allPassed = Object.values(results).every(r => r === "success" || r === "skipped");
+            const allPassed = Object.values(results).every(r => r === "success");
 
             let body = `${marker}\n## PR Pipeline Gate Summary\n\n`;
             body += `| Phase | Status |\n|-------|--------|\n`;
