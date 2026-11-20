@@ -526,10 +526,20 @@ jobs:
             "${QUARANTINE_DESELECTS[@]}" \
             --cov=app \
             --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
             --cov-fail-under=${{ env.COVERAGE_THRESHOLD }} \
             --timeout=300 \
             --tb=short \
             -q
+      # The full catalog's coverage, from the run above (no second run), for
+      # the main-branch SonarCloud analysis in sonar-deep below.
+      - name: Upload full-catalog coverage report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: coverage-full
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 3
       - name: Run Integration Tests
         env:
           EIE_REQUIRE_INTEGRATION: '1'
@@ -570,6 +580,58 @@ jobs:
           L9_E2E_GATE_RAIL: ${{ github.workspace }}/.ci-subjects/gate-peer/constellation-gate/tests/e2e/docker
           L9_E2E_STATE_DIR: ${{ runner.temp }}/l9e2e
         run: bash tests/e2e/run_converge_e2e.sh
+
+  # Main-branch SonarCloud analysis with full-catalog coverage. Runs only
+  # after a successful deep apply (integration), on main, and only while
+  # main's head is still the dispatched expected_sha: an analysis of a moved
+  # main would attach this coverage to the wrong revision. Push-to-main and
+  # pull-request analyses keep PR-fast coverage (sonar above). Not in
+  # ci-gate's needs: Sonar is not a required check.
+  deep-sonar-admit:
+    name: Deep Sonar admission
+    needs: [deep-admit, integration]
+    if: ${{ always() && needs.integration.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.admit.outputs.run }}
+    permissions:
+      contents: read
+    steps:
+      - name: Require main's head to be the dispatched revision
+        id: admit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF:-}" != "refs/heads/${DEFAULT_BRANCH:-}" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "NOT_RUN: ref ${GITHUB_REF:-unknown} is not refs/heads/${DEFAULT_BRANCH:-unknown}; no main analysis"
+            exit 0
+          fi
+          head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha)"
+          if [ "${head}" != "${EXPECTED_SHA:-}" ] || [ "${GITHUB_SHA:-}" != "${EXPECTED_SHA:-}" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "NOT_RUN: main head ${head} is not the dispatched expected_sha ${EXPECTED_SHA:-unset}; full-catalog coverage not sent to SonarCloud"
+            exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+          echo "main head ${head} equals expected_sha; SonarCloud analyses it with full-catalog coverage"
+
+  sonar-deep:
+    name: SonarCloud (full catalog)
+    needs: deep-sonar-admit
+    if: ${{ always() && needs.deep-sonar-admit.outputs.run == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/sonarcloud.yml
+    with:
+      coverage-artifact: coverage-full
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   security:
     name: Security Scanning

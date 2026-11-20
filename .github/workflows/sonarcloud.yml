@@ -16,11 +16,13 @@
 #
 # This job runs no tests. ci.yml calls it after its Test Suite job, on push to
 # main and on same-repository pull requests. That job's single `make test` run
-# measures PR-fast coverage of app/ and uploads it as coverage-pr-fast; this
-# job downloads it to coverage.xml, which sonar-project.properties names, and
-# fails when it is absent: a scan without it reads as 0% coverage. Sonar's
-# new-code gate then judges the changed lines that selection exercises. The
-# catalog, peers, and e2e are the deep plan in ci.yml.
+# measures PR-fast coverage of app/ and uploads it as coverage-pr-fast; after
+# a deep apply on main, ci.yml calls it again with coverage-full from the deep
+# plan's full catalog. This job downloads that artifact to coverage.xml, which
+# sonar-project.properties names, and fails when it is absent: a scan without
+# it reads as 0% coverage. Sonar's new-code gate then judges the changed lines
+# that coverage exercises. The catalog, peers, and e2e are the deep plan in
+# ci.yml.
 # A missing SONAR_TOKEN fails this scan. It does not decide whether the
 # catalog ran.
 
@@ -28,6 +30,16 @@ name: SonarCloud
 
 on:
   workflow_call:
+    inputs:
+      coverage-artifact:
+        description: >-
+          Artifact holding coverage.xml from this run. coverage-pr-fast (the
+          Test Suite job) for push and pull-request analyses; coverage-full
+          (the deep plan's full catalog) for the main analysis after a deep
+          apply.
+        required: false
+        type: string
+        default: coverage-pr-fast
     secrets:
       SONAR_TOKEN:
         description: SonarQube Cloud analysis token, used by this job only.
@@ -60,10 +72,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Download PR-fast coverage report
+      - name: Download coverage report
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
         with:
-          name: coverage-pr-fast
+          name: ${{ inputs.coverage-artifact }}
           path: .
 
       - name: Require the coverage report
