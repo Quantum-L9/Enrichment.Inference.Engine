@@ -19,15 +19,22 @@ schema_version: "2.0.0"
 
 dora_metadata:
   created_at: "2026-03-25T00:00:00Z"
-  updated_at: "2026-10-23T00:00:00Z"
-  updated_by: "l9-pr-remediation"
+  updated_at: "2026-11-21T00:00:00Z"
+  updated_by: "eie-org-ci-cutover"
   purpose: "Repository-wide method/param contract enforcement for SDK transport runtime"
 
 scan:
   include_globs:
     - "**/*.py"
   exclude_globs:
+    # Repository-owned code only. Any virtualenv, at any depth, holds installed
+    # third-party packages; `.ci-subjects/` holds peer repositories that
+    # ci.yml checks out beside this one (CEG, Gate) with their own `.venv`.
+    # Scanning them reported the SDK's own NodeRuntimeConfig call as an EIE
+    # callsite and failed the full catalog (deep run 44918690972).
     - ".venv/**"
+    - "**/.venv/**"
+    - ".ci-subjects/**"
     - ".git/**"
     - "node_modules/**"
     - "__pycache__/**"
