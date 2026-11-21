@@ -59,15 +59,31 @@ repo-setup:  ## Create .venv if absent; install the full profile (project + ever
 	UV_PROJECT_ENVIRONMENT="$(CURDIR)/.venv" PYTHON="$(CURDIR)/.venv/bin/python" bash tools/deps/install_locked.sh full
 	"$(CURDIR)/.venv/bin/pre-commit" install
 
-repo-validate:  ## Contract manifest, payload contract compiler, Gate_SDK channel, audit --strict (no mutation)
+# The leaves below "Audit engine" were local-workflow checks only (ci.yml,
+# pr-pipeline.yml, compliance.yml, l9-constitution-gate.yml,
+# l9-contract-control.yml), none of them a required check. As `make validate`
+# leaves they run in the required `Analyze (central Core)` check (EIE org-CI
+# cutover, Phase 1 rows 11, 18, 20, 28, 31). The local copies stay until each
+# leaf's negative witness is recorded (Phase 4).
+repo-validate:  ## Contracts, payload compiler, Gate_SDK v1 (networked), audit --strict, KB rules, C-21 imports, constitution + attestation, workflow YAML (no mutation)
 	@echo "── Contract manifest ──"
 	$(PYTHON) tools/verify_contracts.py
 	@echo "── Payload contract compiler ──"
 	PYTHONPATH="$${PYTHONPATH:-}:." $(PYTHON) tools/payload_contract_compiler.py --stdout-only
-	@echo "── Gate_SDK declared on the v1 channel (offline) ──"
-	$(PYTHON) scripts/validate_sdk_pin.py
+	@echo "── Gate_SDK declared on the v1 channel (offline + networked tag) ──"
+	$(PYTHON) scripts/validate_sdk_pin.py --verify-tag
 	@echo "── Audit engine (fails on CRITICAL/HIGH) ──"
 	$(PYTHON) tools/audit_engine.py --strict
+	@echo "── KB rule schema ──"
+	$(PYTHON) tools/validate_kb_rules.py
+	@echo "── C-21: no deprecated chassis dispatch imports in app/ ──"
+	$(PYTHON) local_pr_pipeline/check_compliance_terminology.py
+	@echo "── Node constitution and runtime attestation ──"
+	$(PYTHON) scripts/verify_node_constitution.py
+	PYTHONPATH="$${PYTHONPATH:-}:." $(PYTHON) scripts/l9_contract_control.py verify-constitution
+	PYTHONPATH="$${PYTHONPATH:-}:." $(PYTHON) scripts/l9_contract_control.py verify-attestation
+	@echo "── Workflow YAML parses ──"
+	$(PYTHON) tools/validate_workflow_yaml.py
 
 repo-check:  ## Non-mutating static gate: ruff check, ruff format --check, strict mypy
 	@echo "── Ruff lint ──"
