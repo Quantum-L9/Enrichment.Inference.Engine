@@ -18,6 +18,51 @@ from pathlib import Path
 import yaml
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader that refuses a mapping with two equal explicit keys.
+
+    PyYAML keeps the last of duplicate keys silently, so a file could hide an
+    invalid value behind a valid one. YAML requires unique keys; merge keys
+    (``<<``) may still be overridden by an explicit key, as the spec allows.
+    """
+
+
+def _construct_unique_mapping(
+    loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[object, object]:
+    seen: set[object] = set()
+    for key_node, _ in node.value:
+        if key_node.tag == "tag:yaml.org,2002:merge":
+            continue
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            hash(key)
+        except TypeError:
+            continue  # SafeLoader reports an unhashable key itself
+        if key in seen:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping
+)
+
+
+def _load(text: str) -> object:
+    loader = _UniqueKeyLoader(text)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
 def kb_rule_errors(kb_dir: Path) -> list[str]:
     """Return one message per violation under *kb_dir*; empty when it conforms."""
     if not kb_dir.exists():
@@ -25,7 +70,7 @@ def kb_rule_errors(kb_dir: Path) -> list[str]:
     errors: list[str] = []
     for path in sorted({*kb_dir.rglob("*.yaml"), *kb_dir.rglob("*.yml")}):
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            data = _load(path.read_text(encoding="utf-8"))
         except yaml.YAMLError as exc:
             errors.append(f"{path}: {exc}")
             continue

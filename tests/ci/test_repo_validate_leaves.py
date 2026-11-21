@@ -41,13 +41,35 @@ def _repo_validate_recipe() -> str:
     return match.group(1)
 
 
+def _ignores_errors(recipe_line: str) -> bool:
+    """Whether make ignores this command's exit status: `-` anywhere in its prefix."""
+    prefix = re.match(r"[@+\-\s]*", recipe_line.lstrip("\t"))
+    return prefix is not None and "-" in prefix.group(0)
+
+
+@pytest.mark.parametrize(
+    ("line", "ignored"),
+    [
+        ("\t$(PYTHON) tools/x.py", False),
+        ("\t@$(PYTHON) tools/x.py", False),
+        ("\t+$(PYTHON) tools/x.py", False),
+        ("\t-$(PYTHON) tools/x.py", True),
+        ("\t@-$(PYTHON) tools/x.py", True),
+        ("\t-@$(PYTHON) tools/x.py", True),
+        ("\t@ - $(PYTHON) tools/x.py", True),
+    ],
+)
+def test_ignored_error_prefix_is_detected(line: str, ignored: bool) -> None:
+    assert _ignores_errors(line) is ignored
+
+
 @pytest.mark.parametrize("leaf", REQUIRED_LEAVES)
 def test_repo_validate_runs_the_leaf(leaf: str) -> None:
-    recipe = _repo_validate_recipe()
-    assert any(
-        line.rstrip().endswith(leaf) and not line.lstrip("\t").startswith("-")
-        for line in recipe.splitlines()
-    ), f"`make validate` no longer runs {leaf} (or ignores its exit status)"
+    lines = [line for line in _repo_validate_recipe().splitlines() if line.rstrip().endswith(leaf)]
+    assert lines, f"`make validate` no longer runs {leaf}"
+    assert not any(_ignores_errors(line) for line in lines), (
+        f"`make validate` ignores the exit status of {leaf}"
+    )
 
 
 # ── KB rule schema ─────────────────────────────────────────────────────
@@ -76,12 +98,18 @@ def test_kb_conforming_rules_pass(tmp_path: Path) -> None:
         ("rules: {field: mfi}\n", "`rules` must be a list"),
         ("rules:\n  - just-a-string\n", "must be a mapping"),
         ("rules: [\n", "while parsing"),
+        ("rules:\n  - when: {gt: 1}\nrules: []\n", "found duplicate key 'rules'"),
     ],
 )
 def test_kb_violations_are_reported(tmp_path: Path, body: str, expected: str) -> None:
     errors = kb_rule_errors(_kb(tmp_path, body))
     assert len(errors) == 1
     assert expected in errors[0]
+
+
+def test_kb_merge_key_override_is_not_a_duplicate(tmp_path: Path) -> None:
+    body = "base: &b {field: x, when: {gt: 1}}\nrules:\n  - <<: *b\n    field: y\n"
+    assert kb_rule_errors(_kb(tmp_path, body)) == []
 
 
 def test_kb_absent_passes(tmp_path: Path) -> None:
@@ -116,6 +144,7 @@ def test_workflow_that_parses_passes(tmp_path: Path) -> None:
         ),
         ("on: push\n", "no `jobs` mapping"),
         ("- a\n", "root must be a YAML mapping"),
+        ("on: push\njobs: 1\njobs:\n  a:\n    runs-on: x\n", "found duplicate key 'jobs'"),
     ],
 )
 def test_broken_workflow_is_reported(tmp_path: Path, body: str, expected: str) -> None:
