@@ -25,7 +25,6 @@ Run **`make pr`** before opening a PR for local validation. The **`pr-pipeline.y
 - `PR_SKIP_SEMGREP=1` — Skip Semgrep policy checks
 - `PR_SKIP_L9=1` — Skip L9 constitution/contract checks
 - `PR_L9_MINIMAL=1` — Minimal L9 (no select-gates runner)
-- `PR_SECURITY_STRICT=1` — Fail on security warnings
 - `PR_SKIP_GITLEAKS=1` — Skip Gitleaks secret detection
 - `ORDER=gate|failfast` — Phase execution order
 
@@ -34,7 +33,6 @@ Run **`make pr`** before opening a PR for local validation. The **`pr-pipeline.y
 - `skip_semgrep` — Skip Semgrep
 - `skip_l9` — Skip L9 checks
 - `l9_minimal` — Minimal L9 only
-- `security_strict` — Fail on security warnings
 
 MyPy is always blocking in both local and GitHub validation; every finding
 fails the type gate.
@@ -93,7 +91,7 @@ Phase Details:
   lint       — Ruff check + format + MyPy type check
   semgrep    — Semgrep policy rules (.semgrep/)
   test       — pytest with coverage (Postgres + Redis services)
-  security   — Gitleaks + pip-audit + Bandit + dependency-review
+  security   — Gitleaks + dependency-review (pip-audit, Bandit: Core security job)
   compliance — Terminology guard + chassis isolation + KB schema + L9 contracts
   l9         — Constitution verify + tier2 tests + attestation + select-gates
   docs       — Docs consistency + markdown link check
@@ -109,7 +107,7 @@ validate → lint → semgrep → test → security → sbom → scorecard → c
     │         │       │        │        │        │        │          └─ Fan-in: PASS/FAIL
     │         │       │        │        │        │        └─ OpenSSF Scorecard
     │         │       │        │        │        └─ SPDX SBOM generation
-    │         │       │        │        └─ Gitleaks + pip-audit + Bandit
+    │         │       │        │        └─ Gitleaks (pip-audit, Bandit: Core security job)
     │         │       │        └─ pytest with coverage (Postgres + Redis services)
     │         │       └─ Semgrep policy rules (.semgrep/)
     │         └─ Ruff lint + format + MyPy type check

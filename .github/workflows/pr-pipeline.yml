@@ -50,10 +50,6 @@ on:
         description: 'Minimal L9 checks only (PR_L9_MINIMAL)'
         type: boolean
         default: false
-      security_strict:
-        description: 'Fail on security warnings (PR_SECURITY_STRICT)'
-        type: boolean
-        default: false
 
 concurrency:
   group: pr-pipeline-${{ github.ref }}
@@ -350,21 +346,9 @@ jobs:
             --config .gitleaks.toml \
             --redact \
             --exit-code 1
-      - name: Run pip-audit (dependency vulnerabilities)
-        run: |
-          echo "Scanning dependencies for known vulnerabilities..."
-          pip-audit --desc
-
-      - name: Run Bandit (SAST)
-        env:
-          PR_SECURITY_STRICT: ${{ inputs.security_strict && '1' || '' }}
-        run: |
-          echo "Running Bandit static security analysis..."
-          if [ -n "$PR_SECURITY_STRICT" ]; then
-            bandit -r app -ll -f screen --exclude ./venv,./.venv,./tests,./build,./dist
-          else
-            bandit -r app -ll -f screen --exclude ./venv,./.venv,./tests,./build,./dist || echo "⚠️ Security warnings (non-blocking)"
-          fi
+      # pip-audit and bandit are Core-owned; EIE installs and runs neither
+      # (CI-UL, 2026-11-21). Core's security job (l9-ci-core #312) runs both
+      # from Core's toolchain lock in the org-required `Analyze (central Core)`.
 
       - name: Dependency Review (PR only)
         if: github.event_name == 'pull_request'

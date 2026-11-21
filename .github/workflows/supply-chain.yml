@@ -166,11 +166,11 @@ jobs:
           # Exempted by name, each reviewed 2026-11-11:
           # - AND-compounds of allowed licences, which this action does not
           #   match: colorama, httpcore, nodeenv (BSD-2 AND BSD-3); sniffio,
-          #   types-pyyaml, pip-requirements-parser (Apache-2.0 AND MIT);
-          #   pip-audit (Apache-2.0 AND ISC); cyclonedx-python-lib (Apache-2.0
-          #   AND Python-2.0); wcwidth (HPND AND MIT); greenlet (MIT AND
-          #   PSF-2.0); mypy (MIT AND Python-2.0 AND BSD-2-Clause, Core-owned
-          #   dev tool).
+          #   types-pyyaml (Apache-2.0 AND MIT); wcwidth (HPND AND MIT); greenlet
+          #   (MIT AND PSF-2.0); mypy (MIT AND Python-2.0 AND BSD-2-Clause,
+          #   Core-owned dev tool). pip-audit, pip-requirements-parser and
+          #   cyclonedx-python-lib left uv.lock with pip-audit (Core-owned,
+          #   2026-11-21), so their exemptions are removed.
           # - typing-extensions: PSF-2.0; the detected "GPL-1.0-or-later" comes
           #   from the PSF licence history text, not a GPL grant.
           # - protobuf: BSD-3-Clause AND LicenseRef-scancode-protobuf (Google's
@@ -181,8 +181,7 @@ jobs:
           allow-dependencies-licenses: >-
             pkg:pypi/structlog, pkg:pypi/prometheus-client, pkg:pypi/mypy,
             pkg:pypi/colorama, pkg:pypi/httpcore, pkg:pypi/nodeenv,
-            pkg:pypi/sniffio, pkg:pypi/types-pyyaml, pkg:pypi/pip-requirements-parser,
-            pkg:pypi/pip-audit, pkg:pypi/cyclonedx-python-lib, pkg:pypi/wcwidth,
+            pkg:pypi/sniffio, pkg:pypi/types-pyyaml, pkg:pypi/wcwidth,
             pkg:pypi/greenlet, pkg:pypi/typing-extensions,
             pkg:pypi/protobuf
           comment-summary-in-pr: on-failure
