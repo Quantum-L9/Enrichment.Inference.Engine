@@ -190,14 +190,22 @@ rules:
   metadata:
     l9:
       canonical_rule_id: CONSUMER-ENRICHMENT-INFERENCE-ENGINE-NO-SQL-FSTRING
-  # An f-string with at least one interpolation whose text starts with a DML
-  # keyword. The former four `f"SELECT ... {$VAR} ..."` patterns matched no
-  # f-string under Semgrep 1.186.0, not even the "Bad" example below, so the
-  # rule never fired (EIE org-CI cutover canary). Witnesses:
+  # An f-string with at least one interpolation whose literal starts with a DML
+  # keyword: the whole string is bound to $SQL and the anchored regex runs on
+  # its full text, so a keyword inside prose (or inside a nested example) does
+  # not match. Any Python f-string prefix (f, F, rf, fr, Rf, ...) is covered.
+  # The former four `f"SELECT ... {$VAR} ..."` patterns matched no f-string
+  # under Semgrep 1.186.0, not even the "Bad" example below, so the rule never
+  # fired (EIE org-CI cutover canary). Witnesses:
   # tests/ci/test_semgrep_consumer_rulepack.py.
   patterns:
-    - pattern: f"...{$VAR}..."
-    - pattern-regex: \bf(?:"{3}|'{3}|"|')\s*(?:SELECT|INSERT|UPDATE|DELETE)\b
+    - pattern: $SQL
+    - metavariable-pattern:
+        metavariable: $SQL
+        pattern: f"...{$VAR}..."
+    - metavariable-regex:
+        metavariable: $SQL
+        regex: ^(?:[fF][rR]?|[rR][fF])(?:"""|'''|"|')\s*(?:SELECT|INSERT|UPDATE|DELETE)\b
   message: |
     SQL queries must use parameterized queries, not f-strings.
 

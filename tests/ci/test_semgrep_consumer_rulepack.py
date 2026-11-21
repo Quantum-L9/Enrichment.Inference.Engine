@@ -88,11 +88,16 @@ _SQL_CASES = {
     "bad_delete": ('f"DELETE FROM x WHERE a = {value}"', True),
     "bad_update_triple": ("f'''UPDATE {table} SET a = {value}'''", True),
     "bad_insert": ('f"INSERT INTO {table} VALUES (1)"', True),
+    "bad_upper_prefix": ('F"SELECT * FROM {table}"', True),
+    "bad_raw_prefix_rf": ('rf"DELETE FROM x WHERE a = {value}"', True),
+    "bad_raw_prefix_fr": ('fr"UPDATE {table} SET a = 1"', True),
+    "bad_raw_prefix_upper": ('Rf"INSERT INTO {table} VALUES (1)"', True),
     "good_prose": ('f"Selected {count} items"', False),
     "good_no_interpolation": ('f"SELECT 1"', False),
     "good_parameterized": ('"SELECT * FROM t WHERE id = $1"', False),
     "good_lowercase_prose": ('f"selected rows: {count}"', False),
     "good_keyword_mid_text": ('f"Report: SELECT ran on {table}"', False),
+    "good_nested_example_in_prose": ("f\"Example: f'SELECT {table}'\"", False),
 }
 
 
