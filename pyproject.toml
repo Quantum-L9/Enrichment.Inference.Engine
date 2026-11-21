@@ -66,10 +66,8 @@ ci = [
     "types-PyYAML>=6.0.12.20261030",
     "pytest-xdist>=3.8.0",
     "pytest-timeout>=2.4.0",
-    "bandit>=1.9.4",
-    # `safety` was removed (ADR-003, 2026-10-23): it duplicated pip-audit and
-    # its filelock<4.0 pin kept a vulnerable filelock in this environment.
-    "pip-audit>=2.10.1",
+    # bandit and pip-audit are Core-owned (exclude-dependencies below): Core's
+    # security job installs and runs them from Core's toolchain lock.
 ]
 licenses = [
     "pip-licenses==5.5.5",
@@ -89,7 +87,16 @@ release = [
 # (exact versions, so tools/mypy_ratchet.py still sees one mypy). Names only,
 # never versions. Core list: l9-ci-core
 # .github/actions/install-consumer-ci/core-owned-tools.json.
-exclude-dependencies = ["mypy", "pip", "pre-commit", "pytest", "ruff", "semgrep"]
+exclude-dependencies = [
+    "bandit",
+    "mypy",
+    "pip",
+    "pip-audit",
+    "pre-commit",
+    "pytest",
+    "ruff",
+    "semgrep",
+]
 
 [tool.uv.sources]
 # Policy (EIE-001, CEG#266): the manifest names Gate_SDK's moving major tag;

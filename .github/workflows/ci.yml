@@ -691,15 +691,8 @@ jobs:
             --redact \
             --exit-code 1
 
-      - name: Run pip-audit
-        run: pip-audit --desc
-      - name: Run Bandit
-        run: |
-          bandit -r ${{ env.SOURCE_DIR }} \
-            -ll \
-            -f screen \
-            --exclude ./venv,./.venv,./tests,./build,./dist \
-            || echo "Bandit warnings are non-blocking"
+      # pip-audit and bandit are Core-owned and run by Core's security job from
+      # Core's toolchain lock; EIE installs and runs neither (CI-UL, 2026-11-21).
       - name: Dependency Review
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec  # v5.0.1

@@ -416,3 +416,13 @@ Durable, non-obvious notes for running this service in the Cursor Cloud VM. The 
 > scoring dimensions are owned by Cognitive.Engine.Graphs (ADR-010; enforced by
 > `app/engines/domain_spec_schema.py` `_reject_ceg()`; see `docs/INVARIANTS.md`
 > INV-8). The T5 protection on `score_models.py` is not lifted by this note.
+
+> **2026-11-21 correction (additive; append-only):** bandit and pip-audit join
+> the Core-owned tools EIE never declares. `pyproject.toml` no longer lists
+> them in the `ci` group, `[tool.uv] exclude-dependencies` names them, and
+> `uv.lock` drops them and the 23 packages only they pulled in. The workflow
+> steps that ran them are removed (`ci.yml` security job, `pr-pipeline.yml`
+> security phase, and the `security_strict` dispatch input that only Bandit
+> read): Core's security job installs both from Core's toolchain lock and runs
+> them. No local `make` target called either tool.
+> `tests/unit/test_core_toolchain_pins.py` now includes both in `CORE_TOOLS`.
