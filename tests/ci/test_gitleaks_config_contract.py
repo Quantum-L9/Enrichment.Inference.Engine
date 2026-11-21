@@ -1,13 +1,18 @@
 """Gitleaks configuration and install contracts (campaign finding T23).
 
-Two regressions this file fails on:
+Three regressions this file fails on:
 
 1. A whole-directory or whole-extension path allowlist returns to
    `.gitleaks.toml`. Such an entry exempts every present and future file under
    it from secret scanning (l9.contract/validation-and-correctness@1:
    no `silent_skip_of_applicable_required_validation`). An exemption names one
    existing file, under the rule that fires, with a reason.
-2. A workflow installs the Gitleaks binary without verifying its SHA-256, or
+2. A global allowlist, or any allowlist regex that matches an ordinary word,
+   returns. The former global `(?i)example|placeholder|dummy|test|fake|mock|sample`
+   suppressed every finding whose match contained one of those substrings, a
+   real credential included. Known false positives are exact fingerprints in
+   `.gitleaksignore`.
+3. A workflow installs the Gitleaks binary without verifying its SHA-256, or
    the workflows disagree on the pinned version. The pin is the one
    Quantum-L9/l9-ci-core selects.
 
@@ -123,6 +128,52 @@ def test_every_path_exemption_names_one_existing_file_with_a_reason() -> None:
             assert (REPO_ROOT / named).is_file(), f"{owner}: {named} does not exist"
 
 
+# The words the former global allowlist exempted. A credential may contain any
+# of them, so no allowlist regex may match one.
+COMMON_WORDS = ("example", "placeholder", "dummy", "test", "fake", "mock", "sample")
+
+LEGACY_GLOBAL_REGEX = r"(?i)example|placeholder|dummy|test|fake|mock|sample"
+
+IGNORE_FILE = REPO_ROOT / ".gitleaksignore"
+
+
+def test_no_global_allowlist() -> None:
+    """No global allowlist table: an exemption belongs to the rule that fires."""
+    config = _config()
+    assert not config.get("allowlist") and not config.get("allowlists"), "global allowlist present"
+
+
+@pytest.mark.parametrize("word", COMMON_WORDS)
+def test_no_allowlist_regex_matches_an_ordinary_word(word: str) -> None:
+    for owner, table in _allowlists(_config()):
+        for pattern in table.get("regexes", []) + table.get("stopwords", []):
+            assert not re.search(pattern, word), (
+                f"{owner}: {pattern!r} exempts any match containing {word!r}"
+            )
+
+
+def test_the_legacy_global_regex_is_rejected() -> None:
+    """Witness for the check above: the former global regex fails it."""
+    assert all(re.search(LEGACY_GLOBAL_REGEX, word) for word in COMMON_WORDS)
+
+
+def _ignore_entries() -> list[str]:
+    lines = IGNORE_FILE.read_text(encoding="utf-8").splitlines()
+    return [line for line in lines if line.strip() and not line.lstrip().startswith("#")]
+
+
+def test_every_ignore_entry_is_one_exact_fingerprint() -> None:
+    """`.gitleaksignore` holds commit:path:rule:line fingerprints only, for known rules."""
+    rule_ids = {rule["id"] for rule in _config().get("rules", [])}
+    entries = _ignore_entries()
+    assert entries, "the fingerprint list is empty; delete the file instead"
+    for entry in entries:
+        match = re.fullmatch(r"([0-9a-f]{40}):(.+):([a-z0-9-]+):(\d+)", entry)
+        assert match, f"not a commit:path:rule:line fingerprint: {entry!r}"
+        assert match.group(3) in rule_ids, f"unknown rule in {entry!r}"
+    assert len(entries) == len(set(entries)), "duplicate fingerprint"
+
+
 # ── Install steps ─────────────────────────────────────────────────────
 
 
@@ -214,8 +265,8 @@ _AWS_KEY_ID = "AKIA" + "Q7W3E9R5T1Y8U2I6"  # synthetic: key-ID shape, not a cred
 _API_KEY_LINE = "api" + '_key = "' + "local-cache-slot-abcd" + '"\n'
 
 
-def _scan(repo: Path, relative: str, content: str) -> int:
-    shutil.copy(CONFIG, repo / ".gitleaks.toml")
+def _scan(repo: Path, relative: str, content: str, config: Path = CONFIG) -> int:
+    shutil.copy(config, repo / ".gitleaks.toml")
     target = repo / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content)
@@ -274,6 +325,42 @@ def test_the_named_fixture_exemption_is_bound_to_its_rule(tmp_path: Path) -> Non
     """The exempt file is still scanned by every other rule."""
     relative = "tests/unit/test_odoo_cross_repo_contract.py"
     assert _scan(tmp_path, relative, f"aws_access_key_id: {_AWS_KEY_ID}\n") == 1
+
+
+# Synthetic credentials that contain a formerly exempt word ("test"), assembled
+# at run time. The former global allowlist suppressed both.
+_AWS_KEY_ID_WITH_WORD = "AKIA" + "TEST" + "Q7W3E9R5T1Y8"
+_OPENAI_KEY_WITH_WORD = "sk-" + "test" + "Zq8mK2vL9xR4tY7uW1e3"
+
+
+@pytest.mark.skipif(_REAL_GITLEAKS is None, reason="gitleaks binary not installed")
+@pytest.mark.parametrize(
+    "content",
+    [f"aws_access_key_id: {_AWS_KEY_ID_WITH_WORD}\n", f"OPENAI_API_KEY={_OPENAI_KEY_WITH_WORD}\n"],
+    ids=["aws-key-id", "openai-key"],
+)
+def test_a_secret_containing_an_ordinary_word_is_a_finding(content: str, tmp_path: Path) -> None:
+    """Witness: a credential whose text contains "test" is caught."""
+    assert _scan(tmp_path, "app/settings.py", content) == 1
+
+
+@pytest.mark.skipif(_REAL_GITLEAKS is None, reason="gitleaks binary not installed")
+def test_the_legacy_global_regex_would_have_hidden_it(tmp_path: Path) -> None:
+    """Negative control: the same credential under the former global allowlist is silent."""
+    legacy = tmp_path / "legacy.toml"
+    legacy.write_text(
+        CONFIG.read_text(encoding="utf-8")
+        + f'\n[allowlist]\nregexTarget = "match"\nregexes = ["""{LEGACY_GLOBAL_REGEX}"""]\n',
+        encoding="utf-8",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert (
+        _scan(
+            repo, "app/settings.py", f"aws_access_key_id: {_AWS_KEY_ID_WITH_WORD}\n", config=legacy
+        )
+        == 0
+    )
 
 
 _DSN_PREFIX = "postgresql://" + "svc:" + "Zq8mK2vL9x" + "@"

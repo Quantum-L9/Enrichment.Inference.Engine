@@ -97,18 +97,13 @@ tags = ["api", "sendgrid"]
 
 # ── Allowlist ─────────────────────────────────────────────────────────────
 #
-# No whole-directory or whole-extension path is exempt from scanning. The
-# former global `paths` list (tests/, docs/, readme/, kb/, .env.example,
-# .env.template, docker-compose.*.yml, requirements*.txt, *.md, *.sarif,
-# *.json) hid two findings in total across every ref the workflows scan. Each
-# is now a named exemption on its own rule above. A new false positive gets
-# the same treatment: an exact file, or a pattern that cannot match a real
-# credential, under the rule that fires, with a one-line reason.
+# There is no global allowlist. No whole-directory or whole-extension path is
+# exempt, and no word in a match exempts it: the former global regex
+# `(?i)example|placeholder|dummy|test|fake|mock|sample` suppressed every
+# finding, under every rule, whose match contained one of those substrings
+# (a real key containing "test" included). It hid nine historical findings,
+# each now an exact fingerprint in .gitleaksignore with its reason. A new false
+# positive gets the same treatment: an exact fingerprint in .gitleaksignore, or
+# an exact file or a pattern that cannot match a real credential under the
+# rule that fires, with a one-line reason.
 # Contract: tests/ci/test_gitleaks_config_contract.py
-
-[allowlist]
-description = "Matches that name themselves as placeholders"
-regexTarget = "match"
-regexes = [
-    '''(?i)example|placeholder|dummy|test|fake|mock|sample''',
-]
