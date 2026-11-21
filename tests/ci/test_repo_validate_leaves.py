@@ -120,6 +120,20 @@ def test_kb_duplicate_inside_a_merge_operand_is_reported(tmp_path: Path) -> None
     assert "found duplicate key 'rules'" in errors[0]
 
 
+@pytest.mark.parametrize(
+    ("body", "spelling"),
+    [
+        ("rules: []\nRules: []\ntrue: 1\nTrue: 2\n", "True"),
+        ("1: a\n0x1: b\n", "0x1"),
+    ],
+)
+def test_kb_keys_equal_after_construction_are_duplicates(
+    tmp_path: Path, body: str, spelling: str
+) -> None:
+    errors = kb_rule_errors(_kb(tmp_path, body))
+    assert any(f"found duplicate key {spelling!r}" in error for error in errors), errors
+
+
 def test_kb_merge_key_override_is_not_a_duplicate(tmp_path: Path) -> None:
     body = "base: &b {field: x, when: {gt: 1}}\nrules:\n  - <<: *b\n    field: y\n"
     assert kb_rule_errors(_kb(tmp_path, body)) == []

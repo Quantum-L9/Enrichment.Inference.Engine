@@ -32,6 +32,9 @@ def _duplicate_key_errors(text: str) -> list[str]:
     Construction itself stays ``yaml.safe_load`` (AGENTS.md C-08).
     """
     root = yaml.compose(text, Loader=yaml.SafeLoader)
+    # Keys are compared by the value safe_load gives them, not by spelling:
+    # `true`/`True` and `1`/`0x1` collapse to one dict key, hiding a value.
+    constructor = yaml.SafeLoader("")
     errors: list[str] = []
     seen_nodes: set[int] = set()
     stack: list[yaml.Node] = [root] if root is not None else []
@@ -41,20 +44,21 @@ def _duplicate_key_errors(text: str) -> list[str]:
             continue
         seen_nodes.add(id(node))
         if isinstance(node, yaml.MappingNode):
-            keys: set[tuple[str, str]] = set()
+            keys: set[object] = set()
             for key_node, value_node in node.value:
                 stack.extend((key_node, value_node))
                 if key_node.tag == "tag:yaml.org,2002:merge" or not isinstance(
                     key_node, yaml.ScalarNode
                 ):
                     continue
-                key = (key_node.tag, key_node.value)
+                key = constructor.construct_object(key_node, deep=True)
                 if key in keys:
                     mark = key_node.start_mark
                     errors.append(f"line {mark.line + 1}: found duplicate key {key_node.value!r}")
                 keys.add(key)
         elif isinstance(node, yaml.SequenceNode):
             stack.extend(node.value)
+    constructor.dispose()
     return errors
 
 
