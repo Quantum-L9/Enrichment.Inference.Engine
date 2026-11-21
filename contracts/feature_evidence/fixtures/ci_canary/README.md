@@ -14,3 +14,17 @@ pytest does not collect them (`pytest.ini` collects `tests/test_*.py`).
 
 `tests/canary/central_rule_bad_in_tests.py` is a scope witness: the same
 central known-bad construct placed under `tests/`.
+
+## Evidence
+
+Run 1. Head `7c836078`, org-ci Core `2ff05a03`, SDK `47ae3ac5`, central mode
+blocking. Full record: PR #378 comment 7058473821.
+
+| Gate | Verdict | Run / job |
+|---|---|---|
+| 2: central rule fires and blocks | PASS. `central_rule_bad.py:8`, both rules, blocking | 44874376220 / 136755713865 |
+| 3: consumer cannot weaken central coverage | PASS. `override_attempt.py:14` still blocks (`nosem: disabled`); `tests/` is excluded by central scan-scope policy 1.1.0, not by the consumer | 44874376220 / 136755713865 |
+| EIE local Semgrep | FAIL as designed. `local_rule_bad.py` only, run twice (duplicate job) | 44874376340 / 136755763813; 44874376228 / 136755781181 |
+
+Run 2 is due after PIN-ADVANCE-3 (Core #324 `12befe6`, SDK `4a887396`,
+CENTRAL-DIFF and the waiver ledger live). Its result is recorded on PR #378.
