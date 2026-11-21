@@ -55,3 +55,32 @@ def test_anti_pattern_scanners_skip_peer_checkouts_and_virtualenvs(
     _tree(tmp_path)
     found = _relative(tmp_path, get_python_files(tmp_path))
     assert found == set(OWNED)
+
+
+def test_anti_pattern_scanner_rooted_inside_a_peer_checkout_scans_that_root(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A skip name above the scan root does not empty the scan; one below it still applies."""
+    root = tmp_path / ".ci-subjects" / "ceg-peer"
+    for relative in ("engine/graph/driver.py", ".ci-subjects/nested/peer.py", ".venv/lib/x.py"):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n", encoding="utf-8")
+    assert _relative(root, get_python_files(root)) == {"engine/graph/driver.py"}
+
+
+def test_anti_pattern_scanner_matches_whole_directory_names(tmp_path: pathlib.Path) -> None:
+    """`build` and `.git` skip only directories with exactly those names."""
+    for relative in (
+        "app/services/prompt_builder.py",
+        ".github/scripts/classify_pr.py",
+        "build/lib/app/x.py",
+        "pkg.egg-info/x.py",
+    ):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n", encoding="utf-8")
+    assert _relative(tmp_path, get_python_files(tmp_path)) == {
+        "app/services/prompt_builder.py",
+        ".github/scripts/classify_pr.py",
+    }

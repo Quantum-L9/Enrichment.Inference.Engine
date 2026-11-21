@@ -116,10 +116,20 @@ def _iter_python_files_simple(
     effective_skip = skip_dirs if skip_dirs is not None else SKIP_DIRS
 
     for py_file in sorted(root.rglob("*.py")):
-        path_str = str(py_file)
-        if any(skip in path_str for skip in effective_skip):
+        # Directory components below *root* only: a skip name never matches
+        # the root's own ancestors, nor a substring of a name ("build" is not
+        # "prompt_builder.py", ".git" is not ".github").
+        directories = py_file.relative_to(root).parts[:-1]
+        if any(_is_skipped(part, effective_skip) for part in directories):
             continue
         yield py_file
+
+
+def _is_skipped(directory: str, skip_dirs: frozenset[str]) -> bool:
+    """Whether one directory name is excluded; ``.egg-info`` matches as a suffix."""
+    if directory in skip_dirs:
+        return True
+    return ".egg-info" in skip_dirs and directory.endswith(".egg-info")
 
 
 def get_python_files(
