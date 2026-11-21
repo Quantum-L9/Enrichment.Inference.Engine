@@ -18,49 +18,51 @@ from pathlib import Path
 import yaml
 
 
-class _UniqueKeyLoader(yaml.SafeLoader):
-    """SafeLoader that refuses a mapping with two equal explicit keys.
+def _duplicate_key_errors(text: str) -> list[str]:
+    """Return one message per mapping that repeats an explicit key.
 
     PyYAML keeps the last of duplicate keys silently, so a file could hide an
-    invalid value behind a valid one. YAML requires unique keys; merge keys
-    (``<<``) may still be overridden by an explicit key, as the spec allows.
+    invalid value behind a valid one. The check runs on the composed node
+    graph, before anything is constructed: every mapping node is visited once
+    (aliases included, merge operands included) and only its own explicit keys
+    are compared, so a merge key (``<<``) overridden by an explicit key stays
+    legal and in-place merge flattening cannot produce a false duplicate.
+    Construction itself stays ``yaml.safe_load`` (AGENTS.md C-08).
     """
-
-
-def _construct_unique_mapping(
-    loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool = False
-) -> dict[object, object]:
-    seen: set[object] = set()
-    for key_node, _ in node.value:
-        if key_node.tag == "tag:yaml.org,2002:merge":
+    root = yaml.compose(text, Loader=yaml.SafeLoader)
+    # Keys are compared by the value safe_load gives them, not by spelling:
+    # `true`/`True` and `1`/`0x1` collapse to one dict key, hiding a value.
+    constructor = yaml.SafeLoader("")
+    errors: list[str] = []
+    seen_nodes: set[int] = set()
+    stack: list[yaml.Node] = [root] if root is not None else []
+    while stack:
+        node = stack.pop()
+        if id(node) in seen_nodes:
             continue
-        key = loader.construct_object(key_node, deep=deep)
-        try:
-            hash(key)
-        except TypeError:
-            continue  # SafeLoader reports an unhashable key itself
-        if key in seen:
-            raise yaml.constructor.ConstructorError(
-                "while constructing a mapping",
-                node.start_mark,
-                f"found duplicate key {key!r}",
-                key_node.start_mark,
-            )
-        seen.add(key)
-    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
-
-
-_UniqueKeyLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping
-)
-
-
-def _load(text: str) -> object:
-    loader = _UniqueKeyLoader(text)
-    try:
-        return loader.get_single_data()
-    finally:
-        loader.dispose()
+        seen_nodes.add(id(node))
+        if isinstance(node, yaml.MappingNode):
+            keys: set[object] = set()
+            for key_node, value_node in node.value:
+                stack.extend((key_node, value_node))
+                if key_node.tag == "tag:yaml.org,2002:merge" or not isinstance(
+                    key_node, yaml.ScalarNode
+                ):
+                    continue
+                if key_node.tag == "tag:yaml.org,2002:value":
+                    # Unquoted `=`: safe_load's mapping construction retags it
+                    # as a string key; construct_object has no constructor for it.
+                    key: object = key_node.value
+                else:
+                    key = constructor.construct_object(key_node, deep=True)
+                if key in keys:
+                    mark = key_node.start_mark
+                    errors.append(f"line {mark.line + 1}: found duplicate key {key_node.value!r}")
+                keys.add(key)
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(node.value)
+    constructor.dispose()
+    return errors
 
 
 def kb_rule_errors(kb_dir: Path) -> list[str]:
@@ -69,10 +71,15 @@ def kb_rule_errors(kb_dir: Path) -> list[str]:
         return []
     errors: list[str] = []
     for path in sorted({*kb_dir.rglob("*.yaml"), *kb_dir.rglob("*.yml")}):
+        text = path.read_text(encoding="utf-8")
         try:
-            data = _load(path.read_text(encoding="utf-8"))
+            duplicates = _duplicate_key_errors(text)
+            data = yaml.safe_load(text)
         except yaml.YAMLError as exc:
             errors.append(f"{path}: {exc}")
+            continue
+        if duplicates:
+            errors.extend(f"{path}: {message}" for message in duplicates)
             continue
         if not isinstance(data, dict):
             errors.append(f"{path}: Root must be a YAML mapping")

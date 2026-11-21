@@ -107,6 +107,43 @@ def test_kb_violations_are_reported(tmp_path: Path, body: str, expected: str) ->
     assert expected in errors[0]
 
 
+def test_kb_nested_merge_reused_by_alias_is_not_a_duplicate(tmp_path: Path) -> None:
+    """In-place merge flattening of a reused anchor must not read as a duplicate."""
+    body = "rules:\n  - <<: &b\n      <<: {field: x, when: {}}\n      field: y\n  - *b\n"
+    assert kb_rule_errors(_kb(tmp_path, body)) == []
+
+
+def test_kb_duplicate_inside_a_merge_operand_is_reported(tmp_path: Path) -> None:
+    body = "<<: {rules: [{when: {gt: 1}}], rules: []}\n"
+    errors = kb_rule_errors(_kb(tmp_path, body))
+    assert len(errors) == 1
+    assert "found duplicate key 'rules'" in errors[0]
+
+
+@pytest.mark.parametrize(
+    ("body", "spelling"),
+    [
+        ("rules: []\nRules: []\ntrue: 1\nTrue: 2\n", "True"),
+        ("1: a\n0x1: b\n", "0x1"),
+    ],
+)
+def test_kb_keys_equal_after_construction_are_duplicates(
+    tmp_path: Path, body: str, spelling: str
+) -> None:
+    errors = kb_rule_errors(_kb(tmp_path, body))
+    assert any(f"found duplicate key {spelling!r}" in error for error in errors), errors
+
+
+def test_kb_unquoted_equals_key_is_a_string_key(tmp_path: Path) -> None:
+    """safe_load reads an unquoted `=` key as the string '='; it is legal."""
+    assert kb_rule_errors(_kb(tmp_path, "rules: [{field: x, when: {=: 1}}]\n")) == []
+
+
+def test_kb_unquoted_and_quoted_equals_keys_are_duplicates(tmp_path: Path) -> None:
+    errors = kb_rule_errors(_kb(tmp_path, "rules: [{field: x, when: {=: 1, '=': 2}}]\n"))
+    assert any("found duplicate key '='" in error for error in errors), errors
+
+
 def test_kb_merge_key_override_is_not_a_duplicate(tmp_path: Path) -> None:
     body = "base: &b {field: x, when: {gt: 1}}\nrules:\n  - <<: *b\n    field: y\n"
     assert kb_rule_errors(_kb(tmp_path, body)) == []
@@ -151,6 +188,17 @@ def test_broken_workflow_is_reported(tmp_path: Path, body: str, expected: str) -
     errors = workflow_errors(_workflows(tmp_path, body))
     assert len(errors) == 1
     assert expected in errors[0]
+
+
+def test_workflow_unquoted_equals_key_is_a_string_key(tmp_path: Path) -> None:
+    directory = _workflows(tmp_path, "on: push\njobs:\n  a:\n    env: {=: 1}\n")
+    assert workflow_errors(directory) == []
+
+
+def test_workflow_unquoted_and_quoted_equals_keys_are_duplicates(tmp_path: Path) -> None:
+    directory = _workflows(tmp_path, "on: push\njobs:\n  a:\n    env: {=: 1, '=': 2}\n")
+    errors = workflow_errors(directory)
+    assert any("found duplicate key '='" in error for error in errors), errors
 
 
 def test_no_workflows_is_reported(tmp_path: Path) -> None:
