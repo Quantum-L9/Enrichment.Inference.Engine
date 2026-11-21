@@ -201,6 +201,18 @@ def test_workflow_unquoted_and_quoted_equals_keys_are_duplicates(tmp_path: Path)
     assert any("found duplicate key '='" in error for error in errors), errors
 
 
+def test_workflow_yaml_1_1_booleans_are_distinct_keys(tmp_path: Path) -> None:
+    """GitHub Actions reads `ON` and `YES` as strings, so they are two keys."""
+    body = 'on: push\njobs:\n  a:\n    env: {ON: "a", YES: "b", on: "c", yes: "d"}\n'
+    assert workflow_errors(_workflows(tmp_path, body)) == []
+
+
+def test_workflow_yaml_1_2_boolean_spellings_still_collide(tmp_path: Path) -> None:
+    body = "on: push\njobs:\n  a:\n    env: {true: a, True: b}\n"
+    errors = workflow_errors(_workflows(tmp_path, body))
+    assert any("found duplicate key 'True'" in error for error in errors), errors
+
+
 def test_no_workflows_is_reported(tmp_path: Path) -> None:
     assert workflow_errors(tmp_path) != []
 

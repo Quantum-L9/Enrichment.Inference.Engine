@@ -14,10 +14,33 @@ Exit 0 when every workflow parses, 1 with one line per broken file otherwise.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
 import yaml
+
+
+class _WorkflowLoader(yaml.SafeLoader):
+    """SafeLoader with GitHub Actions' YAML 1.2 booleans.
+
+    PyYAML resolves YAML 1.1 booleans, so `on`, `yes`, `ON` and `YES` all
+    become `True`; GitHub Actions reads them as distinct strings. Keys are
+    compared as GitHub sees them, so `env: {ON: a, YES: b}` is not a
+    duplicate. Only the implicit bool resolver differs: construction is still
+    SafeLoader's (AGENTS.md C-08).
+    """
+
+
+_WorkflowLoader.yaml_implicit_resolvers = {
+    first: [(tag, regexp) for tag, regexp in resolvers if tag != "tag:yaml.org,2002:bool"]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_WorkflowLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+    list("tTfF"),
+)
 
 
 def _duplicate_key_errors(text: str) -> list[str]:
@@ -31,10 +54,10 @@ def _duplicate_key_errors(text: str) -> list[str]:
     legal and in-place merge flattening cannot produce a false duplicate.
     Construction itself stays ``yaml.safe_load`` (AGENTS.md C-08).
     """
-    root = yaml.compose(text, Loader=yaml.SafeLoader)
-    # Keys are compared by the value safe_load gives them, not by spelling:
+    root = yaml.compose(text, Loader=_WorkflowLoader)
+    # Keys are compared by their constructed value, not by spelling:
     # `true`/`True` and `1`/`0x1` collapse to one dict key, hiding a value.
-    constructor = yaml.SafeLoader("")
+    constructor = _WorkflowLoader("")
     errors: list[str] = []
     seen_nodes: set[int] = set()
     stack: list[yaml.Node] = [root] if root is not None else []
