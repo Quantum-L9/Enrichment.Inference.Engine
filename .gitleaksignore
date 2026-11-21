@@ -1,0 +1,21 @@
+# Gitleaks finding fingerprints (commit:path:rule:line) that are known not to be
+# credentials. Each entry names one historical finding exactly; it cannot hide
+# a different commit, file, rule or line. A new false positive gets a new line
+# here with its reason, never a broad allowlist in .gitleaks.toml.
+# Contract: tests/ci/test_gitleaks_config_contract.py
+#
+# Throwaway passwords for a CI service database on the loopback host
+# (localhost / 127.0.0.1), in workflow and local-pipeline history. None is at HEAD.
+e1baeae9732810d38f3e481631fe913247e57449:.github/workflows/sonarcloud.yml:postgres-connection-string:85
+c42f2011d12c5870ea1822b951170e4e0b4583c3:.github/workflows/pr-pipeline.yml:postgres-connection-string:274
+e90687f55e7568c4ba527f2e8096398d32b817d4:local_pr_pipeline/pr_pipeline.sh:postgres-connection-string:128
+f83f9dde1ef5c6099bead86293b17aeac781f176:.github/workflows/ci.yml:postgres-connection-string:78
+87a8621d3bb59a471523978536f0900cea9cd4d3:.github/workflows/ci.yml:postgres-connection-string:233
+ba256a17e7d7f8814078a81a0391d02fed23bd4d:.github/workflows/ci-quality.yml:postgres-connection-string:219
+b38c26a27d10a2e62984ac59dc82f7f133d7e7c4:.github/workflows/ci-quality.yml:postgres-connection-string:219
+#
+# Documentation template with ${POSTGRES_USER}/${POSTGRES_DB} placeholders on localhost.
+5407258dcd7005a10c0ce81acdae18a76baa047f:CONFIG_ENV_CONTRACT.md:postgres-connection-string:228
+#
+# The redis-connection-string rule's own regex, matching itself in this config.
+919c763ce22cd8e5395a7d10c14ee6a9a72f2b35:.gitleaks.toml:redis-connection-string:57
