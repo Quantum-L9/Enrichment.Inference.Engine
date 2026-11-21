@@ -107,6 +107,19 @@ def test_kb_violations_are_reported(tmp_path: Path, body: str, expected: str) ->
     assert expected in errors[0]
 
 
+def test_kb_nested_merge_reused_by_alias_is_not_a_duplicate(tmp_path: Path) -> None:
+    """In-place merge flattening of a reused anchor must not read as a duplicate."""
+    body = "rules:\n  - <<: &b\n      <<: {field: x, when: {}}\n      field: y\n  - *b\n"
+    assert kb_rule_errors(_kb(tmp_path, body)) == []
+
+
+def test_kb_duplicate_inside_a_merge_operand_is_reported(tmp_path: Path) -> None:
+    body = "<<: {rules: [{when: {gt: 1}}], rules: []}\n"
+    errors = kb_rule_errors(_kb(tmp_path, body))
+    assert len(errors) == 1
+    assert "found duplicate key 'rules'" in errors[0]
+
+
 def test_kb_merge_key_override_is_not_a_duplicate(tmp_path: Path) -> None:
     body = "base: &b {field: x, when: {gt: 1}}\nrules:\n  - <<: *b\n    field: y\n"
     assert kb_rule_errors(_kb(tmp_path, body)) == []
