@@ -106,7 +106,7 @@ target-version = "py312"
 extend-exclude = ["gap-fixes", "WIP", "*.md", "**/*.md"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "TCH", "T20"]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "TCH"]
 ignore = [
     "E501",     # formatter handles line length
     "TC001",    # typing-only first-party import — breaks Pydantic v2 validators at runtime
@@ -123,11 +123,6 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# T20 (no print) applies to service code only: app/ and engine/, the scope the
-# compliance.yml terminology grep had. CLIs, tools, scripts and tests print by
-# design. `make check` runs this in the required `Analyze (central Core)`
-# check (EIE org-CI cutover, Phase 1 row 29).
-"!{app,engine}/**.py" = ["T20"]
 "tests/**" = ["PLR2004", "PT011", "E741", "SIM102", "F841", "F821"]
 "engine/config/**" = ["PLR2004"]
 "tools/**" = ["PLC0415", "E741", "SIM102"]

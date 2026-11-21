@@ -69,9 +69,17 @@ repo-validate:  ## Contract manifest, payload contract compiler, Gate_SDK channe
 	@echo "── Audit engine (fails on CRITICAL/HIGH) ──"
 	$(PYTHON) tools/audit_engine.py --strict
 
-repo-check:  ## Non-mutating static gate: ruff check, ruff format --check, strict mypy
+# Service code may not print (Phase 1 row 29; the compliance.yml grep on app/ and
+# engine/ was not a required check). A separate `--select T20` run over those
+# directories only, so pyproject.toml's ruff select and its frozen ignore list
+# (C-18 / INV-17) stay untouched and CLIs, tools, scripts and tests may print.
+PRINT_BAN_PATHS := $(wildcard app engine)
+
+repo-check:  ## Non-mutating static gate: ruff check, no print() in service code, ruff format --check, strict mypy
 	@echo "── Ruff lint ──"
 	$(PYTHON) -m ruff check .
+	@echo "── No print() in service code (ruff T20: $(PRINT_BAN_PATHS)) ──"
+	$(PYTHON) -m ruff check --select T20 --no-fix $(PRINT_BAN_PATHS)
 	@echo "── Ruff format (check only) ──"
 	$(PYTHON) -m ruff format --check .
 	@echo "── Type check ──"
