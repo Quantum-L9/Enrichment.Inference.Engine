@@ -14,19 +14,36 @@
 # Fork pull requests skip this entire secret-bearing job. A skipped job is
 # not a quality-gate PASS and provides no analysis proof.
 #
-# This job does not run the test catalog. The pull-request selection is
-# `make test`. The catalog, peers, and e2e are the deep plan in ci.yml.
+# This job runs no tests. ci.yml calls it after its Test Suite job, on push to
+# main and on same-repository pull requests. That job's single `make test` run
+# measures PR-fast coverage of app/ and uploads it as coverage-pr-fast; after
+# a deep apply on main, ci.yml calls it again with coverage-full from the deep
+# plan's full catalog. This job downloads that artifact to coverage.xml, which
+# sonar-project.properties names, and fails when it is absent: a scan without
+# it reads as 0% coverage. Sonar's new-code gate then judges the changed lines
+# that coverage exercises. The catalog, peers, and e2e are the deep plan in
+# ci.yml.
 # A missing SONAR_TOKEN fails this scan. It does not decide whether the
 # catalog ran.
 
 name: SonarCloud
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_call:
+    inputs:
+      coverage-artifact:
+        description: >-
+          Artifact holding coverage.xml from this run. coverage-pr-fast (the
+          Test Suite job) for push and pull-request analyses; coverage-full
+          (the deep plan's full catalog) for the main analysis after a deep
+          apply.
+        required: false
+        type: string
+        default: coverage-pr-fast
+    secrets:
+      SONAR_TOKEN:
+        description: SonarQube Cloud analysis token, used by this job only.
+        required: false
 
 permissions:
   contents: read
@@ -54,6 +71,20 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Download coverage report
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: ${{ inputs.coverage-artifact }}
+          path: .
+
+      - name: Require the coverage report
+        run: |
+          set -euo pipefail
+          if [ ! -s coverage.xml ]; then
+            echo "::error::coverage.xml from the Test Suite job is missing; the scan would read 0% coverage" >&2
+            exit 1
+          fi
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1

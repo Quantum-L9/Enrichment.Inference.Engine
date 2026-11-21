@@ -11,7 +11,7 @@
 # Universal CI/CD Pack — PR Review Policy Enforcement
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # VERSION: 1.0.0
-# PURPOSE: Automated PR size limits and review policy enforcement
+# PURPOSE: Advisory PR size report (housekeeping: reports, never blocks)
 # SIBLING PARITY: Cognitive.Engine.Graphs/pr-review-enforcement.yml
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -57,7 +57,9 @@ jobs:
             const maxFiles = parseInt('${{ env.PR_MAX_FILES }}');
 
             let messages = [];
-            let shouldFail = false;
+            // Housekeeping: advisory only (operator decision 2026-11-20). Over-limit
+            // PRs are reported and annotated; this check never blocks a merge.
+            let overLimit = false;
             let shouldWarn = false;
 
             messages.push(`## PR Size Report`);
@@ -71,8 +73,8 @@ jobs:
             messages.push('');
 
             if (totalChanges > blockThreshold) {
-              shouldFail = true;
-              messages.push(`> **BLOCKED**: PR exceeds ${blockThreshold} lines changed`);
+              overLimit = true;
+              messages.push(`> **Over limit (advisory)**: PR exceeds ${blockThreshold} lines changed`);
               messages.push('');
             } else if (totalChanges > warnThreshold) {
               shouldWarn = true;
@@ -81,12 +83,12 @@ jobs:
             }
 
             if (changedFiles > maxFiles) {
-              shouldFail = true;
-              messages.push(`> **BLOCKED**: PR changes ${changedFiles} files (max: ${maxFiles})`);
+              overLimit = true;
+              messages.push(`> **Over limit (advisory)**: PR changes ${changedFiles} files (limit: ${maxFiles})`);
               messages.push('');
             }
 
-            if (shouldFail || shouldWarn) {
+            if (overLimit || shouldWarn) {
               messages.push('### Best Practices for Large Changes');
               messages.push('');
               messages.push('1. **Refactoring + Features**: Separate into 2 PRs');
@@ -96,46 +98,51 @@ jobs:
               messages.push('');
             }
 
-            if (shouldFail) {
+            if (overLimit) {
               messages.push('---');
               messages.push('');
-              messages.push('**This PR is blocked from merging until size limits are met.**');
+              messages.push('**Advisory:** this PR is over the size limits. This check reports size and never blocks merging.');
             } else if (!shouldWarn) {
               messages.push('✅ **PR size is within recommended limits**');
             }
 
             const body = messages.join('\n');
 
-            const comments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pr.number
-            });
-
-            const botComment = comments.data.find(comment =>
-              comment.user.type === 'Bot' &&
-              comment.body.includes('PR Size Report')
-            );
-
-            if (botComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: botComment.id,
-                body: body
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pr.number,
-                body: body
-              });
+            if (overLimit) {
+              core.warning('Advisory: PR exceeds size limits — consider splitting this PR (this check does not block)');
             }
 
-            if (shouldFail) {
-              core.warning('PR exceeds size policy limits — consider splitting this PR');
-              // core.setFailed() removed: check always passes, report comment still posted
+            // Publishing the report is best-effort: on fork PRs the token is
+            // read-only, and a comment API error must not fail an advisory check.
+            try {
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number
+              });
+
+              const botComment = comments.data.find(comment =>
+                comment.user.type === 'Bot' &&
+                comment.body.includes('PR Size Report')
+              );
+
+              if (botComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: botComment.id,
+                  body: body
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: body
+                });
+              }
+            } catch (error) {
+              core.warning(`PR size report comment not published (advisory): ${error.message}`);
             }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

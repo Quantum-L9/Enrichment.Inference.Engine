@@ -1,3 +1,10 @@
+# Each step checks a file this repository has. A step that SKIPs with exit 0
+# when its target is missing proves nothing, and four of them always did:
+#   AGENT.md            -> AGENTS.md (the agent contract; "Autonomy Tiers")
+#   INVARIANTS.md       -> docs/INVARIANTS.md (INV-1..INV-20, matched whole)
+#   GUARDRAILS.md ref   -> retired: no GUARDRAILS.md exists to reference
+#   AGENT_BOOTSTRAP.md  -> retired: no such file exists in this repository
+# A required file that is missing now FAILs. WARN steps stay advisory.
 name: docs-consistency
 
 on:
@@ -22,17 +29,17 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Verify AGENT.md contains Autonomy Tiers
+      - name: Verify AGENTS.md contains Autonomy Tiers
         run: |
-          if [ ! -f "AGENT.md" ]; then
-            echo "SKIP: AGENT.md not found (may be added by this PR)"
-            exit 0
-          fi
-          if ! grep -q "Agent Autonomy Tiers" AGENT.md; then
-            echo "FAIL: AGENT.md missing 'Agent Autonomy Tiers' section"
+          if [ ! -f "AGENTS.md" ]; then
+            echo "FAIL: AGENTS.md not found"
             exit 1
           fi
-          echo "PASS: AGENT.md contains Autonomy Tiers"
+          if ! grep -qE "^#+ .*Autonomy Tiers" AGENTS.md; then
+            echo "FAIL: AGENTS.md missing an 'Autonomy Tiers' section"
+            exit 1
+          fi
+          echo "PASS: AGENTS.md contains Autonomy Tiers"
 
       - name: Verify 7-gate sequence has single SSOT
         run: |
@@ -46,38 +53,28 @@ jobs:
           fi
           echo "PASS: make agent-check referenced in $COUNT files (within limit)"
 
-      - name: Verify AGENT.md references GUARDRAILS.md
+      - name: Verify docs/INVARIANTS.md contains INV-1 through INV-20
         run: |
-          if [ ! -f "AGENT.md" ]; then
-            echo "SKIP: AGENT.md not found"
-            exit 0
-          fi
-          if ! grep -q "GUARDRAILS.md" AGENT.md; then
-            echo "FAIL: AGENT.md does not reference GUARDRAILS.md"
+          if [ ! -f "docs/INVARIANTS.md" ]; then
+            echo "FAIL: docs/INVARIANTS.md not found"
             exit 1
           fi
-          echo "PASS: AGENT.md references GUARDRAILS.md"
-
-      - name: Verify INVARIANTS.md contains INV-1 through INV-20
-        run: |
-          if [ ! -f "INVARIANTS.md" ]; then
-            echo "SKIP: INVARIANTS.md not found"
-            exit 0
-          fi
           for i in $(seq 1 20); do
-            if ! grep -q "INV-$i" INVARIANTS.md; then
-              echo "FAIL: INVARIANTS.md missing INV-$i"
+            # Whole identifier on both sides: INV-1 is not satisfied by INV-10,
+            # INV-1x or XINV-1.
+            if ! grep -qE "(^|[^A-Za-z0-9_])INV-$i([^A-Za-z0-9_]|$)" docs/INVARIANTS.md; then
+              echo "FAIL: docs/INVARIANTS.md missing INV-$i"
               exit 1
             fi
           done
-          echo "PASS: All INV-1 through INV-20 present in INVARIANTS.md"
+          echo "PASS: All INV-1 through INV-20 present in docs/INVARIANTS.md"
 
       - name: Verify active registered waivers have ADR references
         run: |
           REGISTER="docs/CI_WHITELIST_REGISTER.md"
           if [ ! -f "$REGISTER" ]; then
-            echo "SKIP: $REGISTER not found"
-            exit 0
+            echo "FAIL: $REGISTER not found"
+            exit 1
           fi
           for waiver in 002 004 005; do
             if ! grep -q "ADR-$waiver" "$REGISTER"; then
@@ -90,8 +87,8 @@ jobs:
       - name: Verify ADR files exist
         run: |
           if [ ! -d "docs/adr" ]; then
-            echo "SKIP: docs/adr/ directory not found"
-            exit 0
+            echo "FAIL: docs/adr/ directory not found"
+            exit 1
           fi
           for i in $(seq 1 7); do
             NUM=$(printf "%03d" $i)
@@ -134,15 +131,3 @@ jobs:
           else
             echo "SKIP: app/api/ not found"
           fi
-
-      - name: Verify AGENT_BOOTSTRAP.md is present and linked
-        run: |
-          if [ ! -f "AGENT_BOOTSTRAP.md" ]; then
-            echo "SKIP: AGENT_BOOTSTRAP.md not found (may be added by this PR)"
-            exit 0
-          fi
-          if ! grep -q "AGENT.md" AGENT_BOOTSTRAP.md; then
-            echo "FAIL: AGENT_BOOTSTRAP.md does not reference AGENT.md"
-            exit 1
-          fi
-          echo "PASS: AGENT_BOOTSTRAP.md present and references AGENT.md"

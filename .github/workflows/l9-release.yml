@@ -60,11 +60,11 @@ jobs:
     name: Canonical release analysis
     needs: source
     uses: Quantum-L9/l9-ci-core/.github/workflows/analyze-semgrep.yml@89c9bc4e5ceafab932c92a2fdca2d3739fccf95f
+    # analyze-semgrep.yml at this pin has one job, `analyze`, and it declares
+    # only contents: read. It writes SARIF to an artifact and publishes no
+    # check run and no code-scanning upload, so no write scope is granted.
     permissions:
-      actions: read
-      checks: write
       contents: read
-      security-events: write
     with:
       # Explicit class: Core maps workflow_dispatch to `nightly` otherwise,
       # which the `release` profile does not admit.
