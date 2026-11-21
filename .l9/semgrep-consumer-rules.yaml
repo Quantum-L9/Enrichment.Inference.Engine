@@ -1,0 +1,9 @@
+# Scoped consumer rulepack declaration (l9-ci-sdk ADR 0021).
+# Central CI runs the rule files listed here as a separate consumer execution;
+# the central required Semgrep run is unchanged. EIE's own ci.yml and
+# pr-pipeline.yml keep running them too until the consumer instance is
+# recorded firing in `Analyze (central Core)` (EIE org-CI cutover, Phase 1 row 23).
+schema: l9.semgrep-consumer-rulepack/v1
+owner: Quantum-L9/Enrichment.Inference.Engine
+rule_files:
+  - .semgrep/semgrep-rules.yaml
