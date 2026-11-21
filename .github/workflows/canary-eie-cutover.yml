@@ -1,11 +1,6 @@
 # CANARY (DO NOT MERGE): EIE org-CI cutover H5, leaf witness for tools/validate_workflow_yaml.py.
-# `jobs` appears twice; PyYAML would keep the last silently. `make validate` must fail.
+# Parses as YAML but has no `jobs` mapping, so the workflow can never run. `make validate` must fail.
 name: canary-eie-cutover
 on: workflow_dispatch
 permissions: {}
-jobs: {}
-jobs:
-  noop:
-    runs-on: ubuntu-latest
-    steps:
-      - run: "true"
+jobs: none
