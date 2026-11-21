@@ -197,7 +197,43 @@ def _pin(job: dict, step: dict) -> dict[str, str]:
 def test_the_binary_installs_are_found() -> None:
     """Guard the discovery itself: an empty set would pass every check below."""
     names = {workflow for workflow, _, _ in _install_steps()}
-    assert {"ci.yml", "pr-pipeline.yml", "gitleaks.yml"} <= names
+    assert "gitleaks.yml" in names
+
+
+# The org-CI cutover removed the repository-local `Security Scanning` job from
+# both pipelines. It ran `gitleaks git .` over every fetched ref, so a branch's
+# history (the cutover canary's planted fixture) failed unrelated pull requests.
+# Core's `security / security` job in the required Analyze check runs gitleaks
+# over the pull request's own range, plus pip-audit and Bandit; dependency
+# review runs in supply-chain.yml.
+_DUPLICATE_SCANS = ("gitleaks", "pip-audit", "bandit", "dependency-review-action")
+
+
+@pytest.mark.parametrize(
+    ("workflow", "gate"), [("ci.yml", "ci-gate"), ("pr-pipeline.yml", "pr-pipeline-gate")]
+)
+def test_the_legacy_security_scanning_job_stays_removed(workflow: str, gate: str) -> None:
+    data = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8"))
+    jobs = data["jobs"]
+    assert "security" not in jobs, workflow
+    assert all(job.get("name") != "Security Scanning" for job in jobs.values()), workflow
+    for name, job in jobs.items():
+        for step in job.get("steps", []):
+            text = f"{step.get('run') or ''} {step.get('uses') or ''}"
+            hits = [scan for scan in _DUPLICATE_SCANS if scan in text]
+            assert not hits, f"{workflow}:{name} runs {hits}"
+    assert "security" not in jobs[gate]["needs"], workflow
+
+
+def test_dependency_review_still_runs_on_pull_requests() -> None:
+    """The one Security Scanning step Core does not run keeps its own home."""
+    data = yaml.safe_load((WORKFLOWS / "supply-chain.yml").read_text(encoding="utf-8"))
+    on = data.get("on", data.get(True))
+    assert "pull_request" in on
+    job = data["jobs"]["dependency-review"]
+    step = next(s for s in job["steps"] if "dependency-review-action" in (s.get("uses") or ""))
+    assert step["with"]["fail-on-severity"] == "high"
+    assert not step.get("continue-on-error")
 
 
 @pytest.mark.parametrize("entry", _install_steps(), ids=lambda entry: entry[0])
@@ -222,7 +258,7 @@ def test_all_gitleaks_installs_use_one_pin() -> None:
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash not installed")
-@pytest.mark.parametrize("workflow", ["ci.yml", "pr-pipeline.yml"])
+@pytest.mark.parametrize("workflow", ["gitleaks.yml"])
 def test_install_step_refuses_a_download_with_the_wrong_checksum(
     workflow: str, tmp_path: Path
 ) -> None:

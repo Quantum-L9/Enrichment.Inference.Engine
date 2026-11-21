@@ -50,10 +50,6 @@ on:
         description: 'Minimal L9 checks only (PR_L9_MINIMAL)'
         type: boolean
         default: false
-      security_strict:
-        description: 'Fail on security warnings (PR_SECURITY_STRICT)'
-        type: boolean
-        default: false
 
 concurrency:
   group: pr-pipeline-${{ github.ref }}
@@ -297,80 +293,16 @@ jobs:
         # catalog runs only from ci.yml's deep plan.
         run: make test
 
-  # ────────────────────────────────────────────────────────────────────────
-  # PHASE 5: SECURITY
-  # ────────────────────────────────────────────────────────────────────────
-  security:
-    name: Security Scanning
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: validate
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-
-      - name: Install security tools
-        env:
-          SDK_TOKEN: ${{ secrets.SDK_TOKEN }}
-        run: |
-          git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/".insteadOf "https://github.com/"
-          bash tools/deps/install_locked.sh full
-
-      - name: Install gitleaks (binary — no org license required)
-        # Version and SHA-256 are the pin Quantum-L9/l9-ci-core selects
-        # (.github/actions/install-consumer-ci/tool-ownership.json,
-        # .github/workflows/security.yml); gitleaks.yml uses the same pair.
-        env:
-          GITLEAKS_VERSION: "8.24.3"
-          GITLEAKS_SHA256: "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c"
-        run: |
-          set -euo pipefail
-          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl --proto "=https" --tlsv1.2 -sSfL "$url" -o gitleaks.tar.gz
-          actual_sha="$(sha256sum gitleaks.tar.gz | awk '{print $1}')"
-          if [ "${actual_sha}" != "${GITLEAKS_SHA256}" ]; then
-            echo "::error::gitleaks checksum mismatch: got ${actual_sha}"
-            exit 1
-          fi
-          tar -xzf gitleaks.tar.gz gitleaks
-          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
-          gitleaks version
-      - name: Run Gitleaks (secret detection)
-        run: |
-          gitleaks git . \
-            --config .gitleaks.toml \
-            --redact \
-            --exit-code 1
-      - name: Run pip-audit (dependency vulnerabilities)
-        run: |
-          echo "Scanning dependencies for known vulnerabilities..."
-          pip-audit --desc
-
-      - name: Run Bandit (SAST)
-        env:
-          PR_SECURITY_STRICT: ${{ inputs.security_strict && '1' || '' }}
-        run: |
-          echo "Running Bandit static security analysis..."
-          if [ -n "$PR_SECURITY_STRICT" ]; then
-            bandit -r app -ll -f screen --exclude ./venv,./.venv,./tests,./build,./dist
-          else
-            bandit -r app -ll -f screen --exclude ./venv,./.venv,./tests,./build,./dist || echo "⚠️ Security warnings (non-blocking)"
-          fi
-
-      - name: Dependency Review (PR only)
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec  # v5.0.1
-        with:
-          fail-on-severity: high
+  # The repository-local `Security Scanning` job was removed in the org-CI
+  # cutover. Every step it ran is covered elsewhere on each pull request:
+  #   gitleaks   -> Core `security / security` (Analyze, required; PR range
+  #                 only). The local job ran `gitleaks git .` over every
+  #                 fetched ref, so any branch's history (e.g. a canary's
+  #                 deliberate fixture) failed every unrelated pull request.
+  #   pip-audit  -> Core `security / security` (required for Python).
+  #   bandit     -> Core `security / security` (advisory, as it was here).
+  #   dependency review -> supply-chain.yml `Dependency Review`
+  #                 (fail-on-severity: high, unchanged).
 
   # ────────────────────────────────────────────────────────────────────────
   # PHASE 6: COMPLIANCE
@@ -611,7 +543,6 @@ jobs:
       - lint
       - semgrep
       - test
-      - security
       - compliance
       - l9
       - docs
@@ -628,7 +559,6 @@ jobs:
           echo "  lint:       ${{ needs.lint.result }}"
           echo "  semgrep:    ${{ needs.semgrep.result }}"
           echo "  test:       ${{ needs.test.result }}"
-          echo "  security:   ${{ needs.security.result }}"
           echo "  compliance: ${{ needs.compliance.result }}"
           echo "  l9:         ${{ needs.l9.result }}"
           echo "  docs:       ${{ needs.docs.result }}"
@@ -650,10 +580,6 @@ jobs:
           fi
           if [[ "${{ needs.test.result }}" != "success" ]]; then
             echo "❌ test FAILED"
-            FAILED=1
-          fi
-          if [[ "${{ needs.security.result }}" != "success" ]]; then
-            echo "❌ security FAILED"
             FAILED=1
           fi
           if [[ "${{ needs.compliance.result }}" != "success" ]]; then
@@ -698,7 +624,6 @@ jobs:
               lint: "${{ needs.lint.result }}",
               semgrep: "${{ needs.semgrep.result }}",
               test: "${{ needs.test.result }}",
-              security: "${{ needs.security.result }}",
               compliance: "${{ needs.compliance.result }}",
               l9: "${{ needs.l9.result }}",
               docs: "${{ needs.docs.result }}"
