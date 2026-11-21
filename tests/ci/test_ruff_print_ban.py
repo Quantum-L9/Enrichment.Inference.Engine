@@ -30,7 +30,7 @@ def test_repo_check_runs_the_print_ban_over_service_code() -> None:
     text = (REPO_ROOT / "Repo.mk").read_text(encoding="utf-8")
     assert re.search(r"^PRINT_BAN_PATHS := \$\(wildcard app engine\)$", text, re.MULTILINE)
     lines = [line.strip() for line in _repo_check_recipe().splitlines()]
-    assert "$(PYTHON) -m ruff check --select T20 --no-fix $(PRINT_BAN_PATHS)" in lines
+    assert "$(PYTHON) -m ruff check --select T20 --no-fix --ignore-noqa $(PRINT_BAN_PATHS)" in lines
 
 
 def test_the_frozen_ruff_configuration_is_not_used_for_it() -> None:
@@ -46,6 +46,7 @@ def test_print_in_service_code_is_a_finding_and_elsewhere_is_not(tmp_path: Path)
     for relative, body in {
         "app/svc.py": 'def f() -> None:\n    print("x")\n',
         "engine/svc.py": 'def f() -> None:\n    print("x")\n',
+        "app/suppressed.py": 'def f() -> None:\n    print("x")  # noqa: T201\n',
         "tools/cli.py": 'print("ok")\n',
         "tests/test_cli.py": 'print("ok")\n',
     }.items():
@@ -55,7 +56,16 @@ def test_print_in_service_code_is_a_finding_and_elsewhere_is_not(tmp_path: Path)
     # The recipe's command, with PRINT_BAN_PATHS expanded for this tree.
     proc = subprocess.run(
         [
-            *(sys.executable, "-m", "ruff", "check", "--select", "T20", "--no-fix"),
+            *(
+                sys.executable,
+                "-m",
+                "ruff",
+                "check",
+                "--select",
+                "T20",
+                "--no-fix",
+                "--ignore-noqa",
+            ),
             *("--output-format", "concise", "app", "engine"),
         ],
         cwd=tmp_path,
@@ -65,13 +75,23 @@ def test_print_in_service_code_is_a_finding_and_elsewhere_is_not(tmp_path: Path)
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
     flagged = {line.split(":", 1)[0] for line in proc.stdout.splitlines() if "T201" in line}
-    assert flagged == {"app/svc.py", "engine/svc.py"}, proc.stdout
+    assert flagged == {"app/svc.py", "app/suppressed.py", "engine/svc.py"}, proc.stdout
 
 
 def test_service_code_of_this_repository_has_no_print() -> None:
     paths = [name for name in ("app", "engine") if (REPO_ROOT / name).is_dir()]
     proc = subprocess.run(
-        [sys.executable, "-m", "ruff", "check", "--select", "T20", "--no-fix", *paths],
+        [
+            sys.executable,
+            "-m",
+            "ruff",
+            "check",
+            "--select",
+            "T20",
+            "--no-fix",
+            "--ignore-noqa",
+            *paths,
+        ],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

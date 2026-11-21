@@ -79,7 +79,7 @@ repo-check:  ## Non-mutating static gate: ruff check, no print() in service code
 	@echo "── Ruff lint ──"
 	$(PYTHON) -m ruff check .
 	@echo "── No print() in service code (ruff T20: $(PRINT_BAN_PATHS)) ──"
-	$(PYTHON) -m ruff check --select T20 --no-fix $(PRINT_BAN_PATHS)
+	$(PYTHON) -m ruff check --select T20 --no-fix --ignore-noqa $(PRINT_BAN_PATHS)
 	@echo "── Ruff format (check only) ──"
 	$(PYTHON) -m ruff format --check .
 	@echo "── Type check ──"
