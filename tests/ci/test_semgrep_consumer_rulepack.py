@@ -13,9 +13,13 @@ subset of its contract that a rule edit in this repository can break.
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -72,3 +76,55 @@ def test_every_rule_meets_the_consumer_admission_contract() -> None:
         canonical.append(canonical_id)
     assert len(set(ids)) == len(ids)
     assert len(set(canonical)) == len(canonical)
+
+
+# ── no-sql-fstring witnesses (the rule matched nothing before this PR) ──
+
+_SEMGREP = shutil.which("semgrep")
+
+_SQL_CASES = {
+    "bad_where": ("f\"SELECT * FROM users WHERE id = '{user_id}'\"", True),
+    "bad_table": ('f"SELECT * FROM {table}"', True),
+    "bad_delete": ('f"DELETE FROM x WHERE a = {value}"', True),
+    "bad_update_triple": ("f'''UPDATE {table} SET a = {value}'''", True),
+    "bad_insert": ('f"INSERT INTO {table} VALUES (1)"', True),
+    "good_prose": ('f"Selected {count} items"', False),
+    "good_no_interpolation": ('f"SELECT 1"', False),
+    "good_parameterized": ('"SELECT * FROM t WHERE id = $1"', False),
+    "good_lowercase_prose": ('f"selected rows: {count}"', False),
+    "good_keyword_mid_text": ('f"Report: SELECT ran on {table}"', False),
+}
+
+
+@pytest.mark.skipif(_SEMGREP is None, reason="semgrep binary not installed")
+def test_no_sql_fstring_fires_on_sql_fstrings_only(tmp_path: Path) -> None:
+    lines = {}
+    body = ["user_id = table = value = count = 1\n"]
+    for name, (expression, _) in _SQL_CASES.items():
+        lines[len(body) + 1] = name
+        body.append(f"{name} = {expression}\n")
+    target = tmp_path / "cases.py"
+    target.write_text("".join(body), encoding="utf-8")
+    rules = REPO_ROOT / ".semgrep" / "semgrep-rules.yaml"
+    proc = subprocess.run(
+        [
+            _SEMGREP,
+            "--config",
+            str(rules),
+            "--json",
+            "--metrics=off",
+            "--disable-version-check",
+            str(target),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    report = json.loads(proc.stdout)
+    assert not report["errors"], report["errors"]
+    fired = {
+        lines[result["start"]["line"]]
+        for result in report["results"]
+        if result["check_id"].endswith("l9.eie.no-sql-fstring")
+    }
+    assert fired == {name for name, (_, bad) in _SQL_CASES.items() if bad}

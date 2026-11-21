@@ -190,12 +190,14 @@ rules:
   metadata:
     l9:
       canonical_rule_id: CONSUMER-ENRICHMENT-INFERENCE-ENGINE-NO-SQL-FSTRING
+  # An f-string with at least one interpolation whose text starts with a DML
+  # keyword. The former four `f"SELECT ... {$VAR} ..."` patterns matched no
+  # f-string under Semgrep 1.186.0, not even the "Bad" example below, so the
+  # rule never fired (EIE org-CI cutover canary). Witnesses:
+  # tests/ci/test_semgrep_consumer_rulepack.py.
   patterns:
-    - pattern-either:
-        - pattern: f"SELECT ... {$VAR} ..."
-        - pattern: f"INSERT ... {$VAR} ..."
-        - pattern: f"UPDATE ... {$VAR} ..."
-        - pattern: f"DELETE ... {$VAR} ..."
+    - pattern: f"...{$VAR}..."
+    - pattern-regex: \bf(?:"{3}|'{3}|"|')\s*(?:SELECT|INSERT|UPDATE|DELETE)\b
   message: |
     SQL queries must use parameterized queries, not f-strings.
 
