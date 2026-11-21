@@ -99,6 +99,8 @@ SKIP_DIRS: frozenset[str] = frozenset(
         ".mypy_cache",
         ".ruff_cache",
         "htmlcov",
+        # Peer repositories ci.yml checks out beside this one (CEG, Gate).
+        ".ci-subjects",
     }
 )
 
