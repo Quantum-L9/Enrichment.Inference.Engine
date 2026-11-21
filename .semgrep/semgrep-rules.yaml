@@ -205,7 +205,7 @@ rules:
         pattern: f"...{$VAR}..."
     - metavariable-regex:
         metavariable: $SQL
-        regex: ^(?:[fF][rR]?|[rR][fF])(?:"""|'''|"|')(?:\s|\\[ntr])*(?i:SELECT\b[\s\S]*(?:\b|(?<=\\[ntr]))FROM|INSERT(?:\s|\\[ntr])+INTO|UPDATE\b[\s\S]*(?:\b|(?<=\\[ntr]))SET|DELETE(?:\s|\\[ntr])+FROM)\b
+        regex: ^(?:(?:[rR][fF]|[fF][rR])(?:"""|'''|"|')\s*(?i:SELECT\b[\s\S]*\b(?:FROM|AS)|INSERT\s+INTO|UPDATE\b[\s\S]*\bSET|DELETE\s+FROM)|[fF](?:"""|'''|"|')(?:\s|\\[ntr])*(?i:SELECT\b[\s\S]*(?:\b|(?<=\\[ntr]))(?:FROM|AS)|INSERT(?:\s|\\[ntr])+INTO|UPDATE\b[\s\S]*(?:\b|(?<=\\[ntr]))SET|DELETE(?:\s|\\[ntr])+FROM))\b
   message: |
     SQL queries must use parameterized queries, not f-strings.
 
