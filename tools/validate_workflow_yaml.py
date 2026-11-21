@@ -51,7 +51,12 @@ def _duplicate_key_errors(text: str) -> list[str]:
                     key_node, yaml.ScalarNode
                 ):
                     continue
-                key = constructor.construct_object(key_node, deep=True)
+                if key_node.tag == "tag:yaml.org,2002:value":
+                    # Unquoted `=`: safe_load's mapping construction retags it
+                    # as a string key; construct_object has no constructor for it.
+                    key: object = key_node.value
+                else:
+                    key = constructor.construct_object(key_node, deep=True)
                 if key in keys:
                     mark = key_node.start_mark
                     errors.append(f"line {mark.line + 1}: found duplicate key {key_node.value!r}")
