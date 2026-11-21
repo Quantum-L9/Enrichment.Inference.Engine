@@ -106,6 +106,7 @@ _SQL_CASES = {
     "good_raw_escape_is_literal": ('rf"\\nSELECT * FROM {table}"', False),
     "bad_select_without_from": ('f"SELECT {value} AS result"', True),
     "bad_select_without_from_lower": ('f"select {value} as total"', True),
+    "good_select_as_prose": ('f"select {count} items as needed"', False),
     "good_prose": ('f"Selected {count} items"', False),
     "good_no_interpolation": ('f"SELECT 1"', False),
     "good_parameterized": ('"SELECT * FROM t WHERE id = $1"', False),
