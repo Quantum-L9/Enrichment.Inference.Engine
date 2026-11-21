@@ -1,4 +1,0 @@
-# CANARY (DO NOT MERGE): EIE org-CI cutover, leaf witness for tools/validate_kb_rules.py.
-# A rule without `field`: `make validate` must fail in Analyze (central Core).
-rules:
-  - when: {gt: 1}
