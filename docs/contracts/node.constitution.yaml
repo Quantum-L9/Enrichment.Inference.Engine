@@ -5,7 +5,6 @@ node:
   contract_version: "1.0.0"
   contract_pack_root: docs/contracts
   tracked_contracts:
-    - docs/contracts/canary_eie_cutover_missing.yaml  # CANARY (DO NOT MERGE): H4 witness, this file does not exist
     - docs/contracts/VERIFICATION_MATRIX.md
     - docs/contracts/api/openapi.yaml
     - docs/contracts/agents/protocols/packet-envelope.yaml
