@@ -1,0 +1,16 @@
+# TEMPORARY canary — not for merge. Shows what Quantum-L9/l9-ci-core#308
+# (org-ci.yml Core pins at eba72ac3, SDK fallback fbe14fec) does to
+# `Analyze (central Core)` on this repository before #308 merges. The pull
+# request that carries this file is closed after the run; it never lands on main.
+name: Canary l9-ci-core#308
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  core:
+    uses: Quantum-L9/l9-ci-core/.github/workflows/org-ci.yml@e024e182d1d411edc1a25942a293fe3f2087bd1e
+    with:
+      event: pull_request
+    secrets:
+      L9_GITHUB_READ_TOKEN: ${{ secrets.L9_GITHUB_READ_TOKEN }}
