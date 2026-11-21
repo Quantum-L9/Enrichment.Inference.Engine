@@ -347,8 +347,8 @@ jobs:
             --redact \
             --exit-code 1
       # pip-audit and bandit are Core-owned; EIE installs and runs neither
-      # (CI-UL, 2026-11-21). Core's security job (l9-ci-core #312) is to run both
-      # from Core's toolchain lock. Until it runs on EIE, no job here runs them.
+      # (CI-UL, 2026-11-21). Core's security job (l9-ci-core #312) runs both
+      # from Core's toolchain lock in the org-required `Analyze (central Core)`.
 
       - name: Dependency Review (PR only)
         if: github.event_name == 'pull_request'
