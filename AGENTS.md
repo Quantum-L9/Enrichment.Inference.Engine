@@ -423,6 +423,7 @@ Durable, non-obvious notes for running this service in the Cursor Cloud VM. The 
 > `uv.lock` drops them and the 23 packages only they pulled in. The workflow
 > steps that ran them are removed (`ci.yml` security job, `pr-pipeline.yml`
 > security phase, and the `security_strict` dispatch input that only Bandit
-> read): Core's security job installs both from Core's toolchain lock and runs
-> them. No local `make` target called either tool.
+> read). Core's security job (l9-ci-core #312) is to install both from Core's
+> toolchain lock and run them; until it runs on EIE, no job runs either tool
+> here. No local `make` target called either tool.
 > `tests/unit/test_core_toolchain_pins.py` now includes both in `CORE_TOOLS`.
