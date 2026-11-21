@@ -195,6 +195,12 @@ def test_workflow_unquoted_equals_key_is_a_string_key(tmp_path: Path) -> None:
     assert workflow_errors(directory) == []
 
 
+def test_workflow_unquoted_and_quoted_equals_keys_are_duplicates(tmp_path: Path) -> None:
+    directory = _workflows(tmp_path, "on: push\njobs:\n  a:\n    env: {=: 1, '=': 2}\n")
+    errors = workflow_errors(directory)
+    assert any("found duplicate key '='" in error for error in errors), errors
+
+
 def test_no_workflows_is_reported(tmp_path: Path) -> None:
     assert workflow_errors(tmp_path) != []
 
