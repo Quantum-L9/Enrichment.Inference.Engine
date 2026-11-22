@@ -113,7 +113,7 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
 | Outcome | Settles as | Cause |
 |---|---|---|
 | ACKNOWLEDGED | `acknowledged` | GRAPH_ACKNOWLEDGED: `status == "success"`, `entity_type` is the endpoint, `synced_count == len(batch)`, `rejected_count` absent or 0 (A1 F-A1-01). A node ack carries no created/replayed counts. |
-| REFUSED | `failed_terminal` | `no_contract`, `contract_changed`, `unpinned`, `row_type` (value off its declared type; nothing sent), `all_rejected` naming this endpoint with `synced_count == 0`, or a Gate 4xx. |
+| REFUSED | `failed_terminal` | `no_contract`, `contract_changed`, `unpinned`, `row_type` (value off its declared type; nothing sent), `all_rejected` naming this endpoint with `synced_count == 0`, `rows_rejected` (a success answer for this endpoint with `rejected_count` > 0, F-A1-01), or a Gate 4xx. |
 | RETRYABLE | `pending` (backoff) | Gate unreachable, timeout or 5xx; a worker `failure` packet; an answer that does not confirm this row. |
 
 ## Operator view

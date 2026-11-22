@@ -304,8 +304,16 @@ async def test_a_node_ack_with_rejected_rows_is_not_acknowledged(
     ):
         ack, outcomes = await _sync(router)
     assert (ack is not None) is confirmed
-    expected = GraphSyncOutcomeKind.ACKNOWLEDGED if confirmed else GraphSyncOutcomeKind.RETRYABLE
-    assert outcomes[0].kind is expected
+    if confirmed:
+        assert outcomes[0].kind is GraphSyncOutcomeKind.ACKNOWLEDGED
+    elif isinstance(rejected, int) and not isinstance(rejected, bool) and rejected > 0:
+        # Rows CEG rejected: the terminal, non-retryable refused disposition.
+        assert (outcomes[0].kind, outcomes[0].reason) == (
+            GraphSyncOutcomeKind.REFUSED,
+            "rows_rejected",
+        )
+    else:
+        assert outcomes[0].kind is GraphSyncOutcomeKind.RETRYABLE
 
 
 def test_the_contract_digest_pins_the_target_node(tmp_path: Path) -> None:

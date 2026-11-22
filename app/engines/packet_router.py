@@ -365,10 +365,12 @@ def graph_sync_acknowledged(
 
     Anything else — ``None``, a non-mapping, a missing or non-success status, a
     non-positive ``synced_count``, a ``synced_count`` other than
-    ``expected_count`` when the caller knows its batch size, or an
-    acknowledgment for a different endpoint — is NOT a synchronization. The
-    node-sync path applies the stricter :func:`node_sync_acknowledged`. The
-    graph may or may not hold the row; the caller must not record it as synced.
+    ``expected_count`` when the caller knows its batch size, a
+    ``rejected_count`` that is present and not 0 (A1 matrix F-A1-01: a node ack
+    carries no created/replayed counts, and a row CEG rejected is never read as
+    synchronized), or an acknowledgment for a different endpoint — is NOT a
+    synchronization. The graph may or may not hold the row; the caller must not
+    record it as synced.
     """
     if not isinstance(ack, dict):
         return False
@@ -379,22 +381,31 @@ def graph_sync_acknowledged(
         return False
     if expected_count is not None and synced != expected_count:
         return False
+    if "rejected_count" in ack and not _is_int(ack["rejected_count"], 0):
+        return False
     return not (entity_type is not None and ack.get("entity_type") != entity_type)
 
 
-def node_sync_acknowledged(ack: Any, *, entity_type: str, expected_count: int) -> bool:
-    """GRAPH_ACKNOWLEDGED for a node ``sync`` (A1 matrix F-A1-01).
-
-    :func:`graph_sync_acknowledged` for this endpoint and exact batch size, and
-    ``rejected_count`` absent or 0: a node ack carries no created/replayed
-    counts, and a row CEG rejected must never be read as synchronized.
-    """
-    if not graph_sync_acknowledged(ack, entity_type=entity_type, expected_count=expected_count):
+def _is_int(value: Any, expected: int | None = None) -> bool:
+    """An int (never a bool), equal to ``expected`` when one is given."""
+    if isinstance(value, bool) or not isinstance(value, int):
         return False
-    if "rejected_count" not in ack:
-        return True
-    rejected = ack["rejected_count"]
-    return not isinstance(rejected, bool) and isinstance(rejected, int) and rejected == 0
+    return expected is None or value == expected
+
+
+def _rows_rejected(ack: Any, entity_type: str) -> bool:
+    """A success answer for this endpoint that names rows CEG rejected (F-A1-01).
+
+    CEG validated those rows against its own tenant spec and refused them; the
+    same pinned input is refused again, so it is terminal, never retried.
+    """
+    return (
+        isinstance(ack, dict)
+        and ack.get("status") == "success"
+        and ack.get("entity_type") == entity_type
+        and _is_int(ack.get("rejected_count"))
+        and ack["rejected_count"] > 0
+    )
 
 
 def _retry_allowed(exc: BaseException, *, has_idempotency_key: bool) -> bool:
@@ -1199,7 +1210,7 @@ class PacketRouter:
             return settle(graph_sync_failure_kind(exc), f"route:{type(exc).__name__}")
         # CEG answers synced_count == len(batch); an acknowledgment for any other
         # count cannot be this request's and does not confirm this row.
-        if not node_sync_acknowledged(
+        if not graph_sync_acknowledged(
             ack, entity_type=contract.entity_type, expected_count=len(batch)
         ):
             logger.warning(
@@ -1212,6 +1223,8 @@ class PacketRouter:
             )
             if _rejected_in_full(ack, contract.entity_type):
                 return settle(GraphSyncOutcomeKind.REFUSED, "all_rejected")
+            if _rows_rejected(ack, contract.entity_type):
+                return settle(GraphSyncOutcomeKind.REFUSED, "rows_rejected")
             return settle(GraphSyncOutcomeKind.RETRYABLE, "unacknowledged")
         return settle(GraphSyncOutcomeKind.ACKNOWLEDGED, "acknowledged", ack)
 
