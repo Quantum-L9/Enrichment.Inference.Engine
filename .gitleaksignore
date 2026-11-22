@@ -19,3 +19,13 @@ b38c26a27d10a2e62984ac59dc82f7f133d7e7c4:.github/workflows/ci-quality.yml:postgr
 #
 # The redis-connection-string rule's own regex, matching itself in this config.
 919c763ce22cd8e5395a7d10c14ee6a9a72f2b35:.gitleaks.toml:redis-connection-string:57
+#
+# Deliberate fake key planted by the DO-NOT-MERGE EIE org-CI cutover canary (#385,
+# branch canary/ci-ul-eie-cutover): canary/eie_cutover/gitleaks_word_bad.py, an
+# sk- shaped string that starts with "test" and matches no real key format. It is
+# the negative witness proving the narrowed allowlist (#380) and the renamed rules
+# (#386) catch it; both witnesses are recorded (repository job 136957572213, Core
+# security job 136964644917). The legacy Security Scanning job scans every fetched
+# ref, so the canary branch reached every EIE pull request. Exact commit only.
+a38e9aa93b41b6cab0c971217281e720e0b3a8f7:canary/eie_cutover/gitleaks_word_bad.py:eie-openai-api-key:3
+a38e9aa93b41b6cab0c971217281e720e0b3a8f7:canary/eie_cutover/gitleaks_word_bad.py:eie-generic-api-key:3

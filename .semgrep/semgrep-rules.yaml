@@ -1,18 +1,17 @@
 # =============================================================================
-# Python CI Policy Rules — Regression Prevention (Repo-Agnostic)
+# EIE consumer Semgrep rules
 #
-# Semgrep rules that enforce Python best practices. Drop this file into any
-# Python project's .semgrep/ directory and run:
-#
-#   semgrep --config .semgrep/semgrep-rules.yaml .
-#
-# Customize paths.include/exclude to match YOUR project structure.
-# All rules are universal Python — nothing project-specific.
-#
-# To customize:
-#   1. Change paths.include to match your source directories
-#   2. Add project-specific rules at the bottom
-#   3. Change severity levels as needed (ERROR = blocks CI, WARNING = report only)
+# Declared in .l9/semgrep-consumer-rules.yaml (schema
+# l9.semgrep-consumer-rulepack/v1, l9-ci-sdk ADR 0021), so the required
+# `Analyze (central Core)` check runs them as a separate consumer execution
+# beside the SDK baseline. Each rule carries:
+#   - an id under the `l9.` consumer prefix (`l9.eie.<name>`),
+#   - metadata.l9.canonical_rule_id in this repository's consumer namespace
+#     (CONSUMER-ENRICHMENT-INFERENCE-ENGINE-<NAME>),
+#   - its own paths.include / paths.exclude scope.
+# Every finding blocks (central policy), WARNING severity included, as the
+# local `semgrep --config .semgrep/ --error` did. Local CI keeps running this
+# file until the consumer instance is witnessed firing in org CI.
 # =============================================================================
 
 rules:
@@ -21,7 +20,10 @@ rules:
 # RULE 1: No deprecated datetime.utcnow()
 # Rationale: Deprecated in Python 3.12, returns naive datetime
 # ---------------------------------------------------------------------------
-- id: no-datetime-utcnow
+- id: l9.eie.no-datetime-utcnow
+  metadata:
+    l9:
+      canonical_rule_id: CONSUMER-ENRICHMENT-INFERENCE-ENGINE-NO-DATETIME-UTCNOW
   pattern: datetime.utcnow()
   message: |
     datetime.utcnow() is deprecated in Python 3.12+. Use datetime.now(UTC) instead.
@@ -45,7 +47,10 @@ rules:
 # RULE 2: httpx.AsyncClient must use async context manager
 # Rationale: Without context manager, client connections are leaked
 # ---------------------------------------------------------------------------
-- id: httpx-async-context-required
+- id: l9.eie.httpx-async-context-required
+  metadata:
+    l9:
+      canonical_rule_id: CONSUMER-ENRICHMENT-INFERENCE-ENGINE-HTTPX-ASYNC-CONTEXT-REQUIRED
   patterns:
     - pattern: $CLIENT = httpx.AsyncClient(...)
     - pattern-not-inside: |
@@ -76,7 +81,10 @@ rules:
 # RULE 3: Singleton pattern must use lock for thread safety
 # Rationale: Race condition when multiple threads init singleton
 # ---------------------------------------------------------------------------
-- id: singleton-requires-lock
+- id: l9.eie.singleton-requires-lock
+  metadata:
+    l9:
+      canonical_rule_id: CONSUMER-ENRICHMENT-INFERENCE-ENGINE-SINGLETON-REQUIRES-LOCK
   patterns:
     - pattern: |
         if $_INSTANCE is None:
@@ -111,7 +119,10 @@ rules:
 # RULE 4: float() conversion should handle ValueError
 # Rationale: float() raises ValueError on invalid input
 # ---------------------------------------------------------------------------
-- id: float-requires-try-except
+- id: l9.eie.float-requires-try-except
+  metadata:
+    l9:
+      canonical_rule_id: CONSUMER-ENRICHMENT-INFERENCE-ENGINE-FLOAT-REQUIRES-TRY-EXCEPT
   patterns:
     - pattern: float($VAR)
     - pattern-not-inside: |
@@ -145,7 +156,10 @@ rules:
 # RULE 5: No eval() — Security vulnerability
 # Rationale: eval() allows arbitrary code execution
 # ---------------------------------------------------------------------------
-- id: no-eval
+- id: l9.eie.no-eval
+  metadata:
+    l9:
+      canonical_rule_id: CONSUMER-ENRICHMENT-INFERENCE-ENGINE-NO-EVAL
   patterns:
     - pattern: eval(...)
     - pattern-not: $OBJ.eval(...)  # Allow tensor.eval(), model.eval()
@@ -172,13 +186,26 @@ rules:
 # RULE 6: SQL queries must use parameterized queries
 # Rationale: f-string SQL is vulnerable to injection
 # ---------------------------------------------------------------------------
-- id: no-sql-fstring
+- id: l9.eie.no-sql-fstring
+  metadata:
+    l9:
+      canonical_rule_id: CONSUMER-ENRICHMENT-INFERENCE-ENGINE-NO-SQL-FSTRING
+  # An f-string with at least one interpolation whose literal starts with a DML
+  # keyword: the whole string is bound to $SQL and the anchored regex runs on
+  # its full text, so a keyword inside prose (or inside a nested example) does
+  # not match. Any Python f-string prefix (f, F, rf, fr, Rf, ...) is covered.
+  # The former four `f"SELECT ... {$VAR} ..."` patterns matched no f-string
+  # under Semgrep 1.186.0, not even the "Bad" example below, so the rule never
+  # fired (EIE org-CI cutover canary). Witnesses:
+  # tests/ci/test_semgrep_consumer_rulepack.py.
   patterns:
-    - pattern-either:
-        - pattern: f"SELECT ... {$VAR} ..."
-        - pattern: f"INSERT ... {$VAR} ..."
-        - pattern: f"UPDATE ... {$VAR} ..."
-        - pattern: f"DELETE ... {$VAR} ..."
+    - pattern: $SQL
+    - metavariable-pattern:
+        metavariable: $SQL
+        pattern: f"...{$VAR}..."
+    - metavariable-regex:
+        metavariable: $SQL
+        regex: ^(?:(?:[rR][fF]|[fF][rR])(?:"""|'''|"|')\s*(?i:SELECT\b[\s\S]*\bFROM|SELECT\s+\S+\s+AS\s+\w+|INSERT\s+INTO|UPDATE\b[\s\S]*\bSET|DELETE\s+FROM)|[fF](?:"""|'''|"|')(?:\s|\\[ntr])*(?i:SELECT\b[\s\S]*(?:\b|(?<=\\[ntr]))FROM|SELECT(?:\s|\\[ntr])+\S+?(?:\s|\\[ntr])+AS(?:\s|\\[ntr])+\w+|INSERT(?:\s|\\[ntr])+INTO|UPDATE\b[\s\S]*(?:\b|(?<=\\[ntr]))SET|DELETE(?:\s|\\[ntr])+FROM))\b
   message: |
     SQL queries must use parameterized queries, not f-strings.
 
@@ -203,7 +230,10 @@ rules:
 # RULE 7: No pickle for deserialization — Security
 # Rationale: pickle.loads() can execute arbitrary code
 # ---------------------------------------------------------------------------
-- id: no-pickle-loads
+- id: l9.eie.no-pickle-loads
+  metadata:
+    l9:
+      canonical_rule_id: CONSUMER-ENRICHMENT-INFERENCE-ENGINE-NO-PICKLE-LOADS
   pattern: pickle.loads(...)
   message: |
     pickle.loads() is forbidden — deserialization vulnerability.
@@ -228,7 +258,10 @@ rules:
 # Rationale: structlog doesn't have getChild() — use bind() instead
 # Note: Only relevant if your project uses structlog. Remove if not.
 # ---------------------------------------------------------------------------
-- id: no-structlog-getchild
+- id: l9.eie.no-structlog-getchild
+  metadata:
+    l9:
+      canonical_rule_id: CONSUMER-ENRICHMENT-INFERENCE-ENGINE-NO-STRUCTLOG-GETCHILD
   pattern: $LOGGER.getChild(...)
   message: |
     structlog doesn't support getChild(). Use bind() instead.

@@ -22,6 +22,7 @@ so the file itself stays clean under the rules it tests.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -411,3 +412,75 @@ def test_connection_string_template_is_quiet_and_a_real_host_is_not(tmp_path: Pa
     real.mkdir()
     assert _scan(template, "CONFIG.md", f"- Format: `{_DSN_PREFIX}host:port/dbname`\n") == 0
     assert _scan(real, "CONFIG.md", f"- Format: `{_DSN_PREFIX}db.internal.corp:5432/app`\n") == 1
+
+
+# ── Org CI composition (Core security.yml) ─────────────────────────────
+#
+# Core scans with this file plus `[extend] useDefault = true`. A custom rule
+# whose id equals a gitleaks default id is then replaced by the default rule, so
+# a key this repository's own scan catches passed org CI (cutover canary #385:
+# the repository gitleaks job failed on canary/eie_cutover/gitleaks_word_bad.py,
+# the Core security job reported "no leaks found" on the same range).
+
+# Default rule ids the custom rules used to reuse. None may come back.
+SHADOWED_DEFAULT_IDS = ("openai-api-key", "generic-api-key", "slack-bot-token", "private-key")
+
+
+def _core_composed(config_text: str) -> str:
+    """The config Core security.yml builds from a repository `.gitleaks.toml`."""
+    if tomllib.loads(config_text).get("extend") is None:
+        config_text += "\n\n[extend]\nuseDefault = true\n"
+    return config_text
+
+
+def test_no_custom_rule_reuses_a_shadowed_default_id() -> None:
+    rule_ids = {rule["id"] for rule in _config().get("rules", [])}
+    assert not rule_ids & set(SHADOWED_DEFAULT_IDS), (
+        "a custom rule reuses a gitleaks default id; org CI replaces it with the default"
+    )
+
+
+def _scan_rule_ids(tmp_path: Path, config_text: str, content: str) -> set[str]:
+    config = tmp_path / "composed.toml"
+    config.write_text(config_text, encoding="utf-8")
+    target = tmp_path / "scan" / "app" / "settings.py"
+    target.parent.mkdir(parents=True)
+    target.write_text(content, encoding="utf-8")
+    report = tmp_path / "report.json"
+    assert _REAL_GITLEAKS is not None
+    subprocess.run(
+        [
+            _REAL_GITLEAKS,
+            "dir",
+            str(target.parent.parent),
+            "--config",
+            str(config),
+            "--no-banner",
+            "--redact",
+            "--report-format",
+            "json",
+            "--report-path",
+            str(report),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    return {finding["RuleID"] for finding in json.loads(report.read_text(encoding="utf-8"))}
+
+
+_OPENAI_LINE = f'OPENAI_API_KEY = "{_OPENAI_KEY_WITH_WORD}"\n'
+
+
+@pytest.mark.skipif(_REAL_GITLEAKS is None, reason="gitleaks binary not installed")
+def test_the_custom_openai_rule_survives_org_ci_composition(tmp_path: Path) -> None:
+    composed = _core_composed(CONFIG.read_text(encoding="utf-8"))
+    assert "eie-openai-api-key" in _scan_rule_ids(tmp_path, composed, _OPENAI_LINE)
+
+
+@pytest.mark.skipif(_REAL_GITLEAKS is None, reason="gitleaks binary not installed")
+def test_a_shadowed_id_would_lose_the_finding_under_composition(tmp_path: Path) -> None:
+    """Negative control: the former spelling, composed like Core, is silent."""
+    text = CONFIG.read_text(encoding="utf-8")
+    for rule_id in SHADOWED_DEFAULT_IDS:
+        text = text.replace(f'id = "eie-{rule_id}"', f'id = "{rule_id}"')
+    assert _scan_rule_ids(tmp_path, _core_composed(text), _OPENAI_LINE) == set()
