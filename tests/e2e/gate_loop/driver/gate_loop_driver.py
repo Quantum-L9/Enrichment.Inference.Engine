@@ -307,7 +307,16 @@ async def s_negatives(args: dict) -> dict:
             key=base64.b64encode(os.urandom(32)).decode(),
         )
     )
-    p = packet("match", good, tenant, source="odoo", key_id="odoo-gl", idem="gl-neg-replay-1")
+    # A fresh idempotency key per run, so a cached answer from an earlier run cannot satisfy P13.
+    p = packet(
+        "match",
+        good,
+        tenant,
+        source="odoo",
+        key_id="odoo-gl",
+        idem=f"gl-neg-replay-{os.urandom(4).hex()}",
+    )
+    res["replay_packet_id"] = str(p.header.packet_id)
     res["replay_first"] = await post(p)
     res["replay_second_same_packet_id"] = await post(p)
     # A genuinely expired packet: signed with a 1 s deadline, posted after it.
@@ -334,8 +343,21 @@ async def s_isolation(args: dict) -> dict:
     return out
 
 
+async def s_post_signed(args: dict) -> dict:
+    """One consumer-signed packet posted raw, returning its packet_id so the rail can
+    correlate Gate's structured events (gate.failure / gate.completed) to this request."""
+    key_id = args.get("key_id", "odoo-gl")
+    pkt = packet(
+        args["action"], args["payload"], args["tenant"], source=NODE_OF[key_id], key_id=key_id
+    )
+    out = await post(pkt)
+    out["request_packet_id"] = str(pkt.header.packet_id)
+    return out
+
+
 SCENARIOS = {
     "execute": s_execute,
+    "post_signed": s_post_signed,
     "policy_matrix": s_policy_matrix,
     "negatives": s_negatives,
     "isolation": s_isolation,

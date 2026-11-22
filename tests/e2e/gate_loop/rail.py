@@ -32,7 +32,6 @@ never recorded, because one can carry command arguments.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
@@ -103,10 +102,14 @@ def rail(*args: str, extra_env: dict | None = None) -> subprocess.CompletedProce
 
 def drive(scenario: str, args: dict | None = None) -> dict:
     r = sh(["bash", str(HERE / "scripts/drive.sh"), scenario, json.dumps(args or {})], timeout=600)
+    if r.returncode != 0:
+        return {
+            "driver_error": f"launcher rc {r.returncode}: {redact(r.stderr or r.stdout)[-600:]}"
+        }
     try:
         return json.loads(r.stdout.strip().splitlines()[-1])
     except (IndexError, ValueError):
-        return {"driver_error": redact((r.stderr or r.stdout)[-600:])}
+        return {"driver_error": redact(r.stderr or r.stdout)[-600:]}
 
 
 def cypher(db: str, query: str) -> list[list[str]]:
@@ -191,6 +194,24 @@ def gate_events(since: str, action: str) -> list[dict]:
     return out
 
 
+def gate_events_for(since: str, packet_id: str) -> list[dict]:
+    """Gate's structured events whose packet_id is this request's (exact correlation, not a time window)."""
+    out = []
+    for ln in logs("l9e2e-gate", since, (packet_id,)):
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        if ev.get("packet_id") == packet_id and ev.get("event"):
+            out.append(
+                {
+                    k: ev.get(k)
+                    for k in ("event", "action", "error_type", "error_message", "packet_id")
+                }
+            )
+    return out
+
+
 def ready_once(max_s: float) -> dict:
     r = sh(
         [
@@ -227,7 +248,8 @@ def wait_ready(timeout: int = 420) -> dict:
     }
 
 
-def registry() -> dict:
+def registry_raw() -> dict | None:
+    """Gate's registry as returned (node name -> registration), or None when it cannot be read."""
     tok = env()["GL_ADMIN_TOKEN"]
     r = sh(
         [
@@ -246,12 +268,20 @@ def registry() -> dict:
     try:
         d = json.loads(r.stdout)
     except ValueError:
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def registry() -> dict:
+    d = registry_raw()
+    if d is None:
         return {"unavailable": True}
-    return (
-        {k: sorted(v.get("supported_actions", [])) for k, v in d.items()}
-        if isinstance(d, dict)
-        else {"raw": d}
-    )
+    return {k: sorted(v.get("supported_actions", [])) for k, v in d.items()}
+
+
+def registry_url(node: str) -> str | None:
+    d = registry_raw() or {}
+    return (d.get(node) or {}).get("internal_url")
 
 
 def stamp() -> str:
@@ -484,25 +514,25 @@ def c_policy(p: str) -> list[Result]:
     def policy_refused(k: str, act: str) -> bool:
         return cells[(k, act)]["http_status"] == 403 and "not permitted to invoke" in msg(k, act)
 
-    def reached(k: str, act: str) -> bool:
-        return cells[(k, act)].get("reached_worker") is True
+    def reached(k: str, act: str, worker: str) -> bool:
+        """A response packet came back and its source is the expected worker (a typed failure counts)."""
+        c = cells[(k, act)]
+        return c.get("reached_worker") is True and c.get("response_source") == worker
 
     checks = {
         "eie worker score: kind rule": kind_refused("eie-gl", "score"),
         "ceg worker score: kind rule": kind_refused("ceg-gl", "score"),
         "ceg worker health-assess: kind rule": kind_refused("ceg-gl", "health-assess"),
-        "eie worker health-assess: reaches graph": reached("eie-gl", "health-assess"),
+        "eie worker health-assess: reaches graph": reached("eie-gl", "health-assess", "graph"),
         "operator consumer health-assess: reaches graph (WORKER_ORIGINATED applies to workers only)": reached(
-            "op-gl", "health-assess"
+            "op-gl", "health-assess", "graph"
         ),
         "odoo consumer health-assess: refused by its policy": policy_refused(
             "odoo-gl", "health-assess"
         ),
         "ceg worker graph-inference-result: reaches enrichment-engine": reached(
-            "ceg-gl", "graph-inference-result"
-        )
-        and cells[("ceg-gl", "graph-inference-result")].get("response_source")
-        == "enrichment-engine",
+            "ceg-gl", "graph-inference-result", "enrichment-engine"
+        ),
         "eie worker graph-inference-result: refused": policy_refused(
             "eie-gl", "graph-inference-result"
         ),
@@ -522,6 +552,7 @@ def c_policy(p: str) -> list[Result]:
 
 
 def c_negatives(p: str) -> list[Result]:
+    since = stamp()
     n = drive("negatives")
     if "driver_error" in n:
         return [
@@ -543,17 +574,28 @@ def c_negatives(p: str) -> list[Result]:
     failed11 = [
         f"{k}={st.get(k)} (expected {v})" for k, v in expect11.items() if st.get(k) not in v
     ]
+    base = n.get("baseline_valid") or {}
+    control_ok = (
+        base.get("http_status") == 200
+        and base.get("gate_signature_valid") is True
+        and (base.get("payload") or {}).get("status") == "success"
+    )
     first, second = n.get("replay_first") or {}, n.get("replay_second_same_packet_id") or {}
     qid1 = (first.get("payload") or {}).get("query_id")
+    rpid = str(n.get("replay_packet_id") or "")
+    replay_events = gate_events_for(since, rpid) if rpid else []
+    dispatched = [e for e in replay_events if e["event"] == "gate.completed"]
+    s2 = st.get("replay_second_same_packet_id")
+    if s2 == 400:
+        replay_outcome = "refused"
+    elif s2 == 200 and second.get("payload") == first.get("payload") and len(dispatched) == 1:
+        replay_outcome = "cache_hit"  # identical answer, and Gate dispatched the packet id once
+    else:
+        replay_outcome = "unproven"
     checks13 = {
         "first execution succeeded with a query_id": st.get("replay_first") == 200 and bool(qid1),
-        "same packet id: replay refused or the identical cached answer": st.get(
-            "replay_second_same_packet_id"
-        )
-        == 400
-        or (
-            st.get("replay_second_same_packet_id") == 200
-            and (second.get("payload") or {}).get("query_id") == qid1
+        "same packet id: replay refused, or an identical answer with a single Gate dispatch": (
+            replay_outcome in ("refused", "cache_hit")
         ),
         "expired deadline refused": st.get("expired_deadline") == 400,
     }
@@ -583,11 +625,31 @@ def c_negatives(p: str) -> list[Result]:
         p,
         "a replayed packet id adds no effect; an expired deadline is refused",
         verdict(not failed13, p, signed_claim=True),
-        observed={"http_status": st, "checks": checks13},
+        observed={
+            "http_status": st,
+            "checks": checks13,
+            "replay_outcome": replay_outcome,
+            "replay_packet_id": rpid,
+            "replay_gate_events": replay_events,
+        },
         reason=("failed: " + "; ".join(failed13))
         if failed13
-        else "effect count: the replay returned the cached answer (same query_id), i.e. no second execution",
+        else {
+            "refused": "Gate refused the replayed packet id (HTTP 400): no second execution",
+            "cache_hit": "identical answer for the replayed packet id, and Gate dispatched it once",
+        }[replay_outcome],
     )
+    if not control_ok:
+        r11 = not_run(
+            "P11",
+            "A7",
+            p,
+            r11.assertion,
+            "positive control failed: the valid signed match did not return a Gate-verified success, "
+            "so the denials are not evidence",
+            baseline_valid=base,
+            http_status=st,
+        )
     return [r11, r13]
 
 
@@ -623,10 +685,16 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
             not_run(i, "A8", p, "converge -> sync read-back", str(exc), entity_id=eid) for i in ids
         ]
     sync_events = gate_events(since, "sync")
+    conv_root = (r.get("response") or {}).get("root_id")
+    # Bound to this converge: EIE's sync must derive from the converge packet (same root_id),
+    # so a sync from another case or an earlier run cannot satisfy P07/P05.
     ingress = [
         e
         for e in sync_events
-        if e["event"] == "gate.ingress" and e["source_node"] == "enrichment-engine"
+        if e["event"] == "gate.ingress"
+        and e["source_node"] == "enrichment-engine"
+        and conv_root is not None
+        and e["root_id"] == conv_root
     ]
     completed = [
         e
@@ -752,7 +820,12 @@ def c_ceg_down(p: str) -> list[Result]:
         started_before = _started_at("l9e2e-eie")
         restart = sh(["docker", "restart", "l9e2e-eie"], timeout=180)
         started_after = _started_at("l9e2e-eie")
-        if restart.returncode != 0 or not started_after or started_after == started_before:
+        if (
+            restart.returncode != 0
+            or not started_before
+            or not started_after
+            or started_after == started_before
+        ):
             raise ProbeError(
                 f"EIE restart not proven (rc {restart.returncode}, "
                 f"StartedAt {started_before} -> {started_after})"
@@ -792,12 +865,32 @@ def c_ceg_down(p: str) -> list[Result]:
                 "graph_after_recovery": g,
                 "durable_intent_tables": outbox,
             },
-            reason=""
-            if ok
-            else "pending graph intent is in-memory (F-A1-06, EIE-W): no outbox table, "
-            "not recovered after the EIE restart",
+            reason="" if ok else _p14_reason(st, persisted, absent_before, g, outbox),
         )
     ]
+
+
+def _p14_reason(
+    state: str | None, persisted: list[str], absent: bool, graph: dict, outbox: list[str]
+) -> str:
+    """The P14 failure reason, from what was observed rather than a fixed string."""
+    parts = []
+    if state != "completed":
+        parts.append(f"converge state {state!r}, not completed, while CEG was down")
+    if persisted != ["1"]:
+        parts.append(f"EIE durable result rows {persisted}, not exactly one")
+    if not absent:
+        parts.append("the row was already in the graph while CEG was down (outage not effective)")
+    if graph.get("facility_count") != 1:
+        parts.append(
+            f"graph rows after CEG recovery and an EIE restart: {graph.get('facility_count')}, not 1"
+        )
+        parts.append(
+            "durable pending-intent table: "
+            + (", ".join(outbox) if outbox else "none")
+            + " (F-A1-06, EIE-W)"
+        )
+    return "; ".join(parts)
 
 
 def c_sync_rejects(p: str) -> list[Result]:
@@ -916,11 +1009,14 @@ def c_sync_rejects(p: str) -> list[Result]:
 def c_match(p: str) -> list[Result]:
     """P33/P34: seed the A1 fixture facilities through Gate (rig), then consumer match through Gate.
 
-    Assertions are scoped to the tp-fac- fixture set. Rows other cases wrote into the same tenant database can
+    Assertions are scoped to the facility ids this case seeds. Rows other cases wrote into the same tenant database can
     also match; they are recorded under off_fixture_candidates and never asserted on.
     """
     vec = json.loads((HERE / "vectors/sync_rows.json").read_text())
     rows = [v["row"] for v in vec["vectors"] if v["id"].startswith("PX-POS")]
+    # The fixture set is exactly what this case seeds; any other returned id (rows written by
+    # other cases, e.g. converge_plasticos's tp-fac-010) is recorded, never asserted on.
+    seeded = {r["facility_id"] for r in rows}
     seed = drive(
         "execute",
         {
@@ -943,10 +1039,8 @@ def c_match(p: str) -> list[Result]:
             errors.append(mv["id"])
         ids = [(c.get("candidate") or {}).get("facility_id") for c in (pl.get("candidates") or [])]
         res[mv["id"]] = {
-            "fixture_ids": sorted(i for i in ids if str(i).startswith("tp-fac-")),
-            "off_fixture_candidates": sorted(
-                str(i) for i in ids if not str(i).startswith("tp-fac-")
-            ),
+            "fixture_ids": sorted(i for i in ids if i in seeded),
+            "off_fixture_candidates": sorted(str(i) for i in ids if i not in seeded),
             "expect_fixture_ids": sorted(mv["expect_ids"]),
             "status": pl.get("status"),
             "error": m.get("error"),
@@ -1054,7 +1148,27 @@ MATCH_PROBE = {
 def c_gate_restart(p: str) -> list[Result]:
     """P09: Gate restart. Readiness must degrade; a call during the outage fails closed; recovery by re-registration."""
     a = "Gate restart: readiness degrades truthfully, no peer fallback, recovery by live re-registration"
-    sh(["docker", "restart", "l9e2e-gate"], timeout=120)
+    started_before = _started_at("l9e2e-gate")
+    restart = sh(["docker", "restart", "l9e2e-gate"], timeout=120)
+    started_after = _started_at("l9e2e-gate")
+    if (
+        restart.returncode != 0
+        or not started_before
+        or not started_after
+        or started_after == started_before
+    ):
+        return [
+            not_run(
+                "P09",
+                "A7",
+                p,
+                a,
+                "Gate restart not proven",
+                restart_rc=restart.returncode,
+                started_before=started_before,
+                started_after=started_after,
+            )
+        ]
     time.sleep(6)
     reg0, r0 = registry(), ready_once(10)
     m = drive("execute", MATCH_PROBE)
@@ -1090,8 +1204,10 @@ def c_gate_restart(p: str) -> list[Result]:
 def c_rogue_signer(p: str) -> list[Result]:
     """P12: a worker response signed by a key Gate does not trust is refused; SDK code digest identical."""
     a = "SDK lock mismatch blocked AND untrusted response signer refused"
+    m: dict = {}
+    events: list[dict] = []
     try:
-        rail(
+        setup = rail(
             "compose",
             "up",
             "-d",
@@ -1100,22 +1216,34 @@ def c_rogue_signer(p: str) -> list[Result]:
             "graph",
             extra_env={"GL_ROGUE_CEG": "1"},
         )
+        if setup.returncode != 0:
+            raise ProbeError(f"rogue graph worker could not be created (rc {setup.returncode})")
         time.sleep(25)
-        m = drive("execute", MATCH_PROBE)
-        glog = logs(
-            "l9e2e-gate",
-            "1m",
-            ("worker_response_untrusted", "GateDispatchSecurityError", "inbound"),
-        )
+        since = stamp()
+        m = drive("post_signed", MATCH_PROBE)
+        rpid = str(m.get("request_packet_id") or "")
+        events = gate_events_for(since, rpid) if rpid else []
     finally:
-        rail("compose", "up", "-d", "--no-deps", "--force-recreate", "graph")
+        back = rail("compose", "up", "-d", "--no-deps", "--force-recreate", "graph")
         rec = wait_ready()
-        if not rec.get("ready"):
-            raise ProbeError(f"trusted graph worker not ready after the rogue-signer case: {rec}")
+        if back.returncode != 0 or not rec.get("ready"):
+            raise ProbeError(
+                f"trusted graph worker not restored after the rogue-signer case (rc {back.returncode}, {rec})"
+            )
     digests = sdk_digests()
-    same = len({v.split()[-1] for v in digests.values()}) == 1
-    untrusted = m.get("ok") is False and "502" in str(m.get("error"))
-    sub = verdict(untrusted and same, p, signed_claim=True)
+    valid = [v for v in digests.values() if not v.startswith("UNAVAILABLE")]
+    same = len(valid) == 3 and len({v.split()[-1] for v in valid}) == 1
+    # Refusal tied to this request: Gate's own gate.failure for its packet id, naming the response check.
+    untrusted = m.get("http_status") == 502 and any(
+        e["event"] == "gate.failure"
+        and e["error_type"] == "GateDispatchSecurityError"
+        and "worker response failed transport validation" in str(e["error_message"])
+        for e in events
+    )
+    if len(valid) != 3:
+        sub = "NOT_RUN (SDK code digest unavailable)"
+    else:
+        sub = verdict(untrusted and same, p, signed_claim=True)
     # Two required assertions; one is exercised, so the case as a whole is NOT_RUN.
     return [
         not_run(
@@ -1128,7 +1256,7 @@ def c_rogue_signer(p: str) -> list[Result]:
             "(outside this lane)",
             unauthorized_signer_subcase=sub,
             call=m,
-            gate_log=glog,
+            gate_events_for_request=events,
             recovery=rec,
             sdk_code_digest=digests,
         )
@@ -1191,33 +1319,49 @@ def c_registration(p: str) -> list[Result]:
     hijack: dict = {}
     during: dict = {}
     reg_hijacked: dict = {}
-    glog: list[str] = []
+    events: list[dict] = []
     try:
         hijack = admin_register(
             {"graph": {**GRAPH_REG, "internal_url": "http://enrichment-engine:8000"}}
         )
         reg_hijacked = registry()
-        during = drive("execute", MATCH_PROBE)
-        glog = logs(
-            "l9e2e-gate",
-            "1m",
-            ("worker_response", "GateDispatch", "worker_transport", "gate.failure"),
-        )
+        since = stamp()
+        during = drive("post_signed", MATCH_PROBE)
+        dpid = str(during.get("request_packet_id") or "")
+        events = gate_events_for(since, dpid) if dpid else []
     finally:
         restore = admin_register({"graph": GRAPH_REG})
+        restored = registry()
+        if restore.get("http_status") not in (200, 201) or restored.get("graph") != sorted(
+            GRAPH_REG["supported_actions"]
+        ):
+            raise ProbeError(
+                f"graph registration not restored (HTTP {restore.get('http_status')}); stop using this stack"
+            )
+        if registry_url("graph") != GRAPH_REG["internal_url"]:
+            raise ProbeError(
+                "graph registration restored with the wrong internal_url; stop using this stack"
+            )
     after = drive("execute", MATCH_PROBE)
     obs = {
         "owner_collision_register": collision,
         "hijack_register": hijack,
         "registry_after_hijack": reg_hijacked,
         "call_while_hijacked": during,
-        "gate_log": glog,
+        "gate_events_for_request": events,
         "restore_register": restore,
         "call_after_restore": {k: after.get(k) for k in ("ok", "error", "gate_signature_valid")},
     }
+    # Witness: Gate dispatched this very request to the replacement, and the worker there refused it.
+    dispatched_to_replacement = during.get("http_status") == 502 and any(
+        e["event"] == "gate.failure"
+        and e["error_type"] == "WorkerHTTPError"
+        and "worker 'graph' execute returned HTTP 403" in str(e["error_message"])
+        for e in events
+    )
     witnessed = (
         hijack.get("http_status") in (200, 201)
-        and during.get("ok") is False
+        and dispatched_to_replacement
         and after.get("ok") is True
     )
     collided = collision["http_status"] == 400 and "is owned by" in collision["body"]
@@ -1303,6 +1447,18 @@ def c_gate_rail_policy(p: str) -> list[Result]:
     )
     out = [redact(ln) for ln in (r.stdout + r.stderr).strip().splitlines()[-3:]]
     joined = " ".join(out)
+    if r.returncode != 0 or not ("SETTINGS_REFUSED" in joined or "SETTINGS_OK" in joined):
+        return [
+            not_run(
+                "F-A1-11",
+                "A7",
+                p,
+                "settings probe",
+                f"the settings probe did not run to a verdict (rc {r.returncode})",
+                settings_probe=out,
+                gate_image_id=gate_image,
+            )
+        ]
     refused = "SETTINGS_REFUSED" in joined and "caller policy" in joined
     return [
         Result(
@@ -1539,17 +1695,18 @@ def release_set(profile: str) -> dict:
         if lab.returncode != 0:
             raise ProbeError(f"cannot inspect the image of {c}")
         imgs[c] = {"image_id": image_id, "revision": lab.stdout.strip()}
+    # Pack digests as the running processes see them: hashed inside each container at its mount.
     packs = {}
-    for f in sorted(
-        (Path(os.environ["GL_CEG_REPO"]) / "tests/fixtures/test_only_packs").glob("*/spec.yaml")
+    for c, mount, prefix in (
+        ("l9e2e-ceg", "/gl/ceg_packs", ""),
+        ("l9e2e-eie", "/gl/eie_domains", "eie:"),
     ):
-        packs[f.parent.name] = hashlib.sha256(f.read_bytes()).hexdigest()
-    packs["eie:plasticos"] = hashlib.sha256(
-        (EIE_ROOT / "domains/plasticos/spec.yaml").read_bytes()
-    ).hexdigest()
-    packs["eie:synthneutral"] = hashlib.sha256(
-        (HERE / "cartridges/synthneutral/spec.yaml").read_bytes()
-    ).hexdigest()
+        hr = sh(["docker", "exec", c, "sh", "-c", f"sha256sum {mount}/*/spec.yaml"], timeout=30)
+        if hr.returncode != 0 or not hr.stdout.strip():
+            raise ProbeError(f"cannot hash the packs mounted in {c} at {mount}")
+        for ln in hr.stdout.strip().splitlines():
+            digest, path = ln.split(maxsplit=1)
+            packs[prefix + Path(path).parent.name] = digest
     return {
         "requested_profile": profile,
         "observed_signing_algorithm": dict(OBSERVED_PROFILE),

@@ -219,5 +219,5 @@
       ]
     }
   ],
-  "match_scope": "expect_ids are compared within the tp-fac- fixture set; candidates written by other cases into the same tenant database are recorded as off_fixture_candidates and never asserted on"
+  "match_scope": "expect_ids are compared within the PX-POS rows the match case seeds (tp-fac-001..003); candidates written by other cases into the same tenant database are recorded as off_fixture_candidates and never asserted on"
 }

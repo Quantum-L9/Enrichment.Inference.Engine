@@ -46,7 +46,9 @@ What the matrix shows:
 - **`score`:** both worker keys are refused by Gate's operator-only kind rule (`ingress_validator.py:211-220`), which fires before the action list is checked; both workers' lists name `score` on purpose. Consumers reach CEG, which answers `failure`, because `REMOTE_SCORE_ENABLED` is off and no `score:read` grant exists. P36 is therefore NOT_APPLICABLE.
 - **`health-assess`:** only the `enrichment-engine` worker may originate it; `ceg-gl` is refused by the kind rule. CEG answered the operator's `health_report` probe with `failure`. The exact refusal is in the receipt and is a CEG-W item.
 - **`graph-inference-result`:** only `ceg-gl` may originate it. Gate resolves it to `enrichment-engine` (EIE-owned).
-- **Registration:** both nodes register live into an empty registry (`GATE_NODE_REGISTRY_PATH` unset). Hijack resistance stays source-level only (F-A1-05); it was not exercised.
+- **Registration:** both nodes register live into an empty registry (`GATE_NODE_REGISTRY_PATH` unset).
+  - Observed (F-A1-05 witness, `receipts/a7/F-A1-05.ed25519.json`): an admin-token holder replaced the canonical `graph` registration with `enrichment-engine`'s URL, and Gate accepted it. Gate then dispatched a consumer `match` there, and the worker refused it (Gate `gate.failure`, `WorkerHTTPError`, worker HTTP 403, surfaced as 502), correlated by that request's packet id.
+  - Source-level only, not exercised: the registration is not bound to the registering node's signing key, and the admin token is compared with `!=` in `services/admin_registration_service.py:64-68`.
 
 ## 3. Lineage
 

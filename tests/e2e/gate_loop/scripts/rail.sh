@@ -14,9 +14,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GL_DIR="$(dirname "$HERE")"
 EIE_ROOT="$(cd "$GL_DIR/../../.." && pwd)"
 STATE="${GL_STATE_DIR:-/root/l9e2e/gate_loop}"
-ENV_FILE="${GL_ENV_FILE:-$STATE/run.env}"
 : "${GL_GATE_RAIL:?path to Constellation.Gate constellation-gate/tests/e2e/docker}"
 : "${GL_CEG_REPO:?path to the Cognitive.Engine.Graphs checkout}"
+# Compose resolves a relative bind source against the first compose file's directory (the
+# Gate checkout), not the caller's: export only absolute paths for the fixture mounts.
+mkdir -p "$STATE"
+STATE="$(cd "$STATE" && pwd)"
+GL_CEG_REPO="$(cd "$GL_CEG_REPO" && pwd)"
+ENV_FILE="${GL_ENV_FILE:-$STATE/run.env}"
 
 mkdir -p "$STATE"
 # Regenerate when absent or written by an older gen_keys.py (no GL_NEO4J_SECRET).
