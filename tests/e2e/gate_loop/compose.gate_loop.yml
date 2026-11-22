@@ -58,7 +58,8 @@ services:
       L9_SIGNING_KEY_ID: eie-gl
       L9_VERIFYING_KEYS_JSON: ${GL_WORKER_VERIFYING_KEYS_JSON:?}
       DOMAINS_DIR: /gl/eie_domains
-      DATABASE_URL: postgresql+asyncpg://enrich:${GL_PG_PASSWORD:?}@eie-postgres:5432/enrich
+      # DATABASE_URL comes from the base rail (L9E2E_PG_PASSWORD, aliased to
+      # GL_PG_PASSWORD by scripts/rail.sh); it is not restated here.
     volumes:
       - ${GL_EIE_DOMAINS:?}:/gl/eie_domains:ro
     depends_on:
@@ -75,7 +76,6 @@ services:
       L9_SIGNING_KEY_ID: ${GL_CEG_KEY_ID:-ceg-gl}
       L9_VERIFYING_KEYS_JSON: ${GL_WORKER_VERIFYING_KEYS_JSON:?}
       L9_GATE_SIGNING_KEY_IDS: gate-gl
-      NEO4J_PASSWORD: ${GL_NEO4J_PASSWORD:?}
       DOMAINS_ROOT: /gl/ceg_packs
       TENANT_ALLOWLIST: plasticos,synthneutral
       # Opt-in for the feedback seam under test; default False in settings.py.
@@ -84,14 +84,9 @@ services:
     volumes:
       - ${GL_CEG_PACKS:?}:/gl/ceg_packs:ro
 
-  neo4j:
-    environment:
-      NEO4J_AUTH: neo4j/${GL_NEO4J_PASSWORD:?}
-      L9E2E_NEO4J_PASSWORD: ${GL_NEO4J_PASSWORD:?}
-
+  # Credentials for neo4j, eie-postgres and the DSNs come from the base rail's
+  # L9E2E_* variables, which scripts/rail.sh aliases to this run's GL_* values.
   eie-postgres:
-    environment:
-      POSTGRES_PASSWORD: ${GL_PG_PASSWORD:?}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U enrich -d enrich"]
       interval: 3s
