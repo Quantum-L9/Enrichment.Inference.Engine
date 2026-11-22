@@ -62,6 +62,15 @@ logger = structlog.get_logger("sweep_handlers")
 
 _RESULTS_KEYS = frozenset({"sweep_id", "cursor"})
 
+#: A running sweep nothing has touched for this long -- no new result, no
+#: ledger write of its tenant-day -- has lost its worker (a restart, a crash).
+#: Far above the longest gap a live sweep leaves: readiness is at most
+#: ceil(500 / 100) Gate calls before the first reservation, and every converge
+#: is bounded by the canonical 25 s budget and touches the ledger twice.
+SWEEP_STALE_AFTER = timedelta(minutes=30)
+#: How often this process looks for such sweeps, with no request needed.
+SWEEP_STALE_POLL_SECONDS = 60.0
+
 
 @dataclass
 class _Wiring:
@@ -74,6 +83,9 @@ class _Wiring:
 
 _wiring = _Wiring()
 _background: set[asyncio.Task[None]] = set()
+# Sweeps whose worker is a task of this process: never stale while it runs.
+_running_here: set[str] = set()
+_stale_poll: asyncio.Task[None] | None = None
 
 
 def init_sweep(
@@ -93,6 +105,65 @@ def init_sweep(
         converge=converge,
         clock=clock or (lambda: datetime.now(UTC)),
     )
+    if store is None:
+        # The production wiring: the durable store, where a sweep outlives the
+        # process that started it. An injected store is a caller's own.
+        start_stale_sweep_poll()
+
+
+def start_stale_sweep_poll(interval_seconds: float = SWEEP_STALE_POLL_SECONDS) -> bool:
+    """Close stale sweeps every `interval_seconds` in this process (startup).
+
+    Started from `init_sweep`, which startup registration runs inside the event
+    loop. Returns False, starting nothing, outside a running loop or when the
+    poll already runs on it. A pass that finds the store unavailable is logged
+    and retried on the next tick.
+    """
+    global _stale_poll
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    current = _stale_poll
+    if current is not None and not current.done() and current.get_loop() is loop:
+        return False
+    _stale_poll = loop.create_task(_stale_loop(interval_seconds), name="enrichment-sweep:stale")
+    return True
+
+
+async def stop_stale_sweep_poll() -> None:
+    """Stop this process's stale-sweep poll (shutdown, tests)."""
+    global _stale_poll
+    task, _stale_poll = _stale_poll, None
+    if task is None or task.get_loop().is_closed():
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+async def _stale_loop(interval_seconds: float) -> None:
+    while True:
+        await asyncio.sleep(interval_seconds)
+        await close_stale_sweeps()
+
+
+async def close_stale_sweeps() -> list[str]:
+    """Complete every running sweep whose worker is gone; never raises.
+
+    Its unhandled candidates are skipped `sweep_failed` and the ledger is left
+    as it is, so no reservation is released into a second spend and the cap
+    holds. Sweeps this process is running are never closed.
+    """
+    try:
+        closed = await _store().close_stale_sweeps(
+            _wiring.clock(), SWEEP_STALE_AFTER, exclude=set(_running_here)
+        )
+    except Exception as exc:
+        logger.warning("enrichment_sweep.stale_close_failed", error=str(exc))
+        return []
+    if closed:
+        logger.warning("enrichment_sweep.stale_closed", sweeps=closed)
+    return closed
 
 
 async def wait_for_background_sweeps() -> None:
@@ -156,6 +227,7 @@ async def handle_enrichment_sweep(
     record = _new_record(tenant, sweep_id, request, settings, now)
     store = _store()
     await _purge(store, settings, now)
+    await close_stale_sweeps()
     try:
         stored, created = await store.create_sweep(record)
     except Exception as exc:
@@ -225,7 +297,9 @@ def _start(store: SweepStore, record: SweepRecord, settings: Any) -> None:
     )
     task = asyncio.create_task(runner.run(record), name=f"enrichment-sweep:{record.sweep_id}")
     _background.add(task)
+    _running_here.add(record.sweep_id)
     task.add_done_callback(_background.discard)
+    task.add_done_callback(lambda _: _running_here.discard(record.sweep_id))
 
 
 async def handle_enrichment_sweep_results(
@@ -305,7 +379,10 @@ def _cursor(value: object) -> int:
 __all__ = [
     "handle_enrichment_sweep",
     "handle_enrichment_sweep_results",
+    "close_stale_sweeps",
     "init_sweep",
+    "start_stale_sweep_poll",
+    "stop_stale_sweep_poll",
     "wait_for_background_sweeps",
 ]
 

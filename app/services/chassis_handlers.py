@@ -120,3 +120,36 @@ def register_all_handlers() -> None:
         "sdk_handlers_registered",
         handlers=registered_actions(),
     )
+    start_graph_intent_recovery()
+
+
+#: How often a process replays the durable graph intents that are due (A2).
+GRAPH_INTENT_RECOVERY_INTERVAL_SECONDS = 30.0
+
+
+def start_graph_intent_recovery() -> bool:
+    """Start this process's bounded graph-intent recovery poll (A2), once.
+
+    Called from startup registration, inside the running event loop: an idle
+    node that restarted with intents left `pending` replays them without
+    waiting for traffic. It is an in-process task of the one coordinator --
+    no queue, no daemon -- and its first pass runs one interval after start,
+    by which time startup has initialised the store; a pass that finds the
+    store unavailable is logged and retried on the next tick. Returns False,
+    starting nothing, when no event loop is running or the poll already runs.
+    """
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    from app.core.config import get_settings
+
+    from .side_effect_coordinator import get_side_effect_coordinator
+
+    started = get_side_effect_coordinator().start_graph_recovery(
+        get_settings(), interval_seconds=GRAPH_INTENT_RECOVERY_INTERVAL_SECONDS
+    )
+    logger.info("graph_intent_recovery_started", started=started)
+    return started
