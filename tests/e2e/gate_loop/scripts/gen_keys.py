@@ -44,6 +44,8 @@ def main(out: str) -> None:
     # Diagnostic HMAC profile (class D, never PASS for a signed claim): one
     # distinct secret per identity, used only with GL_SIGNING=hmac.
     hm = {kid: base64.b64encode(secrets.token_bytes(32)).decode() for kid in IDS}
+    neo4j_secret = secrets.token_urlsafe(18).replace("-", "x").replace("_", "y")
+    pg_secret = secrets.token_urlsafe(18).replace("-", "x").replace("_", "y")
     env = {
         **{f"GL_HMAC_{k.split('-')[0].upper()}": hm[k] for k in IDS},
         "GL_HMAC_GATE_VERIFYING_KEYS_JSON": json.dumps(
@@ -56,8 +58,12 @@ def main(out: str) -> None:
         "GL_WORKER_VERIFYING_KEYS_JSON": json.dumps(worker_verifying),
         "GL_ALL_PUBLIC_KEYS_JSON": json.dumps(pub),
         "GL_ADMIN_TOKEN": secrets.token_urlsafe(24),
-        "GL_NEO4J_PASSWORD": secrets.token_urlsafe(18).replace("-", "x").replace("_", "y"),
-        "GL_PG_PASSWORD": secrets.token_urlsafe(18).replace("-", "x").replace("_", "y"),
+        "GL_NEO4J_SECRET": neo4j_secret,
+        "GL_PG_SECRET": pg_secret,
+        # The Gate rail's compose.yml interpolates these names (${L9E2E_*:?}); the
+        # values are generated here and live only in run.env, outside the repository.
+        "L9E2E_NEO4J_PASSWORD": neo4j_secret,
+        "L9E2E_PG_PASSWORD": pg_secret,
     }
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     # Write a private temp file beside the target and publish it only once it is complete and

@@ -19,7 +19,10 @@ ENV_FILE="${GL_ENV_FILE:-$STATE/run.env}"
 : "${GL_CEG_REPO:?path to the Cognitive.Engine.Graphs checkout}"
 
 mkdir -p "$STATE"
-[[ -f "$ENV_FILE" ]] || python3 "$HERE/gen_keys.py" "$ENV_FILE" >"$STATE/keys.receipt.json"
+# Regenerate when absent or written by an older gen_keys.py (no GL_NEO4J_SECRET).
+if [[ ! -f "$ENV_FILE" ]] || ! grep -q '^GL_NEO4J_SECRET=' "$ENV_FILE"; then
+  python3 "$HERE/gen_keys.py" "$ENV_FILE" >"$STATE/keys.receipt.json"
+fi
 
 # The base rail interpolates L9E2E_* with ${VAR:?}. This overlay replaces every
 # one of those values, so the aliases below only satisfy interpolation; the
@@ -30,8 +33,8 @@ compose_env() {
   . "$ENV_FILE"
   set +a
   export L9E2E_GATE_KEY="$GL_PRIV_GATE" L9E2E_EIE_KEY="$GL_PRIV_EIE" L9E2E_CEG_KEY="$GL_PRIV_CEG"
-  export L9E2E_ADMIN_TOKEN="$GL_ADMIN_TOKEN" L9E2E_NEO4J_PASSWORD="$GL_NEO4J_PASSWORD"
-  export L9E2E_PG_PASSWORD="$GL_PG_PASSWORD" L9E2E_VERIFYING_KEYS_JSON="$GL_GATE_VERIFYING_KEYS_JSON"
+  # The base rail's database credentials (L9E2E_*) come straight from run.env.
+  export L9E2E_ADMIN_TOKEN="$GL_ADMIN_TOKEN" L9E2E_VERIFYING_KEYS_JSON="$GL_GATE_VERIFYING_KEYS_JSON"
   # P12 rig: GL_ROGUE_CEG=1 makes the graph worker sign its responses with the
   # well-formed but untrusted rogue-gl key.
   if [[ "${GL_ROGUE_CEG:-0}" == "1" ]]; then export GL_PRIV_CEG="$GL_PRIV_ROGUE" GL_CEG_KEY_ID=rogue-gl; fi
@@ -55,7 +58,7 @@ assemble_domains() {
 neo4j_dbs() {
   for db in plasticos synthneutral; do
     for _ in $(seq 1 30); do
-      docker exec l9e2e-neo4j cypher-shell -u neo4j -p "$GL_NEO4J_PASSWORD" -d system \
+      docker exec l9e2e-neo4j cypher-shell -u neo4j -p "$GL_NEO4J_SECRET" -d system \
         "CREATE DATABASE $db IF NOT EXISTS WAIT;" >/dev/null 2>&1 && break
       sleep 5
     done

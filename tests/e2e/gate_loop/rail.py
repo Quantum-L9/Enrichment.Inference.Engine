@@ -74,7 +74,7 @@ def secrets_() -> list[str]:
     except OSError:
         return []
     keys = [k for k in e if k.startswith(("GL_PRIV_", "GL_HMAC_")) and not k.endswith("_JSON")]
-    keys += ["GL_ADMIN_TOKEN", "GL_NEO4J_PASSWORD", "GL_PG_PASSWORD"]
+    keys += ["GL_ADMIN_TOKEN", "GL_NEO4J_SECRET", "GL_PG_SECRET"]
     return [e[k] for k in keys if k in e and len(e[k]) > 8]
 
 
@@ -111,7 +111,7 @@ def drive(scenario: str, args: dict | None = None) -> dict:
 
 def cypher(db: str, query: str) -> list[list[str]]:
     """Rows of a Cypher query (header dropped). Raises ProbeError when the query does not complete."""
-    pw = env()["GL_NEO4J_PASSWORD"]
+    pw = env()["GL_NEO4J_SECRET"]
     r = sh(
         [
             "docker",
