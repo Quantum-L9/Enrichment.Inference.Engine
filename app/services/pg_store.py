@@ -994,14 +994,27 @@ async def _idempotent_hit(
         "enrichment_result_idempotent_hit", idempotency_key=idempotency_key, tenant_id=tenant_id
     )
     if graph_intent is not None:
-        # The result is already durable. Its graph obligation is recorded now if
-        # it never was (a row older than graph_sync_intents) -- but only for a
-        # verified replay: a retry that carries other fields must not attach
-        # data the stored result never committed.
-        _require_verified_replay(existing, fields, graph_intent)
         async with get_session() as session:
+            if await _intent_exists(session, graph_intent):
+                # The operation committed with its obligation: this call is its
+                # duplicate, whatever it recomputed.
+                raise GraphIntentDuplicateError(graph_intent.tenant_id, graph_intent.effect_key)
+            # A stored result with no obligation (older than graph_sync_intents,
+            # or committed without a graph leg): backfill one only for a
+            # verified replay -- never data the stored result does not hold.
+            _require_verified_replay(existing, fields, graph_intent)
             await _insert_graph_intent(session, graph_intent, existing.id)
     return existing
+
+
+async def _intent_exists(session: AsyncSession, spec: GraphIntentSpec) -> bool:
+    found = await session.execute(
+        select(GraphSyncIntent.id).where(
+            GraphSyncIntent.tenant_id == spec.tenant_id,
+            GraphSyncIntent.effect_key == spec.effect_key,
+        )
+    )
+    return found.scalar_one_or_none() is not None
 
 
 async def _idempotent_race_winner(
@@ -1042,15 +1055,26 @@ def _require_verified_replay(
 ) -> None:
     """Attach an intent to a stored result only when this call replays it exactly.
 
-    Same tenant, entity and committed fields; anything else is a mismatch
-    (`GraphIntentReplayMismatchError`): the stored result is the operation's,
-    and this call's different result is not durable.
+    Same entity and committed fields, and every graph field the intent pins
+    equal to the stored result's value for it -- a graph field the stored
+    result does not hold as-is (shaped, or absent) cannot be verified. Anything
+    else is a mismatch (`GraphIntentReplayMismatchError`): the stored result is
+    the operation's, and this call's different result is not durable.
     """
 
     def normal(value: Any) -> str:
         return json.dumps(value, sort_keys=True, default=str)
 
-    if existing.entity_id != spec.entity_id or normal(existing.fields) != normal(dict(fields)):
+    stored = dict(existing.fields or {})
+    graph_verified = all(
+        name in stored and normal(stored[name]) == normal(value)
+        for name, value in spec.fields.items()
+    )
+    if (
+        existing.entity_id != spec.entity_id
+        or normal(stored) != normal(dict(fields))
+        or not graph_verified
+    ):
         logger.warning(
             "graph_intent_replay_mismatch",
             tenant_id=spec.tenant_id,

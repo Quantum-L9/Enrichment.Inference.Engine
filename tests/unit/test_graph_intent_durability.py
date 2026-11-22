@@ -47,6 +47,7 @@ class _Row:
     attempts: int = 0
     max_attempts: int = 8
     lease_owner: str | None = None
+    lease_expires_at: Any = None
     due: bool = True
     origin: str = "enrich"
     enrichment_result_id: uuid.UUID | None = None
@@ -762,3 +763,46 @@ def test_a_poll_bound_to_a_closed_loop_is_replaced_without_cancelling() -> None:
         await coord.stop_graph_recovery()
 
     asyncio.run(restart())
+
+
+@pytest.mark.asyncio
+async def test_a_claim_whose_lease_ran_out_before_the_send_sends_nothing() -> None:
+    """A slow claim can return an already-expired lease; another worker may own it."""
+    from datetime import UTC, datetime, timedelta
+
+    world = _world()
+    await _commit(
+        SideEffectCoordinator(intents=world.intents),
+        world,
+        _router(),
+        idempotency_key="op-1",
+        graph_sync=False,
+        defer_graph_sync=True,
+    )
+    (claimed,) = await world.intents.claim_due(owner="w1", limit=1)
+    expired = replace(claimed, lease_expires_at=datetime.now(UTC) - timedelta(seconds=1))
+    router = _router(ACK)
+    report = await _send_claimed(SideEffectCoordinator(intents=world.intents), router, expired)
+    router.notify_graph_sync.assert_not_awaited()
+    assert report.graph_deferred and "graph_sync:lease_expired_before_send" in report.errors
+    world.intents.settles.clear()
+
+
+async def _send_claimed(coord: SideEffectCoordinator, router: MagicMock, record: Any) -> Any:
+    from app.services.side_effect_coordinator import SideEffectReport
+
+    report = SideEffectReport(key=record.effect_key, graph_retry=True)
+    with patch("app.engines.packet_router.get_router", return_value=router):
+        await coord._graph_leg(
+            key=record.effect_key,
+            tenant=record.tenant_id,
+            entity_id=record.entity_id,
+            fields=record.fields,
+            domain=record.domain or record.tenant_id,
+            node_label=record.node_label,
+            contract_digest=record.contract_digest,
+            settings=SETTINGS,
+            report=report,
+            claimed=record,
+        )
+    return report

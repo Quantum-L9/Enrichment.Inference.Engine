@@ -422,6 +422,13 @@ class SideEffectCoordinator:
         proceed, record = await self._lease_intent(key, tenant, claimed, report)
         if not proceed:
             return
+        if record is not None and _lease_expired(record):
+            # The claim took longer than its lease: another worker may hold the
+            # row now. Nothing is sent on a lease this call no longer owns.
+            report.graph_deferred = True
+            report.errors.append("graph_sync:lease_expired_before_send")
+            logger.warning("side_effects_graph_lease_expired", key=key)
+            return
         if record is not None:
             entity_id = record.entity_id
             fields = record.fields
@@ -1104,3 +1111,11 @@ def _converge_graph_sync_enabled(settings: Any) -> bool:
     """`Settings.converge_graph_sync_enabled`; an object without it holds nothing."""
     value = getattr(settings, "converge_graph_sync_enabled", True)
     return value is not False
+
+
+def _lease_expired(record: Any) -> bool:
+    """Whether a claimed intent's lease ran out before its send started."""
+    from datetime import UTC, datetime
+
+    expires = getattr(record, "lease_expires_at", None)
+    return isinstance(expires, datetime) and expires <= datetime.now(UTC)

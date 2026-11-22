@@ -339,7 +339,7 @@ async def test_held_origins_are_neither_claimed_nor_resolved(db: None) -> None:
 async def test_a_mismatched_replay_attaches_no_intent(db: None) -> None:
     await _save(None, idempotency_key="caller-1")
     with (
-        pg_store.graph_intent_scope(_spec()),
+        pg_store.graph_intent_scope(_spec(fields={"capacity": 9.9})),
         pytest.raises(pg_store.GraphIntentReplayMismatchError),
     ):
         await pg_store.save_enrichment_result(

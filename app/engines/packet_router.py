@@ -318,6 +318,15 @@ def _rejected_in_full(ack: Any, entity_type: str) -> bool:
     )
 
 
+def _unconfirmed_outcome(ack: Any, entity_type: str) -> tuple[GraphSyncOutcomeKind, str]:
+    """Classify an answer that did not acknowledge the row: refused or retryable."""
+    if _rejected_in_full(ack, entity_type):
+        return GraphSyncOutcomeKind.REFUSED, "all_rejected"
+    if _rows_rejected(ack, entity_type):
+        return GraphSyncOutcomeKind.REFUSED, "rows_rejected"
+    return GraphSyncOutcomeKind.RETRYABLE, "unacknowledged"
+
+
 def graph_sync_failure_kind(exc: NodeUnreachableError) -> GraphSyncOutcomeKind:
     """Classify a failed entity ``sync`` route on Gate-client transport signals only.
 
@@ -1221,11 +1230,7 @@ class PacketRouter:
                 entity_type=ack.get("entity_type"),
                 expected_entity_type=contract.entity_type,
             )
-            if _rejected_in_full(ack, contract.entity_type):
-                return settle(GraphSyncOutcomeKind.REFUSED, "all_rejected")
-            if _rows_rejected(ack, contract.entity_type):
-                return settle(GraphSyncOutcomeKind.REFUSED, "rows_rejected")
-            return settle(GraphSyncOutcomeKind.RETRYABLE, "unacknowledged")
+            return settle(*_unconfirmed_outcome(ack, contract.entity_type))
         return settle(GraphSyncOutcomeKind.ACKNOWLEDGED, "acknowledged", ack)
 
     def graph_sync_pin(

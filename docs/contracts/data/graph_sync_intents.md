@@ -105,7 +105,10 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
    configured sends unclaimed. A CEG answer the row did not record (lease lost,
    store error) leaves the key pending.
 8. **Verified replay.** An idempotent replay attaches its intent to the stored
-   result only when it carries the same entity and committed fields. A replay
+   result only when it carries the same entity and committed fields and every
+   graph field it pins equals the stored result's value for that field (a
+   shaped or absent graph field cannot be verified). A replay of an operation
+   whose intent already exists is its duplicate, checked first. A replay
    carrying anything else raises `GraphIntentReplayMismatchError`: it is a
    failed persistence for that call (refused when durability is required),
    never a duplicate and never `completed`.

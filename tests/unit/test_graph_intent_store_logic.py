@@ -188,12 +188,14 @@ async def test_an_idempotent_hit_records_the_missing_intent_against_the_existing
         return existing
 
     monkeypatch.setattr(pg_store, "get_enrichment_result_by_idempotency_key", found)
-    tx = _Session(answers=[_Result(value=uuid.uuid4())])
+    tx = _Session(answers=[_Result(value=None), _Result(value=uuid.uuid4())])
     session[:] = [tx]
-    with pg_store.graph_intent_scope(_spec()):
+    with pg_store.graph_intent_scope(_spec(fields={"capacity": 2.5})):
         assert await _save(idempotency_key="caller-1") is existing
-    params = tx.statements[0].compile(dialect=postgresql.dialect()).params
+    assert _sql(tx.statements[0]).startswith("SELECT graph_sync_intents.id")
+    params = tx.statements[1].compile(dialect=postgresql.dialect()).params
     assert params["enrichment_result_id"] == existing.id
+    assert params["fields"] == {"capacity": 2.5}
 
 
 async def test_an_idempotency_race_returns_the_winner_and_rebinds_the_intent(
@@ -211,7 +213,7 @@ async def test_an_idempotency_race_returns_the_winner_and_rebinds_the_intent(
     )
     tx = _Session(answers=[_Result(value=uuid.uuid4()), _Result(value=winner)], flush_error=race)
     session[:] = [tx]
-    with pg_store.graph_intent_scope(_spec()):
+    with pg_store.graph_intent_scope(_spec(fields={"capacity": 2.5})):
         assert await _save(idempotency_key="caller-1") is winner
     rebind = _sql(tx.statements[-1])
     assert rebind.startswith("UPDATE graph_sync_intents SET enrichment_result_id")
@@ -226,14 +228,80 @@ async def test_a_mismatched_idempotent_replay_is_refused_not_a_duplicate(
         return existing
 
     monkeypatch.setattr(pg_store, "get_enrichment_result_by_idempotency_key", found)
-    tx = _Session()
+    tx = _Session(answers=[_Result(value=None)])
     session[:] = [tx]
     with (
-        pg_store.graph_intent_scope(_spec()),
+        pg_store.graph_intent_scope(_spec(fields={"capacity": 2.5})),
         pytest.raises(pg_store.GraphIntentReplayMismatchError),
     ):
         await _save(idempotency_key="caller-1")
-    assert tx.statements == []
+    assert len(tx.statements) == 1, "nothing is inserted for a mismatched replay"
+
+
+async def test_an_existing_intent_makes_a_hit_a_duplicate_before_any_verification(
+    session: list[_Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry of a committed operation is its duplicate, whatever it recomputed."""
+    existing = SimpleNamespace(id=uuid.uuid4(), entity_id="d-1", fields={"capacity": 1.0})
+
+    async def found(*_: Any, **__: Any) -> Any:
+        return existing
+
+    monkeypatch.setattr(pg_store, "get_enrichment_result_by_idempotency_key", found)
+    session[:] = [_Session(answers=[_Result(value=uuid.uuid4())])]
+    with (
+        pg_store.graph_intent_scope(_spec(fields={"capacity": 9.9})),
+        pytest.raises(pg_store.GraphIntentDuplicateError),
+    ):
+        await _save(idempotency_key="caller-1")
+
+
+@pytest.mark.parametrize(
+    "graph_fields",
+    [{"capacity": 9.9}, {"handled_items": [{"code": "A1"}]}],
+    ids=["different-value", "not-in-stored-result"],
+)
+async def test_a_hit_whose_graph_fields_the_stored_result_does_not_hold_is_refused(
+    session: list[_Session], monkeypatch: pytest.MonkeyPatch, graph_fields: dict[str, Any]
+) -> None:
+    """Result fields match, the pinned graph fields do not: nothing is attached."""
+    existing = SimpleNamespace(id=uuid.uuid4(), entity_id="d-1", fields={"capacity": 2.5})
+
+    async def found(*_: Any, **__: Any) -> Any:
+        return existing
+
+    monkeypatch.setattr(pg_store, "get_enrichment_result_by_idempotency_key", found)
+    tx = _Session(answers=[_Result(value=None)])
+    session[:] = [tx]
+    with (
+        pg_store.graph_intent_scope(_spec(fields=graph_fields)),
+        pytest.raises(pg_store.GraphIntentReplayMismatchError),
+    ):
+        await _save(idempotency_key="caller-1")
+    assert len(tx.statements) == 1
+
+
+async def test_a_race_whose_graph_fields_the_winner_does_not_hold_is_refused(
+    session: list[_Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def none(*_: Any, **__: Any) -> None:
+        return None
+
+    monkeypatch.setattr(pg_store, "get_enrichment_result_by_idempotency_key", none)
+    winner = EnrichmentResult(
+        id=uuid.uuid4(), tenant_id="synthco", entity_id="d-1", fields={"capacity": 2.5}
+    )
+    race = IntegrityError(
+        "INSERT", {}, Exception("uq_enrichment_results_tenant_idempotency_key violated")
+    )
+    session[:] = [
+        _Session(answers=[_Result(value=uuid.uuid4()), _Result(value=winner)], flush_error=race)
+    ]
+    with (
+        pg_store.graph_intent_scope(_spec(fields={"capacity": 9.9})),
+        pytest.raises(pg_store.GraphIntentReplayMismatchError),
+    ):
+        await _save(idempotency_key="caller-1")
 
 
 async def test_a_mismatched_race_winner_rolls_the_intent_back(
