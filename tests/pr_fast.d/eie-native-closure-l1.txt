@@ -5,3 +5,4 @@ tests/contracts/test_eie_native_closure_l1_inference_contract.py
 tests/unit/test_eie_native_f06_node_binding.py
 tests/unit/test_eie_native_f06_plasticos_characterization.py
 tests/contracts/test_eie_native_closure_l1_f06_contract.py
+tests/unit/test_eie_native_f06_spec_contract.py

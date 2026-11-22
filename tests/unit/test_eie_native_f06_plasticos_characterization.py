@@ -2,9 +2,10 @@
 
 PlasticOS declares one node and its rules name none, so every rule binds to
 that node implicitly and no spec edit is needed. The witness compares the
-node-bound bridge (spec supplied: the production path) with the rules-only
-bridge, which binds nothing and so runs exactly the pre-binding rule set, over a
-grid of realistic facts, and pins the expected grades. The spec is read only.
+bridge bound to the spec's node (``node="Facility"``, the path the caller wiring
+will take) with ``node=None`` (today's path) and with the rules-only bridge,
+over a grid of realistic facts, and pins the expected grades. The spec is read
+only, and it validates unchanged under the node-scoped spec contract.
 """
 
 from __future__ import annotations
@@ -26,6 +27,12 @@ _SPEC = Path(__file__).resolve().parents[2] / "domains" / "plasticos" / "spec.ya
 @pytest.fixture(scope="module")
 def spec() -> dict[str, Any]:
     return parse_native_yaml(_SPEC.read_bytes())
+
+
+def test_plasticos_spec_validates_unchanged(spec: dict[str, Any]) -> None:
+    from app.engines.domain_spec_schema import validate_spec
+
+    assert validate_spec(spec, spec["name"]) == spec
 
 
 def _entities() -> list[dict[str, Any]]:
@@ -50,14 +57,18 @@ def _entities() -> list[dict[str, Any]]:
 
 def test_bound_and_unbound_bridges_agree_on_every_entity(spec: dict[str, Any]) -> None:
     rules = spec["inference_rules"]
-    bound = InferenceBridge(rules=rules, domain_spec=spec)
-    unbound = InferenceBridge(rules=rules)
-    assert bound.describe()["rule_count"] == unbound.describe()["rule_count"] == 3
+    (label,) = [n["label"] for n in spec["ontology"]["nodes"]]
+    bridges = [
+        InferenceBridge(rules=rules, domain_spec=spec, node=label),
+        InferenceBridge(rules=rules, domain_spec=spec),
+        InferenceBridge(rules=rules),
+    ]
+    assert [b.describe()["rule_count"] for b in bridges] == [3, 3, 3]
     for entity in _entities():
-        b, u = bound.run(dict(entity)), unbound.run(dict(entity))
-        assert b.derived_fields == u.derived_fields, entity
-        assert b.provenance == u.provenance, entity
-        assert b.confidence_map == u.confidence_map, entity
+        bound, today, rules_only = (b.run(dict(entity)) for b in bridges)
+        assert bound.derived_fields == today.derived_fields == rules_only.derived_fields, entity
+        assert bound.provenance == today.provenance == rules_only.provenance, entity
+        assert bound.confidence_map == today.confidence_map, entity
 
 
 @pytest.mark.parametrize(
@@ -72,7 +83,7 @@ def test_bound_and_unbound_bridges_agree_on_every_entity(spec: dict[str, Any]) -
 def test_pinned_plasticos_outputs(
     spec: dict[str, Any], contamination: float, capacity: int, expected: dict[str, str]
 ) -> None:
-    bridge = InferenceBridge(rules=spec["inference_rules"], domain_spec=spec)
+    bridge = InferenceBridge(rules=spec["inference_rules"], domain_spec=spec, node="Facility")
     entity = {
         "processed_polymers": [{"code": "HDPE", "line_id": "11", "direction": "in"}],
         "contamination_tolerance": contamination,

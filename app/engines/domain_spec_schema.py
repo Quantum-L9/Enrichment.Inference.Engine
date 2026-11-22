@@ -14,7 +14,7 @@ from copy import deepcopy
 from pathlib import PurePosixPath
 from typing import Any
 
-from app.engines.inference.rule_loader import RuleDefinition
+from app.engines.inference.rule_loader import RuleDefinition, bound_node
 from app.engines.spec_types import (
     TypeDeclarationError,
     describe,
@@ -153,12 +153,22 @@ def _hints(value: object, fields: set[str]) -> None:
             _integer(hints[key], key, 1)
 
 
-def _rules(value: object, fields: set[str], tenant_id: str) -> None:
+def _rules(value: object, nodes: dict[str, set[str]], tenant_id: str) -> None:
+    """Each rule belongs to one declared node and references only that node's fields.
+
+    A rule names its node with `node`; in a single-node spec it may omit it.
+    An unnamed rule in a multi-node spec, or an undeclared node, refuses the spec.
+    """
     seen: set[str] = set()
     for entry in _list(value, "inference_rules"):
         rule = _mapping(entry, "inference rule")
         _reject_ceg(rule)
-        _unique(_text(rule.get("rule_id"), "rule_id"), seen, "rule_id")
+        rule_id = _text(rule.get("rule_id"), "rule_id")
+        _unique(rule_id, seen, "rule_id")
+        node = rule.get("node")
+        if node is not None:
+            node = _identifier(node, "rule node")
+        fields = nodes[bound_node(rule_id, node, list(nodes))]
         _text(rule.get("rule_or_model_version"), "rule_or_model_version")
         _probability(rule.get("confidence"), "rule confidence")
         _integer(rule.get("priority", 10), "rule priority", 0, 100)
@@ -349,7 +359,7 @@ def validate_spec(raw: object, tenant_id: str) -> dict[str, Any]:
         query = _mapping(spec["queryschema"], "queryschema")
         _properties(query.get("fields"), "queryschema.fields")
     if "inference_rules" in spec:
-        _rules(spec["inference_rules"], set().union(*nodes.values()), tenant_id)
+        _rules(spec["inference_rules"], nodes, tenant_id)
     if "inference_rules_path" in spec:
         path = _text(spec["inference_rules_path"], "inference_rules_path")
         if (

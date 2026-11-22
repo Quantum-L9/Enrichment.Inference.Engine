@@ -133,11 +133,15 @@ class InferenceBridge:
     ):
         """`node` is the request's resolved ontology node (see `node_for_subject`).
 
-        With a spec, inference is bound to one node: the given `node`, else the
-        spec's only node. Condition rules run only when bound to that node, and
-        the derivation graph is built from that node's declarations. A spec with
-        several nodes and no resolved node runs no condition rule; nothing is
-        guessed. Without a spec no node is knowable and rules run unbound.
+        Given a `node` and a spec, inference is bound to that node: only the
+        condition rules bound to it run (a rule that cannot be bound to one
+        declared node refuses the set), and the derivation graph is built from
+        that node's declarations. With `node=None` the bridge runs exactly what
+        it ran before node binding existed; it never picks a node for the
+        request. Runtime filtering therefore activates only when the caller
+        passes `node` (caller wiring: convergence_controller.py / handlers.py).
+        The spec contract (domain_spec_schema._rules) refuses unbound rules at
+        load and publish whatever the caller passes.
         """
         self._rules: list[dict] = []
         self._domain_spec = domain_spec
@@ -149,14 +153,13 @@ class InferenceBridge:
         self._run_errors: list[str] = []
         self._last_unlock_map: dict[str, float] = {}
 
-        labels = _node_labels(domain_spec) if domain_spec else None
-        if node is None and labels is not None and len(labels) == 1:
-            node = labels[0]
+        # Binding needs both a node and the spec that declares the node labels.
+        labels = _node_labels(domain_spec) if domain_spec and node is not None else None
         self._node = node
 
         if domain_spec:
             scoped = domain_spec
-            if labels is not None and node in labels:
+            if labels is not None and node is not None:  # undeclared node: no declarations
                 scoped = _scope_to_node(domain_spec, node)
             self._graph = build_derivation_graph(scoped)
 
