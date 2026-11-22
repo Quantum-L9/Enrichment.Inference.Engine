@@ -44,7 +44,13 @@ from app.services.pg_models import (
     EnrichmentSweepResult,
     SweepBudgetLedger,
 )
-from app.services.sweep_store import COMPLETED, LedgerState, SweepRecord, SweepResultRow
+from app.services.sweep_store import (
+    COMPLETED,
+    LedgerState,
+    SweepRecord,
+    SweepResultRow,
+    interrupted_progress,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 CARTRIDGES = REPO / "tests/fixtures/cartridges"
@@ -89,6 +95,7 @@ class MemoryStore:
         self.results: dict[str, list[SweepResultRow]] = {}
         self.ledgers: dict[tuple[str, date], LedgerState] = {}
         self.fail_ledger = False
+        self.stale: set[str] = set()
 
     async def create_sweep(self, record: SweepRecord) -> tuple[SweepRecord, bool]:
         for existing in self.sweeps.values():
@@ -155,6 +162,23 @@ class MemoryStore:
             del self.sweeps[key]
             self.results.pop(key, None)
         return len(expired)
+
+    async def close_stale_sweeps(
+        self, now: datetime, stale_after: timedelta, exclude: Any = ()
+    ) -> list[str]:
+        """Closes the running sweeps a test marked stale (`self.stale`)."""
+        closed = []
+        for sweep_id in sorted(self.stale - set(exclude)):
+            record = self.sweeps.get(sweep_id)
+            if record is None or record.state == COMPLETED:
+                continue
+            handled = {r.entity_id for r in self.results.get(sweep_id, [])}
+            skipped, stats = interrupted_progress(record, handled)
+            self.sweeps[sweep_id] = replace(
+                record, skipped=tuple(skipped), stats=stats, state=COMPLETED, completed_at=now
+            )
+            closed.append(sweep_id)
+        return closed
 
 
 def target(name: str, priority: float = 50.0) -> dict[str, Any]:

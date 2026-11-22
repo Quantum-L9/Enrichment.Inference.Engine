@@ -45,12 +45,14 @@ from typing import Any
 
 import structlog
 
-from ..services.sweep_store import SweepRecord, SweepStore
+from ..services.sweep_store import RUNNING, SWEEP_FAILED, SweepRecord, SweepStore
 from .converge_request_v2 import REQUEST_CONTRACT_V2
 from .domain_yaml_reader import DomainEnrichmentConfig, default_node_label
 from .spec_types import node_properties
 
 logger = structlog.get_logger("enrichment_sweep")
+# The structured-log event of every "budget ledger cannot be read or written" stop.
+_LEDGER_UNAVAILABLE_EVENT = "enrichment_sweep.ledger_unavailable"
 
 ASSESS_ACTION = "health-assess"
 ASSESS_SUBACTION = "health_batch_assess"
@@ -593,6 +595,9 @@ class SweepRunner:
         run: _Run,
     ) -> str | None:
         """Reserve, converge, settle, store. Returns a stop reason, or None to go on."""
+        stop = await self._still_running(record)
+        if stop is not None:
+            return stop
         stop = await self._reserve(record, estimate, record.effective_budget_usd)
         if stop is not None:
             return stop
@@ -616,9 +621,7 @@ class SweepRunner:
                 run.seq += 1
                 await self._store.add_result(record.sweep_id, run.seq, entity_id, response, cost)
         except Exception as exc:
-            logger.error(
-                "enrichment_sweep.ledger_unavailable", sweep_id=record.sweep_id, error=str(exc)
-            )
+            logger.error(_LEDGER_UNAVAILABLE_EVENT, sweep_id=record.sweep_id, error=str(exc))
             return "budget_ledger_unavailable"
         if response is None:
             run.skip(entity_id, "converge_failed")
@@ -627,14 +630,28 @@ class SweepRunner:
             run.enriched.append(entity_id)
         return None
 
+    async def _still_running(self, record: SweepRecord) -> str | None:
+        """None while the sweep is running; a stop reason once it was closed.
+
+        A sweep closed as stale (its worker looked dead) stops here, before
+        reserving anything: a closed sweep never spends again.
+        """
+        try:
+            current = await self._store.get_sweep(record.tenant_id, record.sweep_id)
+        except Exception as exc:
+            logger.error(_LEDGER_UNAVAILABLE_EVENT, sweep_id=record.sweep_id, error=str(exc))
+            return "budget_ledger_unavailable"
+        if current is None or current.state != RUNNING:
+            logger.warning("enrichment_sweep.closed_while_running", sweep_id=record.sweep_id)
+            return SWEEP_FAILED
+        return None
+
     async def _reserve(self, record: SweepRecord, estimate: Decimal, cap: Decimal) -> str | None:
         """None when reserved; otherwise the reason every remaining candidate is skipped."""
         try:
             granted = await self._store.reserve(record.tenant_id, record.day, estimate, cap)
         except Exception as exc:
-            logger.error(
-                "enrichment_sweep.ledger_unavailable", sweep_id=record.sweep_id, error=str(exc)
-            )
+            logger.error(_LEDGER_UNAVAILABLE_EVENT, sweep_id=record.sweep_id, error=str(exc))
             return "budget_ledger_unavailable"
         return None if granted else "budget_exhausted"
 
