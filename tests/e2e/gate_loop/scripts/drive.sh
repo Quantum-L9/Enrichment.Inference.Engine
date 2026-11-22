@@ -4,8 +4,10 @@
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${GL_ENV_FILE:-${GL_STATE_DIR:-/root/l9e2e/gate_loop}/run.env}"
+set -a
 # shellcheck source=/dev/null
-set -a; . "$ENV_FILE"; set +a
+. "$ENV_FILE"
+set +a
 docker run --rm --network l9e2e_control \
   -v "$(dirname "$HERE")/driver/gate_loop_driver.py:/driver.py:ro" \
   -e GATE_URL=http://gate:9000 -e HTTPS_PROXY= -e https_proxy= \

@@ -25,8 +25,10 @@ mkdir -p "$STATE"
 # one of those values, so the aliases below only satisfy interpolation; the
 # overridden services never see them.
 compose_env() {
+  set -a
   # shellcheck source=/dev/null
-  set -a; . "$ENV_FILE"; set +a
+  . "$ENV_FILE"
+  set +a
   export L9E2E_GATE_KEY="$GL_PRIV_GATE" L9E2E_EIE_KEY="$GL_PRIV_EIE" L9E2E_CEG_KEY="$GL_PRIV_CEG"
   export L9E2E_ADMIN_TOKEN="$GL_ADMIN_TOKEN" L9E2E_NEO4J_PASSWORD="$GL_NEO4J_PASSWORD"
   export L9E2E_PG_PASSWORD="$GL_PG_PASSWORD" L9E2E_VERIFYING_KEYS_JSON="$GL_GATE_VERIFYING_KEYS_JSON"
