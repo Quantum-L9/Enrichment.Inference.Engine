@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Any
 
 SYSTEM_TEMPLATE = """You are a domain research analyst. Your task is to research
@@ -66,7 +67,7 @@ def build_prompt(
     entity: dict[str, Any],
     object_type: str,
     objective: str,
-    target_schema: dict[str, str] | None = None,
+    target_schema: Mapping[str, str | Mapping[str, Any]] | None = None,
     kb_context_text: str = "",
     model: str = "sonar-reasoning",
     sonar_config=None,
@@ -165,7 +166,7 @@ def unwrap_envelope(raw: dict[str, Any]) -> dict[str, Any]:
     return fields if isinstance(fields, dict) else raw
 
 
-def build_schema_hash(target_schema: dict[str, str] | None) -> str:
+def build_schema_hash(target_schema: Mapping[str, str | Mapping[str, Any]] | None) -> str:
     """Deterministic hash of the target schema for caching/dedup."""
     schema_str = json.dumps(sorted((target_schema or {}).items()), sort_keys=True)
     return hashlib.sha256(schema_str.encode()).hexdigest()[:16]
@@ -211,7 +212,7 @@ def build_variation_prompts(
     entity: dict[str, Any],
     object_type: str,
     objective: str = "enrich",
-    target_schema: dict[str, str] | None = None,
+    target_schema: Mapping[str, str | Mapping[str, Any]] | None = None,
     kb_context_text: str = "",
     model: str = "sonar-reasoning",
     n: int = 3,

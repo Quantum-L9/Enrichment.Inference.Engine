@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Mapping
 from typing import Any
 
 import structlog
@@ -463,7 +464,7 @@ def _has_non_metadata_field(validated: dict[str, Any]) -> bool:
 
 def _reply_is_sufficient(
     result: Any,
-    target_schema: dict[str, str] | None,
+    target_schema: Mapping[str, str | Mapping[str, Any]] | None,
     threshold: float,
     field_thresholds: dict[str, float] | None = None,
     default_field_threshold: float = DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
@@ -507,7 +508,7 @@ async def _collect_variations(
     *,
     call: Any,
     variation_count: int,
-    target_schema: dict[str, str] | None,
+    target_schema: Mapping[str, str | Mapping[str, Any]] | None,
     threshold: float,
     field_thresholds: dict[str, float] | None = None,
     default_field_threshold: float = DEFAULT_FIELD_CONFIDENCE_THRESHOLD,
