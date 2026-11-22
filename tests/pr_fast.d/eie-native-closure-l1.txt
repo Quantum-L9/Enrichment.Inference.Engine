@@ -2,3 +2,4 @@ tests/unit/test_eie_native_e2_contains_mapping.py
 tests/unit/test_eie_native_e2_numeric_finite.py
 tests/unit/test_eie_native_e2_node_boundary.py
 tests/unit/test_eie_native_e3_derivation_graph.py
+tests/contracts/test_eie_native_closure_l1_inference_contract.py
