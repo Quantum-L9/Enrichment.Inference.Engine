@@ -298,23 +298,36 @@ async def test_p03_unrelated_node_untouched_and_owner_recorded(
 
 
 @pytest.mark.parametrize(
-    "decisions",
+    ("decisions", "match"),
     [
-        _decide((OTHER, "slot_count", True)),  # approval names a node that does not own it
-        _decide((OWNER, "slot_count", True), (OWNER, "slot_count", False)),  # contradiction
-        _decide((OWNER, "slot_count", True), (OWNER, "never_proposed", True)),
+        # approval names a node that does not own the proposed field
+        (_decide((OTHER, "slot_count", True)), "unproposed owner/field pair"),
+        (
+            _decide((OWNER, "slot_count", True), (OWNER, "slot_count", False)),
+            "Duplicate approval owner/field pair",
+        ),
+        (
+            _decide((OWNER, "slot_count", True), (OWNER, "never_proposed", True)),
+            "unproposed owner/field pair",
+        ),
     ],
     ids=["wrong-owner", "contradictory", "unproposed-pair"],
 )
 async def test_p04_conflicting_decisions_refuse_the_whole_batch(
-    tmp_path: Path, audit: _Audit, decisions: list[proposer.ApprovalDecision]
+    tmp_path: Path,
+    audit: _Audit,
+    decisions: list[proposer.ApprovalDecision],
+    match: str,
 ) -> None:
     base = _base()
     previous = _publish_base(tmp_path, base)
     before = _snapshot(tmp_path)
-    proposal = _proposal(base, [(OWNER, "slot_count"), (OTHER, "slot_count")])
-    with pytest.raises(DomainPublicationError):
-        await _approve(tmp_path, base, proposal, decisions, reviewed="f" * 64)
+    proposal = _proposal(base)  # slot_count is proposed for OWNER only
+    # The digest of the valid single approval: the review-digest guard would pass,
+    # so only decision validation can refuse the batch.
+    valid = _sha(_materialize(base, proposal, _decide((OWNER, "slot_count", True))))
+    with pytest.raises(DomainPublicationError, match=match):
+        await _approve(tmp_path, base, proposal, decisions, reviewed=valid)
     assert audit.calls == []  # nothing audited
     assert _snapshot(tmp_path) == before  # nothing published, partially or otherwise
     assert _current(tmp_path) == previous
