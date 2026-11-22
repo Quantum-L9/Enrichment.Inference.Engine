@@ -9,6 +9,7 @@ Callers acquire a session via get_session() context manager.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -24,6 +25,7 @@ import structlog
 from sqlalchemy import (
     BigInteger,
     DateTime,
+    Float,
     Identity,
     Index,
     Integer,
@@ -52,6 +54,7 @@ from sqlalchemy.orm import Mapped, aliased, mapped_column, selectinload
 from app.engines.convergence.schema_proposer import _is_canonical_field_name
 from app.engines.domain_yaml_reader import is_legal_tenant_id
 
+from .graph_return_channel import GraphReturnCapacityError
 from .pg_models import (
     Base,
     ConvergenceRun,
@@ -1427,6 +1430,484 @@ async def graph_intent_status_counts(tenant_id: str | None = None) -> dict[str, 
     stmt = select(GraphSyncIntent.state, func.count()).group_by(GraphSyncIntent.state)
     if tenant_id is not None:
         stmt = stmt.where(GraphSyncIntent.tenant_id == tenant_id)
+    async with get_session() as session:
+        rows = (await session.execute(stmt)).all()
+    return {state: int(count) for state, count in rows}
+
+
+# ── Graph-return targets (A4) ─────────────────────────────────────────────
+# CEG's graph-inference-result outputs, retained durably until a later
+# eligible converge of their tenant and entity consumes them. Internal state
+# only: no payload, action or domain-spec key carries any column.
+
+GRAPH_RETURN_RETAINED = "retained"
+GRAPH_RETURN_CONSUMING = "consuming"
+GRAPH_RETURN_CONSUMED = "consumed"
+GRAPH_RETURN_REJECTED = "rejected"
+GRAPH_RETURN_EXPIRED = "expired"
+GRAPH_RETURN_TERMINAL_STATES = frozenset(
+    {GRAPH_RETURN_CONSUMED, GRAPH_RETURN_REJECTED, GRAPH_RETURN_EXPIRED}
+)
+#: States that hold a target a converge may still use, or already used.
+GRAPH_RETURN_ACCEPTED_STATES = (
+    GRAPH_RETURN_RETAINED,
+    GRAPH_RETURN_CONSUMING,
+    GRAPH_RETURN_CONSUMED,
+)
+GRAPH_RETURN_OPEN_STATES = (GRAPH_RETURN_RETAINED, GRAPH_RETURN_CONSUMING)
+GRAPH_RETURN_DEFAULT_MAX_ATTEMPTS = 5
+
+
+class GraphReturnTarget(Base):
+    """One graph-inference output retained for a later converge."""
+
+    __tablename__ = "graph_return_targets"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    seq: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=False), nullable=False, unique=True
+    )
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    field_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    rule: Mapped[str] = mapped_column(String(128), nullable=False)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    value_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    fact_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    intake_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    producer_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    origin_packet_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default=GRAPH_RETURN_RETAINED)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=GRAPH_RETURN_DEFAULT_MAX_ATTEMPTS
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_by: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "intake_key", name="uq_graph_return_targets_tenant_intake"),
+        Index("ix_graph_return_targets_entity", "tenant_id", "entity_id", "state", "seq"),
+        Index("ix_graph_return_targets_fact", "tenant_id", "fact_key"),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class GraphReturnIntake:
+    """One output of one graph-inference-result packet, bound at intake.
+
+    `rejection` is set for an output that is well-formed enough to identify
+    (tenant, entity, field) but is not eligible: it is recorded `rejected`
+    with that reason, never retained.
+    """
+
+    tenant_id: str
+    entity_id: str
+    field_name: str
+    rule: str
+    value: Any
+    confidence: float
+    producer_key: str
+    origin_packet_id: str
+    rejection: str | None = None
+
+    @property
+    def value_digest(self) -> str:
+        return _digest(json.dumps(self.value, sort_keys=True, default=str, separators=(",", ":")))
+
+    @property
+    def fact_key(self) -> str:
+        """The fact: tenant, entity, field, rule and value -- not who sent it."""
+        return _digest(
+            "|".join(
+                (self.tenant_id, self.entity_id, self.field_name, self.rule, self.value_digest)
+            )
+        )
+
+    @property
+    def intake_key(self) -> str:
+        """The producer's idempotency key plus the fact (A1 F-A1-07)."""
+        return _digest(f"{self.producer_key}|{self.fact_key}")
+
+
+@dataclass(frozen=True, slots=True)
+class GraphReturnIntakeResult:
+    """What one packet's intake recorded."""
+
+    retained: int
+    duplicates: int
+    unchanged: int
+    rejected: int
+
+
+@dataclass(frozen=True, slots=True)
+class GraphReturnRecord:
+    """A snapshot of one `graph_return_targets` row."""
+
+    id: uuid.UUID
+    seq: int
+    tenant_id: str
+    entity_id: str
+    field_name: str
+    rule: str
+    value: Any
+    confidence: float
+    producer_key: str
+    origin_packet_id: str
+    state: str
+    attempts: int
+    max_attempts: int
+    lease_owner: str | None
+    lease_expires_at: datetime | None
+    expires_at: datetime
+    created_at: datetime
+
+
+def _digest(text_value: str) -> str:
+    return hashlib.sha256(text_value.encode("utf-8")).hexdigest()
+
+
+def _return_record(row: Any) -> GraphReturnRecord:
+    value = row.value
+    return GraphReturnRecord(
+        id=row.id,
+        seq=row.seq,
+        tenant_id=row.tenant_id,
+        entity_id=row.entity_id,
+        field_name=row.field_name,
+        rule=row.rule,
+        value=value.get("value") if isinstance(value, dict) else value,
+        confidence=row.confidence,
+        producer_key=row.producer_key,
+        origin_packet_id=row.origin_packet_id,
+        state=row.state,
+        attempts=row.attempts,
+        max_attempts=row.max_attempts,
+        lease_owner=row.lease_owner,
+        lease_expires_at=row.lease_expires_at,
+        expires_at=row.expires_at,
+        created_at=row.created_at,
+    )
+
+
+def _intake_lock(tenant_id: str) -> Any:
+    """Serialise one tenant's intake: capacity and the unchanged-fact check."""
+    return select(func.pg_advisory_xact_lock(func.hashtextextended(f"graph_return|{tenant_id}", 0)))
+
+
+async def _unchanged_facts(
+    session: AsyncSession, tenant_id: str, intakes: list[GraphReturnIntake]
+) -> set[str]:
+    """Fact keys an accepted row already holds with at least this confidence."""
+    by_fact = {i.fact_key: i.confidence for i in intakes}
+    if not by_fact:
+        return set()
+    rows = (
+        await session.execute(
+            select(GraphReturnTarget.fact_key, func.max(GraphReturnTarget.confidence))
+            .where(
+                GraphReturnTarget.tenant_id == tenant_id,
+                GraphReturnTarget.fact_key.in_(sorted(by_fact)),
+                GraphReturnTarget.state.in_(GRAPH_RETURN_ACCEPTED_STATES),
+            )
+            .group_by(GraphReturnTarget.fact_key)
+        )
+    ).all()
+    return {fact for fact, best in rows if best >= by_fact[fact]}
+
+
+async def retain_graph_return_targets(
+    intakes: list[GraphReturnIntake],
+    *,
+    capacity: int,
+    ttl_seconds: float,
+    max_attempts: int = GRAPH_RETURN_DEFAULT_MAX_ATTEMPTS,
+    now: datetime | None = None,
+) -> GraphReturnIntakeResult:
+    """Record one packet's outputs atomically and idempotently.
+
+    All outputs share the packet's tenant. In one transaction, under a
+    per-tenant advisory lock:
+
+    * an output whose intake key (producer key + fact) is already recorded is a
+      duplicate -- a Gate retransmit or a restart replay -- and records nothing;
+    * an eligible output whose fact an accepted row already holds with at
+      least this confidence is `rejected` (`unchanged_fact`): an echo is not a
+      new observation and must not reseed the field;
+    * an ineligible output is `rejected` with its reason;
+    * the rest are `retained`.
+
+    When retaining them would take the tenant's open rows past `capacity`,
+    nothing is recorded and `GraphReturnCapacityError` is raised: the packet is
+    refused whole and retryable, never half-accepted.
+    """
+    if not intakes:
+        return GraphReturnIntakeResult(retained=0, duplicates=0, unchanged=0, rejected=0)
+    tenants = {i.tenant_id for i in intakes}
+    if len(tenants) != 1:
+        raise ValueError("one packet's outputs share one tenant")
+    tenant_id = next(iter(tenants))
+    at = now or datetime.now(UTC)
+    by_key: dict[str, GraphReturnIntake] = {}
+    for intake in intakes:
+        by_key.setdefault(intake.intake_key, intake)
+
+    async with get_session() as session:
+        await session.execute(_intake_lock(tenant_id))
+        recorded_rows = (
+            await session.execute(
+                select(GraphReturnTarget.intake_key, GraphReturnTarget.state).where(
+                    GraphReturnTarget.tenant_id == tenant_id,
+                    GraphReturnTarget.intake_key.in_(sorted(by_key)),
+                )
+            )
+        ).all()
+        recorded: dict[str, str] = {str(key): str(state) for key, state in recorded_rows}
+        fresh = [i for k, i in by_key.items() if k not in recorded]
+        unchanged = await _unchanged_facts(
+            session, tenant_id, [i for i in fresh if i.rejection is None]
+        )
+        rows: list[dict[str, Any]] = []
+        retained_new = rejected_new = unchanged_new = 0
+        for intake in fresh:
+            reason = intake.rejection
+            if reason is None and intake.fact_key in unchanged:
+                reason = "unchanged_fact"
+                unchanged_new += 1
+            elif reason is not None:
+                rejected_new += 1
+            else:
+                retained_new += 1
+            rows.append(
+                {
+                    "id": uuid.uuid4(),
+                    "tenant_id": tenant_id,
+                    "entity_id": intake.entity_id[:256],
+                    "field_name": intake.field_name[:128],
+                    "rule": intake.rule[:128],
+                    "value": json.loads(json.dumps({"value": intake.value}, default=str)),
+                    "value_digest": intake.value_digest,
+                    "fact_key": intake.fact_key,
+                    "intake_key": intake.intake_key,
+                    "producer_key": intake.producer_key[:256],
+                    "origin_packet_id": intake.origin_packet_id[:128],
+                    "confidence": intake.confidence,
+                    "state": GRAPH_RETURN_REJECTED if reason else GRAPH_RETURN_RETAINED,
+                    "reason": reason,
+                    "attempts": 0,
+                    "max_attempts": max_attempts,
+                    "expires_at": at + timedelta(seconds=ttl_seconds),
+                    "resolved_at": at if reason else None,
+                    "created_at": at,
+                    "updated_at": at,
+                }
+            )
+            # Within one packet a second output of the same fact is unchanged.
+            if reason is None:
+                unchanged.add(intake.fact_key)
+        if retained_new:
+            open_count = (
+                await session.execute(
+                    select(func.count()).where(
+                        GraphReturnTarget.tenant_id == tenant_id,
+                        GraphReturnTarget.state.in_(GRAPH_RETURN_OPEN_STATES),
+                    )
+                )
+            ).scalar_one()
+            if int(open_count) + retained_new > capacity:
+                raise GraphReturnCapacityError(tenant_id, int(open_count), retained_new, capacity)
+        if rows:
+            await session.execute(
+                insert(GraphReturnTarget)
+                .values(rows)
+                .on_conflict_do_nothing(constraint="uq_graph_return_targets_tenant_intake")
+            )
+    already = sum(1 for state in recorded.values() if state in GRAPH_RETURN_ACCEPTED_STATES)
+    result = GraphReturnIntakeResult(
+        retained=retained_new + already,
+        duplicates=len(intakes) - len(fresh),
+        unchanged=unchanged_new,
+        rejected=rejected_new,
+    )
+    logger.info(
+        "graph_return_targets_recorded",
+        tenant_id=tenant_id,
+        retained=result.retained,
+        duplicates=result.duplicates,
+        unchanged=result.unchanged,
+        rejected=result.rejected,
+    )
+    return result
+
+
+async def claim_graph_return_targets(
+    *,
+    tenant_id: str,
+    entity_id: str,
+    owner: str,
+    lease_seconds: float,
+    limit: int = 500,
+    now: datetime | None = None,
+) -> list[GraphReturnRecord]:
+    """Lease one entity's retained targets to one converge (cross-process safe).
+
+    First, in the same transaction, the entity's rows that can no longer be
+    consumed are `expired`: past their TTL, or leased `max_attempts` times
+    without being settled. Then `FOR UPDATE SKIP LOCKED` leases the rest --
+    `retained`, or `consuming` under an expired lease (the converge holding it
+    died) -- under a fresh fencing token, so two workers never lease one row
+    and only this claim can settle what it leased.
+    """
+    at = now or datetime.now(UTC)
+    claim_owner = f"{owner[:100]}#{uuid.uuid4().hex[:16]}"
+    target = GraphReturnTarget
+
+    def entity(table: Any) -> list[Any]:
+        return [table.tenant_id == tenant_id, table.entity_id == entity_id]
+
+    def lease_free(table: Any) -> Any:
+        return or_(
+            table.state == GRAPH_RETURN_RETAINED,
+            and_(table.state == GRAPH_RETURN_CONSUMING, table.lease_expires_at <= at),
+        )
+
+    expire_ttl = (
+        update(target)
+        .where(*entity(target), lease_free(target), target.expires_at <= at)
+        .values(
+            state=GRAPH_RETURN_EXPIRED,
+            reason="ttl_expired",
+            lease_owner=None,
+            lease_expires_at=None,
+            resolved_at=at,
+            updated_at=at,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    expire_attempts = (
+        update(target)
+        .where(*entity(target), lease_free(target), target.attempts >= target.max_attempts)
+        .values(
+            state=GRAPH_RETURN_EXPIRED,
+            reason="attempts_exhausted",
+            lease_owner=None,
+            lease_expires_at=None,
+            resolved_at=at,
+            updated_at=at,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    locked = aliased(GraphReturnTarget)
+    claim = (
+        update(target)
+        .where(
+            target.id.in_(
+                select(locked.id)
+                .where(*entity(locked), lease_free(locked), locked.expires_at > at)
+                .order_by(locked.seq)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+                .scalar_subquery()
+            )
+        )
+        .values(
+            state=GRAPH_RETURN_CONSUMING,
+            lease_owner=claim_owner,
+            lease_expires_at=at + timedelta(seconds=lease_seconds),
+            attempts=target.attempts + 1,
+            updated_at=at,
+        )
+        .returning(*GraphReturnTarget.__table__.columns)
+        .execution_options(synchronize_session=False)
+    )
+    async with get_session() as session:
+        await session.execute(expire_ttl)
+        await session.execute(expire_attempts)
+        rows = (await session.execute(claim)).all()
+    claimed = sorted((_return_record(r) for r in rows), key=lambda r: r.seq)
+    if claimed:
+        logger.info(
+            "graph_return_targets_claimed",
+            tenant_id=tenant_id,
+            entity_id=entity_id,
+            owner=claim_owner,
+            count=len(claimed),
+        )
+    return claimed
+
+
+async def settle_graph_return_targets(
+    *,
+    owner: str,
+    consumed: Mapping[uuid.UUID, str],
+    rejected: Mapping[uuid.UUID, str],
+    consumed_by: str | None,
+    now: datetime | None = None,
+) -> int:
+    """Record what a converge did with the targets it leased; returns rows settled.
+
+    `consumed` maps a row to its outcome (`seeded`, or why the pass kept another
+    value); `rejected` maps a row to why the converge refused it. Only the claim
+    holding `owner` (its fencing token) settles: a lease that expired and was
+    re-claimed settles nothing.
+    """
+    at = now or datetime.now(UTC)
+    settled = 0
+    async with get_session() as session:
+        for state, mapping, column in (
+            (GRAPH_RETURN_CONSUMED, consumed, "outcome"),
+            (GRAPH_RETURN_REJECTED, rejected, "reason"),
+        ):
+            for row_id, note in mapping.items():
+                result = await session.execute(
+                    update(GraphReturnTarget)
+                    .where(
+                        GraphReturnTarget.id == row_id,
+                        GraphReturnTarget.state == GRAPH_RETURN_CONSUMING,
+                        GraphReturnTarget.lease_owner == owner,
+                    )
+                    .values(
+                        {
+                            "state": state,
+                            column: note[:64] if column == "outcome" else note,
+                            "consumed_by": consumed_by[:512] if consumed_by else None,
+                            "lease_owner": None,
+                            "lease_expires_at": None,
+                            "resolved_at": at,
+                            "updated_at": at,
+                        }
+                    )
+                    .returning(GraphReturnTarget.id)
+                    .execution_options(synchronize_session=False)
+                )
+                settled += len(result.all())
+    expected = len(consumed) + len(rejected)
+    log = logger.info if settled == expected else logger.warning
+    log("graph_return_targets_settled", owner=owner, settled=settled, expected=expected)
+    return settled
+
+
+async def graph_return_status_counts(tenant_id: str | None = None) -> dict[str, int]:
+    """Operator view: how many graph-return targets are in each state."""
+    stmt = select(GraphReturnTarget.state, func.count()).group_by(GraphReturnTarget.state)
+    if tenant_id is not None:
+        stmt = stmt.where(GraphReturnTarget.tenant_id == tenant_id)
     async with get_session() as session:
         rows = (await session.execute(stmt)).all()
     return {state: int(count) for state, count in rows}
