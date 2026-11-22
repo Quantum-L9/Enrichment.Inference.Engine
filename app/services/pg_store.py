@@ -1210,7 +1210,8 @@ async def claim_graph_intents(
 
 def graph_intent_backoff(attempts: int, *, base_seconds: float, cap_seconds: float) -> float:
     """Seconds before the next attempt after `attempts` failed ones."""
-    return float(min(cap_seconds, base_seconds * (2 ** max(attempts - 1, 0))))
+    delay: float = base_seconds * (2 ** max(attempts - 1, 0))
+    return min(cap_seconds, delay)
 
 
 async def settle_graph_intent(
