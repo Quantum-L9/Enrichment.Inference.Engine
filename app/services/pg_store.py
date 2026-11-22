@@ -1292,28 +1292,17 @@ async def claim_graph_intents(
             ~newer_sent(row),
         ]
 
-    async with get_session() as session:
-        await session.execute(supersede)
-        await session.execute(exhaust)
-        candidates = (
-            await session.execute(
-                select(candidate.id, candidate.tenant_id, candidate.entity_id, candidate.endpoint)
-                .where(*claimable(candidate))
-                .order_by(candidate.seq)
-                .limit(limit)
-            )
-        ).all()
+    def candidates_query(exclude: set[uuid.UUID], room: int) -> Any:
+        query = select(
+            candidate.id, candidate.tenant_id, candidate.entity_id, candidate.endpoint
+        ).where(*claimable(candidate))
+        if exclude:
+            query = query.where(candidate.id.not_in(sorted(exclude)))
+        return query.order_by(candidate.seq).limit(room)
 
-    # One transaction per claim, serialised per subject: the advisory lock is
-    # held until the claim commits, so a concurrent claim of the same subject
-    # waits and then -- in a statement that starts after the commit -- sees
-    # this claim's `attempts`. Without it, two Read Committed claims could each
-    # miss the other's uncommitted lease and send two versions out of order.
-    rows: list[Any] = []
-    for candidate_id, subject_tenant, subject_entity, subject_endpoint in candidates:
-        subject = f"{subject_tenant}|{subject_entity}|{subject_endpoint or ''}"
+    def claim_statement(candidate_id: uuid.UUID) -> Any:
         locked = aliased(GraphSyncIntent)
-        claim = (
+        return (
             update(intent)
             .where(
                 intent.id.in_(
@@ -1333,12 +1322,37 @@ async def claim_graph_intents(
             .returning(*GraphSyncIntent.__table__.columns)
             .execution_options(synchronize_session=False)
         )
+
+    async with get_session() as session:
+        await session.execute(supersede)
+        await session.execute(exhaust)
+        candidates = (await session.execute(candidates_query(set(), limit))).all()
+
+    # One transaction per claim, serialised per subject: the advisory lock is
+    # held until the claim commits, so a concurrent claim of the same subject
+    # waits and then -- in a statement that starts after the commit -- sees
+    # this claim's `attempts`. Without it, two Read Committed claims could each
+    # miss the other's uncommitted lease and send two versions out of order.
+    # A candidate another worker won (or that stopped being claimable) is not
+    # the end of the scan: the window is refilled, excluding every candidate
+    # already checked by this call, until `limit` rows are leased or none is
+    # left. Each candidate is checked at most once, so the loop ends.
+    rows: list[Any] = []
+    checked: set[uuid.UUID] = set()
+    while candidates:
+        for candidate_id, subject_tenant, subject_entity, subject_endpoint in candidates:
+            checked.add(candidate_id)
+            subject = f"{subject_tenant}|{subject_entity}|{subject_endpoint or ''}"
+            async with get_session() as session:
+                await session.execute(
+                    select(func.pg_advisory_xact_lock(func.hashtextextended(subject, 0)))
+                )
+                await session.execute(supersede)
+                rows.extend((await session.execute(claim_statement(candidate_id))).all())
+        if len(rows) >= limit:
+            break
         async with get_session() as session:
-            await session.execute(
-                select(func.pg_advisory_xact_lock(func.hashtextextended(subject, 0)))
-            )
-            await session.execute(supersede)
-            rows.extend((await session.execute(claim)).all())
+            candidates = (await session.execute(candidates_query(checked, limit - len(rows)))).all()
     claimed = sorted((_intent_record(r) for r in rows), key=lambda r: r.seq)
     if claimed:
         logger.info("graph_intents_claimed", owner=claim_owner, count=len(claimed))

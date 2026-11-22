@@ -432,6 +432,39 @@ async def test_a_claim_supersedes_exhausts_then_leases_in_seq_order(
     assert token != params["lease_owner"], "every claim gets its own fencing token"
 
 
+async def test_a_candidate_lost_to_another_worker_does_not_end_the_scan(
+    session: list[_Session],
+) -> None:
+    lost, won = _row(seq=3, effect_key="a"), _row(seq=7, effect_key="b", entity_id="d-2")
+    scan = _Session(
+        answers=[_Result(), _Result(), _Result(rows=[(lost["id"], "synthco", "d-1", "depots")])]
+    )
+    lost_claim = _Session(answers=[_Result(), _Result(), _Result(rows=[])])
+    refill = _Session(answers=[_Result(rows=[(won["id"], "synthco", "d-2", "depots")])])
+    won_claim = _Session(answers=[_Result(), _Result(), _Result(rows=[won])])
+    session[:] = [scan, lost_claim, refill, won_claim]
+    claimed = await pg_store.claim_graph_intents(owner="w1", lease_seconds=30, limit=1, now=T0)
+    assert [r.effect_key for r in claimed] == ["b"]
+    (refill_query,) = refill.statements
+    sql = _sql(refill_query)
+    assert "graph_sync_intents_1.id NOT IN" in sql
+    params = refill_query.compile(dialect=postgresql.dialect()).params
+    assert params["id_1"] == [lost["id"]]
+    assert params["param_1"] == 1  # the window is refilled only up to the room left
+
+
+async def test_a_scan_stops_once_no_unchecked_candidate_is_left(session: list[_Session]) -> None:
+    lost = _row(seq=3)
+    scan = _Session(
+        answers=[_Result(), _Result(), _Result(rows=[(lost["id"], "synthco", "d-1", "depots")])]
+    )
+    lost_claim = _Session(answers=[_Result(), _Result(), _Result(rows=[])])
+    refill = _Session(answers=[_Result(rows=[])])
+    session[:] = [scan, lost_claim, refill]
+    assert await pg_store.claim_graph_intents(owner="w1", lease_seconds=30, now=T0) == []
+    assert len(refill.statements) == 1
+
+
 async def test_a_single_operation_claim_is_scoped_to_its_key(session: list[_Session]) -> None:
     tx = _Session(answers=[_Result(), _Result(), _Result(rows=[])])
     session[:] = [tx]

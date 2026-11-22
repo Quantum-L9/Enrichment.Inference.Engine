@@ -317,6 +317,22 @@ async def test_a_claim_waits_for_an_uncommitted_claim_of_the_same_subject(db: No
     assert older is not None and older.state == "superseded"
 
 
+async def test_a_candidate_another_worker_holds_does_not_end_the_scan(db: None) -> None:
+    """Two due subjects, limit 1: the first is locked elsewhere, the second is claimed."""
+    await _save(_spec("held", entity_id="d-1"), entity_id="d-1")
+    await _save(_spec("free", entity_id="d-2"), entity_id="d-2")
+    engine = pg_store._engine
+    assert engine is not None
+    async with engine.connect() as other:
+        tx = await other.begin()
+        await other.execute(
+            text("SELECT id FROM graph_sync_intents WHERE effect_key = 'held' FOR UPDATE")
+        )
+        claimed = await pg_store.claim_graph_intents(owner="a", lease_seconds=30, limit=1)
+        await tx.rollback()
+    assert [r.effect_key for r in claimed] == ["free"]
+
+
 async def test_versions_are_ordered_by_resolved_endpoint_not_node_label(db: None) -> None:
     """`node_label=None` and `Depot` that resolve to one endpoint are one subject."""
     await _save(_spec("v1", node_label=None))
