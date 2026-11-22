@@ -1,6 +1,6 @@
 {
  "id": "P11",
- "run": "20261122T185228Z-ed25519",
+ "run": "20261122T193839Z-ed25519",
  "slice": "A7",
  "profile": "ed25519",
  "assertion": "unknown action, wrong tenant, forgery, unsigned and HMAC downgrade all fail closed",
@@ -83,5 +83,5 @@
    }
   }
  },
- "timestamp": "2026-11-22T18:53:32.143667+00:00"
+ "timestamp": "2026-11-22T19:38:48.372486+00:00"
 }

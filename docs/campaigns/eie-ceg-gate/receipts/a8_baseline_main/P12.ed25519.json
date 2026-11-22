@@ -1,6 +1,6 @@
 {
  "id": "P12",
- "run": "20261122T185228Z-ed25519",
+ "run": "20261122T193839Z-ed25519",
  "slice": "A7",
  "profile": "ed25519",
  "assertion": "SDK lock mismatch blocked AND untrusted response signer refused",
@@ -9,12 +9,35 @@
  "observed": {
   "unauthorized_signer_subcase": "PASS",
   "call": {
-   "ok": false,
-   "elapsed_s": 0.114,
-   "error": "GateHTTPError: Gate execute returned HTTP 502"
+   "http_status": 502,
+   "body": {
+    "detail": {
+     "code": "worker_response_untrusted",
+     "message": "worker response failed transport validation: TransportAuthenticationError: no verifying key available for transport signature verification",
+     "node": "graph"
+    }
+   },
+   "request_packet_id": "0e972a88-bac0-4ecd-a0eb-cd4d77e803b0"
   },
-  "gate_log": [
-   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker response failed transport validation: TransportAuthenticationError: no verifying key available for transport signature verification\", \"error_type\": \"GateDispatchSecurityError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"404730c8-8d68-4999-91c0-db86eb7ea38f\", \"request_id\": \"c4651c67c0034d31bc22390029b5e589\", \"root_id\": \"404730c8-8d68-4999-91c0-db86eb7ea38f\", \"source_node\": \"odoo\"}"
+  "gate_events_for_request": [
+   {
+    "event": "gate.ingress",
+    "action": "match",
+    "request_id": "6b3966349eba4f4da5462b41d3ef1add",
+    "packet_id": "0e972a88-bac0-4ecd-a0eb-cd4d77e803b0",
+    "root_id": "0e972a88-bac0-4ecd-a0eb-cd4d77e803b0",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.failure",
+    "action": "match",
+    "request_id": "6b3966349eba4f4da5462b41d3ef1add",
+    "packet_id": "0e972a88-bac0-4ecd-a0eb-cd4d77e803b0",
+    "root_id": "0e972a88-bac0-4ecd-a0eb-cd4d77e803b0",
+    "error_type": "GateDispatchSecurityError",
+    "error_message": "worker response failed transport validation: TransportAuthenticationError: no verifying key available for transport signature verification"
+   }
   ],
   "recovery": {
    "ready": true,
@@ -26,5 +49,5 @@
    "l9e2e-ceg": "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929"
   }
  },
- "timestamp": "2026-11-22T19:00:15.441630+00:00"
+ "timestamp": "2026-11-22T19:39:23.622616+00:00"
 }

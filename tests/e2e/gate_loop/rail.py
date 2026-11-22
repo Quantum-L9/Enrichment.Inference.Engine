@@ -195,20 +195,20 @@ def gate_events(since: str, action: str) -> list[dict]:
 
 
 def gate_events_for(since: str, packet_id: str) -> list[dict]:
-    """Gate's structured events whose packet_id is this request's (exact correlation, not a time window)."""
+    """Gate's structured events for one request (exact correlation, not a time window).
+
+    Ingress and failure events carry the request's packet_id. completed and cached events carry the
+    response's packet_id and the request's root_id, so a request is matched on either field.
+    """
+    keys = ("event", "action", "request_id", "packet_id", "root_id", "error_type", "error_message")
     out = []
     for ln in logs("l9e2e-gate", since, (packet_id,)):
         try:
             ev = json.loads(ln)
         except ValueError:
             continue
-        if ev.get("packet_id") == packet_id and ev.get("event"):
-            out.append(
-                {
-                    k: ev.get(k)
-                    for k in ("event", "action", "error_type", "error_message", "packet_id")
-                }
-            )
+        if ev.get("event") and packet_id in (ev.get("packet_id"), ev.get("root_id")):
+            out.append({k: ev.get(k) for k in keys})
     return out
 
 
@@ -585,11 +585,24 @@ def c_negatives(p: str) -> list[Result]:
     rpid = str(n.get("replay_packet_id") or "")
     replay_events = gate_events_for(since, rpid) if rpid else []
     dispatched = [e for e in replay_events if e["event"] == "gate.completed"]
+    cached = [e for e in replay_events if e["event"] == "gate.cached"]
+    resp1 = (first.get("response") or {}).get("packet_id")
+    resp2 = (second.get("response") or {}).get("packet_id")
     s2 = st.get("replay_second_same_packet_id")
     if s2 == 400:
         replay_outcome = "refused"
-    elif s2 == 200 and second.get("payload") == first.get("payload") and len(dispatched) == 1:
-        replay_outcome = "cache_hit"  # identical answer, and Gate dispatched the packet id once
+    elif (
+        s2 == 200
+        and second.get("payload") == first.get("payload")
+        and resp1 is not None
+        and resp1 == resp2
+        and len(dispatched) == 1
+        and len(cached) == 1
+        and cached[0]["packet_id"] == resp1
+    ):
+        # Gate executed the packet id once (one gate.completed) and answered the replay from its
+        # cache (gate.cached) with the same response packet: no second execution.
+        replay_outcome = "cache_hit"
     else:
         replay_outcome = "unproven"
     checks13 = {
@@ -636,7 +649,8 @@ def c_negatives(p: str) -> list[Result]:
         if failed13
         else {
             "refused": "Gate refused the replayed packet id (HTTP 400): no second execution",
-            "cache_hit": "identical answer for the replayed packet id, and Gate dispatched it once",
+            "cache_hit": "Gate answered the replayed packet id from its cache (gate.cached, the same "
+            "response packet and payload) after a single gate.completed: no second execution",
         }[replay_outcome],
     )
     if not control_ok:

@@ -1,11 +1,11 @@
 {
  "id": "P13",
- "run": "20261122T185228Z-ed25519",
+ "run": "20261122T193839Z-ed25519",
  "slice": "A7",
  "profile": "ed25519",
  "assertion": "a replayed packet id adds no effect; an expired deadline is refused",
  "verdict": "PASS",
- "reason": "effect count: the replay returned the cached answer (same query_id), i.e. no second execution",
+ "reason": "Gate answered the replayed packet id from its cache (gate.cached, the same response packet and payload) after a single gate.completed: no second execution",
  "observed": {
   "http_status": {
    "baseline_valid": 200,
@@ -24,9 +24,49 @@
   },
   "checks": {
    "first execution succeeded with a query_id": true,
-   "same packet id: replay refused or the identical cached answer": true,
+   "same packet id: replay refused, or an identical answer with a single Gate dispatch": true,
    "expired deadline refused": true
-  }
+  },
+  "replay_outcome": "cache_hit",
+  "replay_packet_id": "4db8d242-6186-4531-8b1e-74b791550547",
+  "replay_gate_events": [
+   {
+    "event": "gate.ingress",
+    "action": "match",
+    "request_id": "3a9226254cdd4d159bca1e5098727575",
+    "packet_id": "4db8d242-6186-4531-8b1e-74b791550547",
+    "root_id": "4db8d242-6186-4531-8b1e-74b791550547",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.completed",
+    "action": "match",
+    "request_id": "3a9226254cdd4d159bca1e5098727575",
+    "packet_id": "e20dd25b-03f3-45ba-a9e8-fcfca031a157",
+    "root_id": "4db8d242-6186-4531-8b1e-74b791550547",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.ingress",
+    "action": "match",
+    "request_id": "b2abd5a1043e4753ba9630e66cf4493d",
+    "packet_id": "4db8d242-6186-4531-8b1e-74b791550547",
+    "root_id": "4db8d242-6186-4531-8b1e-74b791550547",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.cached",
+    "action": "match",
+    "request_id": "b2abd5a1043e4753ba9630e66cf4493d",
+    "packet_id": "e20dd25b-03f3-45ba-a9e8-fcfca031a157",
+    "root_id": "4db8d242-6186-4531-8b1e-74b791550547",
+    "error_type": null,
+    "error_message": null
+   }
+  ]
  },
- "timestamp": "2026-11-22T18:53:32.221345+00:00"
+ "timestamp": "2026-11-22T19:38:48.441914+00:00"
 }

@@ -87,7 +87,7 @@ The `hmac_downgrade_with_public_key` row is a forgery that Gate **accepted** (**
 
 CEG's own ingress refuses HMAC from Gate in staging (`receipts/a8_baseline_main/hmac_profile_note.json`).
 
-Replay of a packet id that carries an idempotency key returns the cached response (same `query_id`, no second execution). Without a key, Gate's replay guard returns 400 `replay detected`, observed during the first boot.
+Replay (P13, `receipts/a8_baseline_main/P13.ed25519.json`, run `20261122T193839Z-ed25519`): the replayed packet carried a fresh idempotency key. Gate logged one `gate.completed` for that packet id, then answered the replay with `gate.cached`, returning the same response packet and payload. The receipt records the outcome as `cache_hit`. That observation covers a keyed packet only. The 400 `replay detected` for a packet without a key was seen once, during the first boot; no receipt records it.
 
 ## 5. Findings (owners; nothing patched)
 

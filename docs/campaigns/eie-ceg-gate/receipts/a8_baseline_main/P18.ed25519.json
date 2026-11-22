@@ -1,32 +1,32 @@
 {
  "id": "P18",
- "run": "20261122T185228Z-ed25519",
+ "run": "20261122T192809Z-ed25519",
  "slice": "A8",
  "profile": "ed25519",
  "assertion": "typed processed_polymers -> PROCESSES edge with direction in and form Regrind; Facility carries no processed_polymers property (no JSON-string map)",
  "verdict": "BLOCKED",
  "reason": "EIE egress GateClient carries no ed25519 key from env (F-A1-04, owner Gate_SDK)",
  "observed": {
-  "entity_id": "gl-plas-421f44",
+  "entity_id": "gl-plas-086c94",
   "converge": {
    "ok": true,
-   "elapsed_s": 0.202,
+   "elapsed_s": 0.269,
    "error": null,
    "gate_signature_valid": true
   },
   "response": {
-   "packet_id": "2a18e2f4-78da-4449-8f52-60ff0dbe0986",
+   "packet_id": "dc425ffd-f14f-477e-b059-4bca5ed4349e",
    "packet_type": "response",
    "action": "converge",
    "source_node": "enrichment-engine",
    "destination_node": "gate",
    "reply_to": "enrichment-engine",
    "tenant": "plasticos",
-   "root_id": "0fdf2477-6466-4aaf-b066-913da31c976d",
-   "parent_id": "df0ba089-9dce-4aa3-b8f5-5a7dbd8618e5",
+   "root_id": "14282d6f-9fe4-41c6-a64e-cb8f96dc3757",
+   "parent_id": "bab08eeb-ea4b-4405-99b7-542064a743d4",
    "generation": 2,
-   "causation_id": "df0ba089-9dce-4aa3-b8f5-5a7dbd8618e5",
-   "idempotency_key": "gl:converge:plasticos:gl-plas-421f44:31b2d89a",
+   "causation_id": "bab08eeb-ea4b-4405-99b7-542064a743d4",
+   "idempotency_key": "gl:converge:plasticos:gl-plas-086c94:a6b3f810",
    "signing_key_id": "gate-gl",
    "signature_algorithm": "ed25519",
    "hop_trace": [
@@ -56,15 +56,15 @@
   },
   "gate_sync_events": [],
   "eie_log": [
-   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-421f44:31b2d89a:enrich\", \"entity_id\": \"gl-plas-421f44\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:33.602112Z\"}",
-   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-421f44:31b2d89a:enrich\", \"entity_id\": \"gl-plas-421f44\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:33.602280Z\"}",
-   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-421f44:31b2d89a:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:33.602565Z\"}",
-   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:33.648585Z\"}",
-   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:33.648934Z\"}",
-   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:53:33.649799Z\"}",
-   "{\"entity_id\": \"gl-plas-421f44\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:53:33.649879Z\"}",
-   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-421f44:31b2d89a:enrich\", \"entity_id\": \"gl-plas-421f44\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:53:33.649942Z\"}"
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-086c94:a6b3f810:enrich\", \"entity_id\": \"gl-plas-086c94\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:00.251176Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-086c94:a6b3f810:enrich\", \"entity_id\": \"gl-plas-086c94\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:00.251363Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-086c94:a6b3f810:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:00.251635Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:00.326224Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:00.326343Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:00.327144Z\"}",
+   "{\"entity_id\": \"gl-plas-086c94\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:00.327211Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-086c94:a6b3f810:enrich\", \"entity_id\": \"gl-plas-086c94\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:00.327248Z\"}"
   ]
  },
- "timestamp": "2026-11-22T18:53:44.229455+00:00"
+ "timestamp": "2026-11-22T19:30:12.703995+00:00"
 }

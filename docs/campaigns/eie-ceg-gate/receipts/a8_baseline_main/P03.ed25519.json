@@ -1,6 +1,6 @@
 {
  "id": "P03",
- "run": "20261122T185228Z-ed25519",
+ "run": "20261122T192809Z-ed25519",
  "slice": "A8",
  "profile": "ed25519",
  "assertion": "no direct peer path: workers cannot resolve each other; the driver reaches Gate and only Gate",
@@ -12,12 +12,12 @@
    "graph": "unresolvable: [Errno -2] Name or service not known",
    "neo4j": "unresolvable: [Errno -2] Name or service not known",
    "eie-postgres": "unresolvable: [Errno -2] Name or service not known",
-   "gate": "172.22.0.2"
+   "gate": "172.19.0.2"
   },
   "getent_rc": {
    "eie->graph": 2,
    "ceg->eie": 2
   }
  },
- "timestamp": "2026-11-22T18:53:22.713651+00:00"
+ "timestamp": "2026-11-22T19:29:47.574843+00:00"
 }
