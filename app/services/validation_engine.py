@@ -151,7 +151,9 @@ def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) 
         return bool(value)
 
     if expected is list:
-        return _dedup([_coerce_member(v, items) for v in _list_members(value)])
+        declared_maps = items is not None and str(items.get("type", "")).lower() == "map"
+        members = _list_members(value, keep_empty_maps=declared_maps)
+        return _dedup([_coerce_member(v, items) for v in members])
 
     if expected in (int, float):
         return _number(value, expected)
@@ -164,17 +166,22 @@ def _number(value: Any, expected: type) -> int | float:
     """A finite number of the declared kind; never a bool, NaN, ±Inf or a truncation.
 
     ``float(True)`` is ``1.0`` and ``int(3.7)`` is ``3``: each would admit a value
-    the provider never stated. Such values raise, so the field is skipped.
+    the provider never stated. Such values raise, so the field is skipped. An
+    integer too large for a float stays a valid ``int``; as a ``float`` it is
+    refused rather than raising ``OverflowError`` out of validation.
     """
     if isinstance(value, bool):
         raise TypeError("a boolean is not a number")
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError("not a finite number")
     if expected is int:
         if isinstance(value, float) and not value.is_integer():
-            raise ValueError("a fractional number is not an integer")
+            raise ValueError("a fractional or non-finite number is not an integer")
         return int(value)
+    try:
+        number = float(value)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ValueError("not a representable number") from exc
+    if not math.isfinite(number):
+        raise ValueError("not a finite number")
     return number
 
 
@@ -189,12 +196,16 @@ def _free_member(value: Any) -> Any:
     return str(value).strip()[:256]
 
 
-def _list_members(value: Any) -> list[Any]:
-    """The members a list field carries: CSV text split, empties dropped."""
+def _list_members(value: Any, *, keep_empty_maps: bool = False) -> list[Any]:
+    """The members a list field carries: CSV text split, empties dropped.
+
+    With ``keep_empty_maps`` (declared map items) an empty mapping is kept, so it
+    reaches required-property validation instead of being silently dropped.
+    """
     if isinstance(value, str):
         return [s for s in value.split(",") if s.strip()]
     if isinstance(value, (list, tuple)):
-        return [v for v in value if v]
+        return [v for v in value if v or (keep_empty_maps and isinstance(v, Mapping))]
     return [value]
 
 
