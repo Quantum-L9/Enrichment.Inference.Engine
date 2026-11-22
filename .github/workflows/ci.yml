@@ -256,7 +256,7 @@ jobs:
         # plan (`make test-deep`). This one run also records PR-fast coverage
         # of app/ for the SonarCloud job below (Repo.mk PR_FAST_COVERAGE_XML);
         # no second test run is made for Sonar.
-        run: make test PR_FAST_COVERAGE_XML=coverage.xml
+        run: make test-fast PR_FAST_COVERAGE_XML=coverage.xml
       - name: Require the PR-fast coverage report
         run: |
           set -euo pipefail
@@ -375,7 +375,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     needs: [validate, deep-admit]
-    if: ${{ always() && needs.validate.result == 'success' && needs.deep-admit.result == 'success' && needs.deep-admit.outputs.run_heavy == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && always() && needs.validate.result == 'success' && needs.deep-admit.result == 'success' && needs.deep-admit.outputs.run_heavy == 'true' }}
     concurrency:
       group: eie-deep-${{ inputs.utc_slot }}-${{ inputs.dispatch_key }}
       cancel-in-progress: false
