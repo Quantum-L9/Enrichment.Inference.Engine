@@ -47,8 +47,8 @@ The local validation counterpart is `make pr-check` (agent-check plus the `local
 
 | Workflow | Trigger | Purpose | Blocking |
 |----------|---------|---------|----------|
-| **`pr-pipeline.yml`** | **PR, Push, Manual** | **Full PR gate (8 phases) — parity with `make pr`** | **Intended yes; enforcement Unknown — see branch protection** |
-| `ci.yml` | Push, PR | Main pipeline (validate, lint, semgrep, test, security, SBOM, scorecard) | Yes |
+| **`pr-pipeline.yml`** | **PR, Push, Manual** | **Full PR gate (7 phases) — parity with `make pr`** | **Intended yes; enforcement Unknown — see branch protection** |
+| `ci.yml` | Push, PR | Main pipeline (validate, lint, semgrep, test, SBOM, scorecard, Gate_SDK channel) | Yes |
 | `compliance.yml` | PR (Python changes) | Architecture compliance (terminology, chassis isolation, KB schema, L9 contracts) | Yes |
 | `supply-chain.yml` | PR, push, weekly | License compliance, dependency review | Partial |
 | `codeql.yml` | PR, push, weekly | GitHub CodeQL semantic analysis | No |
@@ -69,7 +69,7 @@ The local validation counterpart is `make pr-check` (agent-check plus the `local
 
 ### PR Pipeline Phases (pr-pipeline.yml)
 
-The **`pr-pipeline.yml`** workflow is the primary code review gate. It runs 8 parallel/sequential phases that mirror `make pr`:
+The **`pr-pipeline.yml`** workflow is the primary code review gate. It runs 7 parallel/sequential phases that mirror `make pr`:
 
 ```
 validate → lint ──────┐
@@ -78,9 +78,7 @@ validate → lint ──────┐
     │                 │
     ├─→ test ─────────┤
     │                 │
-    ├─→ security ─────┼─→ pr-pipeline-gate (fan-in)
-    │                 │
-    ├─→ compliance ───┤
+    ├─→ compliance ───┼─→ pr-pipeline-gate (fan-in)
     │                 │
     ├─→ l9 ───────────┤
     │                 │
@@ -91,7 +89,6 @@ Phase Details:
   lint       — Ruff check + format + MyPy type check
   semgrep    — Semgrep policy rules (.semgrep/)
   test       — pytest with coverage (Postgres + Redis services)
-  security   — Gitleaks + dependency-review (pip-audit, Bandit: Core security job)
   compliance — Terminology guard + chassis isolation + KB schema + L9 contracts
   l9         — Constitution verify + tier2 tests + attestation + select-gates
   docs       — Docs consistency + markdown link check
@@ -102,17 +99,22 @@ The **`pr-pipeline-gate`** job posts a summary comment on the PR with pass/fail 
 ### CI Pipeline Phases (ci.yml)
 
 ```
-validate → lint → semgrep → test → security → sbom → scorecard → ci-gate
-    │         │       │        │        │        │        │          │
-    │         │       │        │        │        │        │          └─ Fan-in: PASS/FAIL
-    │         │       │        │        │        │        └─ OpenSSF Scorecard
-    │         │       │        │        │        └─ SPDX SBOM generation
-    │         │       │        │        └─ Gitleaks (pip-audit, Bandit: Core security job)
+validate → lint → semgrep → test → sbom → scorecard → ci-gate
+    │         │       │        │       │        │          │
+    │         │       │        │       │        │          └─ Fan-in: PASS/FAIL
+    │         │       │        │       │        └─ OpenSSF Scorecard
+    │         │       │        │       └─ SPDX SBOM generation
     │         │       │        └─ pytest with coverage (Postgres + Redis services)
     │         │       └─ Semgrep policy rules (.semgrep/)
     │         └─ Ruff lint + format + MyPy type check
     └─ Python syntax + YAML validation + KB schema
 ```
+
+The repository-local `Security Scanning` job was removed from both workflows in
+the org-CI cutover. Gitleaks, pip-audit and Bandit run in Core's
+`security / security` job inside the required `Analyze (central Core)` check
+(gitleaks over the pull request's own range), and dependency review runs in
+`supply-chain.yml`.
 
 **Advisory `integration` job (ci.yml).** Runs `pytest tests/integration -p no:xdist`
 with `EIE_REQUIRE_INTEGRATION=1` against everything those tests otherwise skip
