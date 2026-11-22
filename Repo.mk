@@ -51,7 +51,7 @@ COVERAGE_MIN ?= 71
 # comment), so this report passes --cov-fail-under=0 to keep that scope.
 # Sonar's own new-code gate judges the changed lines this report covers.
 PR_FAST_COVERAGE_XML ?=
-PR_FAST_COVERAGE_ARGS = $(if $(PR_FAST_COVERAGE_XML),--cov=app --cov-report=xml:$(PR_FAST_COVERAGE_XML) --cov-fail-under=0)
+PR_FAST_COVERAGE_ARGS = $(if $(PR_FAST_COVERAGE_XML),--cov=app --cov-report=xml:$(PR_FAST_COVERAGE_XML) --cov-fail-under=73)
 
 PYTHON := $(shell if [ -x "$(CURDIR)/.venv/bin/python" ]; then printf '%s' "$(CURDIR)/.venv/bin/python"; else command -v python3; fi)
 PYTEST := $(PYTHON) -m pytest
