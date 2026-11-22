@@ -20,7 +20,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -515,3 +517,106 @@ def test_p08_a_ceg_owned_section_is_refused_by_the_owner_check(
             approval_ref=APPROVAL,
         )
     assert _current(tmp_path) is None
+
+
+# ── F20: list-shaped replay of approved audit rows (apply_approved_records) ──
+
+
+def _row(digest: str, **overrides: Any) -> SimpleNamespace:
+    fields: dict[str, Any] = {
+        "tenant_id": TENANT,
+        "domain": TENANT,
+        "batch_run_id": "run-1",
+        "node_label": OWNER,
+        "discovery_spec_sha256": digest,
+        "ownership_contract_version": 1,
+        "field_name": "slot_count",
+        "field_type": "integer",
+        "source": "enrichment",
+        "fill_rate": 1.0,
+        "avg_confidence": 0.9,
+        "sample_values": [],
+        "value_distribution": {},
+        "proposed_gate": None,
+        "proposed_scoring_dimension": None,
+        "approval_status": "approved",
+        "reviewed_by": REVIEWER,
+        "reviewed_at": datetime(2026, 11, 1, 12, 0, tzinfo=UTC),
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def _replay(spec: dict[str, Any], rows: list[Any], artifacts: dict[str, bytes]) -> dict[str, Any]:
+    from app.api.v1 import converge
+
+    return converge.apply_approved_records(spec, rows, discovery_specs=artifacts)
+
+
+def test_p02_p03_replay_adds_only_the_approved_owner_property_with_one_bump() -> None:
+    base = _base()
+    discovery = _bytes(base)
+    digest = _sha(discovery)
+    original = copy.deepcopy(base)
+    revised = _replay(base, [_row(digest)], {digest: discovery})
+    assert revised["version"] == "1.1.0-discovered"
+    assert [p["name"] for p in _node(revised, OWNER)["properties"]] == [
+        "holder_id",
+        "title",
+        "slot_count",
+    ]
+    assert _node(revised, OTHER) == _node(original, OTHER)
+    assert revised["subjects"] == original["subjects"]
+    assert base == original  # replay returns a new spec; the input is untouched
+    assert _replay(base, [_row(digest)], {digest: discovery}) == revised  # deterministic
+
+
+@pytest.mark.parametrize(
+    ("overrides", "artifacts", "match"),
+    [
+        ({}, "missing", "recorded discovery artifact"),
+        ({}, "changed", "recorded discovery artifact|digest mismatch"),
+        ({"tenant_id": "foreign-yard", "domain": "foreign-yard"}, "exact", "cross-tenant"),
+        ({"approval_status": "pending"}, "exact", "approved audit records"),
+        ({"reviewed_by": " "}, "exact", "named reviewer"),
+        ({"node_label": "Absent"}, "exact", ""),
+        ({"discovery_spec_sha256": "A" * 64}, "exact", "discovery_spec_sha256"),
+    ],
+    ids=[
+        "artifact-missing",
+        "artifact-changed",
+        "foreign-tenant",
+        "unapproved",
+        "unnamed-reviewer",
+        "unknown-owner",
+        "malformed-digest",
+    ],
+)
+def test_p05_replay_refuses_stale_or_unbound_rows_and_changes_nothing(
+    overrides: dict[str, Any], artifacts: str, match: str
+) -> None:
+    base = _base()
+    discovery = _bytes(base)
+    digest = _sha(discovery)
+    supplied = {
+        "missing": {},
+        "changed": {digest: _bytes(_base("1.0.1"))},
+        "exact": {digest: discovery},
+    }[artifacts]
+    original = copy.deepcopy(base)
+    with pytest.raises(ValueError, match=match or None):
+        _replay(base, [_row(digest, **overrides)], supplied)
+    assert base == original
+
+
+def test_p04_replay_refuses_a_batch_binding_two_discovery_artifacts() -> None:
+    base = _base()
+    first, second = _bytes(base), _bytes(_base("1.0.1"))
+    rows = [
+        _row(_sha(first)),
+        _row(_sha(second), field_name="other_field"),
+    ]
+    original = copy.deepcopy(base)
+    with pytest.raises(ValueError, match="one discovery artifact"):
+        _replay(base, rows, {_sha(first): first, _sha(second): second})
+    assert base == original
