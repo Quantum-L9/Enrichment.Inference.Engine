@@ -1,61 +1,63 @@
 {
- "run": "20261122T183011Z-ed25519",
  "id": "P27",
+ "run": "20261122T184452Z-ed25519",
  "slice": "A8",
  "profile": "ed25519",
  "assertion": "accepted then consumed on a later pass, with distinct accepted/retained/consumed evidence",
  "verdict": "BLOCKED",
  "reason": "partial: accepted and consumed observed through Gate (consumed once; the next pass re-derives region from the provider). Retained has no observable evidence: in-memory only (F-A1-06, EIE-W). The inference came from the ceg-gl rig because CEG egress cannot sign (F-A1-04)",
  "observed": {
-  "entity_id": "sn-fb-97808d",
+  "entity_id": "sn-fb-c51565",
   "accepted": {
    "status": "accepted",
    "targets_queued": 1,
-   "packet_id": "5149a932-1342-4757-99df-1bed91602b63",
+   "packet_id": "0f88ad83-89ca-468f-8e24-66cbc04cbf68",
    "tenant": "synthneutral"
   },
   "converge1_fields": {
    "region": "West",
-   "band": "det:band:b53e1d7df32a"
+   "band": "det:band:dca30e1ca001"
   },
   "converge2_fields": {
-   "region": "det:region:d8f9f9f93ead",
-   "band": "det:band:b53e1d7df32a"
+   "region": "det:region:f34d96cda38c",
+   "band": "det:band:dca30e1ca001"
   },
   "eie_log": [
-   "{\"reason\": \"inbound packet destination_node 'graph' does not match local node 'enrichment-engine'\", \"event\": \"gate_only_ingress_rejected\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:37:55.658720Z\"}",
-   "{\"asctime\": \"2026-11-22 18:37:59,947\", \"levelname\": \"INFO\", \"name\": \"app.services.graph_return_channel\", \"message\": \"GraphReturnChannel: submitted 1 targets for tenant=synthneutral (packet=5149a932-1342-4757-99df-1bed91602b63)\"}",
-   "{\"domain\": \"unknown\", \"edges\": 0, \"topo_depth\": 0, \"multi_hop\": [], \"event\": \"derivation_graph.built\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:38:01.335124Z\"}",
-   "{\"asctime\": \"2026-11-22 18:38:01,336\", \"levelname\": \"INFO\", \"name\": \"app.services.graph_return_channel\", \"message\": \"GraphReturnChannel: took 1 targets for tenant=synthneutral entity=sn-fb-97808d\"}",
-   "{\"pass_number\": 1, \"fields\": [\"region\"], \"received\": 1, \"event\": \"graph_targets_applied\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:38:01.336205Z\"}",
-   "{\"entity_key\": \"sn-fb-97808d\", \"field_count\": 2, \"synthetic_fields\": [\"band\"], \"event\": \"deterministic_enrichment_served\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:38:01.337182Z\"}",
-   "{\"id\": \"a75de615-30c2-4c6f-ae5b-cfeb4e68f67c\", \"entity_id\": \"sn-fb-97808d\", \"fields_count\": 2, \"confidence\": 0.95, \"event\": \"enrichment_result_saved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:38:01.386640Z\"}",
-   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-97808d:241f590e:enrich\", \"entity_id\": \"sn-fb-97808d\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:38:01.386764Z\"}",
-   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-97808d:241f590e:enrich\", \"entity_id\": \"sn-fb-97808d\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:38:01.386887Z\"}",
-   "{\"tenant\": \"synthneutral\", \"entity_id\": \"sn-fb-97808d\", \"fields\": [\"band\", \"region\"], \"pass_count\": 1, \"state\": \"completed\", \"remaining_s\": 24.947, \"event\": \"handlers.converge_ok\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:38:01.386949Z\"}",
-   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-97808d:241f590e:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:38:01.387033Z\"}",
-   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:38:01.410353Z\"}",
-   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:38:01.410420Z\"}",
-   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:38:01.411097Z\"}",
-   "{\"entity_id\": \"sn-fb-97808d\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:38:01.411152Z\"}",
-   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-97808d:241f590e:enrich\", \"entity_id\": \"sn-fb-97808d\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:38:01.411181Z\"}"
+   "{\"reason\": \"inbound packet destination_node 'graph' does not match local node 'enrichment-engine'\", \"event\": \"gate_only_ingress_rejected\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:44:58.430193Z\"}",
+   "{\"asctime\": \"2026-11-22 18:45:01,638\", \"levelname\": \"INFO\", \"name\": \"app.services.graph_return_channel\", \"message\": \"GraphReturnChannel: submitted 1 targets for tenant=synthneutral (packet=0f88ad83-89ca-468f-8e24-66cbc04cbf68)\"}",
+   "{\"domain\": \"unknown\", \"edges\": 0, \"topo_depth\": 0, \"multi_hop\": [], \"event\": \"derivation_graph.built\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:45:03.175440Z\"}",
+   "{\"asctime\": \"2026-11-22 18:45:03,175\", \"levelname\": \"INFO\", \"name\": \"app.services.graph_return_channel\", \"message\": \"GraphReturnChannel: took 1 targets for tenant=synthneutral entity=sn-fb-c51565\"}",
+   "{\"pass_number\": 1, \"fields\": [\"region\"], \"received\": 1, \"event\": \"graph_targets_applied\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:45:03.175852Z\"}",
+   "{\"entity_key\": \"sn-fb-c51565\", \"field_count\": 2, \"synthetic_fields\": [\"band\"], \"event\": \"deterministic_enrichment_served\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:45:03.176467Z\"}",
+   "{\"id\": \"b7cd7f78-291f-4c13-977c-c242ac152165\", \"entity_id\": \"sn-fb-c51565\", \"fields_count\": 2, \"confidence\": 0.95, \"event\": \"enrichment_result_saved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:45:03.185345Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-c51565:8dde4745:enrich\", \"entity_id\": \"sn-fb-c51565\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:45:03.185439Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-c51565:8dde4745:enrich\", \"entity_id\": \"sn-fb-c51565\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:45:03.185522Z\"}",
+   "{\"tenant\": \"synthneutral\", \"entity_id\": \"sn-fb-c51565\", \"fields\": [\"band\", \"region\"], \"pass_count\": 1, \"state\": \"completed\", \"remaining_s\": 24.989, \"event\": \"handlers.converge_ok\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:45:03.185615Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-c51565:8dde4745:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:45:03.185699Z\"}",
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:45:03.189103Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:45:03.189206Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:45:03.189814Z\"}",
+   "{\"entity_id\": \"sn-fb-c51565\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:45:03.189861Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-c51565:8dde4745:enrich\", \"entity_id\": \"sn-fb-c51565\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:45:03.189888Z\"}"
   ],
   "graph_after": [],
+  "converge1_completed": true,
   "plasticos_noop": {
-   "entity_id": "gl-fbp-286615",
+   "converge_completed": true,
+   "entity_id": "gl-fbp-b2dc99",
    "accepted": {
     "status": "accepted",
     "targets_queued": 1,
-    "packet_id": "9fb1692c-6f32-462e-9c89-ae09939a490c",
+    "packet_id": "757e7862-9d7a-457e-bf91-4881e7dfadf5",
     "tenant": "plasticos"
    },
    "fields": {
-    "name": "TEST_ONLY gl-fbp-286615",
-    "capacity_tons_month": 50.6,
-    "tier": "det:tier:781d70ea92c7"
+    "name": "TEST_ONLY gl-fbp-b2dc99",
+    "capacity_tons_month": 0.48,
+    "tier": "det:tier:8a6cd873fb83"
    },
    "observed": true
   }
  },
- "timestamp": "2026-11-22T18:38:08.118830+00:00"
+ "timestamp": "2026-11-22T18:45:10.318976+00:00"
 }

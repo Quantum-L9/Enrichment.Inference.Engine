@@ -1189,8 +1189,8 @@ def c_registration(p: str) -> list[Result]:
             "F-A1-05",
             "A7",
             p,
-            "witness: an admin-token holder can repoint a canonical owner's registration; "
-            "only response verification stops the mis-route",
+            "witness: an admin-token holder can repoint a canonical owner's registration; the "
+            "replacement is accepted, then the worker rejects the mis-routed packet (403, Gate 502)",
             "WITNESSED" if witnessed else "NOT_WITNESSED",
             observed=obs,
             reason="BLOCKED_WITH_EXACT_OWNER: Constellation.Gate (registration not bound to the node key; "
@@ -1337,6 +1337,11 @@ def c_feedback(p: str) -> list[Result]:
         and bool(pfields)
         and "region" not in pfields
     )
+
+    def _converged(r: dict) -> bool:
+        return r.get("ok") is True and (r.get("payload") or {}).get("state") == "completed"
+
+    c1_ok, pc_ok = _converged(c1), _converged(pc)
     try:
         synced = cypher("synthneutral", f"MATCH (s:Station {{station_id:'{eid}'}}) RETURN s.region")
     except ProbeError as exc:
@@ -1348,7 +1353,9 @@ def c_feedback(p: str) -> list[Result]:
         "converge2_fields": f2,
         "eie_log": seeded_log,
         "graph_after": synced,
+        "converge1_completed": c1_ok,
         "plasticos_noop": {
+            "converge_completed": pc_ok,
             "entity_id": pid,
             "accepted": pacc.get("payload"),
             "fields": pfields,
@@ -1378,9 +1385,20 @@ def c_feedback(p: str) -> list[Result]:
         "a justified no-op",
         "BLOCKED",
         observed=obs,
-        reason="changed fact observed in the converge answer, but the resync cannot leave EIE under ed25519 "
-        "(F-A1-04); plasticos justified no-op "
-        + ("observed (region undeclared, absent from fields)" if noop else "NOT observed"),
+        reason=(
+            "changed fact "
+            + (
+                "observed in the converge answer"
+                if c1_ok and consumed
+                else "NOT observed (converge c1 did not complete with region=West)"
+            )
+            + ", but the resync cannot leave EIE under ed25519 (F-A1-04); plasticos justified no-op "
+            + (
+                ("observed (region undeclared, absent from fields)" if noop else "NOT observed")
+                if pc_ok
+                else "evidence missing (plasticos converge did not complete)"
+            )
+        ),
     )
     p22 = Result(
         "P22",

@@ -1,9 +1,9 @@
 {
- "run": "20261122T183011Z-ed25519",
  "id": "F-A1-05",
+ "run": "20261122T184452Z-ed25519",
  "slice": "A7",
  "profile": "ed25519",
- "assertion": "witness: an admin-token holder can repoint a canonical owner's registration; only response verification stops the mis-route",
+ "assertion": "witness: an admin-token holder can repoint a canonical owner's registration; the replacement is accepted, then the worker rejects the mis-routed packet (403, Gate 502)",
  "verdict": "WITNESSED",
  "reason": "BLOCKED_WITH_EXACT_OWNER: Constellation.Gate (registration not bound to the node key; admin token compared with != in services/admin_registration_service.py:64-68, source-level)",
  "observed": {
@@ -33,13 +33,11 @@
   },
   "call_while_hijacked": {
    "ok": false,
-   "elapsed_s": 0.068,
+   "elapsed_s": 0.074,
    "error": "GateHTTPError: Gate execute returned HTTP 502"
   },
   "gate_log": [
-   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker response failed transport validation: TransportAuthenticationError: no verifying key available for transport signature verification\", \"error_type\": \"GateDispatchSecurityError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"9569ddca-225f-4730-8ea2-1b5c2fdc03fe\", \"request_id\": \"833daa468aac450499c4b93ef4f488c4\", \"root_id\": \"9569ddca-225f-4730-8ea2-1b5c2fdc03fe\", \"source_node\": \"odoo\"}",
-   "{\"level\": \"error\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\"}",
-   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker 'graph' execute returned HTTP 403\", \"error_type\": \"WorkerHTTPError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"b9ba9c93-6dd2-451b-925b-365b11e18339\", \"request_id\": \"cfcbaa1f214e40de8eaa0d815e2a3881\", \"root_id\": \"b9ba9c93-6dd2-451b-925b-365b11e18339\", \"source_node\": \"odoo\"}",
+   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker 'graph' execute returned HTTP 403\", \"error_type\": \"WorkerHTTPError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"439231ba-01ee-439c-9888-4a8b042aa590\", \"request_id\": \"4daf48d73d2c407f8d333c2035afffeb\", \"root_id\": \"439231ba-01ee-439c-9888-4a8b042aa590\", \"source_node\": \"odoo\"}",
    "{\"level\": \"error\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\"}"
   ],
   "restore_register": {
@@ -52,5 +50,5 @@
    "gate_signature_valid": true
   }
  },
- "timestamp": "2026-11-22T18:37:57.340230+00:00"
+ "timestamp": "2026-11-22T18:45:00.346066+00:00"
 }
