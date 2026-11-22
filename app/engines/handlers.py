@@ -110,6 +110,7 @@ async def _persist_and_sync(
     operation_id: str | None = None,
     defer_graph_sync: bool = False,
     graph_fields: Mapping[str, Any] | None = None,
+    graph_origin: str = "enrich",
 ) -> SideEffectReport:
     """
     Delegate post-enrich side effects to the single SideEffectCoordinator (TASK-021).
@@ -166,6 +167,7 @@ async def _persist_and_sync(
         node_label=payload.get("node_label") or object_type,
         defer_graph_sync=defer_graph_sync,
         graph_fields=graph_fields,
+        graph_origin=graph_origin,
     )
 
 
@@ -524,6 +526,7 @@ async def _run_canonical_converge(
                 operation_id=operation_id,
                 defer_graph_sync=defer_graph,
                 graph_fields=graph_fields,
+                graph_origin="converge",
             )
         except PersistenceRequiredError as exc:
             logger.error(

@@ -656,7 +656,7 @@ def test_graph_sync_acknowledged_is_ceg_handle_sync_contract():
         {"status": "success", "entity_type": "facilities", "synced_count": 3},
         entity_type="facilities",
     )
-    assert ok({"status": "success", "synced_count": 1, "rejected_count": 2, "packet_id": "p"})
+    assert not ok({"status": "success", "synced_count": 1, "rejected_count": 2, "packet_id": "p"})
     assert ok(
         {"status": "success", "entity_type": "facilities", "synced_count": 1}, expected_count=1
     )
