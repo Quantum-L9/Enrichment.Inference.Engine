@@ -540,3 +540,23 @@ async def test_t18_invalid_row_is_unacknowledged_and_nothing_is_sent(
     assert graph_sync_acknowledged(result) is False
     execute.assert_not_awaited()
     assert any(e["event"] == "graph_sync_refused_row_type" for e in logs)
+
+
+# ── Review follow-ups (#391): empty map members and integers beyond a float ──
+
+
+def test_t06_an_empty_member_of_a_declared_map_list_is_not_dropped_silently() -> None:
+    assert "members" not in _validated({"members": [{"code": "A1"}, {}]}, FULL_SCHEMA)
+    assert "members" not in _validated({"members": [{}]}, FULL_SCHEMA)
+
+
+def test_untyped_list_still_drops_empty_members() -> None:
+    result = validate_response({"fields": {"tags": [{}, "a", ""]}}, {"tags": "list"})
+    assert result["tags"] == ["a"]
+
+
+def test_t08_an_integer_beyond_float_range_is_an_int_and_refused_as_a_float() -> None:
+    huge = 10**400
+    assert _validated({"units": huge}, FULL_SCHEMA)["units"] == huge
+    assert "weight" not in _validated({"weight": huge}, FULL_SCHEMA)
+    assert "weight" not in _validated({"weight": "1" + "0" * 400}, FULL_SCHEMA)
