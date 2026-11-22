@@ -34,7 +34,27 @@ __all__ = [
     "build_unlock_index",
     "score_unlock_potential",
     "rank_fields_by_unlock",
+    "bound_node",
 ]
+
+
+def bound_node(rule_id: str, node: str | None, labels: list[str]) -> str:
+    """The node label a rule is bound to, given the spec's declared node labels.
+
+    A rule names its node with `node`. In a spec with exactly one node, a rule
+    that names none binds to that node. Otherwise an unnamed or undeclared node
+    is refused: a rule that cannot be placed on one node must not run on any.
+
+    Raises:
+        ValueError: the rule names no node in a multi-node spec, or an undeclared one
+    """
+    if node is None:
+        if len(labels) == 1:
+            return labels[0]
+        raise ValueError(f"rule {rule_id}: names no node; the spec declares {sorted(labels)}")
+    if node not in labels:
+        raise ValueError(f"rule {rule_id}: node {node!r} is not declared in the spec")
+    return node
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -110,6 +130,9 @@ class RuleDefinition(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     priority: int = Field(default=10, ge=0, le=100)
     domain: str | None = None
+    # The ontology node label this rule belongs to. Optional only where the
+    # spec has a single node (see `bound_node`); it was once dropped on load.
+    node: str | None = None
     description: str | None = None
     # Provenance: the rule-set version the domain YAML declares. Without this
     # field the default `extra="ignore"` dropped it silently on load.
