@@ -108,9 +108,17 @@ repo-check:  ## Non-mutating static gate: ruff check, no print() in service code
 
 # The pull-request selection (make-v2 `test-fast`). Every path is a literal, so
 # Core's PR test-expense judge reads a bounded selection; a `$` expansion in
-# the path list is judged UNKNOWN_SCRIPT. tests/unit and tests/contracts hold
-# every lane's own tests and the previous fixed PR-fast files; the two files
-# outside them are named. Quarantine deselections must be literal too: the
+# the path list is judged UNKNOWN_SCRIPT. tests/unit and tests/contracts
+# (tier2 included) hold every lane's own tests and the previous fixed PR-fast
+# files, so a lane adding tests there edits nothing here. Paths outside them:
+#   # base PR-fast contract selection
+#     tests/services/test_gate_registration.py
+#     tests/architecture/test_no_bespoke_gate_transport.py
+#   # lane: eie-ceg-gate/eie-w
+#     tests/test_pr21_packet_router.py
+# tests/integration needs Neo4j, Redis, Postgres and pinned peers: it is not
+# PR-safe and runs with the full suite (repo-test, test-deep), not here.
+# Quarantine deselections must be literal too: the
 # ledger is empty today, and a non-empty ledger fails here until its entries
 # are written below as `--deselect <nodeid>`, never hidden behind an expansion.
 # An empty or all-skipped selection fails.
@@ -128,6 +136,7 @@ repo-test-fast:  ## Bounded PR selection: tests/unit, tests/contracts and two na
 	  tests/contracts \
 	  tests/services/test_gate_registration.py \
 	  tests/architecture/test_no_bespoke_gate_transport.py \
+	  tests/test_pr21_packet_router.py \
 	  -p no:xdist \
 	  --timeout=120 \
 	  --tb=short -q \
