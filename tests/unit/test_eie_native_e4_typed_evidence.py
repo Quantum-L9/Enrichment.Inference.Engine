@@ -560,3 +560,19 @@ def test_t08_an_integer_beyond_float_range_is_an_int_and_refused_as_a_float() ->
     assert _validated({"units": huge}, FULL_SCHEMA)["units"] == huge
     assert "weight" not in _validated({"weight": huge}, FULL_SCHEMA)
     assert "weight" not in _validated({"weight": "1" + "0" * 400}, FULL_SCHEMA)
+
+
+def test_a_declared_property_without_a_string_name_is_not_a_property() -> None:
+    decl = {
+        "type": "list",
+        "items": {
+            "type": "map",
+            "properties": [
+                {"type": "string", "required": True},
+                {"name": 7, "type": "string", "required": True},
+                {"name": "code", "type": "string", "required": True},
+            ],
+        },
+    }
+    result = _validated({"parts": [{"code": "A1", "7": "x"}]}, {"parts": decl})
+    assert result["parts"] == [{"code": "A1"}]
