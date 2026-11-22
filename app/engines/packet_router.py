@@ -300,6 +300,24 @@ def graph_sync_contract_digest(contract: GraphSyncContract) -> str:
     return hashlib.sha256(material.encode()).hexdigest()
 
 
+def _rejected_in_full(ack: Any, entity_type: str) -> bool:
+    """CEG refused this batch at this endpoint and wrote none of it.
+
+    Only then is the same row refused again. A rejection naming another
+    endpoint, or any count other than an integer 0, is not this request's
+    answer and stays retryable.
+    """
+    synced = ack.get("synced_count") if isinstance(ack, dict) else None
+    return (
+        isinstance(ack, dict)
+        and ack.get("status") == "all_rejected"
+        and ack.get("entity_type") == entity_type
+        and isinstance(synced, int)
+        and not isinstance(synced, bool)
+        and synced == 0
+    )
+
+
 def graph_sync_failure_kind(exc: NodeUnreachableError) -> GraphSyncOutcomeKind:
     """Classify a failed entity ``sync`` route on Gate-client transport signals only.
 
@@ -1192,16 +1210,7 @@ class PacketRouter:
                 entity_type=ack.get("entity_type"),
                 expected_entity_type=contract.entity_type,
             )
-            if (
-                ack.get("status") == "all_rejected"
-                and ack.get("entity_type") == contract.entity_type
-                and ack.get("synced_count") == 0
-                and not isinstance(ack.get("synced_count"), bool)
-            ):
-                # CEG validated this batch at this endpoint against its own
-                # tenant spec and wrote none of it: the same row is refused
-                # again. A rejection naming another endpoint, or any count,
-                # is not this request's answer and stays retryable.
+            if _rejected_in_full(ack, contract.entity_type):
                 return settle(GraphSyncOutcomeKind.REFUSED, "all_rejected")
             return settle(GraphSyncOutcomeKind.RETRYABLE, "unacknowledged")
         return settle(GraphSyncOutcomeKind.ACKNOWLEDGED, "acknowledged", ack)

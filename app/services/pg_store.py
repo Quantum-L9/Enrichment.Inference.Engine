@@ -158,23 +158,8 @@ async def save_enrichment_result(
         msg = f"graph intent tenant {graph_intent.tenant_id!r} != result tenant {tenant_id!r}"
         raise ValueError(msg)
     if idempotency_key:
-        existing = await get_enrichment_result_by_idempotency_key(
-            idempotency_key, tenant_id=tenant_id
-        )
-        if existing:
-            logger.debug(
-                "enrichment_result_idempotent_hit",
-                idempotency_key=idempotency_key,
-                tenant_id=tenant_id,
-            )
-            if graph_intent is not None:
-                # The result is already durable. Its graph obligation is recorded
-                # now if it never was (a row older than graph_sync_intents) --
-                # but only for a verified replay: a retry that carries other
-                # fields must not attach data the stored result never committed.
-                _require_verified_replay(existing, fields, graph_intent)
-                async with get_session() as session:
-                    await _insert_graph_intent(session, graph_intent, existing.id)
+        existing = await _idempotent_hit(tenant_id, idempotency_key, fields, graph_intent)
+        if existing is not None:
             return existing
 
     record = EnrichmentResult(
@@ -220,31 +205,9 @@ async def save_enrichment_result(
                 exc.orig
             ):
                 raise
-            existing = (
-                await session.execute(
-                    select(EnrichmentResult).where(
-                        EnrichmentResult.idempotency_key == idempotency_key,
-                        EnrichmentResult.tenant_id == tenant_id,
-                    )
-                )
-            ).scalar_one()
-            if graph_intent is not None:
-                # Raising rolls back the intent inserted above with the rest.
-                _require_verified_replay(existing, fields, graph_intent)
-                await session.execute(
-                    update(GraphSyncIntent)
-                    .where(
-                        GraphSyncIntent.tenant_id == graph_intent.tenant_id,
-                        GraphSyncIntent.effect_key == graph_intent.effect_key,
-                    )
-                    .values(enrichment_result_id=existing.id)
-                )
-            logger.debug(
-                "enrichment_result_idempotent_race",
-                idempotency_key=idempotency_key,
-                tenant_id=tenant_id,
+            return await _idempotent_race_winner(
+                session, tenant_id, idempotency_key, fields, graph_intent
             )
-            return existing
 
         if field_confidence_map:
             for field_name, conf in field_confidence_map.items():
@@ -1001,6 +964,63 @@ def graph_intent_scope(spec: GraphIntentSpec | None) -> Iterator[None]:
         yield
     finally:
         _graph_intent_var.reset(token)
+
+
+async def _idempotent_hit(
+    tenant_id: str,
+    idempotency_key: str,
+    fields: Mapping[str, Any],
+    graph_intent: GraphIntentSpec | None,
+) -> EnrichmentResult | None:
+    """The stored result for this key, with its missing intent recorded, or None."""
+    existing = await get_enrichment_result_by_idempotency_key(idempotency_key, tenant_id=tenant_id)
+    if existing is None:
+        return None
+    logger.debug(
+        "enrichment_result_idempotent_hit", idempotency_key=idempotency_key, tenant_id=tenant_id
+    )
+    if graph_intent is not None:
+        # The result is already durable. Its graph obligation is recorded now if
+        # it never was (a row older than graph_sync_intents) -- but only for a
+        # verified replay: a retry that carries other fields must not attach
+        # data the stored result never committed.
+        _require_verified_replay(existing, fields, graph_intent)
+        async with get_session() as session:
+            await _insert_graph_intent(session, graph_intent, existing.id)
+    return existing
+
+
+async def _idempotent_race_winner(
+    session: AsyncSession,
+    tenant_id: str,
+    idempotency_key: str,
+    fields: Mapping[str, Any],
+    graph_intent: GraphIntentSpec | None,
+) -> EnrichmentResult:
+    """The concurrent save that won this key; the intent is rebound to it."""
+    existing = (
+        await session.execute(
+            select(EnrichmentResult).where(
+                EnrichmentResult.idempotency_key == idempotency_key,
+                EnrichmentResult.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one()
+    if graph_intent is not None:
+        # Raising rolls back the intent inserted earlier in this transaction.
+        _require_verified_replay(existing, fields, graph_intent)
+        await session.execute(
+            update(GraphSyncIntent)
+            .where(
+                GraphSyncIntent.tenant_id == graph_intent.tenant_id,
+                GraphSyncIntent.effect_key == graph_intent.effect_key,
+            )
+            .values(enrichment_result_id=existing.id)
+        )
+    logger.debug(
+        "enrichment_result_idempotent_race", idempotency_key=idempotency_key, tenant_id=tenant_id
+    )
+    return existing
 
 
 def _require_verified_replay(
