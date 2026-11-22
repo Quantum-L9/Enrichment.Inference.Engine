@@ -91,7 +91,11 @@ def test_v2_resolves_to_the_pinned_cartridge_and_a_v1_shaped_body(reader: Domain
         "odoo": {"record_id": 7},
         "domain_id": "plasticos",
         "node_label": "Facility",
-        "schema": {"contamination_tolerance": "float", "processed_polymers": "list"},
+        "schema": {
+            "contamination_tolerance": "float",
+            # A container target carries its typed declaration (F04).
+            "processed_polymers": {"type": "list", "items": LIST_OF_MAPS["items"]},
+        },
         "field_thresholds": {"contamination_tolerance": 0.8},
     }
 
