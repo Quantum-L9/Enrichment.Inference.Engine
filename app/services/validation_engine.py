@@ -151,8 +151,7 @@ def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) 
         return bool(value)
 
     if expected is list:
-        declared_maps = items is not None and str(items.get("type", "")).lower() == "map"
-        members = _list_members(value, keep_empty_maps=declared_maps)
+        members = _list_members(value, declared_items=items is not None)
         return _dedup([_coerce_member(v, items) for v in members])
 
     if expected in (int, float):
@@ -196,17 +195,27 @@ def _free_member(value: Any) -> Any:
     return str(value).strip()[:256]
 
 
-def _list_members(value: Any, *, keep_empty_maps: bool = False) -> list[Any]:
+def _list_members(value: Any, *, declared_items: bool = False) -> list[Any]:
     """The members a list field carries: CSV text split, empties dropped.
 
-    With ``keep_empty_maps`` (declared map items) an empty mapping is kept, so it
-    reaches required-property validation instead of being silently dropped.
+    With ``declared_items`` only absent members are dropped: ``None`` and blank
+    text carry no value. Every other member reaches its declared item type, so
+    ``0`` and ``0.0`` are kept, a boolean in a numeric list is refused, and an
+    empty mapping reaches required-property validation. An untyped list keeps
+    the falsy filter.
     """
     if isinstance(value, str):
         return [s for s in value.split(",") if s.strip()]
     if isinstance(value, (list, tuple)):
-        return [v for v in value if v or (keep_empty_maps and isinstance(v, Mapping))]
+        if declared_items:
+            return [v for v in value if not _is_absent(v)]
+        return [v for v in value if v]
     return [value]
+
+
+def _is_absent(value: Any) -> bool:
+    """A list member that states no value: ``None`` or blank text."""
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _coerce_member(value: Any, items: Mapping[str, Any] | None) -> Any:

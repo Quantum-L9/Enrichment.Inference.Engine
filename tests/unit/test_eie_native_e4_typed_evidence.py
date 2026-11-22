@@ -576,3 +576,39 @@ def test_a_declared_property_without_a_string_name_is_not_a_property() -> None:
     }
     result = _validated({"parts": [{"code": "A1", "7": "x"}]}, {"parts": decl})
     assert result["parts"] == [{"code": "A1"}]
+
+
+# ── Review follow-up (#391): falsy members of a declared numeric list ───────
+
+
+def _typed_list(item_type: str) -> dict[str, Any]:
+    return {"xs": {"type": "list", "items": {"type": item_type}}}
+
+
+@pytest.mark.parametrize(
+    ("item_type", "values", "expected"),
+    [
+        ("int", [0, 1], [0, 1]),
+        ("float", [0.0, 2.5], [0.0, 2.5]),
+        ("int", [1, None, "", "  "], [1]),  # absent members state no value
+    ],
+)
+def test_a_declared_numeric_list_keeps_zero_and_drops_only_absent_members(
+    item_type: str, values: list[Any], expected: list[Any]
+) -> None:
+    assert _validated({"xs": values}, _typed_list(item_type))["xs"] == expected
+
+
+@pytest.mark.parametrize(
+    ("item_type", "values"),
+    [("int", [1, False]), ("int", [True]), ("float", [2.5, False])],
+)
+def test_a_boolean_member_refuses_a_declared_numeric_list(
+    item_type: str, values: list[Any]
+) -> None:
+    assert "xs" not in _validated({"xs": values}, _typed_list(item_type))
+
+
+def test_an_untyped_list_keeps_its_falsy_filter() -> None:
+    result = validate_response({"fields": {"xs": [0, "a", "", None, False]}}, {"xs": "list"})
+    assert result["xs"] == ["a"]
