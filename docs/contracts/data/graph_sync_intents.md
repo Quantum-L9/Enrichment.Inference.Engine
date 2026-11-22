@@ -90,6 +90,9 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
    fencing token; only that claim settles the row. A claim whose lease expired
    and was re-claimed -- by another worker or the same process -- settles
    nothing. Recovery claims one row at a time, immediately before sending it.
+   Each claim is its own transaction holding a per-subject advisory lock
+   (`pg_advisory_xact_lock`) until it commits, so two claims of one subject
+   are serialised and the later one sees the earlier one's lease.
 5. **Version order.** A subject is the graph row written: tenant, entity and
    resolved endpoint. A row is not claimed while an older row of its subject is
    `pending` or `dispatching`, nor once a newer row was **sent** (claimed at
@@ -102,8 +105,10 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
    configured sends unclaimed. A CEG answer the row did not record (lease lost,
    store error) leaves the key pending.
 8. **Verified replay.** An idempotent replay attaches its intent to the stored
-   result only when it carries the same entity and committed fields; otherwise
-   it is a duplicate of the stored operation.
+   result only when it carries the same entity and committed fields. A replay
+   carrying anything else raises `GraphIntentReplayMismatchError`: it is a
+   failed persistence for that call (refused when durability is required),
+   never a duplicate and never `completed`.
 9. **Recovery.** `SideEffectCoordinator.recover_graph_intents` claims due rows
    and replays them; startup registration runs it every 30 s in-process, so a
    restarted idle node recovers without traffic.

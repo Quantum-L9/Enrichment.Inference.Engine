@@ -217,7 +217,7 @@ async def test_an_idempotency_race_returns_the_winner_and_rebinds_the_intent(
     assert rebind.startswith("UPDATE graph_sync_intents SET enrichment_result_id")
 
 
-async def test_a_mismatched_idempotent_replay_is_a_duplicate(
+async def test_a_mismatched_idempotent_replay_is_refused_not_a_duplicate(
     session: list[_Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     existing = SimpleNamespace(id=uuid.uuid4(), entity_id="d-1", fields={"capacity": 1.0})
@@ -230,7 +230,7 @@ async def test_a_mismatched_idempotent_replay_is_a_duplicate(
     session[:] = [tx]
     with (
         pg_store.graph_intent_scope(_spec()),
-        pytest.raises(pg_store.GraphIntentDuplicateError),
+        pytest.raises(pg_store.GraphIntentReplayMismatchError),
     ):
         await _save(idempotency_key="caller-1")
     assert tx.statements == []
@@ -254,7 +254,7 @@ async def test_a_mismatched_race_winner_rolls_the_intent_back(
     ]
     with (
         pg_store.graph_intent_scope(_spec()),
-        pytest.raises(pg_store.GraphIntentDuplicateError),
+        pytest.raises(pg_store.GraphIntentReplayMismatchError),
     ):
         await _save(idempotency_key="caller-1")
 
@@ -316,29 +316,52 @@ def _row(**overrides: Any) -> dict[str, Any]:
 async def test_a_claim_supersedes_exhausts_then_leases_in_seq_order(
     session: list[_Session],
 ) -> None:
-    later, earlier = _row(seq=7, effect_key="b"), _row(seq=3, effect_key="a")
-    tx = _Session(answers=[_Result(), _Result(), _Result(rows=[later, earlier])])
-    session[:] = [tx]
+    earlier, later = _row(seq=3, effect_key="a"), _row(seq=7, effect_key="b", entity_id="d-2")
+    scan = _Session(
+        answers=[
+            _Result(),
+            _Result(),
+            _Result(
+                rows=[
+                    (earlier["id"], "synthco", "d-1", "depots"),
+                    (later["id"], "synthco", "d-2", "depots"),
+                ]
+            ),
+        ]
+    )
+    first = _Session(answers=[_Result(), _Result(), _Result(rows=[earlier])])
+    second = _Session(answers=[_Result(), _Result(), _Result(rows=[later])])
+    session[:] = [scan, first, second]
     claimed = await pg_store.claim_graph_intents(owner="w1", lease_seconds=30, now=T0)
     assert [r.effect_key for r in claimed] == ["a", "b"]
-    supersede, exhaust, claim = (_sql(s) for s in tx.statements)
+    supersede, exhaust, candidates = (_sql(s) for s in scan.statements)
     assert supersede.startswith("UPDATE graph_sync_intents SET state=")
     assert "EXISTS (SELECT" in supersede and "graph_sync_intents_1.seq >" in supersede
     assert "graph_sync_intents_1.attempts >" in supersede  # "sent" = claimed at least once
     assert "graph_sync_intents_1.endpoint IS NOT DISTINCT FROM" in supersede
     assert "graph_sync_intents.attempts >= graph_sync_intents.max_attempts" in exhaust
+    assert candidates.startswith("SELECT") and "ORDER BY" in candidates
+    # One transaction per claim: subject lock, supersede again, then the claim.
+    lock, resupersede, claim = (_sql(s) for s in first.statements)
+    assert "pg_advisory_xact_lock(hashtextextended(" in lock
+    lock_params = first.statements[0].compile(dialect=postgresql.dialect()).params
+    assert "synthco|d-1|depots" in lock_params.values()
+    assert resupersede == supersede
     assert "FOR UPDATE SKIP LOCKED" in claim
     assert claim.count("NOT (EXISTS (SELECT") == 2  # no older outstanding, no newer sent
     assert "attempts=(graph_sync_intents.attempts +" in claim
     assert "RETURNING" in claim
-    params = tx.statements[2].compile(dialect=postgresql.dialect()).params
+    params = first.statements[2].compile(dialect=postgresql.dialect()).params
     assert params["lease_owner"].startswith("w1#")
+    assert params["lease_expires_at"] == T0 + timedelta(seconds=30)
+    again_scan = _Session(
+        answers=[_Result(), _Result(), _Result(rows=[(earlier["id"], "synthco", "d-1", "depots")])]
+    )
     again = _Session(answers=[_Result(), _Result(), _Result(rows=[])])
-    session[:] = [again]
-    await pg_store.claim_graph_intents(owner="w1", lease_seconds=30, now=T0)
+    session[:] = [again_scan, again]
+    assert await pg_store.claim_graph_intents(owner="w1", lease_seconds=30, now=T0) == []
     token = again.statements[2].compile(dialect=postgresql.dialect()).params["lease_owner"]
     assert token != params["lease_owner"], "every claim gets its own fencing token"
-    assert params["lease_expires_at"] == T0 + timedelta(seconds=30)
 
 
 async def test_a_single_operation_claim_is_scoped_to_its_key(session: list[_Session]) -> None:

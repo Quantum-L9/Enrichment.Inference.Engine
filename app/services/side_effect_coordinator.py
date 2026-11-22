@@ -327,7 +327,11 @@ class SideEffectCoordinator:
         (already synced, or never deferred) or a leg for it is already in
         flight — one sync per key at a time.
         """
-        if key not in self._graph_pending or key in self._graph_leg_in_flight:
+        if (
+            key not in self._graph_pending
+            or key in self._graph_leg_in_flight
+            or key in self._completed
+        ):
             return False
         self._graph_leg_in_flight.add(key)
         task = asyncio.create_task(self._run_graph_leg(key, settings), context=detached_context())
@@ -648,9 +652,13 @@ class SideEffectCoordinator:
             return False
         current = self._recovery_task
         if current is not None and not current.done():
-            if current.get_loop() is asyncio.get_running_loop():
+            previous_loop = current.get_loop()
+            if previous_loop is asyncio.get_running_loop():
                 return False
-            current.cancel()
+            if not previous_loop.is_closed():
+                # A closed loop cannot run the cancellation; the task is dead
+                # with it, so it is only dropped.
+                current.cancel()
         self._recovery_task = asyncio.create_task(
             self._recovery_loop(settings, interval_seconds), context=detached_context()
         )
@@ -987,6 +995,13 @@ class SideEffectCoordinator:
                 report.errors.append(f"event:{exc}")
                 logger.warning("side_effect_event_failed", entity_id=entity_id, error=str(exc))
 
+        if key in self._completed:
+            # Recovery resolved this key's durable intent while this call was
+            # awaiting its event; that disposition stands, and no pending graph
+            # leg is recorded beside it.
+            self._graph_pending.pop(key, None)
+            logger.info("side_effects_resolved_by_recovery", key=key, entity_id=entity_id)
+            return report
         if (graph_sync or graph_retry or report.graph_deferred) and not _leg_resolved(report):
             # The graph leg was asked for (on this call, or on the earlier one
             # that left it pending) and did not complete. Recording the key as

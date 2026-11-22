@@ -684,3 +684,81 @@ async def test_startup_registration_starts_the_singletons_poll_once() -> None:
         assert start_graph_intent_recovery() is False
     finally:
         await coord.stop_graph_recovery()
+
+
+# ── Review round 3 ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_mismatched_replay_is_a_failed_persistence_not_completed() -> None:
+    """The stored result does not hold this call's values: never answered `completed`."""
+    from app.services.side_effect_coordinator import PersistenceRequiredError
+
+    world = _world()
+    world.persist.side_effect = pg_store.GraphIntentReplayMismatchError(TENANT, "op-1")
+    coord = SideEffectCoordinator(intents=world.intents)
+    with pytest.raises(PersistenceRequiredError):
+        await _commit(
+            coord,
+            world,
+            _router(ACK),
+            idempotency_key="op-1",
+            require_persistence=True,
+            graph_sync=False,
+            defer_graph_sync=True,
+        )
+    key = next(iter(coord._in_flight), None)
+    assert key is None
+    assert not coord._completed and not coord._persisted
+    world.emitter.emit_enrichment_completed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recovery_finishing_first_leaves_no_pending_beside_completed() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    router = _router(ACK)
+
+    async def emit_while_recovery_runs(**_: Any) -> None:
+        # Recovery resolves the intent while the foreground emit is awaited.
+        await _recover(coord, router)
+
+    world.emitter.emit_enrichment_completed = AsyncMock(side_effect=emit_while_recovery_runs)
+    report = await _commit(
+        coord, world, _router(), idempotency_key="op-1", graph_sync=False, defer_graph_sync=True
+    )
+    assert report.key in coord._completed
+    assert report.key not in coord._graph_pending
+    assert coord.schedule_graph_leg(report.key, settings=SETTINGS) is False
+    assert world.intents.only().state == "acknowledged"
+
+
+def test_a_completed_key_never_starts_a_graph_leg() -> None:
+    coord = SideEffectCoordinator(intents=FakeIntents())
+    coord._graph_pending["k"] = {
+        "tenant": TENANT,
+        "entity_id": "d-1",
+        "fields": {},
+        "domain": TENANT,
+    }
+    coord._completed.add("k")
+    assert coord.schedule_graph_leg("k", settings=SETTINGS) is False
+
+
+def test_a_poll_bound_to_a_closed_loop_is_replaced_without_cancelling() -> None:
+    coord = SideEffectCoordinator(intents=FakeIntents())
+    old_loop = asyncio.new_event_loop()
+
+    async def start() -> None:
+        assert coord.start_graph_recovery(SETTINGS, interval_seconds=60)
+
+    old_loop.run_until_complete(start())
+    stale = coord._recovery_task
+    old_loop.close()  # the lifespan's loop is gone; its task never finished
+
+    async def restart() -> None:
+        assert coord.start_graph_recovery(SETTINGS, interval_seconds=60)
+        assert coord._recovery_task is not stale
+        await coord.stop_graph_recovery()
+
+    asyncio.run(restart())

@@ -282,6 +282,41 @@ async def test_a_newer_version_back_to_pending_still_supersedes_the_older(db: No
     assert older is not None and older.state == "superseded"
 
 
+async def test_a_claim_waits_for_an_uncommitted_claim_of_the_same_subject(db: None) -> None:
+    """Worker B has leased the newer version but not committed; A must not send the older."""
+    await _save(_spec("v1", fields={"capacity": 1.0}))
+    await _save(_spec("v2", fields={"capacity": 2.0}))
+    engine = pg_store._engine
+    assert engine is not None
+    subject = f"{TENANT}|d-1|depots"
+    async with engine.connect() as worker_b:
+        tx = await worker_b.begin()
+        await worker_b.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:s, 0))"), {"s": subject}
+        )
+        await worker_b.execute(
+            text(
+                "UPDATE graph_sync_intents SET state = 'dispatching', attempts = 1,"
+                " lease_owner = 'b', lease_expires_at = now() + interval '1 minute'"
+                " WHERE effect_key = 'v2'"
+            )
+        )
+        # v1 is the older outstanding row, so A's candidate is v1; its claim
+        # must wait on B's subject lock rather than miss B's uncommitted lease.
+        async with pg_store.get_session() as session:
+            await session.execute(
+                text("UPDATE graph_sync_intents SET state = 'pending' WHERE effect_key = 'v1'")
+            )
+        worker_a = asyncio.create_task(pg_store.claim_graph_intents(owner="a", lease_seconds=30))
+        await asyncio.sleep(0.3)
+        assert not worker_a.done(), "A must wait for B's claim to commit"
+        await tx.commit()
+    claimed = await asyncio.wait_for(worker_a, timeout=10)
+    assert [r.effect_key for r in claimed] == []
+    older = await pg_store.get_graph_intent(TENANT, "v1")
+    assert older is not None and older.state == "superseded"
+
+
 async def test_versions_are_ordered_by_resolved_endpoint_not_node_label(db: None) -> None:
     """`node_label=None` and `Depot` that resolve to one endpoint are one subject."""
     await _save(_spec("v1", node_label=None))
@@ -305,7 +340,7 @@ async def test_a_mismatched_replay_attaches_no_intent(db: None) -> None:
     await _save(None, idempotency_key="caller-1")
     with (
         pg_store.graph_intent_scope(_spec()),
-        pytest.raises(pg_store.GraphIntentDuplicateError),
+        pytest.raises(pg_store.GraphIntentReplayMismatchError),
     ):
         await pg_store.save_enrichment_result(
             tenant_id=TENANT,

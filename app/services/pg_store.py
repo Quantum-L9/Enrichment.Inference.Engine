@@ -949,6 +949,20 @@ class GraphIntentDuplicateError(RuntimeError):
         self.effect_key = effect_key
 
 
+class GraphIntentReplayMismatchError(RuntimeError):
+    """A replay of a stored operation carries other entity or fields.
+
+    Not a duplicate: the stored result does not hold what this call computed,
+    so this call's result is not durable. The caller treats it as a failed
+    persistence (refused when durability is required), never as `completed`.
+    """
+
+    def __init__(self, tenant_id: str, effect_key: str) -> None:
+        super().__init__(f"replay of {tenant_id}:{effect_key} does not match the stored result")
+        self.tenant_id = tenant_id
+        self.effect_key = effect_key
+
+
 _graph_intent_var: ContextVar[GraphIntentSpec | None] = ContextVar("graph_intent", default=None)
 
 
@@ -1028,8 +1042,9 @@ def _require_verified_replay(
 ) -> None:
     """Attach an intent to a stored result only when this call replays it exactly.
 
-    Same tenant, entity and committed fields; anything else is the stored
-    operation's, and this call is a duplicate of it (`GraphIntentDuplicateError`).
+    Same tenant, entity and committed fields; anything else is a mismatch
+    (`GraphIntentReplayMismatchError`): the stored result is the operation's,
+    and this call's different result is not durable.
     """
 
     def normal(value: Any) -> str:
@@ -1043,7 +1058,7 @@ def _require_verified_replay(
             stored_entity_id=existing.entity_id,
             entity_id=spec.entity_id,
         )
-        raise GraphIntentDuplicateError(spec.tenant_id, spec.effect_key)
+        raise GraphIntentReplayMismatchError(spec.tenant_id, spec.effect_key)
 
 
 async def _insert_graph_intent(
@@ -1234,48 +1249,72 @@ async def claim_graph_intents(
         .execution_options(synchronize_session=False)
     )
     candidate = aliased(GraphSyncIntent)
-    due = (
-        select(candidate.id)
-        .where(
+
+    def claimable(row: Any) -> list[Any]:
+        return [
             or_(
-                and_(candidate.state == GRAPH_INTENT_PENDING, candidate.next_attempt_at <= at),
-                and_(
-                    candidate.state == GRAPH_INTENT_DISPATCHING,
-                    candidate.lease_expires_at <= at,
-                ),
+                and_(row.state == GRAPH_INTENT_PENDING, row.next_attempt_at <= at),
+                and_(row.state == GRAPH_INTENT_DISPATCHING, row.lease_expires_at <= at),
             ),
-            candidate.attempts < candidate.max_attempts,
-            *scope(candidate),
+            row.attempts < row.max_attempts,
+            *scope(row),
             ~exists().where(
-                same_subject(candidate),
-                older_or_newer.seq < candidate.seq,
+                same_subject(row),
+                older_or_newer.seq < row.seq,
                 older_or_newer.state.in_((GRAPH_INTENT_PENDING, GRAPH_INTENT_DISPATCHING)),
             ),
             # Repeated here, not only in `supersede`: under Read Committed an
             # older row committed after `supersede` ran is visible to this claim.
-            ~newer_sent(candidate),
-        )
-        .order_by(candidate.seq)
-        .limit(limit)
-        .with_for_update(skip_locked=True)
-    )
-    claim = (
-        update(intent)
-        .where(intent.id.in_(due.scalar_subquery()))
-        .values(
-            state=GRAPH_INTENT_DISPATCHING,
-            lease_owner=claim_owner,
-            lease_expires_at=at + timedelta(seconds=lease_seconds),
-            attempts=intent.attempts + 1,
-            updated_at=at,
-        )
-        .returning(*GraphSyncIntent.__table__.columns)
-        .execution_options(synchronize_session=False)
-    )
+            ~newer_sent(row),
+        ]
+
     async with get_session() as session:
         await session.execute(supersede)
         await session.execute(exhaust)
-        rows = (await session.execute(claim)).all()
+        candidates = (
+            await session.execute(
+                select(candidate.id, candidate.tenant_id, candidate.entity_id, candidate.endpoint)
+                .where(*claimable(candidate))
+                .order_by(candidate.seq)
+                .limit(limit)
+            )
+        ).all()
+
+    # One transaction per claim, serialised per subject: the advisory lock is
+    # held until the claim commits, so a concurrent claim of the same subject
+    # waits and then -- in a statement that starts after the commit -- sees
+    # this claim's `attempts`. Without it, two Read Committed claims could each
+    # miss the other's uncommitted lease and send two versions out of order.
+    rows: list[Any] = []
+    for candidate_id, subject_tenant, subject_entity, subject_endpoint in candidates:
+        subject = f"{subject_tenant}|{subject_entity}|{subject_endpoint or ''}"
+        locked = aliased(GraphSyncIntent)
+        claim = (
+            update(intent)
+            .where(
+                intent.id.in_(
+                    select(locked.id)
+                    .where(locked.id == candidate_id, *claimable(locked))
+                    .with_for_update(skip_locked=True)
+                    .scalar_subquery()
+                )
+            )
+            .values(
+                state=GRAPH_INTENT_DISPATCHING,
+                lease_owner=claim_owner,
+                lease_expires_at=at + timedelta(seconds=lease_seconds),
+                attempts=intent.attempts + 1,
+                updated_at=at,
+            )
+            .returning(*GraphSyncIntent.__table__.columns)
+            .execution_options(synchronize_session=False)
+        )
+        async with get_session() as session:
+            await session.execute(
+                select(func.pg_advisory_xact_lock(func.hashtextextended(subject, 0)))
+            )
+            await session.execute(supersede)
+            rows.extend((await session.execute(claim)).all())
     claimed = sorted((_intent_record(r) for r in rows), key=lambda r: r.seq)
     if claimed:
         logger.info("graph_intents_claimed", owner=claim_owner, count=len(claimed))
