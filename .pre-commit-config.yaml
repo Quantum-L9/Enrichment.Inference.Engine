@@ -57,7 +57,7 @@ repos:
     rev: 107a41827bb6698dbbff756b2300537774a1d84c  # v8.24.3 (Core toolchain lock)
     hooks:
       - id: gitleaks
-        args: ["protect", "--staged", "--config=.gitleaks.toml"]
+        args: ["--config=.gitleaks.toml"]
 
   # ── Type checking ────────────────────────────────────────────────────
   - repo: local
