@@ -80,3 +80,24 @@ def test_other_probe_errors_do_not_stop_the_run(tmp_path: Path, mp: pytest.Monke
     assert ran == ["probe_fails", "later"]
     assert aborted is None
     assert [(r.id, r.verdict) for r in results] == [("T1", "NOT_RUN"), ("T2", "PASS")]
+
+
+def test_sdk_digest_requires_exit_zero_and_a_sha256(mp: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    good = "1.3.2 41 " + "ab" * 32
+    replies = {
+        "l9e2e-gate": (0, good),
+        "l9e2e-eie": (1, good),  # right output, failed exit: not a digest
+        "l9e2e-ceg": (0, "Traceback (most recent call last)"),  # exit 0, not a digest line
+    }
+
+    def fake_sh(cmd: list[str], **_: object) -> subprocess.CompletedProcess:
+        rc, out = replies[cmd[2]]
+        return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr="")
+
+    mp.setattr(rail, "sh", fake_sh)
+    got = rail.sdk_digests()
+    assert got["l9e2e-gate"] == good
+    assert got["l9e2e-eie"] == "UNAVAILABLE rc=1"
+    assert got["l9e2e-ceg"] == "UNAVAILABLE rc=0"

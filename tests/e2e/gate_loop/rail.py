@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -1672,6 +1673,9 @@ CASE_IDS: dict[str, tuple[str, ...]] = {
 }
 
 
+SDK_DIGEST_LINE = re.compile(r"\S+ \d+ [0-9a-f]{64}")
+
+
 def sdk_digests() -> dict:
     """Code digest per process: sha256 over (relative path, file sha256) of every installed SDK .py file, sorted.
 
@@ -1691,7 +1695,12 @@ def sdk_digests() -> dict:
     out = {}
     for c in ("l9e2e-gate", "l9e2e-eie", "l9e2e-ceg"):
         r = sh(["docker", "exec", c, "python", "-c", probe], timeout=60)
-        out[c] = r.stdout.strip() or f"UNAVAILABLE rc={r.returncode}"
+        line = r.stdout.strip()
+        # Only a successful probe printing "<version> <file count> <sha256>" is a digest.
+        if r.returncode == 0 and SDK_DIGEST_LINE.fullmatch(line):
+            out[c] = line
+        else:
+            out[c] = f"UNAVAILABLE rc={r.returncode}"
     return out
 
 
