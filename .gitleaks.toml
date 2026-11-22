@@ -14,9 +14,18 @@
 title = "L9 Enrichment Engine — Gitleaks Configuration"
 
 # ── Custom Rules ──────────────────────────────────────────────────────────
+#
+# Org CI (Core security.yml) scans with this file plus `[extend] useDefault =
+# true`. A custom rule whose id equals a gitleaks default rule id is then
+# replaced by the default rule, silently. Four did (openai-api-key,
+# generic-api-key, slack-bot-token, private-key): an sk- key this repository
+# catches was not caught by org CI. Custom ids therefore never reuse a default
+# id; new ones take the `eie-` prefix. The ids that fingerprints in
+# .gitleaksignore name keep their spelling.
+# Contract: tests/ci/test_gitleaks_config_contract.py
 
 [[rules]]
-id = "openai-api-key"
+id = "eie-openai-api-key"
 description = "OpenAI API Key"
 regex = '''sk-[a-zA-Z0-9]{20,}'''
 tags = ["api", "openai"]
@@ -28,7 +37,7 @@ regex = '''pplx-[a-zA-Z0-9]{40,}'''
 tags = ["api", "perplexity"]
 
 [[rules]]
-id = "generic-api-key"
+id = "eie-generic-api-key"
 description = "Generic API Key"
 regex = '''(?i)(api[_-]?key|apikey|api[_-]?secret)\s*[=:]\s*['"][a-zA-Z0-9_\-]{20,}['"]'''
 tags = ["api", "generic"]
@@ -49,7 +58,7 @@ regex = '''AKIA[0-9A-Z]{16}'''
 tags = ["aws"]
 
 [[rules]]
-id = "slack-bot-token"
+id = "eie-slack-bot-token"
 description = "Slack Bot Token"
 regex = '''xoxb-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{20,}'''
 tags = ["slack"]
@@ -78,7 +87,7 @@ regex = '''redis://:[^@]+@[^/]+'''
 tags = ["database", "redis"]
 
 [[rules]]
-id = "private-key"
+id = "eie-private-key"
 description = "Private Key"
 regex = '''-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'''
 tags = ["key"]
