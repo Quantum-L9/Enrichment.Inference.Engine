@@ -286,3 +286,23 @@ async def test_without_on_outcome_the_answer_is_unchanged(tmp_path: Path) -> Non
             tenant_id=TENANT, entity_id="d-1", fields={}, domain=TENANT, node_label="Depot"
         )
     assert ack is not None and ack["entity_type"] == "depots"
+
+
+@pytest.mark.parametrize(
+    ("rejected", "confirmed"),
+    [(0, True), (1, False), (True, False), ("0", False)],
+)
+@pytest.mark.asyncio
+async def test_a_node_ack_with_rejected_rows_is_not_acknowledged(
+    tmp_path: Path, rejected: Any, confirmed: bool
+) -> None:
+    """F-A1-01: a node ack confirms only with `rejected_count` absent or 0."""
+    router = _router(tmp_path)
+    answer = {**OK, "rejected_count": rejected}
+    with patch.object(
+        router._client, "execute", new_callable=AsyncMock, return_value=_answer(answer)
+    ):
+        ack, outcomes = await _sync(router)
+    assert (ack is not None) is confirmed
+    expected = GraphSyncOutcomeKind.ACKNOWLEDGED if confirmed else GraphSyncOutcomeKind.RETRYABLE
+    assert outcomes[0].kind is expected

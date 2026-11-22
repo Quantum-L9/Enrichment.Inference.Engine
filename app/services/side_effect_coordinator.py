@@ -32,7 +32,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import socket
 import threading
+import uuid
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -170,7 +173,78 @@ class SideEffectReport:
     # it, or a detached leg for the key was already in flight. The key is left
     # pending for its graph leg; `graph_synced` stays False.
     graph_deferred: bool = False
+    # A2: True when the graph obligation of this key is held durably -- recorded
+    # in the result's own transaction (graph_sync_intents) -- so a restart
+    # cannot lose it. False when no store accepted it (persistence failed and
+    # was not required, or the graph leg was not asked for).
+    graph_durable: bool = False
+    # A2: True when the graph leg ended terminally without a sync: CEG or the
+    # contract refused the pinned input, or its retries were spent. Never
+    # reported as synced; the reason is in `errors` (`graph_sync:refused:*`).
+    graph_terminal: bool = False
     errors: list[str] = field(default_factory=list)
+
+
+#: How long one graph-leg attempt holds its durable claim. Longer than the
+#: worst-case awaited `notify_graph_sync` (two 10 s attempts plus 1 s backoff),
+#: so a live attempt is never re-claimed under it; a holder that died releases
+#: the intent when the lease expires.
+GRAPH_LEASE_SECONDS = 60.0
+#: Backoff between durable graph-leg attempts (doubles per attempt, capped).
+GRAPH_RETRY_BASE_SECONDS = 2.0
+GRAPH_RETRY_CAP_SECONDS = 300.0
+
+
+class PgGraphIntents:
+    """The coordinator's view of the durable graph-intent store (`pg_store`).
+
+    Imported lazily: the coordinator module must stay importable where no DB
+    runtime is installed.
+    """
+
+    async def claim(self, *, owner: str, tenant_id: str, effect_key: str) -> list[Any]:
+        from app.services import pg_store
+
+        return await pg_store.claim_graph_intents(
+            owner=owner,
+            lease_seconds=GRAPH_LEASE_SECONDS,
+            limit=1,
+            tenant_id=tenant_id,
+            effect_key=effect_key,
+        )
+
+    async def claim_due(self, *, owner: str, limit: int) -> list[Any]:
+        from app.services import pg_store
+
+        return await pg_store.claim_graph_intents(
+            owner=owner, lease_seconds=GRAPH_LEASE_SECONDS, limit=limit
+        )
+
+    async def get(self, tenant_id: str, effect_key: str) -> Any | None:
+        from app.services import pg_store
+
+        return await pg_store.get_graph_intent(tenant_id, effect_key)
+
+    async def settle(
+        self,
+        intent_id: Any,
+        *,
+        owner: str,
+        outcome: str,
+        error: str | None,
+        ack: Mapping[str, Any] | None,
+    ) -> str | None:
+        from app.services import pg_store
+
+        return await pg_store.settle_graph_intent(
+            intent_id,
+            owner=owner,
+            outcome=outcome,
+            error=error,
+            ack=ack,
+            retry_base_seconds=GRAPH_RETRY_BASE_SECONDS,
+            retry_cap_seconds=GRAPH_RETRY_CAP_SECONDS,
+        )
 
 
 class SideEffectCoordinator:
@@ -193,7 +267,11 @@ class SideEffectCoordinator:
     A key is never in both. Both are process-local, like the guard always was.
     """
 
-    def __init__(self, max_keys: int = MAX_TRACKED_KEYS) -> None:
+    def __init__(self, max_keys: int = MAX_TRACKED_KEYS, *, intents: Any | None = None) -> None:
+        # A2: the durable graph-intent store and this process's claim identity.
+        self._intents = intents if intents is not None else PgGraphIntents()
+        self._owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"[:128]
+        self._recovery_task: asyncio.Task[None] | None = None
         self._completed = _BoundedKeys(max_keys)
         # Keys whose result a store accepted. A key can be completed without
         # it when persistence was not required and failed (F-001).
@@ -209,6 +287,9 @@ class SideEffectCoordinator:
         self._graph_leg_tasks: set[asyncio.Task[SideEffectReport]] = set()
 
     def reset_for_tests(self) -> None:
+        if self._recovery_task is not None:
+            self._recovery_task.cancel()
+            self._recovery_task = None
         for task in self._graph_leg_tasks:
             task.cancel()
         self._graph_leg_tasks.clear()
@@ -253,29 +334,34 @@ class SideEffectCoordinator:
             pending = self._graph_pending.get(key)
             if pending is None:
                 return report
-            from app.engines.packet_router import get_router, graph_sync_acknowledged
-
-            ack = await get_router(settings).notify_graph_sync(
-                tenant_id=pending["tenant"],
+            await self._graph_leg(
+                key=key,
+                tenant=pending["tenant"],
                 entity_id=pending["entity_id"],
                 fields=pending["fields"],
                 domain=pending["domain"],
                 node_label=pending.get("node_label"),
+                contract_digest=pending.get("contract_digest"),
+                settings=settings,
+                report=report,
             )
-            if graph_sync_acknowledged(ack):
-                report.graph_synced = True
+            if report.graph_synced or report.graph_terminal:
                 self._graph_pending.pop(key, None)
                 self._completed.add(key)
                 logger.info(
-                    "side_effects_graph_leg_synced", key=key, entity_id=pending["entity_id"]
+                    "side_effects_graph_leg_resolved",
+                    key=key,
+                    entity_id=pending["entity_id"],
+                    synced=report.graph_synced,
+                    terminal=report.graph_terminal,
                 )
             else:
-                report.errors.append(f"graph_sync:unacknowledged:{_ack_summary(ack)}")
                 logger.warning(
                     "side_effects_graph_leg_unacknowledged",
                     key=key,
                     entity_id=pending["entity_id"],
-                    ack=_ack_summary(ack),
+                    deferred=report.graph_deferred,
+                    errors=report.errors,
                 )
         except Exception as exc:  # noqa: BLE001 — the leg's failure stays the leg's
             report.errors.append(f"graph_sync:{exc}")
@@ -283,6 +369,202 @@ class SideEffectCoordinator:
         finally:
             self._graph_leg_in_flight.discard(key)
         return report
+
+    async def _graph_leg(
+        self,
+        *,
+        key: str,
+        tenant: str,
+        entity_id: str,
+        fields: Mapping[str, Any],
+        domain: str,
+        node_label: str | None,
+        contract_digest: str | None,
+        settings: Any,
+        report: SideEffectReport,
+        claimed: Any | None = None,
+    ) -> None:
+        """One attempt of the graph leg of `key`, under its durable claim (A2).
+
+        `claimed` is an intent the caller already leased (recovery); the claim
+        step is then skipped.
+
+        The durable intent is claimed first (cross-process lease). When it is
+        claimed, its pinned input is what is sent; when it exists but cannot be
+        claimed -- another worker holds it, or an older version of the same
+        subject is still outstanding -- nothing is sent and the leg is
+        `graph_deferred` (recovery sends it in order). An intent already
+        resolved is reported as it ended, never re-sent. With no durable
+        intent, or the store unreachable, the leg is sent unclaimed: the replay
+        of the same row is a MERGE under the same idempotency key.
+
+        Sets `graph_synced` only on CEG's acknowledgment; `graph_terminal` on a
+        refusal or spent retries; otherwise the leg stays retryable.
+        """
+        from app.engines.packet_router import GraphSyncOutcomeKind
+
+        record: Any | None = claimed
+        try:
+            if record is None:
+                leased = await self._intents.claim(
+                    owner=self._owner, tenant_id=tenant, effect_key=key
+                )
+                record = leased[0] if leased else None
+            if record is None:
+                existing = await self._intents.get(tenant, key)
+                if existing is not None:
+                    self._report_unclaimable(existing, report)
+                    return
+        except Exception as exc:  # noqa: BLE001 — a store outage must not drop the leg
+            logger.warning("side_effects_graph_claim_unavailable", key=key, error=str(exc))
+        if record is not None:
+            entity_id = record.entity_id
+            fields = record.fields
+            domain = record.domain or domain
+            node_label = record.node_label
+            contract_digest = record.contract_digest
+            tenant = record.tenant_id
+
+        from app.engines.packet_router import get_router, graph_sync_acknowledged
+
+        outcomes: list[Any] = []
+        ack: Any = None
+        raised = False
+        try:
+            ack = await get_router(settings).notify_graph_sync(
+                tenant_id=tenant,
+                entity_id=entity_id,
+                fields=dict(fields),
+                domain=domain,
+                node_label=node_label,
+                expected_contract_digest=contract_digest,
+                on_outcome=outcomes.append,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raised = True
+            report.errors.append(f"graph_sync:{exc}")
+            logger.warning("side_effect_graph_sync_failed", entity_id=entity_id, error=str(exc))
+        outcome = outcomes[-1] if outcomes else None
+        if not raised and graph_sync_acknowledged(ack):
+            report.graph_synced = True
+            disposition, error = "acknowledged", None
+        elif outcome is not None and outcome.kind is GraphSyncOutcomeKind.REFUSED:
+            report.graph_terminal = True
+            error = f"refused:{outcome.reason}"
+            report.errors.append(f"graph_sync:{error}")
+            disposition = "terminal"
+            logger.warning(
+                "side_effect_graph_sync_refused",
+                key=key,
+                entity_id=entity_id,
+                reason=outcome.reason,
+            )
+        else:
+            error = f"unacknowledged:{outcome.reason if outcome else _ack_summary(ack)}"
+            if not raised:
+                report.errors.append(f"graph_sync:unacknowledged:{_ack_summary(ack)}")
+                logger.warning(
+                    "side_effect_graph_sync_unacknowledged",
+                    entity_id=entity_id,
+                    key=key,
+                    ack=_ack_summary(ack),
+                )
+            disposition = "retry"
+        if record is None:
+            return
+        try:
+            state = await self._intents.settle(
+                record.id,
+                owner=self._owner,
+                outcome=disposition,
+                error=error,
+                ack=ack if report.graph_synced else None,
+            )
+        except Exception as exc:  # noqa: BLE001 — the row stays claimable; a replay is safe
+            logger.warning("side_effects_graph_settle_failed", key=key, error=str(exc))
+            return
+        if disposition == "retry" and state == "failed_terminal":
+            report.graph_terminal = True
+            report.errors.append("graph_sync:retry_exhausted")
+            logger.error("side_effects_graph_retry_exhausted", key=key, entity_id=entity_id)
+
+    @staticmethod
+    def _report_unclaimable(existing: Any, report: SideEffectReport) -> None:
+        """Report an intent this call could not claim, as it stands."""
+        state = getattr(existing, "state", None)
+        if state == "acknowledged":
+            report.graph_synced = True
+        elif state in {"failed_terminal", "superseded"}:
+            report.graph_terminal = True
+            report.errors.append(f"graph_sync:{state}:{getattr(existing, 'last_error', None)}")
+        else:
+            # Held by another worker's lease, waiting for its backoff, or behind
+            # an older version of the same subject: recovery owns it.
+            report.graph_deferred = True
+
+    async def recover_graph_intents(self, settings: Any, *, limit: int = 50) -> int:
+        """Send every due durable graph intent once; returns how many were attempted.
+
+        This is what makes a pending intent survive a restart: the intents a
+        dead process left `pending` (or leased and never settled) are claimed
+        here and replayed with their pinned input. Safe to run in several
+        workers at once -- each intent is leased to exactly one.
+        """
+        claimed = await self._intents.claim_due(owner=self._owner, limit=limit)
+        for record in claimed:
+            report = SideEffectReport(key=record.effect_key, graph_retry=True)
+            try:
+                await self._graph_leg(
+                    key=record.effect_key,
+                    tenant=record.tenant_id,
+                    entity_id=record.entity_id,
+                    fields=record.fields,
+                    domain=record.domain or record.tenant_id,
+                    node_label=record.node_label,
+                    contract_digest=record.contract_digest,
+                    settings=settings,
+                    report=report,
+                    claimed=record,
+                )
+            except Exception as exc:  # noqa: BLE001 — one intent's failure stays its own
+                logger.warning(
+                    "side_effects_graph_recovery_failed", key=record.effect_key, error=str(exc)
+                )
+                continue
+            if report.graph_synced or report.graph_terminal:
+                self._graph_pending.pop(record.effect_key, None)
+                self._completed.add(record.effect_key)
+        if claimed:
+            logger.info("side_effects_graph_recovered", attempted=len(claimed))
+        return len(claimed)
+
+    def start_graph_recovery(self, settings: Any, *, interval_seconds: float) -> bool:
+        """Run `recover_graph_intents` every `interval_seconds` in this process.
+
+        Returns False, starting nothing, for a non-positive interval or when the
+        loop already runs. Stopped by `stop_graph_recovery`.
+        """
+        if interval_seconds <= 0 or self._recovery_task is not None:
+            return False
+        self._recovery_task = asyncio.create_task(
+            self._recovery_loop(settings, interval_seconds), context=detached_context()
+        )
+        return True
+
+    async def stop_graph_recovery(self) -> None:
+        task, self._recovery_task = self._recovery_task, None
+        if task is None:
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _recovery_loop(self, settings: Any, interval_seconds: float) -> None:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                await self.recover_graph_intents(settings)
+            except Exception as exc:  # noqa: BLE001 — a failed pass is retried next tick
+                logger.warning("side_effects_graph_recovery_pass_failed", error=str(exc))
 
     async def commit_after_enrich(
         self,
@@ -443,32 +725,66 @@ class SideEffectCoordinator:
         )
         graph_domain = domain
         graph_node_label = node_label
+        graph_contract_digest: str | None = None
         if pending is not None:
             graph_tenant = pending.get("tenant", tenant)
             graph_entity_id = pending["entity_id"]
             synced_fields = pending["fields"]
             graph_domain = pending["domain"]
             graph_node_label = pending.get("node_label")
+            graph_contract_digest = pending.get("contract_digest")
             logger.info("side_effects_graph_retry", key=key, entity_id=entity_id)
 
         # 1) Persist once
         if not graph_retry:
+            graph_leg_asked = graph_sync or defer_graph_sync
+            intent = None
             try:
                 from app.models.schemas import EnrichResponse
+                from app.services import pg_store
                 from app.services.result_store import ResultStore
 
+                if graph_leg_asked:
+                    # A2: the graph obligation is recorded in the result's own
+                    # transaction, pinned to exactly what the leg sends, so a
+                    # result answered `completed` cannot lose it to a restart.
+                    pin = self._graph_pin(settings, tenant, node_label)
+                    graph_contract_digest = pin.contract_digest if pin is not None else None
+                    intent = pg_store.GraphIntentSpec(
+                        tenant_id=tenant,
+                        effect_key=key,
+                        entity_id=entity_id,
+                        fields=dict(synced_fields),
+                        domain=domain,
+                        node_label=node_label,
+                        endpoint=pin.entity_type if pin is not None else None,
+                        contract_digest=graph_contract_digest,
+                    )
                 store = ResultStore(tenant_id=tenant)
                 resp_obj = EnrichResponse.model_validate(response_dict)
-                await store.persist_enrich_response(
-                    response=resp_obj,
-                    entity_id=entity_id,
-                    object_type=object_type,
-                    domain=domain,
-                    idempotency_key=idempotency_key,
-                )
+                with pg_store.graph_intent_scope(intent):
+                    await store.persist_enrich_response(
+                        response=resp_obj,
+                        entity_id=entity_id,
+                        object_type=object_type,
+                        domain=domain,
+                        idempotency_key=idempotency_key,
+                    )
                 report.persisted = True
+                report.graph_durable = intent is not None
                 self._persisted.add(key)
             except Exception as exc:  # noqa: BLE001 — fire-and-forward unless required
+                if _is_durable_duplicate(exc):
+                    # Another worker, or this process before a restart, already
+                    # committed this operation: its result, event and durable
+                    # graph obligation exist, and this commit rolled back whole.
+                    report.skipped = True
+                    self._persisted.add(key)
+                    self._completed.add(key)
+                    logger.info(
+                        "side_effects_skipped_durable_duplicate", key=key, entity_id=entity_id
+                    )
+                    return report
                 report.errors.append(f"persist:{exc}")
                 logger.warning("side_effect_persist_failed", entity_id=entity_id, error=str(exc))
                 if require_persistence:
@@ -526,30 +842,17 @@ class SideEffectCoordinator:
                     entity_id=entity_id,
                     pinned_entity_id=graph_entity_id,
                 )
-            try:
-                from app.engines.packet_router import get_router, graph_sync_acknowledged
-
-                router = get_router(settings)
-                ack = await router.notify_graph_sync(
-                    tenant_id=graph_tenant,
-                    entity_id=graph_entity_id,
-                    fields=dict(synced_fields),
-                    domain=graph_domain,
-                    node_label=graph_node_label,
-                )
-                if graph_sync_acknowledged(ack):
-                    report.graph_synced = True
-                else:
-                    report.errors.append(f"graph_sync:unacknowledged:{_ack_summary(ack)}")
-                    logger.warning(
-                        "side_effect_graph_sync_unacknowledged",
-                        entity_id=entity_id,
-                        key=key,
-                        ack=_ack_summary(ack),
-                    )
-            except Exception as exc:  # noqa: BLE001
-                report.errors.append(f"graph_sync:{exc}")
-                logger.warning("side_effect_graph_sync_failed", entity_id=entity_id, error=str(exc))
+            await self._graph_leg(
+                key=key,
+                tenant=graph_tenant,
+                entity_id=graph_entity_id,
+                fields=synced_fields,
+                domain=graph_domain,
+                node_label=graph_node_label,
+                contract_digest=graph_contract_digest,
+                settings=settings,
+                report=report,
+            )
 
         # Event emit once, and never on a graph-only retry. Score invalidation
         # is not a step: Gate does not own score-invalidate, and a dispatch
@@ -571,7 +874,11 @@ class SideEffectCoordinator:
                 report.errors.append(f"event:{exc}")
                 logger.warning("side_effect_event_failed", entity_id=entity_id, error=str(exc))
 
-        if (graph_sync or graph_retry or report.graph_deferred) and not report.graph_synced:
+        if (
+            (graph_sync or graph_retry or report.graph_deferred)
+            and not report.graph_synced
+            and not report.graph_terminal
+        ):
             # The graph leg was asked for (on this call, or on the earlier one
             # that left it pending) and did not complete. Recording the key as
             # completed would suppress the retry that can finish it, so the
@@ -584,6 +891,7 @@ class SideEffectCoordinator:
                 "fields": dict(synced_fields),
                 "domain": graph_domain,
                 "node_label": graph_node_label,
+                "contract_digest": graph_contract_digest,
             }
             log = logger.info if report.graph_deferred else logger.warning
             log(
@@ -612,10 +920,23 @@ class SideEffectCoordinator:
             graph_synced=report.graph_synced,
             graph_skipped=report.graph_skipped,
             graph_retry=graph_retry,
+            graph_terminal=report.graph_terminal,
             score_invalidated=report.score_invalidated,
             event_emitted=report.event_emitted,
         )
         return report
+
+    @staticmethod
+    def _graph_pin(settings: Any, tenant: str, node_label: str | None) -> Any | None:
+        """The endpoint the intent is pinned to now (A2), or None when unresolvable."""
+        try:
+            from app.engines.packet_router import GraphSyncPin, get_router
+
+            pin = get_router(settings).graph_sync_pin(tenant, node_label=node_label)
+        except Exception as exc:  # noqa: BLE001 — an unpinned intent is still durable
+            logger.warning("side_effects_graph_pin_unavailable", tenant=tenant, error=str(exc))
+            return None
+        return pin if isinstance(pin, GraphSyncPin) else None
 
 
 def _ack_summary(ack: Any) -> str:
@@ -641,3 +962,10 @@ def get_side_effect_coordinator() -> SideEffectCoordinator:
             if _coordinator is None:
                 _coordinator = SideEffectCoordinator()
     return _coordinator
+
+
+def _is_durable_duplicate(exc: BaseException) -> bool:
+    """`pg_store.GraphIntentDuplicateError`, matched without importing the DB runtime."""
+    return type(exc).__name__ == "GraphIntentDuplicateError" and type(exc).__module__ == (
+        "app.services.pg_store"
+    )

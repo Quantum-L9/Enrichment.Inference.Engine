@@ -442,3 +442,64 @@ async def test_no_graph_leg_asked_records_no_intent() -> None:
     report = await _commit(coord, world, _router(), idempotency_key="op-1", graph_sync=False)
     assert report.graph_skipped and not report.graph_durable
     assert world.intents.rows == {}
+
+
+# ── P15/P21: an idle restarted node recovers without traffic ────────────────
+
+
+@pytest.mark.asyncio
+async def test_the_recovery_poll_replays_due_intents_on_an_idle_node() -> None:
+    world = _world()
+    await _commit(
+        SideEffectCoordinator(intents=world.intents),
+        world,
+        _router(),
+        idempotency_key="op-1",
+        graph_sync=False,
+        defer_graph_sync=True,
+    )
+    restarted = SideEffectCoordinator(intents=world.intents)
+    router = _router(ACK)
+    with patch("app.engines.packet_router.get_router", return_value=router):
+        assert restarted.start_graph_recovery(SETTINGS, interval_seconds=0.01) is True
+        assert restarted.start_graph_recovery(SETTINGS, interval_seconds=0.01) is False
+        for _ in range(100):
+            if world.intents.only().state == "acknowledged":
+                break
+            await asyncio.sleep(0.01)
+        await restarted.stop_graph_recovery()
+    assert world.intents.only().state == "acknowledged"
+    assert router.notify_graph_sync.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failing_recovery_pass_is_retried_on_the_next_tick() -> None:
+    intents = MagicMock()
+    intents.claim_due = AsyncMock(side_effect=[RuntimeError("store not ready"), []])
+    coord = SideEffectCoordinator(intents=intents)
+    assert coord.start_graph_recovery(SETTINGS, interval_seconds=0.01)
+    for _ in range(100):
+        if intents.claim_due.await_count >= 2:
+            break
+        await asyncio.sleep(0.01)
+    await coord.stop_graph_recovery()
+    assert intents.claim_due.await_count >= 2
+
+
+def test_startup_registration_outside_a_loop_starts_no_poll() -> None:
+    from app.services.chassis_handlers import start_graph_intent_recovery
+
+    assert start_graph_intent_recovery() is False
+
+
+@pytest.mark.asyncio
+async def test_startup_registration_starts_the_singletons_poll_once() -> None:
+    from app.services.chassis_handlers import start_graph_intent_recovery
+    from app.services.side_effect_coordinator import get_side_effect_coordinator
+
+    coord = get_side_effect_coordinator()
+    try:
+        assert start_graph_intent_recovery() is True
+        assert start_graph_intent_recovery() is False
+    finally:
+        await coord.stop_graph_recovery()

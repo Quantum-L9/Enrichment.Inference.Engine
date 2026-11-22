@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -242,6 +243,75 @@ class NodeOperationFailedError(NodeUnreachableError):
     """
 
 
+class GraphSyncOutcomeKind(StrEnum):
+    """How one entity ``sync`` attempt ended, for the caller's retry decision.
+
+    * ``ACKNOWLEDGED`` -- CEG confirmed this row at this endpoint.
+    * ``RETRYABLE`` -- not confirmed, and the same pinned input may be sent
+      again: Gate unavailable, a timeout or 5xx, a worker ``failure`` packet,
+      an answer that does not confirm this row (wrong count or endpoint,
+      malformed). The graph may or may not hold the row; a replay of
+      the same row is a ``MERGE`` on the same id with the same idempotency key.
+    * ``REFUSED`` -- the same input can never succeed: no endpoint resolves,
+      the endpoint's row contract changed since the input was pinned, a value
+      does not match its declared type, CEG rejected the batch in full, or Gate
+      refused the packet (4xx). Terminal: sending the same input again cannot succeed.
+    """
+
+    ACKNOWLEDGED = "acknowledged"
+    RETRYABLE = "retryable"
+    REFUSED = "refused"
+
+
+@dataclass(frozen=True, slots=True)
+class GraphSyncOutcome:
+    """Typed outcome of one ``notify_graph_sync`` attempt; ``ack`` only when acknowledged."""
+
+    kind: GraphSyncOutcomeKind
+    reason: str
+    ack: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GraphSyncPin:
+    """The endpoint a graph intent is pinned to when its result commits."""
+
+    entity_type: str
+    contract_digest: str
+    cartridge_revision: str | None = None
+
+
+def graph_sync_contract_digest(contract: GraphSyncContract) -> str:
+    """Digest of an endpoint contract: entity type, id property, typed row schema."""
+    material = json.dumps(
+        {
+            "entity_type": contract.entity_type,
+            "id_property": contract.id_property,
+            "row_schema": contract.row_schema,
+        },
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+def graph_sync_failure_kind(exc: NodeUnreachableError) -> GraphSyncOutcomeKind:
+    """Classify a failed entity ``sync`` route on Gate-client transport signals only.
+
+    Unreachable, timed out, 5xx, a worker ``failure`` packet: retryable (bounded by the caller). A Gate 4xx, or any other client
+    error: refused -- the same packet would be refused the same way. The
+    worker's own error vocabulary is never read (GAR A5).
+    """
+    if isinstance(exc, NodeOperationFailedError):
+        return GraphSyncOutcomeKind.RETRYABLE
+    cause = exc.__cause__
+    if isinstance(cause, GateConnectionError | GateTimeoutError):
+        return GraphSyncOutcomeKind.RETRYABLE
+    if isinstance(cause, GateHTTPError) and cause.is_server_error:
+        return GraphSyncOutcomeKind.RETRYABLE
+    return GraphSyncOutcomeKind.REFUSED
+
+
 def _is_failure_packet(packet: Any) -> bool:
     """Gate's terminal-success predicate, read from transport-level signals only.
 
@@ -274,6 +344,7 @@ def graph_sync_acknowledged(
     non-positive ``synced_count``, a ``synced_count`` other than
     ``expected_count`` when the caller knows its batch size, or an
     acknowledgment for a different endpoint — is NOT a synchronization. The
+    node-sync path applies the stricter :func:`node_sync_acknowledged`. The
     graph may or may not hold the row; the caller must not record it as synced.
     """
     if not isinstance(ack, dict):
@@ -286,6 +357,21 @@ def graph_sync_acknowledged(
     if expected_count is not None and synced != expected_count:
         return False
     return not (entity_type is not None and ack.get("entity_type") != entity_type)
+
+
+def node_sync_acknowledged(ack: Any, *, entity_type: str, expected_count: int) -> bool:
+    """GRAPH_ACKNOWLEDGED for a node ``sync`` (A1 matrix F-A1-01).
+
+    :func:`graph_sync_acknowledged` for this endpoint and exact batch size, and
+    ``rejected_count`` absent or 0: a node ack carries no created/replayed
+    counts, and a row CEG rejected must never be read as synchronized.
+    """
+    if not graph_sync_acknowledged(ack, entity_type=entity_type, expected_count=expected_count):
+        return False
+    if "rejected_count" not in ack:
+        return True
+    rejected = ack["rejected_count"]
+    return not isinstance(rejected, bool) and isinstance(rejected, int) and rejected == 0
 
 
 def _retry_allowed(exc: BaseException, *, has_idempotency_key: bool) -> bool:
@@ -957,6 +1043,8 @@ class PacketRouter:
         correlation_id: str | None = None,
         *,
         node_label: str | None = None,
+        expected_contract_digest: str | None = None,
+        on_outcome: Callable[[GraphSyncOutcome], None] | None = None,
     ) -> dict[str, Any] | None:
         """
         Sync enriched entity fields into the graph through Gate (action `sync`,
@@ -982,7 +1070,23 @@ class PacketRouter:
         worker ``failure`` packet, a rejected batch, or a malformed answer are
         each a logged, bounded failure. There is no fallback path. ``None``
         means "not synced" — never "synced, response lost" (RV-DOMAIN-RD-07).
+
+        ``on_outcome`` receives the attempt's :class:`GraphSyncOutcome` (A2): the
+        same answer, classified for a caller that retries -- refused (terminal)
+        versus retryable. ``expected_contract_digest`` pins the endpoint
+        contract a durable intent was admitted against: when the tenant's
+        current contract differs, nothing is sent and the attempt is refused as
+        ``contract_changed`` rather than addressed to a contract the pinned
+        fields were never checked against.
         """
+
+        def settle(
+            kind: GraphSyncOutcomeKind, reason: str, ack: dict[str, Any] | None = None
+        ) -> dict[str, Any] | None:
+            if on_outcome is not None:
+                on_outcome(GraphSyncOutcome(kind=kind, reason=reason, ack=ack))
+            return ack if kind is GraphSyncOutcomeKind.ACKNOWLEDGED else None
+
         if domain and domain != tenant_id:
             logger.warning(
                 "graph_sync_domain_is_not_tenant",
@@ -1000,7 +1104,20 @@ class PacketRouter:
                 domain=domain,
                 fix=_NO_CONTRACT_FIX,
             )
-            return None
+            return settle(GraphSyncOutcomeKind.REFUSED, "no_contract")
+        if (
+            expected_contract_digest is not None
+            and graph_sync_contract_digest(contract) != expected_contract_digest
+        ):
+            logger.warning(
+                "graph_sync_refused_contract_changed",
+                tenant_id=tenant_id,
+                entity_id=entity_id,
+                entity_type=contract.entity_type,
+                fix="the tenant's sync contract changed after this result committed; "
+                "the pinned fields were admitted against the earlier contract and are not sent",
+            )
+            return settle(GraphSyncOutcomeKind.REFUSED, "contract_changed")
         projection = project_graph_sync_row(entity_id=entity_id, fields=fields, contract=contract)
         if projection.dropped:
             logger.info(
@@ -1030,7 +1147,7 @@ class PacketRouter:
                 fix="send values of each property's declared type (domains/<tenant>/spec.yaml); "
                 "nothing was sent and nothing is recorded as synced",
             )
-            return None
+            return settle(GraphSyncOutcomeKind.REFUSED, "row_type")
         batch = [row]
         try:
             ack = await self.route(
@@ -1043,10 +1160,10 @@ class PacketRouter:
             )
         except NodeUnreachableError as exc:
             logger.warning("graph_sync_failed", entity_id=entity_id, error=str(exc))
-            return None
+            return settle(graph_sync_failure_kind(exc), f"route:{type(exc).__name__}")
         # CEG answers synced_count == len(batch); an acknowledgment for any other
         # count cannot be this request's and does not confirm this row.
-        if not graph_sync_acknowledged(
+        if not node_sync_acknowledged(
             ack, entity_type=contract.entity_type, expected_count=len(batch)
         ):
             logger.warning(
@@ -1057,8 +1174,28 @@ class PacketRouter:
                 entity_type=ack.get("entity_type"),
                 expected_entity_type=contract.entity_type,
             )
+            if ack.get("status") == "all_rejected":
+                # CEG validated the batch against its own tenant spec and
+                # refused every row: the same row is refused again.
+                return settle(GraphSyncOutcomeKind.REFUSED, "all_rejected")
+            return settle(GraphSyncOutcomeKind.RETRYABLE, "unacknowledged")
+        return settle(GraphSyncOutcomeKind.ACKNOWLEDGED, "acknowledged", ack)
+
+    def graph_sync_pin(
+        self, tenant_id: str, *, node_label: str | None = None
+    ) -> GraphSyncPin | None:
+        """The endpoint a graph intent for ``tenant_id`` is pinned to now, or None.
+
+        None when no contract resolves; the intent is then recorded unpinned and
+        its dispatch refuses as ``no_contract`` if none resolves then either.
+        """
+        contract = self.graph_sync_contract(tenant_id, node_label=node_label)
+        if contract is None:
             return None
-        return ack
+        return GraphSyncPin(
+            entity_type=contract.entity_type,
+            contract_digest=graph_sync_contract_digest(contract),
+        )
 
     def relationship_sync_contract(
         self,
@@ -1225,6 +1362,23 @@ class PacketRouter:
 _router_singleton: PacketRouter | None = None
 
 
+#: Environments allowed to read checked-in, unpublished domain specs. Mirrors
+#: the startup reader in app/main.py (lifespan ``DomainYamlReader``); every
+#: other environment serves tenants and requires native publication (F-A1-09).
+UNPUBLISHED_SPEC_ENVIRONMENTS = frozenset({"local", "dev", "test"})
+_SETTINGS_DEFAULT_ENVIRONMENT = "local"  # app.core.config.Settings.l9_environment
+
+
+def requires_published_specs(settings: Any) -> bool:
+    """Whether the graph-sync reader must refuse unpublished specs, as startup does.
+
+    A settings object without ``l9_environment`` takes ``Settings``' own default
+    (``"local"``); any value that is not a string requires publication.
+    """
+    environment = getattr(settings, "l9_environment", _SETTINGS_DEFAULT_ENVIRONMENT)
+    return not (isinstance(environment, str) and environment in UNPUBLISHED_SPEC_ENVIRONMENTS)
+
+
 def get_router(settings: Any) -> PacketRouter:
     """Module-level singleton router. One instance per process.
 
@@ -1240,7 +1394,11 @@ def get_router(settings: Any) -> PacketRouter:
     domains_dir = getattr(settings, "domains_dir", None)
     _router_singleton = PacketRouter(
         gate_url=settings.gate_url,
-        domain_reader=DomainYamlReader(domains_dir) if domains_dir else None,
+        domain_reader=(
+            DomainYamlReader(domains_dir, require_published=requires_published_specs(settings))
+            if domains_dir
+            else None
+        ),
         fallback_entity_type=getattr(settings, "graph_sync_entity_type", "") or "",
         fallback_id_property=getattr(settings, "graph_sync_id_property", "") or "",
     )
