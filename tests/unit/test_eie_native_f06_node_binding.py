@@ -208,3 +208,34 @@ def test_d11_node_none_keeps_conflict_blocking() -> None:
     )
     assert "t" not in result.derived_fields
     assert result.blocked_fields.get("t") == "no_rule"
+
+
+# ── spec shapes the node scoping must read (or refuse) without raising ───────
+
+
+def test_ontology_less_spec_scopes_its_top_level_nodes() -> None:
+    """build_derivation_graph also reads `nodes` from the spec root; so does scoping."""
+    spec = {
+        "nodes": {
+            "Plant": {"properties": {"t": {"derived_from": ["p"]}}},
+            "Depot": {"properties": {"u": {"derived_from": ["q"]}}},
+        }
+    }
+    graph = InferenceBridge(domain_spec=spec, node="Plant").graph
+    assert graph is not None
+    assert [e.target for e in graph.edges] == ["t"]
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        pytest.param({"name": "x", "ontology": "not-a-mapping"}, id="ontology-not-mapping"),
+        pytest.param({"name": "x", "ontology": {"nodes": None}}, id="nodes-none"),
+    ],
+)
+def test_malformed_ontology_with_a_node_declares_nothing(spec: dict[str, Any]) -> None:
+    bridge = InferenceBridge(rules=[_rule("r", "capacity", "size")], domain_spec=spec, node="Plant")
+    assert bridge.status == STATUS_INVALID
+    assert bridge.graph is not None
+    assert bridge.graph.edges == []
+    assert bridge.run({"capacity": 50}).derived_fields == {}

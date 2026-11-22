@@ -422,13 +422,21 @@ def _node_labels(domain_spec: dict[str, Any]) -> list[str]:
 
 
 def _scope_to_node(domain_spec: dict[str, Any], node: str) -> dict[str, Any]:
-    """A shallow copy of the spec whose ontology declares only `node`."""
+    """A shallow copy of the spec whose ontology declares only `node`.
+
+    A malformed ontology (not a mapping, or nodes neither a list nor a mapping)
+    scopes to no declarations rather than raising.
+    """
     nodes = _spec_nodes(domain_spec)
     if isinstance(nodes, dict):
         kept: Any = {k: v for k, v in nodes.items() if str(k) == node}
-    else:
+    elif isinstance(nodes, list):
         kept = [n for n in nodes if isinstance(n, dict) and n.get("label") == node]
+    else:
+        kept = []
     ontology = domain_spec.get("ontology", domain_spec)
+    if not isinstance(ontology, dict):
+        return {**domain_spec, "ontology": {"nodes": []}}
     key = "nodes" if "nodes" in ontology else "entities"
     scoped_ontology = {**ontology, key: kept}
     if "ontology" in domain_spec:
