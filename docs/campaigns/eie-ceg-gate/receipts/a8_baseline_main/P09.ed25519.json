@@ -1,0 +1,39 @@
+{
+ "run": "20261122T174815Z-ed25519",
+ "id": "P09",
+ "slice": "A7",
+ "profile": "ed25519",
+ "assertion": "Gate restart: readiness degrades truthfully, no peer fallback, recovers by live re-registration",
+ "verdict": "PASS",
+ "reason": "",
+ "observed": {
+  "registry_after_restart": {},
+  "ready_after_restart": "{\"ready\":false,\"status\":\"not_ready\",\"required_actions\":[\"converge\",\"enrich\",\"enrich-and-sync\",\"graph-inference-result\",\"match\",\"sync\",\"outcomes\",\"resolve\"],\"actions\":[{\"action\":\"converge\",\"routable\":false,\"required_owner\":\"eie\",\"resolved_node\":null,\"advertising_nodes\":[],\"healthy_advertising_nodes\":",
+  "call_during_outage": {
+   "ok": false,
+   "elapsed_s": 0.075,
+   "error": "GateHTTPError: Gate execute returned HTTP 404"
+  },
+  "recovery": {
+   "ready": true,
+   "waited_s": 260.5
+  },
+  "registry_after_recovery": {
+   "enrichment-engine": [
+    "converge",
+    "enrich",
+    "enrich-and-sync",
+    "graph-inference-result"
+   ],
+   "graph": [
+    "health-assess",
+    "match",
+    "outcomes",
+    "resolve",
+    "score",
+    "sync"
+   ]
+  }
+ },
+ "timestamp": "2026-11-22T17:54:03.703545+00:00"
+}

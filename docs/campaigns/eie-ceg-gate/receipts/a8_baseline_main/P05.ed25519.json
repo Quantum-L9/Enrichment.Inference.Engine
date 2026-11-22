@@ -1,0 +1,68 @@
+{
+ "run": "20261122T175455Z-ed25519",
+ "id": "P05",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "synthetic neutral tenant converges and syncs typed child edges with no PlasticOS literal",
+ "verdict": "BLOCKED",
+ "reason": "EIE egress GateClient carries no ed25519 key from env (F-A1-04)",
+ "observed": {
+  "entity_id": "gl-synt-d924f3",
+  "converge": {
+   "ok": true,
+   "elapsed_s": 0.099,
+   "error": null,
+   "gate_signature_valid": true
+  },
+  "response": {
+   "packet_id": "40cbd9f8-8c6a-402e-8716-a55b09671bd4",
+   "packet_type": "response",
+   "action": "converge",
+   "source_node": "enrichment-engine",
+   "destination_node": "gate",
+   "reply_to": "enrichment-engine",
+   "tenant": "synthneutral",
+   "root_id": "0287ea87-c8a0-4c05-acec-9c66b037f81e",
+   "parent_id": "6cbd5732-7c3c-4df4-b457-15419c5044e9",
+   "generation": 2,
+   "causation_id": "6cbd5732-7c3c-4df4-b457-15419c5044e9",
+   "idempotency_key": "gl:converge:synthneutral:gl-synt-d924f3:8c61f05b",
+   "signing_key_id": "gate-gl",
+   "signature_algorithm": "ed25519",
+   "hop_trace": [
+    {
+     "node": "enrichment-engine",
+     "direction": "response",
+     "status": "completed",
+     "target_node": null,
+     "signed": false
+    }
+   ],
+   "provenance": {
+    "origin_kind": "gate",
+    "requested_action": "converge",
+    "resolved_by_gate": true,
+    "route_kind": "external_ingress",
+    "original_source_node": "odoo"
+   }
+  },
+  "state": "completed",
+  "eie_persisted_rows": [
+   "1"
+  ],
+  "graph": {
+   "rows": []
+  },
+  "eie_log": [
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-d924f3:8c61f05b:enrich\", \"entity_id\": \"gl-synt-d924f3\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T17:55:00.603175Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-d924f3:8c61f05b:enrich\", \"entity_id\": \"gl-synt-d924f3\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T17:55:00.603275Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-d924f3:8c61f05b:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T17:55:00.603422Z\"}",
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T17:55:00.608388Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T17:55:00.608490Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T17:55:00.609352Z\"}",
+   "{\"entity_id\": \"gl-synt-d924f3\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T17:55:00.609418Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-d924f3:8c61f05b:enrich\", \"entity_id\": \"gl-synt-d924f3\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T17:55:00.609456Z\"}"
+  ]
+ },
+ "timestamp": "2026-11-22T17:55:11.709620+00:00"
+}

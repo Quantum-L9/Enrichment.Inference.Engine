@@ -1,0 +1,27 @@
+{
+ "run": "20261122T175911Z-ed25519",
+ "id": "P19",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "same relationship evidence twice: no duplicate edge",
+ "verdict": "PASS",
+ "reason": "node sync ack has no created/replayed counts (F-A1-01); asserted by graph read",
+ "observed": {
+  "ack1": {
+   "status": "success",
+   "entity_type": "facilities",
+   "synced_count": 1
+  },
+  "ack2": {
+   "status": "success",
+   "entity_type": "facilities",
+   "synced_count": 1
+  },
+  "edge_count": [
+   [
+    "1"
+   ]
+  ]
+ },
+ "timestamp": "2026-11-22T18:00:10.276679+00:00"
+}

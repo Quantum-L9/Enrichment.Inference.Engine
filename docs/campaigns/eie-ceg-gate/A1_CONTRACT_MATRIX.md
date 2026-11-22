@@ -17,7 +17,7 @@ caller policy.
 | Quantum-L9/Gate_SDK | head `dc4e69c4…`; **pinned by every node at `bc1c74c06d70126e82eba73c47df8f2f2af4bc2b` (v1.3.2)** | Gate `requirements.lock:10`; EIE `uv.lock:171-173`; CEG `uv.lock:179-181`. All three use tag `v1`. Head `dc4e69c4` is not a descendant of the pin, and the two differ under `src/` only in `runtime/execution.py`. |
 | Quantum-L9/.github | `d0d292721046cc5e6e5083ee798aa652728d9af1` (v3.45.0) | projection `l9.projection/coding-agent-execution@1`, bundle `f8e44d1536cb` |
 | TEST_ONLY CEG pack `plasticos` | `tests/fixtures/test_only_packs/plasticos/spec.yaml` sha256 `d8cbd15c339e1742032948186069827e5b1c6969a610ea9ef39aebf0ddf13863` | the design pack body verbatim, plus `plugins.inference_rules: [infer_geography_from_postal_code]` |
-| TEST_ONLY CEG pack `synthneutral` | `tests/fixtures/test_only_packs/synthneutral/spec.yaml` sha256 `6af7ad9814b4c134274d09534df9e72b7576b1deec80d7b1e15d7d56c4505a82` | synthetic and domain-neutral |
+| TEST_ONLY CEG pack `synthneutral` (r2) | `tests/fixtures/test_only_packs/synthneutral/spec.yaml` sha256 `d50b9ab2aba2addf0c11b5c6ad3636f102f6e6479262f6b38d526d9f545bbb3e` (r1 was `6af7ad98…5a82`) | synthetic and domain-neutral, with tenant-scoped `capabilities` |
 | TEST_ONLY EIE cartridge `synthneutral` | `tests/e2e/gate_loop/cartridges/synthneutral/spec.yaml` (this repo) | counterpart of the CEG synthetic pack |
 
 The manifest is `Cognitive.Engine.Graphs tests/fixtures/test_only_packs/TEST_ONLY.json`. EIE's
@@ -250,3 +250,24 @@ No new field, action, payload key or caller policy is needed to freeze sections 
 | `tests/e2e/gate_loop/vectors/sync_rows.json` | 10 sync-row vectors and 5 match vectors, across both TEST_ONLY tenants |
 | `tests/e2e/gate_loop/cartridges/synthneutral/spec.yaml` | EIE synthetic cartridge |
 | `Cognitive.Engine.Graphs tests/fixtures/test_only_packs/` | CEG packs and the `TEST_ONLY.json` manifest |
+
+## 7. Amendments after A1 (r2) and the A8 baseline at main
+
+- **TEST_ONLY packs r2.** Only `capabilities` changed; the sync, ontology and gates sections are byte-identical to r1. The A1 conversion matrix is unchanged because `capabilities` takes no part in it.
+- **A7 trust and policy.** See `A7_TRUST_POLICY_MATRIX.md`. New findings:
+  - F-A7-01: Gate private-key self-resolution.
+  - F-A7-02: the same defect in the SDK client.
+  - F-A7-03: algorithm-confusion forgery (CTO-BLOCKER).
+- **A8 baseline at main.** Ledger: `acceptance_ledger.csv`. Receipts: `receipts/a8_baseline_main/`. Rail: `tests/e2e/gate_loop/`.
+
+| Verdict | Cases |
+|---|---|
+| PASS (real-process, ed25519) | P03 (topology), P09, P10, P13, P17\*, P19\*, P33\*, P34\* |
+| BLOCKED | P07, P18, P05 (EIE ed25519 egress, F-A1-04); P11 (F-A7-03); P08 (CEG egress, F-A1-04); P22 (F-A1-02) |
+| FAIL (gap evidence) | P14 (F-A1-06: no durable graph intent, no outbox table in EIE Postgres); P23 (F-A1-07: an identical inference delivery is queued twice) |
+| NOT_RUN | P12 (signer half PASS; lock-mismatch half not exercisable because all images carry identical SDK code); every other case |
+| NOT_APPLICABLE | P36 |
+
+\* CEG-side fixture rows travel through Gate signed with the `eie-gl` key held by the driver (rig), because EIE's own egress is blocked at main. These cases assert CEG ingress, write and match behaviour, not EIE egress.
+
+These verdicts are main-baseline only. The CTO re-runs the same rail at the integrated heads for the case verdicts that count (P39).

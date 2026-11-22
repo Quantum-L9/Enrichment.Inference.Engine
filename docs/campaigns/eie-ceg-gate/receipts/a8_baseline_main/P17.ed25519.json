@@ -1,0 +1,99 @@
+{
+ "run": "20261122T175911Z-ed25519",
+ "id": "P17",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "CEG refuses wrong type / undeclared endpoint: whole batch, nothing written, accurate refusal",
+ "verdict": "PASS",
+ "reason": "sent with the eie-gl key from the driver (worker-key misassignment rig); EIE never builds such a row (A1 vectors)",
+ "observed": {
+  "wrong_type": {
+   "ok": true,
+   "elapsed_s": 0.072,
+   "response": {
+    "packet_id": "1173f104-9b1c-4d88-9601-1bde95146735",
+    "packet_type": "failure",
+    "action": "sync",
+    "source_node": "graph",
+    "destination_node": "gate",
+    "reply_to": "graph",
+    "tenant": "plasticos",
+    "root_id": "0cb37a8e-c731-4604-8992-206a909ec27c",
+    "parent_id": "e029830c-fef0-475b-bd20-f39d2abdc195",
+    "generation": 2,
+    "causation_id": "e029830c-fef0-475b-bd20-f39d2abdc195",
+    "idempotency_key": null,
+    "signing_key_id": "gate-gl",
+    "signature_algorithm": "ed25519",
+    "hop_trace": [
+     {
+      "node": "graph",
+      "direction": "response",
+      "status": "failed",
+      "target_node": null,
+      "signed": false
+     }
+    ],
+    "provenance": {
+     "origin_kind": "gate",
+     "requested_action": "sync",
+     "resolved_by_gate": true,
+     "route_kind": "external_ingress",
+     "original_source_node": "enrichment-engine"
+    }
+   },
+   "gate_signature_valid": true,
+   "payload": {
+    "status": "failed",
+    "error": "SyncRowRejectedError",
+    "message": "SyncRowRejectedError",
+    "packet_id": "e029830c-fef0-475b-bd20-f39d2abdc195"
+   }
+  },
+  "undeclared": {
+   "ok": true,
+   "elapsed_s": 0.067,
+   "response": {
+    "packet_id": "485cecd0-3cd0-4606-b144-37bc4ae5c4c2",
+    "packet_type": "failure",
+    "action": "sync",
+    "source_node": "graph",
+    "destination_node": "gate",
+    "reply_to": "graph",
+    "tenant": "plasticos",
+    "root_id": "5d87fceb-574a-40ac-9d67-a9ebb49bf489",
+    "parent_id": "a65af4c2-ecb3-4805-a48f-6466de24e494",
+    "generation": 2,
+    "causation_id": "a65af4c2-ecb3-4805-a48f-6466de24e494",
+    "idempotency_key": null,
+    "signing_key_id": "gate-gl",
+    "signature_algorithm": "ed25519",
+    "hop_trace": [
+     {
+      "node": "graph",
+      "direction": "response",
+      "status": "failed",
+      "target_node": null,
+      "signed": false
+     }
+    ],
+    "provenance": {
+     "origin_kind": "gate",
+     "requested_action": "sync",
+     "resolved_by_gate": true,
+     "route_kind": "external_ingress",
+     "original_source_node": "enrichment-engine"
+    }
+   },
+   "gate_signature_valid": true,
+   "payload": {
+    "status": "failed",
+    "error": "ValidationError",
+    "message": "ValidationError",
+    "packet_id": "a65af4c2-ecb3-4805-a48f-6466de24e494"
+   }
+  },
+  "graph": []
+ },
+ "timestamp": "2026-11-22T18:00:10.276647+00:00"
+}

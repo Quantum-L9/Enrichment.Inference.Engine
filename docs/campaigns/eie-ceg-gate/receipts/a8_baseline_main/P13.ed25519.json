@@ -1,0 +1,27 @@
+{
+ "run": "20261122T174815Z-ed25519",
+ "id": "P13",
+ "slice": "A7",
+ "profile": "ed25519",
+ "assertion": "replay of a packet id yields no extra effect; expired deadline refused",
+ "verdict": "PASS",
+ "reason": "",
+ "observed": {
+  "http_status": {
+   "baseline_valid": 200,
+   "unknown_action": 403,
+   "wrong_tenant": 403,
+   "unsigned": 400,
+   "unknown_key_rogue": 400,
+   "corrupted_signature": 400,
+   "key_claims_other_node": 403,
+   "consumer_claims_registered_node_name": 403,
+   "hmac_downgrade_with_public_key": 200,
+   "hmac_downgrade_with_random_secret": 400,
+   "replay_first": 200,
+   "replay_second_same_packet_id": 200,
+   "expired_deadline": 400
+  }
+ },
+ "timestamp": "2026-11-22T17:49:11.713732+00:00"
+}

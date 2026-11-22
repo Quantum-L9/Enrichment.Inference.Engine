@@ -10,7 +10,8 @@ from engine.config.loader import DomainPackLoader
 from engine.sync.row_contract import SyncRowContract
 
 root, vec_path = sys.argv[1], sys.argv[2]
-vectors = json.load(open(vec_path))
+with open(vec_path) as fh:
+    vectors = json.load(fh)
 loader = DomainPackLoader(root)
 out = []
 for v in vectors["vectors"]:

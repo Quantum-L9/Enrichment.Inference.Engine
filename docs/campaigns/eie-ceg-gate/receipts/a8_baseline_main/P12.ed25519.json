@@ -1,0 +1,30 @@
+{
+ "run": "20261122T180328Z-ed25519",
+ "id": "P12",
+ "slice": "A7",
+ "profile": "ed25519",
+ "assertion": "SDK lock mismatch blocked AND untrusted response signer refused",
+ "verdict": "NOT_RUN",
+ "reason": "signer sub-assertion PASS; lock-mismatch sub-assertion not exercised: every image installs the same SDK code (no mismatched image exists)",
+ "observed": {
+  "unauthorized_signer_subcase": "PASS",
+  "call": {
+   "ok": false,
+   "elapsed_s": 0.094,
+   "error": "GateHTTPError: Gate execute returned HTTP 502"
+  },
+  "gate_log": [
+   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker response failed transport validation: TransportAuthenticationError: no verifying key available for transport signature verification\", \"error_type\": \"GateDispatchSecurityError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"01b296dd-34ab-4117-8196-2743d2976df8\", \"request_id\": \"b22096039eda435c8d6f728576a6ea42\", \"root_id\": \"01b296dd-34ab-4117-8196-2743d2976df8\", \"source_node\": \"odoo\"}"
+  ],
+  "recovery": {
+   "ready": true,
+   "waited_s": 0.0
+  },
+  "sdk_code_digest": {
+   "l9e2e-gate": "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929",
+   "l9e2e-eie": "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929",
+   "l9e2e-ceg": "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929"
+  }
+ },
+ "timestamp": "2026-11-22T18:04:04.847142+00:00"
+}
