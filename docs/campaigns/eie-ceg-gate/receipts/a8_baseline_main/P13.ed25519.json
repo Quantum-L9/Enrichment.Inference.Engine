@@ -1,0 +1,32 @@
+{
+ "id": "P13",
+ "run": "20261122T185228Z-ed25519",
+ "slice": "A7",
+ "profile": "ed25519",
+ "assertion": "a replayed packet id adds no effect; an expired deadline is refused",
+ "verdict": "PASS",
+ "reason": "effect count: the replay returned the cached answer (same query_id), i.e. no second execution",
+ "observed": {
+  "http_status": {
+   "baseline_valid": 200,
+   "unknown_action": 403,
+   "wrong_tenant": 403,
+   "unsigned": 400,
+   "unknown_key_rogue": 400,
+   "corrupted_signature": 400,
+   "key_claims_other_node": 403,
+   "consumer_claims_registered_node_name": 403,
+   "hmac_downgrade_with_public_key": 200,
+   "hmac_downgrade_with_random_secret": 400,
+   "replay_first": 200,
+   "replay_second_same_packet_id": 200,
+   "expired_deadline": 400
+  },
+  "checks": {
+   "first execution succeeded with a query_id": true,
+   "same packet id: replay refused or the identical cached answer": true,
+   "expired deadline refused": true
+  }
+ },
+ "timestamp": "2026-11-22T18:53:32.221345+00:00"
+}

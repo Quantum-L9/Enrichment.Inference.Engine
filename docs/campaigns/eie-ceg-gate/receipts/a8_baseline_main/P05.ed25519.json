@@ -1,0 +1,77 @@
+{
+ "id": "P05",
+ "run": "20261122T185228Z-ed25519",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "synthetic neutral tenant converges and syncs typed child edges via Gate, with no PlasticOS literal",
+ "verdict": "BLOCKED",
+ "reason": "EIE egress GateClient carries no ed25519 key from env (F-A1-04, owner Gate_SDK)",
+ "observed": {
+  "entity_id": "gl-synt-f5e218",
+  "converge": {
+   "ok": true,
+   "elapsed_s": 0.1,
+   "error": null,
+   "gate_signature_valid": true
+  },
+  "response": {
+   "packet_id": "d39c4f14-4430-478c-8e5d-e85747513616",
+   "packet_type": "response",
+   "action": "converge",
+   "source_node": "enrichment-engine",
+   "destination_node": "gate",
+   "reply_to": "enrichment-engine",
+   "tenant": "synthneutral",
+   "root_id": "1e2214c7-47e7-4e96-8f9f-866192a2ec2a",
+   "parent_id": "82d38e1b-66e2-44f9-a01b-ed854c7db7f5",
+   "generation": 2,
+   "causation_id": "82d38e1b-66e2-44f9-a01b-ed854c7db7f5",
+   "idempotency_key": "gl:converge:synthneutral:gl-synt-f5e218:6126d67a",
+   "signing_key_id": "gate-gl",
+   "signature_algorithm": "ed25519",
+   "hop_trace": [
+    {
+     "node": "enrichment-engine",
+     "direction": "response",
+     "status": "completed",
+     "target_node": null,
+     "signed": false
+    }
+   ],
+   "provenance": {
+    "origin_kind": "gate",
+    "requested_action": "converge",
+    "resolved_by_gate": true,
+    "route_kind": "external_ingress",
+    "original_source_node": "odoo"
+   }
+  },
+  "state": "completed",
+  "eie_persisted_rows": [
+   "1"
+  ],
+  "graph": {
+   "rows": []
+  },
+  "gate_sync_events": [],
+  "eie_log": [
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-421f44:31b2d89a:enrich\", \"entity_id\": \"gl-plas-421f44\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:33.602112Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-421f44:31b2d89a:enrich\", \"entity_id\": \"gl-plas-421f44\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:33.602280Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-421f44:31b2d89a:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:33.602565Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:33.648585Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:33.648934Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:53:33.649799Z\"}",
+   "{\"entity_id\": \"gl-plas-421f44\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:53:33.649879Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-421f44:31b2d89a:enrich\", \"entity_id\": \"gl-plas-421f44\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:53:33.649942Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-f5e218:6126d67a:enrich\", \"entity_id\": \"gl-synt-f5e218\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:45.441761Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-f5e218:6126d67a:enrich\", \"entity_id\": \"gl-synt-f5e218\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:45.441942Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-f5e218:6126d67a:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:45.442243Z\"}",
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:45.452560Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:53:45.452922Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:53:45.453644Z\"}",
+   "{\"entity_id\": \"gl-synt-f5e218\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:53:45.453816Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-f5e218:6126d67a:enrich\", \"entity_id\": \"gl-synt-f5e218\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:53:45.453927Z\"}"
+  ]
+ },
+ "timestamp": "2026-11-22T18:53:56.331201+00:00"
+}
