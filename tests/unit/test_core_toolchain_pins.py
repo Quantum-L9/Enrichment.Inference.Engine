@@ -32,7 +32,7 @@ pytestmark = pytest.mark.unit
 
 # Core-owned tools a Python consumer could take from PyPI (l9-ci-core
 # core-owned-tools.json; biome is npm, python is the interpreter).
-CORE_TOOLS = ("pip", "pre-commit", "ruff", "mypy", "pytest", "semgrep")
+CORE_TOOLS = ("pip", "pre-commit", "ruff", "mypy", "pytest", "semgrep", "bandit", "pip-audit")
 
 _CORE_PRECOMMIT_REPOS = (
     "https://github.com/astral-sh/ruff-pre-commit",
