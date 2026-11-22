@@ -48,7 +48,8 @@ pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
 DOMAINS = ROOT / "domains"
-PLASTICOS = yaml.safe_load((DOMAINS / "plasticos/spec.yaml").read_bytes())
+# The revision current.json publishes, through the loader runtime uses (never the sample).
+PLASTICOS = DomainYamlReader(DOMAINS, require_published=True).load("plasticos").raw_spec
 CEG_SNAPSHOT = ROOT / "tests/fixtures/ceg/plasticos.spec.yaml"
 GATE = "http://gate.test"
 
@@ -279,8 +280,9 @@ def test_s06_ceg_labels_without_an_eie_endpoint_are_not_produced() -> None:
     not_produced = ceg_labels - produced - children
     assert not_produced == {"MaterialIntake", "MaterialForm", "SupplyOpportunity", "BuyerDemand"}
     for label in not_produced:
-        assert resolve_graph_sync_contract(PLASTICOS, node_label=label) is not None
-        assert resolve_graph_sync_contract(PLASTICOS, node_label=label).entity_type == "facilities"
+        contract = resolve_graph_sync_contract(PLASTICOS, node_label=label)
+        assert contract is not None
+        assert contract.entity_type == "facilities"
 
 
 def test_s08_both_plasticos_subject_types_bind_facility() -> None:
@@ -504,6 +506,7 @@ async def test_g13_g14_sync_is_scoped_to_the_callers_tenant_and_one_endpoint(
         )
     assert result is not None
     assert (result["status"], result["synced_count"]) == ("success", 1)
+    assert execute.await_args is not None
     kwargs = execute.await_args.kwargs
     assert kwargs["tenant"] == "plasticos"
     assert kwargs["payload"] == {
@@ -525,6 +528,7 @@ async def test_g19_second_tenant_projects_by_its_own_spec(tmp_path: Path) -> Non
         router._client, "execute", new_callable=AsyncMock, return_value=_ack(ok)
     ) as execute:
         await router.notify_graph_sync(tenant_id="neutral", entity_id="S-1", fields=fields)
+    assert execute.await_args is not None
     assert execute.await_args.kwargs["tenant"] == "neutral"
     assert execute.await_args.kwargs["payload"] == {
         "entity_type": "sites",
