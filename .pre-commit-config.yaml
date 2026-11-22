@@ -57,7 +57,11 @@ repos:
     rev: 107a41827bb6698dbbff756b2300537774a1d84c  # v8.24.3 (Core toolchain lock)
     hooks:
       - id: gitleaks
-        args: ["protect", "--staged", "--config=.gitleaks.toml"]
+        # The v8.24.3 hook entry already runs `gitleaks git --pre-commit --redact
+        # --staged --verbose`; `protect --staged` appended to it was read as a
+        # repository path ("cannot change to 'protect'"): every run failed having
+        # scanned 0 bytes. Only the config rides on the entry.
+        args: ["--config=.gitleaks.toml"]
 
   # ── Type checking ────────────────────────────────────────────────────
   - repo: local
