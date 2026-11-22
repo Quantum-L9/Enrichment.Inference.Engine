@@ -1,4 +1,0 @@
-tests/unit/test_eie_native_e4_typed_evidence.py
-tests/contracts/test_eie_native_l2_validated_row_contract.py
-tests/unit/test_typed_spec_contract.py
-tests/test_validation_engine.py
