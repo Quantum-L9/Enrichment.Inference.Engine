@@ -37,7 +37,14 @@ def test_cartridge_name_is_the_branch_key() -> None:
 
 def test_valid_odoo_line_becomes_one_wire_element() -> None:
     shaped = _shape(
-        [{"polymer": "HDPE", "capability_id": [411, "Line 411"], "direction": "in", "form": "Pellet"}]
+        [
+            {
+                "polymer": "HDPE",
+                "capability_id": [411, "Line 411"],
+                "direction": "in",
+                "form": "Pellet",
+            }
+        ]
     )
     assert shaped == {
         "processed_polymers": [
