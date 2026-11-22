@@ -291,7 +291,7 @@ jobs:
         # Codecov upload deferred. This job no longer builds a full-catalog
         # coverage.xml, and Codecov authentication is out of scope. The full
         # catalog runs only from ci.yml's deep plan.
-        run: make test
+        run: make test-fast
 
   # ────────────────────────────────────────────────────────────────────────
   # PHASE 5: SECURITY
