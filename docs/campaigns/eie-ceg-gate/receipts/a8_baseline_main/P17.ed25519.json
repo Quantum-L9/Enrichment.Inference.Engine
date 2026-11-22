@@ -1,5 +1,5 @@
 {
- "run": "20261122T175911Z-ed25519",
+ "run": "20261122T181723Z-ed25519",
  "id": "P17",
  "slice": "A8",
  "profile": "ed25519",
@@ -9,19 +9,19 @@
  "observed": {
   "wrong_type": {
    "ok": true,
-   "elapsed_s": 0.072,
+   "elapsed_s": 0.079,
    "response": {
-    "packet_id": "1173f104-9b1c-4d88-9601-1bde95146735",
+    "packet_id": "9c5d36ba-9bc5-45b1-81cd-e19ad75bc6df",
     "packet_type": "failure",
     "action": "sync",
     "source_node": "graph",
     "destination_node": "gate",
     "reply_to": "graph",
     "tenant": "plasticos",
-    "root_id": "0cb37a8e-c731-4604-8992-206a909ec27c",
-    "parent_id": "e029830c-fef0-475b-bd20-f39d2abdc195",
+    "root_id": "1567ea76-ed47-4f64-88ab-c1940686dabf",
+    "parent_id": "802fd9e8-8ee7-4a6e-a1cf-21007d2b1322",
     "generation": 2,
-    "causation_id": "e029830c-fef0-475b-bd20-f39d2abdc195",
+    "causation_id": "802fd9e8-8ee7-4a6e-a1cf-21007d2b1322",
     "idempotency_key": null,
     "signing_key_id": "gate-gl",
     "signature_algorithm": "ed25519",
@@ -47,24 +47,24 @@
     "status": "failed",
     "error": "SyncRowRejectedError",
     "message": "SyncRowRejectedError",
-    "packet_id": "e029830c-fef0-475b-bd20-f39d2abdc195"
+    "packet_id": "802fd9e8-8ee7-4a6e-a1cf-21007d2b1322"
    }
   },
   "undeclared": {
    "ok": true,
-   "elapsed_s": 0.067,
+   "elapsed_s": 0.066,
    "response": {
-    "packet_id": "485cecd0-3cd0-4606-b144-37bc4ae5c4c2",
+    "packet_id": "97ead296-1283-49e6-852d-941e8b91229b",
     "packet_type": "failure",
     "action": "sync",
     "source_node": "graph",
     "destination_node": "gate",
     "reply_to": "graph",
     "tenant": "plasticos",
-    "root_id": "5d87fceb-574a-40ac-9d67-a9ebb49bf489",
-    "parent_id": "a65af4c2-ecb3-4805-a48f-6466de24e494",
+    "root_id": "4841748e-aeb5-44c4-8653-beaa4c97ad9e",
+    "parent_id": "87063954-474d-41ee-a8dd-94bcba0824a0",
     "generation": 2,
-    "causation_id": "a65af4c2-ecb3-4805-a48f-6466de24e494",
+    "causation_id": "87063954-474d-41ee-a8dd-94bcba0824a0",
     "idempotency_key": null,
     "signing_key_id": "gate-gl",
     "signature_algorithm": "ed25519",
@@ -90,10 +90,10 @@
     "status": "failed",
     "error": "ValidationError",
     "message": "ValidationError",
-    "packet_id": "a65af4c2-ecb3-4805-a48f-6466de24e494"
+    "packet_id": "87063954-474d-41ee-a8dd-94bcba0824a0"
    }
   },
   "graph": []
  },
- "timestamp": "2026-11-22T18:00:10.276647+00:00"
+ "timestamp": "2026-11-22T18:18:25.340580+00:00"
 }

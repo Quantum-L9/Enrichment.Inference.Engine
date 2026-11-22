@@ -1,11 +1,11 @@
 {
- "run": "20261122T175911Z-ed25519",
+ "run": "20261122T181723Z-ed25519",
  "id": "P19",
  "slice": "A8",
  "profile": "ed25519",
  "assertion": "same relationship evidence twice: no duplicate edge",
  "verdict": "PASS",
- "reason": "node sync ack has no created/replayed counts (F-A1-01); asserted by graph read",
+ "reason": "node GRAPH_ACKNOWLEDGED per the F-A1-01 disposition (tenant, entity_type, synced_count == len(batch), no rejected_count) plus a Neo4j edge count",
  "observed": {
   "ack1": {
    "status": "success",
@@ -21,7 +21,8 @@
    [
     "1"
    ]
-  ]
+  ],
+  "graph_acknowledged_both": true
  },
- "timestamp": "2026-11-22T18:00:10.276679+00:00"
+ "timestamp": "2026-11-22T18:18:25.340607+00:00"
 }

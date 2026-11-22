@@ -1,0 +1,54 @@
+{
+ "run": "20261122T181723Z-ed25519",
+ "id": "F-A1-05",
+ "slice": "A7",
+ "profile": "ed25519",
+ "assertion": "witness: an admin-token holder can repoint a canonical owner's registration; only response verification stops the mis-route",
+ "verdict": "WITNESSED",
+ "reason": "BLOCKED_WITH_EXACT_OWNER: Constellation.Gate (registration not bound to node key; admin token compared with != in services/admin_registration_service.py:64-68, source-level)",
+ "observed": {
+  "owner_collision_register": {
+   "http_status": 400,
+   "body": "{\"detail\":{\"code\":\"invalid_request\",\"message\":\"action 'match' is owned by 'ceg'; registration claims owner 'eie'\"}}"
+  },
+  "hijack_register": {
+   "http_status": 200,
+   "body": "{\"registered\":[{\"node_name\":\"graph\",\"healthy\":true,\"registered\":true}],\"total_nodes\":1}"
+  },
+  "registry_after_hijack": {
+   "enrichment-engine": [
+    "converge",
+    "enrich",
+    "enrich-and-sync",
+    "graph-inference-result"
+   ],
+   "graph": [
+    "health-assess",
+    "match",
+    "outcomes",
+    "resolve",
+    "score",
+    "sync"
+   ]
+  },
+  "call_while_hijacked": {
+   "ok": false,
+   "elapsed_s": 0.064,
+   "error": "GateHTTPError: Gate execute returned HTTP 502"
+  },
+  "gate_log": [
+   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker 'graph' execute returned HTTP 403\", \"error_type\": \"WorkerHTTPError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"5fbb3590-3636-4f66-8abc-05db335b3dca\", \"request_id\": \"9a800490b1474fe4b9b77c3bad28f937\", \"root_id\": \"5fbb3590-3636-4f66-8abc-05db335b3dca\", \"source_node\": \"odoo\"}",
+   "{\"level\": \"error\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\"}"
+  ],
+  "restore_register": {
+   "http_status": 200,
+   "body": "{\"registered\":[{\"node_name\":\"graph\",\"healthy\":true,\"registered\":true}],\"total_nodes\":1}"
+  },
+  "call_after_restore": {
+   "ok": true,
+   "error": null,
+   "gate_signature_valid": true
+  }
+ },
+ "timestamp": "2026-11-22T18:18:29.665842+00:00"
+}

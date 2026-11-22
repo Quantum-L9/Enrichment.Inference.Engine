@@ -234,6 +234,25 @@ def converge_payload(
     }
 
 
+def node_acked(r: dict, tenant: str, entity_type: str, n: int) -> bool:
+    """GRAPH_ACKNOWLEDGED for a node endpoint (CTO disposition of F-A1-01).
+
+    The response came from the graph worker for the right tenant, carries
+    status success, echoes the entity_type, reports synced_count == len(batch)
+    and carries no rejected_count other than 0. created + replayed == requested
+    applies to relationship endpoints only.
+    """
+    resp, pl = r.get("response") or {}, r.get("payload") or {}
+    return (
+        resp.get("source_node") == "graph"
+        and resp.get("tenant") == tenant
+        and pl.get("status") == "success"
+        and pl.get("entity_type") == entity_type
+        and pl.get("synced_count") == n
+        and pl.get("rejected_count") in (None, 0)
+    )
+
+
 def facility(db: str, fid: str) -> dict:
     rows = cypher(
         db,
@@ -534,8 +553,8 @@ def c_sync_rejects(p: str) -> list[Result]:
     )
     ok17 = (
         not partial
-        and ((bad.get("payload") or {}).get("status") != "success")
-        and ((undeclared.get("payload") or {}).get("status") != "success")
+        and not node_acked(bad, "plasticos", "facilities", 2)
+        and not node_acked(undeclared, "plasticos", "no-such-endpoint", 1)
     )
     row = {
         "facility_id": "gl-p19",
@@ -568,7 +587,10 @@ def c_sync_rejects(p: str) -> list[Result]:
         "plasticos",
         "MATCH (:Facility {facility_id:'gl-p19'})-[r:PROCESSES]->(:PolymerFamily {code:'PP'}) RETURN count(r)",
     )
-    ok19 = edges == [["1"]]
+    acked = node_acked(a1, "plasticos", "facilities", 1) and node_acked(
+        a2, "plasticos", "facilities", 1
+    )
+    ok19 = edges == [["1"]] and acked
     return [
         Result(
             "P17",
@@ -585,8 +607,14 @@ def c_sync_rejects(p: str) -> list[Result]:
             p,
             "same relationship evidence twice: no duplicate edge",
             verdict(ok19, p, signed_claim=False),
-            observed={"ack1": a1.get("payload"), "ack2": a2.get("payload"), "edge_count": edges},
-            reason="node sync ack has no created/replayed counts (F-A1-01); asserted by graph read",
+            observed={
+                "ack1": a1.get("payload"),
+                "ack2": a2.get("payload"),
+                "edge_count": edges,
+                "graph_acknowledged_both": acked,
+            },
+            reason="node GRAPH_ACKNOWLEDGED per the F-A1-01 disposition (tenant, entity_type, "
+            "synced_count == len(batch), no rejected_count) plus a Neo4j edge count",
         ),
     ]
 
@@ -801,6 +829,285 @@ def c_rogue_signer(p: str) -> list[Result]:
     ]
 
 
+def admin_register(body: dict, overwrite: bool = True) -> dict:
+    tok = env()["GL_ADMIN_TOKEN"]
+    r = sh(
+        [
+            "curl",
+            "-sS",
+            "--noproxy",
+            "*",
+            "-o",
+            "/dev/stdout",
+            "-w",
+            "\n%{http_code}",
+            "-X",
+            "POST",
+            "-H",
+            f"X-Admin-Token: {tok}",
+            "-H",
+            "Content-Type: application/json",
+            f"http://127.0.0.1:19000/v1/admin/register?overwrite={'true' if overwrite else 'false'}",
+            "--data-binary",
+            json.dumps(body),
+        ]
+    )
+    body_txt, _, code = r.stdout.rpartition("\n")
+    return {"http_status": int(code) if code.isdigit() else None, "body": body_txt[:400]}
+
+
+GRAPH_REG = {
+    "internal_url": "http://graph:8000",
+    "supported_actions": ["match", "sync", "outcomes", "resolve", "health-assess", "score"],
+    "priority_class": "P1",
+    "max_concurrent": 100,
+    "health_endpoint": "/v1/health",
+    "timeout_ms": 30000,
+    "metadata": {"owner": "ceg", "type": "engine"},
+}
+MATCH_PROBE = {
+    "action": "match",
+    "tenant": "plasticos",
+    "payload": {
+        "query": {"polymer_type": "PET", "contamination_pct": 1.0},
+        "match_direction": "supply_opportunity_to_buyer_facility",
+        "top_n": 1,
+    },
+}
+
+
+def c_registration(p: str) -> list[Result]:
+    """A7 witness for F-A1-05 (registration not bound to the node key) + P11 owner collision."""
+    collision = admin_register(
+        {
+            "gl-rogue-node": {
+                **GRAPH_REG,
+                "internal_url": "http://enrichment-engine:8000",
+                "supported_actions": ["match"],
+                "metadata": {"owner": "eie", "type": "engine"},
+            }
+        }
+    )
+    hijack = admin_register(
+        {"graph": {**GRAPH_REG, "internal_url": "http://enrichment-engine:8000"}}
+    )
+    reg_hijacked = registry()
+    during = drive("execute", MATCH_PROBE)
+    glog = logs(
+        "l9e2e-gate", "1m", ("worker_response", "GateDispatch", "worker_transport", "gate.failure")
+    )
+    restore = admin_register({"graph": GRAPH_REG})
+    after = drive("execute", MATCH_PROBE)
+    collision_refused = collision["http_status"] not in (200, 201)
+    hijack_accepted = hijack["http_status"] in (200, 201)
+    refused_downstream = during.get("ok") is False
+    obs = {
+        "owner_collision_register": collision,
+        "hijack_register": hijack,
+        "registry_after_hijack": reg_hijacked,
+        "call_while_hijacked": during,
+        "gate_log": glog,
+        "restore_register": restore,
+        "call_after_restore": {k: after.get(k) for k in ("ok", "error", "gate_signature_valid")},
+    }
+    return [
+        Result(
+            "F-A1-05",
+            "A7",
+            p,
+            "witness: an admin-token holder can repoint a canonical owner's registration; "
+            "only response verification stops the mis-route",
+            "WITNESSED" if hijack_accepted and refused_downstream else "NOT_WITNESSED",
+            observed=obs,
+            reason="BLOCKED_WITH_EXACT_OWNER: Constellation.Gate (registration not bound to node key; "
+            "admin token compared with != in services/admin_registration_service.py:64-68, source-level)",
+        ),
+        Result(
+            "P11-owner-collision",
+            "A7",
+            p,
+            "registration claiming a canonical action under the wrong owner is refused",
+            verdict(collision_refused, p, signed_claim=False),
+            observed={"owner_collision_register": collision},
+        ),
+    ]
+
+
+def c_gate_rail_policy(p: str) -> list[Result]:
+    """A7 witness for F-A1-11: Gate's own Docker rail config (staging, no caller policy) cannot start."""
+    e = env()
+    r = sh(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "-e",
+            "GATE_LOCAL_NODE=gate",
+            "-e",
+            "L9_ENVIRONMENT=staging",
+            "-e",
+            "L9_DEV_MODE=false",
+            "-e",
+            "L9_REQUIRE_SIGNATURE=true",
+            "-e",
+            "L9_SIGNING_ALGORITHM=hmac-sha256",
+            "-e",
+            f"L9_SIGNING_KEY={e['GL_HMAC_GATE']}",
+            "-e",
+            "L9_SIGNING_KEY_ID=gate-e2e",
+            "-e",
+            "L9_VERIFYING_KEYS_JSON="
+            + json.dumps(
+                {
+                    "gate-e2e": e["GL_HMAC_GATE"],
+                    "eie-e2e": e["GL_HMAC_EIE"],
+                    "ceg-e2e": e["GL_HMAC_CEG"],
+                }
+            ),
+            "-e",
+            f"GATE_ADMIN_TOKEN={e['GL_ADMIN_TOKEN']}",
+            "-e",
+            "L9_REPLAY_ENABLED=true",
+            "-e",
+            "L9_TRUSTED_INGRESS_BOUNDARY=signature",
+            "--entrypoint",
+            "python",
+            "l9e2e/gate:local",
+            "-c",
+            "from constellation_gate.config.settings import get_settings\n"
+            "try:\n    get_settings(); print('SETTINGS_OK')\n"
+            "except Exception as exc:\n    print('SETTINGS_REFUSED', type(exc).__name__, str(exc)[:400])",
+        ],
+        timeout=120,
+    )
+    out = (r.stdout + r.stderr).strip().splitlines()[-3:]
+    joined = " ".join(out)
+    refused = "SETTINGS_REFUSED" in joined and "caller policy" in joined
+    return [
+        Result(
+            "F-A1-11",
+            "A7",
+            p,
+            "witness: Gate rail's staging env (no L9_KEY_ALLOWED_ACTIONS_JSON) is refused by Gate settings; "
+            "its driver signs as gate-e2e (run_e2e.sh drive(), source)",
+            "WITNESSED" if refused else "NOT_WITNESSED",
+            observed={"settings_probe": out},
+            reason="BLOCKED_WITH_EXACT_OWNER: Constellation.Gate tests/e2e/docker (rail). This rail builds its own "
+            "caller policy and separate consumer keys, so P02/P10/P11 do not depend on it.",
+        )
+    ]
+
+
+def c_feedback(p: str) -> list[Result]:
+    """F-A1-08 disposition: synthneutral changed-fact witness (P27, P22/P30 parts) and plasticos justified no-op.
+
+    The inference packet is sent with the ceg-gl key held by the driver (rig): CEG's own egress cannot sign
+    under ed25519 at SDK bc1c74c (F-A1-04), and CEG's inference is only reachable through operator admin
+    (F-A1-02). The rig output is exactly what infer_geography_from_postal_code returns for zip 94105.
+    """
+    eid = f"sn-fb-{uuid.uuid4().hex[:6]}"
+    out = {
+        "entity_id": eid,
+        "field": "region",
+        "value": "West",
+        "confidence": 0.82,
+        "rule": "infer_geography_from_postal_code",
+        "provenance": {"rig": "driver ceg-gl", "postal_code": "94105"},
+        "rationale": "US zip=94105",
+    }
+    accepted = drive(
+        "execute",
+        {
+            "action": "graph-inference-result",
+            "tenant": "synthneutral",
+            "key_id": "ceg-gl",
+            "idempotency_key": f"gl-fb-{eid}",
+            "payload": {"inference_outputs": [out]},
+        },
+    )
+    sch = {"region": "string", "band": "string"}
+    c1 = drive(
+        "execute", converge_payload(eid, "synthneutral", extra={"postal_code": "94105"}, schema=sch)
+    )
+    seeded_log = logs("l9e2e-eie", "1m", ("graph", eid))
+    c2 = drive(
+        "execute", converge_payload(eid, "synthneutral", extra={"postal_code": "94105"}, schema=sch)
+    )
+    f1, f2 = (
+        (c1.get("payload") or {}).get("fields") or {},
+        (c2.get("payload") or {}).get("fields") or {},
+    )
+    acc_ok = (accepted.get("payload") or {}).get("targets_queued") == 1
+    consumed = f1.get("region") == "West"
+    # plasticos: region is not declared by the cartridge, so it cannot become a changed fact.
+    pid = f"gl-fbp-{uuid.uuid4().hex[:6]}"
+    pacc = drive(
+        "execute",
+        {
+            "action": "graph-inference-result",
+            "tenant": "plasticos",
+            "key_id": "ceg-gl",
+            "idempotency_key": f"gl-fbp-{pid}",
+            "payload": {"inference_outputs": [{**out, "entity_id": pid}]},
+        },
+    )
+    pc = drive("execute", converge_payload(pid, "plasticos"))
+    pfields = (pc.get("payload") or {}).get("fields") or {}
+    noop = "region" not in pfields
+    synced = cypher("synthneutral", f"MATCH (s:Station {{station_id:'{eid}'}}) RETURN s.region")
+    obs = {
+        "entity_id": eid,
+        "accepted": accepted.get("payload"),
+        "converge1_fields": f1,
+        "converge2_fields": f2,
+        "eie_log": seeded_log,
+        "graph_after": synced,
+        "plasticos_noop": {"entity_id": pid, "accepted": pacc.get("payload"), "fields": pfields},
+    }
+    return [
+        Result(
+            "P27",
+            "A8",
+            p,
+            "accepted then consumed on a later pass, with distinct accepted/retained/consumed evidence",
+            "BLOCKED" if acc_ok and consumed else "FAIL",
+            observed=obs,
+            reason=(
+                "accepted + consumed observed through Gate; retained is in-memory only (F-A1-06), so durable "
+                "retention evidence does not exist at main; inference sent by the ceg-gl rig"
+            )
+            if acc_ok and consumed
+            else "accepted/consumed not both observed (see observed)",
+        ),
+        Result(
+            "P30",
+            "A8",
+            p,
+            "graph inference reaches a later authorized EIE decision: changed fact + resync, or justified no-op",
+            "BLOCKED",
+            observed=obs,
+            reason="changed fact observed in the converge answer, but the resync cannot leave EIE under ed25519 "
+            "(F-A1-04); plasticos justified no-op "
+            + ("observed (region undeclared, absent from fields)" if noop else "NOT observed"),
+        ),
+        Result(
+            "P22",
+            "A8",
+            p,
+            "material graph change with authorized rule: CEG uses graph-read evidence and sends one cited finding",
+            "BLOCKED",
+            observed={
+                "rule_declared": "synthneutral plugins.inference_rules",
+                "trigger": "none Gate-routable",
+            },
+            reason="CEG inference only via operator admin (not a Gate action, not advertised) from caller entity, "
+            "not graph-read (F-A1-02, CEG-W); CEG egress cannot sign under ed25519 (F-A1-04)",
+        ),
+    ]
+
+
 CASES: dict[str, Callable[[str], list[Result]]] = {
     "isolation": c_isolation,
     "policy": c_policy,
@@ -813,6 +1120,9 @@ CASES: dict[str, Callable[[str], list[Result]]] = {
     "ceg_down": c_ceg_down,
     "gate_restart": c_gate_restart,
     "rogue_signer": c_rogue_signer,
+    "registration": c_registration,
+    "gate_rail_policy": c_gate_rail_policy,
+    "feedback": c_feedback,
 }
 
 

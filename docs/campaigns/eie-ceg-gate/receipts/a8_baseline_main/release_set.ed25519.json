@@ -11,10 +11,10 @@
   "l9e2e-ceg": "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929"
  },
  "packs": {
-  "plasticos": "1437177929cd1ccd1a6c6f91fa7f28af1231882f1a561177d81f31d57bd20b6b",
-  "synthneutral": "d50b9ab2aba2addf0c11b5c6ad3636f102f6e6479262f6b38d526d9f545bbb3e",
+  "plasticos": "e6ec5b013c35ad7c6053a26f79bb7734fd110186247c162fe944fc93a8034448",
+  "synthneutral": "72aa88c8c237dfa2b61d754aa237e7a3051191668ef3ae93206fe9e52701d519",
   "eie:plasticos": "dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe",
-  "eie:synthneutral": "1a37a607c1d6227a383896d8fda0a8b191b9b40a610dc25aace9870904010bc0"
+  "eie:synthneutral": "65f68382b5c5143dfe36683daac0f1a582b86f514646d62d1c721e0f59ff805b"
  },
  "provider_class": "deterministic (app/services/deterministic_provider.py, L9_ENVIRONMENT=test)",
  "registry": {

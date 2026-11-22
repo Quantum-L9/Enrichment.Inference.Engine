@@ -1,0 +1,70 @@
+{
+ "run": "20261122T181930Z-ed25519",
+ "id": "P27",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "accepted then consumed on a later pass, with distinct accepted/retained/consumed evidence",
+ "verdict": "BLOCKED",
+ "reason": "accepted + consumed observed through Gate; retained is in-memory only (F-A1-06), so durable retention evidence does not exist at main; inference sent by the ceg-gl rig",
+ "observed": {
+  "entity_id": "sn-fb-61339c",
+  "accepted": {
+   "status": "accepted",
+   "targets_queued": 1,
+   "packet_id": "96eca9c9-ad8b-4551-8c88-7067608ba84c",
+   "tenant": "synthneutral"
+  },
+  "converge1_fields": {
+   "region": "West",
+   "band": "det:band:6f724c18fcea"
+  },
+  "converge2_fields": {
+   "band": "det:band:6f724c18fcea",
+   "region": "det:region:23650422d2aa"
+  },
+  "eie_log": [
+   "{\"domain\": \"unknown\", \"edges\": 0, \"topo_depth\": 0, \"multi_hop\": [], \"event\": \"derivation_graph.built\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:18:38.679733Z\"}",
+   "{\"asctime\": \"2026-11-22 18:18:38,681\", \"levelname\": \"INFO\", \"name\": \"app.services.graph_return_channel\", \"message\": \"GraphReturnChannel: took 1 targets for tenant=plasticos entity=gl-fbp-46f295\"}",
+   "{\"pass_number\": 1, \"fields\": [\"region\"], \"received\": 1, \"event\": \"graph_targets_applied\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:18:38.681649Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-fbp-46f295:50ec4995:enrich\", \"entity_id\": \"gl-fbp-46f295\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:18:38.696128Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-fbp-46f295:50ec4995:enrich\", \"entity_id\": \"gl-fbp-46f295\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:18:38.696239Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-fbp-46f295:50ec4995:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:18:38.696439Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:18:38.746358Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:18:38.746448Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:18:38.747129Z\"}",
+   "{\"entity_id\": \"gl-fbp-46f295\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:18:38.747173Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-fbp-46f295:50ec4995:enrich\", \"entity_id\": \"gl-fbp-46f295\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:18:38.747200Z\"}",
+   "{\"asctime\": \"2026-11-22 18:19:36,458\", \"levelname\": \"INFO\", \"name\": \"app.services.graph_return_channel\", \"message\": \"GraphReturnChannel: submitted 1 targets for tenant=synthneutral (packet=96eca9c9-ad8b-4551-8c88-7067608ba84c)\"}",
+   "{\"domain\": \"unknown\", \"edges\": 0, \"topo_depth\": 0, \"multi_hop\": [], \"event\": \"derivation_graph.built\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:19:37.992697Z\"}",
+   "{\"asctime\": \"2026-11-22 18:19:37,992\", \"levelname\": \"INFO\", \"name\": \"app.services.graph_return_channel\", \"message\": \"GraphReturnChannel: took 1 targets for tenant=synthneutral entity=sn-fb-61339c\"}",
+   "{\"pass_number\": 1, \"fields\": [\"region\"], \"received\": 1, \"event\": \"graph_targets_applied\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:19:37.993059Z\"}",
+   "{\"entity_key\": \"sn-fb-61339c\", \"field_count\": 2, \"synthetic_fields\": [\"band\"], \"event\": \"deterministic_enrichment_served\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:19:37.993598Z\"}",
+   "{\"id\": \"9eb2cdc8-1ce7-46a4-8fb6-10981602bae1\", \"entity_id\": \"sn-fb-61339c\", \"fields_count\": 2, \"confidence\": 0.95, \"event\": \"enrichment_result_saved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:19:38.002870Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-61339c:714ce3a5:enrich\", \"entity_id\": \"sn-fb-61339c\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:19:38.002959Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-61339c:714ce3a5:enrich\", \"entity_id\": \"sn-fb-61339c\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:19:38.003044Z\"}",
+   "{\"tenant\": \"synthneutral\", \"entity_id\": \"sn-fb-61339c\", \"fields\": [\"band\", \"region\"], \"pass_count\": 1, \"state\": \"completed\", \"remaining_s\": 24.989, \"event\": \"handlers.converge_ok\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:19:38.003100Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-61339c:714ce3a5:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:19:38.003167Z\"}",
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:19:38.006604Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:19:38.006686Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:19:38.007264Z\"}",
+   "{\"entity_id\": \"sn-fb-61339c\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:19:38.007310Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-61339c:714ce3a5:enrich\", \"entity_id\": \"sn-fb-61339c\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:19:38.007337Z\"}"
+  ],
+  "graph_after": [],
+  "plasticos_noop": {
+   "entity_id": "gl-fbp-fb0a15",
+   "accepted": {
+    "status": "accepted",
+    "targets_queued": 1,
+    "packet_id": "70670c6b-9822-4e9f-b594-6f80ca3f925a",
+    "tenant": "plasticos"
+   },
+   "fields": {
+    "name": "TEST_ONLY gl-fbp-fb0a15",
+    "tier": "det:tier:2543d3bac436",
+    "capacity_tons_month": 98.31
+   }
+  }
+ },
+ "timestamp": "2026-11-22T18:19:44.972448+00:00"
+}

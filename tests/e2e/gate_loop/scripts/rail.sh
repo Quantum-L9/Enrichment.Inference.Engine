@@ -62,6 +62,15 @@ neo4j_dbs() {
   done
 }
 
+# Gate's registry as JSON. The response is saved to a file and then parsed by a
+# checked-in script; no fetched content is ever executed.
+registry_json() {
+  local out="$STATE/registry.json"
+  curl -sS --noproxy '*' -H "X-Admin-Token: $GL_ADMIN_TOKEN" -o "$out" \
+    http://127.0.0.1:19000/v1/registry 2>/dev/null || printf '{}' >"$out"
+  cat "$out"
+}
+
 case "${1:-status}" in
   up)
     compose_env; assemble_domains
@@ -70,10 +79,7 @@ case "${1:-status}" in
     neo4j_dbs
     docker restart l9e2e-ceg >/dev/null
     for _ in $(seq 1 60); do
-      n="$(curl -sS --noproxy '*' -H "X-Admin-Token: $GL_ADMIN_TOKEN" http://127.0.0.1:19000/v1/registry 2>/dev/null \
-           | python3 -c 'import json,sys
-try: print(len(json.load(sys.stdin)))
-except Exception: print(0)')"
+      n="$(registry_json | python3 "$HERE/registry_view.py" count)"
       [[ "$n" == "2" ]] && break
       sleep 5
     done
@@ -82,8 +88,7 @@ except Exception: print(0)')"
   status)
     compose_env
     COMPOSE ps --format '{{.Name}} {{.State}} {{.Health}}'
-    echo "registry:"; curl -sS --noproxy '*' -H "X-Admin-Token: $GL_ADMIN_TOKEN" http://127.0.0.1:19000/v1/registry | python3 -c 'import json,sys
-d=json.load(sys.stdin); print(json.dumps({k: sorted(v.get("supported_actions", [])) for k, v in d.items()}) if isinstance(d, dict) else d)' || true
+    echo "registry:"; registry_json | python3 "$HERE/registry_view.py" actions || true
     echo "ready:"; curl -sS --noproxy '*' http://127.0.0.1:19000/v1/ready; echo ;;
   compose) shift; compose_env; COMPOSE "$@" ;;
   *) echo "usage: $0 up|down|status|compose <args>" >&2; exit 2 ;;

@@ -16,6 +16,8 @@ ontology:
     - {name: title, type: string, required: true}
     - {name: max_load, type: float}
     - {name: band, type: string}
+    - {name: postal_code, type: string}
+    - {name: region, type: string}
     - name: handled_kinds
       type: list
       items:
@@ -58,6 +60,6 @@ subjects:
   types:
   - name: station
     node: Station
-    fields: [title, max_load, band, handled_kinds, note]
+    fields: [title, max_load, band, postal_code, region, handled_kinds, note]
     ceg_owned: []
 inference_rules: []

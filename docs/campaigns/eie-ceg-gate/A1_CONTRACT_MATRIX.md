@@ -271,3 +271,24 @@ No new field, action, payload key or caller policy is needed to freeze sections 
 \* CEG-side fixture rows travel through Gate signed with the `eie-gl` key held by the driver (rig), because EIE's own egress is blocked at main. These cases assert CEG ingress, write and match behaviour, not EIE egress.
 
 These verdicts are main-baseline only. The CTO re-runs the same rail at the integrated heads for the case verdicts that count (P39).
+
+## 8. CTO dispositions (frozen with A1, 2026-11-22)
+
+| Finding | Disposition | How the rail applies it |
+|---|---|---|
+| F-A1-01 | Node GRAPH_ACKNOWLEDGED means: right tenant and `entity_type`, `synced_count == len(batch)`, and `rejected_count` absent or 0. `created + replayed == requested` applies to relationship endpoints only. | `rail.py` `node_acked()`, asserted in P17 and P19 |
+| F-A1-04, F-A1-05, F-A1-11 | BLOCKED_WITH_EXACT_OWNER: Gate_SDK, Constellation.Gate | each witnessed with a receipt (`A7_TRUST_POLICY_MATRIX.md` §6) |
+| F-A1-08 | No spec change. The changed-fact witness runs on `synthneutral`, whose TEST_ONLY pack r3 and cartridge declare `postal_code` and `region` and authorize `infer_geography_from_postal_code`. Plasticos is the witness for the justified no-op. | `rail.py` `c_feedback`: P27, P30, P22 |
+| F-A1-10 | Fixed in this lane: `tests/e2e/compose.converge.yml`, one line. | — |
+| F-A1-12 | CTO-BLOCKER (EIE-W): the deterministic provider is coupled to dev_mode. | — |
+| F-A1-03, F-A1-06, F-A1-07, F-A1-09 | Coding lanes; left open in the ledger. | — |
+
+TEST_ONLY packs r3:
+
+| Pack | sha256 |
+|---|---|
+| plasticos | `e6ec5b013c35ad7c6053a26f79bb7734fd110186247c162fe944fc93a8034448` |
+| synthneutral | `72aa88c8c237dfa2b61d754aa237e7a3051191668ef3ae93206fe9e52701d519` |
+| EIE synthneutral cartridge | `65f68382b5c5143dfe36683daac0f1a582b86f514646d62d1c721e0f59ff805b` |
+
+C-18 L9_META headers are at the top of each pack. The r3 compatibility probe passes for both tenants (`receipts/a1/eie_projection_r3.json`).
