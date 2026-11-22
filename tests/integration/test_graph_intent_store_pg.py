@@ -173,8 +173,16 @@ async def test_an_expired_lease_is_reclaimed_and_the_old_holder_settles_nothing(
     later = t0 + timedelta(seconds=11)
     (second,) = await pg_store.claim_graph_intents(owner="w2", lease_seconds=10, now=later)
     assert second.attempts == 2
-    assert await pg_store.settle_graph_intent(first.id, owner="w1", outcome="acknowledged") is None
-    state = await pg_store.settle_graph_intent(second.id, owner="w2", outcome="acknowledged")
+    assert first.lease_owner and first.lease_owner.startswith("w1#")
+    assert (
+        await pg_store.settle_graph_intent(
+            first.id, owner=first.lease_owner, outcome="acknowledged"
+        )
+        is None
+    )
+    state = await pg_store.settle_graph_intent(
+        second.id, owner=second.lease_owner, outcome="acknowledged"
+    )
     assert state == "acknowledged"
 
 
@@ -183,7 +191,12 @@ async def test_retry_backs_off_then_exhausts_to_terminal(db: None) -> None:
     t0 = datetime.now(UTC)
     (claim,) = await pg_store.claim_graph_intents(owner="w1", lease_seconds=30, now=t0)
     state = await pg_store.settle_graph_intent(
-        claim.id, owner="w1", outcome="retry", error="unacknowledged", retry_base_seconds=5, now=t0
+        claim.id,
+        owner=claim.lease_owner,
+        outcome="retry",
+        error="unacknowledged",
+        retry_base_seconds=5,
+        now=t0,
     )
     assert state == "pending"
     assert await pg_store.claim_graph_intents(owner="w1", lease_seconds=30, now=t0) == []
@@ -191,7 +204,7 @@ async def test_retry_backs_off_then_exhausts_to_terminal(db: None) -> None:
         owner="w1", lease_seconds=30, now=t0 + timedelta(seconds=6)
     )
     state = await pg_store.settle_graph_intent(
-        claim.id, owner="w1", outcome="retry", error="unacknowledged", now=t0
+        claim.id, owner=claim.lease_owner, outcome="retry", error="unacknowledged", now=t0
     )
     assert state == "failed_terminal"
     intent = await pg_store.get_graph_intent(TENANT, "op-1")
@@ -234,7 +247,7 @@ async def test_a_newer_version_waits_for_the_older_one(db: None) -> None:
         )
         == []
     )
-    await pg_store.settle_graph_intent(older.id, owner="w1", outcome="acknowledged")
+    await pg_store.settle_graph_intent(older.id, owner=older.lease_owner, outcome="acknowledged")
     (newer,) = await pg_store.claim_graph_intents(owner="w2", lease_seconds=30)
     assert newer.effect_key == "v2" and newer.fields == {"capacity": 2.0}
 
@@ -244,12 +257,69 @@ async def test_an_older_version_never_lands_after_a_newer_sent_one(db: None) -> 
     await _save(_spec("v2", fields={"capacity": 2.0}))
     async with pg_store.get_session() as session:
         await session.execute(
-            text("UPDATE graph_sync_intents SET state = 'acknowledged' WHERE effect_key = 'v2'")
+            text(
+                "UPDATE graph_sync_intents SET state = 'acknowledged', attempts = 1"
+                " WHERE effect_key = 'v2'"
+            )
         )
     assert await pg_store.claim_graph_intents(owner="w1", lease_seconds=30) == []
     older = await pg_store.get_graph_intent(TENANT, "v1")
     assert older is not None
     assert (older.state, older.last_error) == ("superseded", "superseded_by_newer_version")
+
+
+async def test_a_newer_version_back_to_pending_still_supersedes_the_older(db: None) -> None:
+    """Sent once, ack lost, back to `pending`: the older version must not land after it."""
+    await _save(_spec("v1", fields={"capacity": 1.0}))
+    await _save(_spec("v2", fields={"capacity": 2.0}))
+    async with pg_store.get_session() as session:
+        await session.execute(
+            text("UPDATE graph_sync_intents SET attempts = 1 WHERE effect_key = 'v2'")
+        )
+    claimed = await pg_store.claim_graph_intents(owner="w1", lease_seconds=30)
+    assert [r.effect_key for r in claimed] == ["v2"]
+    older = await pg_store.get_graph_intent(TENANT, "v1")
+    assert older is not None and older.state == "superseded"
+
+
+async def test_versions_are_ordered_by_resolved_endpoint_not_node_label(db: None) -> None:
+    """`node_label=None` and `Depot` that resolve to one endpoint are one subject."""
+    await _save(_spec("v1", node_label=None))
+    await _save(_spec("v2", node_label="Depot"))
+    claimed = await pg_store.claim_graph_intents(owner="w1", lease_seconds=30)
+    assert [r.effect_key for r in claimed] == ["v1"]
+
+
+async def test_held_origins_are_neither_claimed_nor_resolved(db: None) -> None:
+    await _save(_spec("c1", origin="converge"))
+    await _save(_spec("e1", entity_id="d-2", origin="enrich"), entity_id="d-2")
+    claimed = await pg_store.claim_graph_intents(
+        owner="w1", lease_seconds=30, held_origins=frozenset({"converge"})
+    )
+    assert [r.effect_key for r in claimed] == ["e1"]
+    held = await pg_store.get_graph_intent(TENANT, "c1")
+    assert held is not None and (held.state, held.attempts) == ("pending", 0)
+
+
+async def test_a_mismatched_replay_attaches_no_intent(db: None) -> None:
+    await _save(None, idempotency_key="caller-1")
+    with (
+        pg_store.graph_intent_scope(_spec()),
+        pytest.raises(pg_store.GraphIntentDuplicateError),
+    ):
+        await pg_store.save_enrichment_result(
+            tenant_id=TENANT,
+            entity_id="d-1",
+            object_type="Depot",
+            fields={"capacity": 9.9},
+            confidence=0.9,
+            uncertainty_score=0.1,
+            tokens_used=1,
+            processing_time_ms=1,
+            pass_count=1,
+            idempotency_key="caller-1",
+        )
+    assert await _count("graph_sync_intents") == 0
 
 
 async def test_other_subjects_are_not_held_back(db: None) -> None:

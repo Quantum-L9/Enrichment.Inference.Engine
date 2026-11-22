@@ -34,6 +34,7 @@ def upgrade() -> None:
         sa.Column("endpoint", sa.String(128), nullable=True),
         sa.Column("contract_digest", sa.String(64), nullable=True),
         sa.Column("cartridge_revision", sa.String(128), nullable=True),
+        sa.Column("origin", sa.String(32), nullable=False, server_default="enrich"),
         sa.Column("fields", JSONB(), nullable=False, server_default="{}"),
         sa.Column("enrichment_result_id", UUID(as_uuid=True), nullable=True),
         sa.Column("state", sa.String(32), nullable=False, server_default="pending"),
@@ -62,7 +63,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_graph_sync_intents_subject",
         "graph_sync_intents",
-        ["tenant_id", "entity_id", "node_label", "seq"],
+        ["tenant_id", "entity_id", "endpoint", "seq"],
     )
 
 

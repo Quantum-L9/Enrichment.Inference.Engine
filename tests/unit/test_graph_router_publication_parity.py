@@ -23,7 +23,7 @@ def test_unpublished_environments_match_the_startup_reader() -> None:
     source = MAIN.read_text(encoding="utf-8")
     match = re.search(r"require_published=settings\.l9_environment not in \{([^}]*)\}", source)
     assert match, "app/main.py no longer builds its DomainYamlReader as expected"
-    startup = {item.strip().strip("\"'") for item in match.group(1).split(",")}
+    startup = {item.strip().strip("\"'") for item in match.group(1).split(",")} - {""}
     assert startup == set(UNPUBLISHED_SPEC_ENVIRONMENTS)
 
 

@@ -182,7 +182,7 @@ async def test_the_scope_is_reset_after_its_block() -> None:
 async def test_an_idempotent_hit_records_the_missing_intent_against_the_existing_row(
     session: list[_Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    existing = SimpleNamespace(id=uuid.uuid4())
+    existing = SimpleNamespace(id=uuid.uuid4(), entity_id="d-1", fields={"capacity": 2.5})
 
     async def found(*_: Any, **__: Any) -> Any:
         return existing
@@ -203,7 +203,9 @@ async def test_an_idempotency_race_returns_the_winner_and_rebinds_the_intent(
         return None
 
     monkeypatch.setattr(pg_store, "get_enrichment_result_by_idempotency_key", none)
-    winner = EnrichmentResult(id=uuid.uuid4(), tenant_id="synthco", entity_id="d-1")
+    winner = EnrichmentResult(
+        id=uuid.uuid4(), tenant_id="synthco", entity_id="d-1", fields={"capacity": 2.5}
+    )
     race = IntegrityError(
         "INSERT", {}, Exception("uq_enrichment_results_tenant_idempotency_key violated")
     )
@@ -213,6 +215,58 @@ async def test_an_idempotency_race_returns_the_winner_and_rebinds_the_intent(
         assert await _save(idempotency_key="caller-1") is winner
     rebind = _sql(tx.statements[-1])
     assert rebind.startswith("UPDATE graph_sync_intents SET enrichment_result_id")
+
+
+async def test_a_mismatched_idempotent_replay_is_a_duplicate(
+    session: list[_Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    existing = SimpleNamespace(id=uuid.uuid4(), entity_id="d-1", fields={"capacity": 1.0})
+
+    async def found(*_: Any, **__: Any) -> Any:
+        return existing
+
+    monkeypatch.setattr(pg_store, "get_enrichment_result_by_idempotency_key", found)
+    tx = _Session()
+    session[:] = [tx]
+    with (
+        pg_store.graph_intent_scope(_spec()),
+        pytest.raises(pg_store.GraphIntentDuplicateError),
+    ):
+        await _save(idempotency_key="caller-1")
+    assert tx.statements == []
+
+
+async def test_a_mismatched_race_winner_rolls_the_intent_back(
+    session: list[_Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def none(*_: Any, **__: Any) -> None:
+        return None
+
+    monkeypatch.setattr(pg_store, "get_enrichment_result_by_idempotency_key", none)
+    winner = EnrichmentResult(
+        id=uuid.uuid4(), tenant_id="synthco", entity_id="d-9", fields={"capacity": 2.5}
+    )
+    race = IntegrityError(
+        "INSERT", {}, Exception("uq_enrichment_results_tenant_idempotency_key violated")
+    )
+    session[:] = [
+        _Session(answers=[_Result(value=uuid.uuid4()), _Result(value=winner)], flush_error=race)
+    ]
+    with (
+        pg_store.graph_intent_scope(_spec()),
+        pytest.raises(pg_store.GraphIntentDuplicateError),
+    ):
+        await _save(idempotency_key="caller-1")
+
+
+async def test_held_origins_filter_every_statement(session: list[_Session]) -> None:
+    tx = _Session(answers=[_Result(), _Result(), _Result(rows=[])])
+    session[:] = [tx]
+    await pg_store.claim_graph_intents(
+        owner="w1", lease_seconds=30, now=T0, held_origins=frozenset({"converge"})
+    )
+    for statement in tx.statements:
+        assert "origin NOT IN" in _sql(statement)
 
 
 async def test_any_other_integrity_error_is_raised(
@@ -243,6 +297,7 @@ def _row(**overrides: Any) -> dict[str, Any]:
         "endpoint": "depots",
         "contract_digest": "c" * 64,
         "cartridge_revision": None,
+        "origin": "enrich",
         "fields": {"capacity": 2.5},
         "enrichment_result_id": None,
         "state": "dispatching",
@@ -269,14 +324,20 @@ async def test_a_claim_supersedes_exhausts_then_leases_in_seq_order(
     supersede, exhaust, claim = (_sql(s) for s in tx.statements)
     assert supersede.startswith("UPDATE graph_sync_intents SET state=")
     assert "EXISTS (SELECT" in supersede and "graph_sync_intents_1.seq >" in supersede
-    assert "IS NOT DISTINCT FROM" in supersede
+    assert "graph_sync_intents_1.attempts >" in supersede  # "sent" = claimed at least once
+    assert "graph_sync_intents_1.endpoint IS NOT DISTINCT FROM" in supersede
     assert "graph_sync_intents.attempts >= graph_sync_intents.max_attempts" in exhaust
     assert "FOR UPDATE SKIP LOCKED" in claim
-    assert "NOT (EXISTS (SELECT" in claim
+    assert claim.count("NOT (EXISTS (SELECT") == 2  # no older outstanding, no newer sent
     assert "attempts=(graph_sync_intents.attempts +" in claim
     assert "RETURNING" in claim
     params = tx.statements[2].compile(dialect=postgresql.dialect()).params
-    assert params["lease_owner"] == "w1"
+    assert params["lease_owner"].startswith("w1#")
+    again = _Session(answers=[_Result(), _Result(), _Result(rows=[])])
+    session[:] = [again]
+    await pg_store.claim_graph_intents(owner="w1", lease_seconds=30, now=T0)
+    token = again.statements[2].compile(dialect=postgresql.dialect()).params["lease_owner"]
+    assert token != params["lease_owner"], "every claim gets its own fencing token"
     assert params["lease_expires_at"] == T0 + timedelta(seconds=30)
 
 

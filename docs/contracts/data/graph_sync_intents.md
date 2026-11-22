@@ -35,20 +35,21 @@ leaves none.
 | `node_label` | VARCHAR(128) NULL | Ontology node the endpoint is selected by. |
 | `domain` | VARCHAR(128) NULL | Effective cartridge id at commit. |
 | `endpoint` | VARCHAR(128) NULL | CEG sync endpoint (`entity_type`) resolved at commit, when one resolved. |
-| `contract_digest` | VARCHAR(64) NULL | SHA-256 of the endpoint contract (entity type, id property, typed row schema) the fields were admitted against. |
+| `contract_digest` | VARCHAR(64) NULL | SHA-256 of the endpoint contract (entity type, id property, target node, typed row schema) the fields were admitted against. NULL when no contract resolved at commit; such a row is refused at dispatch (`refused:unpinned`), never sent. |
 | `cartridge_revision` | VARCHAR(128) NULL | Reserved for the effective spec revision; not populated by A2. |
+| `origin` | VARCHAR(32) | Workflow the obligation belongs to: `enrich` or `converge`. Recovery holds `converge` rows while `CONVERGE_GRAPH_SYNC_ENABLED` is off. |
 | `fields` | JSONB | Exactly the admitted typed fields the leg sends (a `list<map>` stays a list of maps). |
 | `enrichment_result_id` | UUID NULL | The `enrichment_results` row this obligation follows. |
 | `state` | VARCHAR(32) | See *States*. |
 | `attempts` / `max_attempts` | INTEGER | Claims so far; the ceiling (default 8). |
 | `next_attempt_at` | TIMESTAMPTZ | Earliest next claim (backoff). |
-| `lease_owner` / `lease_expires_at` | VARCHAR(128) / TIMESTAMPTZ NULL | Current claim holder and its lease. |
+| `lease_owner` / `lease_expires_at` | VARCHAR(128) / TIMESTAMPTZ NULL | Fencing token of the current claim (`<owner>#<token>`, new on every claim) and its lease. |
 | `last_error` / `last_ack` | TEXT / JSONB NULL | Last failure reason; CEG's acknowledgment when acknowledged. |
 | `created_at`, `updated_at`, `resolved_at` | TIMESTAMPTZ | Lifecycle timestamps; `resolved_at` set on a terminal state. |
 
 Constraints: `uq_graph_sync_intents_tenant_key` UNIQUE (`tenant_id`, `effect_key`).
 Indexes: `ix_graph_sync_intents_due` (`state`, `next_attempt_at`),
-`ix_graph_sync_intents_subject` (`tenant_id`, `entity_id`, `node_label`, `seq`).
+`ix_graph_sync_intents_subject` (`tenant_id`, `entity_id`, `endpoint`, `seq`).
 
 ## States
 
@@ -76,22 +77,34 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
    nothing, raises `GraphIntentDuplicateError`, and rolls back whole: one
    result, one completion event, one obligation.
 2. **Pinned input.** Every attempt and every replay sends the row's `fields`
-   for its `tenant_id` / `entity_id` / `node_label`. A replay therefore
-   produces the same sync row and the same Gate idempotency key
-   (`eie:sync:<tenant>:<entity>:<row digest>`); past Gate's cache TTL it lands
-   as CEG's `MERGE` on the same id.
-3. **Pinned contract.** When `contract_digest` is set and the tenant's current
-   endpoint contract differs, nothing is sent and the row ends
-   `failed_terminal` (`refused:contract_changed`).
-4. **Leases.** A claim is `FOR UPDATE SKIP LOCKED`: one row is leased to one
-   worker. Only the lease holder settles; a holder whose lease expired and was
-   re-claimed settles nothing.
-5. **Version order.** A row is not claimed while an older row of the same
-   subject is `pending` or `dispatching`; a `pending` row whose subject has a
-   newer row `acknowledged` or `dispatching` becomes `superseded`.
+   for its `tenant_id` / `entity_id` / `node_label`. The Gate idempotency key
+   binds the row **and** the operation (`effect_key`): retries of one version
+   reuse it; two versions producing the same row never share it, so Gate's
+   cache cannot acknowledge a later version with an earlier one's answer. Past
+   Gate's cache TTL a replay lands as CEG's `MERGE` on the same id.
+3. **Pinned contract.** The digest covers the endpoint's entity type, id
+   property, target node and typed row schema. When it differs from the
+   tenant's current contract nothing is sent (`refused:contract_changed`); a
+   row with no digest is never sent (`refused:unpinned`).
+4. **Leases and fencing.** A claim is `FOR UPDATE SKIP LOCKED` and stamps a new
+   fencing token; only that claim settles the row. A claim whose lease expired
+   and was re-claimed -- by another worker or the same process -- settles
+   nothing. Recovery claims one row at a time, immediately before sending it.
+5. **Version order.** A subject is the graph row written: tenant, entity and
+   resolved endpoint. A row is not claimed while an older row of its subject is
+   `pending` or `dispatching`, nor once a newer row was **sent** (claimed at
+   least once, in any state since); such an older `pending` row is
+   `superseded`.
 6. **Bounded retries.** Retryable outcomes back off 2 s doubling to 300 s; at
    `max_attempts` the row is `failed_terminal` with `retry_exhausted:*`.
-7. **Recovery.** `SideEffectCoordinator.recover_graph_intents` claims due rows
+7. **Ownership before sending.** A store that cannot confirm a claim sends
+   nothing for the key; recovery sends it. Only a process with no durable store
+   configured sends unclaimed. A CEG answer the row did not record (lease lost,
+   store error) leaves the key pending.
+8. **Verified replay.** An idempotent replay attaches its intent to the stored
+   result only when it carries the same entity and committed fields; otherwise
+   it is a duplicate of the stored operation.
+9. **Recovery.** `SideEffectCoordinator.recover_graph_intents` claims due rows
    and replays them; startup registration runs it every 30 s in-process, so a
    restarted idle node recovers without traffic.
 
@@ -100,7 +113,7 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
 | Outcome | Settles as | Cause |
 |---|---|---|
 | ACKNOWLEDGED | `acknowledged` | GRAPH_ACKNOWLEDGED: `status == "success"`, `entity_type` is the endpoint, `synced_count == len(batch)`, `rejected_count` absent or 0 (A1 F-A1-01). A node ack carries no created/replayed counts. |
-| REFUSED | `failed_terminal` | `no_contract`, `contract_changed`, `row_type` (value off its declared type; nothing sent), `all_rejected`, or a Gate 4xx. |
+| REFUSED | `failed_terminal` | `no_contract`, `contract_changed`, `unpinned`, `row_type` (value off its declared type; nothing sent), `all_rejected` naming this endpoint with `synced_count == 0`, or a Gate 4xx. |
 | RETRYABLE | `pending` (backoff) | Gate unreachable, timeout or 5xx; a worker `failure` packet; an answer that does not confirm this row. |
 
 ## Operator view
@@ -110,6 +123,10 @@ state. Structured logs: `graph_intent_recorded`, `graph_intents_claimed`,
 `graph_intent_settled`, `side_effects_graph_retry_exhausted`.
 
 ## Not covered
+
+- The completion event is not a durable obligation: a process that stops
+  after the result commits and before the event is emitted does not re-emit it
+  (the next commit of the operation is a duplicate).
 
 - Relationship evidence sync (`notify_relationship_sync`) is not backed by this
   table.

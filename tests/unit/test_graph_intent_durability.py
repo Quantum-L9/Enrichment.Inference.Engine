@@ -48,6 +48,8 @@ class _Row:
     max_attempts: int = 8
     lease_owner: str | None = None
     due: bool = True
+    origin: str = "enrich"
+    enrichment_result_id: uuid.UUID | None = None
     last_error: str | None = None
     last_ack: dict[str, Any] | None = None
     cartridge_revision: str | None = None
@@ -80,23 +82,39 @@ class FakeIntents:
             contract_digest=spec.contract_digest,
             fields=dict(spec.fields),
             max_attempts=spec.max_attempts,
+            origin=spec.origin,
+            enrichment_result_id=uuid.uuid4(),
         )
 
+    configured_store: bool = True
+    claims: int = 0
+
+    def configured(self) -> bool:
+        return self.configured_store
+
     def _lease(self, row: _Row, owner: str) -> _Row:
+        self.claims += 1
         row.state = "dispatching"
-        row.lease_owner = owner
+        row.lease_owner = f"{owner}#{self.claims}"  # a fresh fencing token per claim
         row.attempts += 1
         return replace(row)
 
-    def _claimable(self, row: _Row) -> bool:
-        return row.state == "pending" and row.due and row.attempts < row.max_attempts
+    def _claimable(self, row: _Row, held: frozenset[str] = frozenset()) -> bool:
+        return (
+            row.state == "pending"
+            and row.due
+            and row.attempts < row.max_attempts
+            and row.origin not in held
+        )
 
     async def claim(self, *, owner: str, tenant_id: str, effect_key: str) -> list[Any]:
         row = self.rows.get((tenant_id, effect_key))
         return [self._lease(row, owner)] if row and self._claimable(row) else []
 
-    async def claim_due(self, *, owner: str, limit: int) -> list[Any]:
-        due = [r for r in self.rows.values() if self._claimable(r)][:limit]
+    async def claim_due(
+        self, *, owner: str, limit: int, held_origins: frozenset[str] = frozenset()
+    ) -> list[Any]:
+        due = [r for r in self.rows.values() if self._claimable(r, held_origins)][:limit]
         return [self._lease(r, owner) for r in due]
 
     async def get(self, tenant_id: str, effect_key: str) -> Any | None:
@@ -325,14 +343,49 @@ async def test_refusal_is_terminal_and_never_replayed(reason: str) -> None:
 
 @pytest.mark.asyncio
 async def test_two_simultaneous_same_key_completions_send_once() -> None:
+    """The second call arrives while the first holds the key (forced overlap)."""
     world = _world()
     coord = SideEffectCoordinator(intents=world.intents)
     router = _router(ACK, ACK)
-    a, b = await asyncio.gather(
-        _commit(coord, world, router, idempotency_key="op-1"),
-        _commit(coord, world, router, idempotency_key="op-1"),
-    )
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    record = world.persist.side_effect
+
+    async def blocking_persist(**kwargs: Any) -> Any:
+        entered.set()
+        await release.wait()
+        return await record(**kwargs)
+
+    world.persist.side_effect = blocking_persist
+    with (
+        patch("app.models.schemas.EnrichResponse.model_validate", return_value=MagicMock()),
+        patch("app.services.result_store.ResultStore") as store_cls,
+        patch("app.engines.packet_router.get_router", return_value=router),
+        patch("app.services.event_emitter.get_emitter", return_value=world.emitter),
+    ):
+        store_cls.return_value.persist_enrich_response = world.persist
+
+        def call() -> Any:
+            return coord.commit_after_enrich(
+                tenant=TENANT,
+                entity_id="d-1",
+                object_type="Depot",
+                domain=TENANT,
+                response_dict={"state": "completed", "fields": {"capacity": 2.5}},
+                settings=SETTINGS,
+                node_label="Depot",
+                idempotency_key="op-1",
+            )
+
+        first = asyncio.create_task(call())
+        await entered.wait()
+        second = asyncio.create_task(call())
+        await asyncio.sleep(0)
+        assert world.persist.await_count == 1, "the second call must wait on the first"
+        release.set()
+        a, b = await asyncio.gather(first, second)
     assert sorted([a.skipped, b.skipped]) == [False, True]
+    assert world.persist.await_count == 1
     assert router.notify_graph_sync.await_count == 1
     assert world.emitter.emit_enrichment_completed.await_count == 1
 
@@ -421,18 +474,146 @@ def coord_key(world: _World) -> str:
 
 
 @pytest.mark.asyncio
-async def test_store_unreachable_still_sends_the_leg_unclaimed() -> None:
-    """A store outage after commit must not drop the leg; a replay is a MERGE."""
+async def test_a_store_that_cannot_confirm_the_claim_sends_nothing() -> None:
+    """Ownership unknown: another worker may hold it; recovery sends it instead."""
     world = _world()
     broken = MagicMock()
+    broken.configured = MagicMock(return_value=True)
     broken.claim = AsyncMock(side_effect=RuntimeError("db down"))
     broken.get = AsyncMock(side_effect=RuntimeError("db down"))
     broken.settle = AsyncMock()
     coord = SideEffectCoordinator(intents=broken)
     router = _router(ACK)
     report = await _commit(coord, world, router, idempotency_key="op-1")
-    assert report.graph_synced is True
+    router.notify_graph_sync.assert_not_awaited()
+    assert report.graph_deferred and not report.graph_synced
+    assert report.key in coord._graph_pending
     broken.settle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_without_a_durable_store_the_leg_is_sent_unclaimed() -> None:
+    world = _world()
+    world.intents.configured_store = False
+    coord = SideEffectCoordinator(intents=world.intents)
+    router = _router(ACK)
+    report = await _commit(coord, world, router, idempotency_key="op-1")
+    assert report.graph_synced and not report.graph_durable
+    assert router.notify_graph_sync.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_an_ack_the_intent_did_not_record_keeps_the_key_pending() -> None:
+    """CEG acknowledged, but the lease was lost: the durable row decides, not this call."""
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    world.intents.settle = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    report = await _commit(coord, world, _router(ACK), idempotency_key="op-1")
+    assert report.graph_synced and report.graph_unsettled
+    assert report.key in coord._graph_pending
+    assert report.key not in coord._completed
+
+
+@pytest.mark.asyncio
+async def test_an_unpinned_intent_is_refused_not_sent() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    router = _router(ACK)
+    router.graph_sync_pin = MagicMock(return_value=None)  # no contract resolved at commit
+    report = await _commit(coord, world, router, idempotency_key="op-1")
+    router.notify_graph_sync.assert_not_awaited()
+    assert report.graph_terminal and "graph_sync:refused:unpinned" in report.errors
+    assert world.intents.only().state == "failed_terminal"
+
+
+@pytest.mark.asyncio
+async def test_the_send_is_keyed_to_the_durable_operation() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    router = _router(ACK)
+    report = await _commit(coord, world, router, idempotency_key="op-1")
+    assert router.notify_graph_sync.await_args.kwargs["operation_key"] == report.key
+
+
+@pytest.mark.asyncio
+async def test_converge_intents_are_held_while_converge_graph_sync_is_off() -> None:
+    world = _world()
+    await _commit(
+        SideEffectCoordinator(intents=world.intents),
+        world,
+        _router(),
+        idempotency_key="op-1",
+        graph_sync=False,
+        defer_graph_sync=True,
+        graph_origin="converge",
+    )
+    off = SimpleNamespace(gate_url="https://gate.example", converge_graph_sync_enabled=False)
+    router = _router(ACK)
+    restarted = SideEffectCoordinator(intents=world.intents)
+    with patch("app.engines.packet_router.get_router", return_value=router):
+        assert await restarted.recover_graph_intents(off) == 0
+    router.notify_graph_sync.assert_not_awaited()
+    assert world.intents.only().state == "pending"
+    assert await _recover(restarted, router) == 1  # flag back on
+    assert world.intents.only().state == "acknowledged"
+
+
+@pytest.mark.asyncio
+async def test_recovery_records_the_linked_result_as_persisted() -> None:
+    world = _world()
+    await _commit(
+        SideEffectCoordinator(intents=world.intents),
+        world,
+        _router(),
+        idempotency_key="op-1",
+        graph_sync=False,
+        defer_graph_sync=True,
+    )
+    restarted = SideEffectCoordinator(intents=world.intents)
+    await _recover(restarted, _router(ACK))
+    key = world.intents.only().effect_key
+    assert key in restarted._completed and key in restarted._persisted
+    again = await _commit(
+        restarted, world, _router(ACK), idempotency_key="op-1", require_persistence=True
+    )
+    assert again.skipped is True
+
+
+@pytest.mark.asyncio
+async def test_recovery_claims_one_intent_at_a_time() -> None:
+    world = _world()
+    for n in range(3):
+        await _commit(
+            SideEffectCoordinator(intents=world.intents),
+            world,
+            _router(),
+            idempotency_key=f"op-{n}",
+            entity_id=f"d-{n}",
+            graph_sync=False,
+            defer_graph_sync=True,
+        )
+    limits: list[int] = []
+    claim_due = world.intents.claim_due
+
+    async def spy(**kwargs: Any) -> list[Any]:
+        limits.append(kwargs["limit"])
+        return await claim_due(**kwargs)
+
+    world.intents.claim_due = spy  # type: ignore[method-assign]
+    assert await _recover(SideEffectCoordinator(intents=world.intents), _router(ACK, ACK, ACK)) == 3
+    assert set(limits) == {1}
+
+
+@pytest.mark.asyncio
+async def test_a_poll_from_an_earlier_lifespan_is_replaced() -> None:
+    coord = SideEffectCoordinator(intents=FakeIntents())
+    assert coord.start_graph_recovery(SETTINGS, interval_seconds=60)
+    first = coord._recovery_task
+    assert first is not None
+    await coord.stop_graph_recovery()
+    assert coord.start_graph_recovery(SETTINGS, interval_seconds=60)
+    assert coord._recovery_task is not first
+    await coord.stop_graph_recovery()
 
 
 @pytest.mark.asyncio

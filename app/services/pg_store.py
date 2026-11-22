@@ -169,8 +169,10 @@ async def save_enrichment_result(
             )
             if graph_intent is not None:
                 # The result is already durable. Its graph obligation is recorded
-                # now if it never was (a row older than graph_sync_intents);
-                # an existing one makes this call a duplicate of that operation.
+                # now if it never was (a row older than graph_sync_intents) --
+                # but only for a verified replay: a retry that carries other
+                # fields must not attach data the stored result never committed.
+                _require_verified_replay(existing, fields, graph_intent)
                 async with get_session() as session:
                     await _insert_graph_intent(session, graph_intent, existing.id)
             return existing
@@ -227,6 +229,8 @@ async def save_enrichment_result(
                 )
             ).scalar_one()
             if graph_intent is not None:
+                # Raising rolls back the intent inserted above with the rest.
+                _require_verified_replay(existing, fields, graph_intent)
                 await session.execute(
                     update(GraphSyncIntent)
                     .where(
@@ -886,6 +890,7 @@ class GraphSyncIntent(Base):
     endpoint: Mapped[str | None] = mapped_column(String(128), nullable=True)
     contract_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
     cartridge_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    origin: Mapped[str] = mapped_column(String(32), nullable=False, default="enrich")
     fields: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     enrichment_result_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True
@@ -915,7 +920,7 @@ class GraphSyncIntent(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "effect_key", name="uq_graph_sync_intents_tenant_key"),
         Index("ix_graph_sync_intents_due", "state", "next_attempt_at"),
-        Index("ix_graph_sync_intents_subject", "tenant_id", "entity_id", "node_label", "seq"),
+        Index("ix_graph_sync_intents_subject", "tenant_id", "entity_id", "endpoint", "seq"),
     )
 
 
@@ -932,6 +937,7 @@ class GraphIntentSpec:
     endpoint: str | None = None
     contract_digest: str | None = None
     cartridge_revision: str | None = None
+    origin: str = "enrich"
     max_attempts: int = GRAPH_INTENT_DEFAULT_MAX_ATTEMPTS
 
 
@@ -949,6 +955,7 @@ class GraphIntentRecord:
     endpoint: str | None
     contract_digest: str | None
     cartridge_revision: str | None
+    origin: str
     fields: dict[str, Any]
     enrichment_result_id: uuid.UUID | None
     state: str
@@ -996,6 +1003,29 @@ def graph_intent_scope(spec: GraphIntentSpec | None) -> Iterator[None]:
         _graph_intent_var.reset(token)
 
 
+def _require_verified_replay(
+    existing: EnrichmentResult, fields: Mapping[str, Any], spec: GraphIntentSpec
+) -> None:
+    """Attach an intent to a stored result only when this call replays it exactly.
+
+    Same tenant, entity and committed fields; anything else is the stored
+    operation's, and this call is a duplicate of it (`GraphIntentDuplicateError`).
+    """
+
+    def normal(value: Any) -> str:
+        return json.dumps(value, sort_keys=True, default=str)
+
+    if existing.entity_id != spec.entity_id or normal(existing.fields) != normal(dict(fields)):
+        logger.warning(
+            "graph_intent_replay_mismatch",
+            tenant_id=spec.tenant_id,
+            effect_key=spec.effect_key,
+            stored_entity_id=existing.entity_id,
+            entity_id=spec.entity_id,
+        )
+        raise GraphIntentDuplicateError(spec.tenant_id, spec.effect_key)
+
+
 async def _insert_graph_intent(
     session: AsyncSession, spec: GraphIntentSpec, result_id: uuid.UUID | None
 ) -> None:
@@ -1017,6 +1047,7 @@ async def _insert_graph_intent(
             endpoint=spec.endpoint,
             contract_digest=spec.contract_digest,
             cartridge_revision=spec.cartridge_revision,
+            origin=spec.origin,
             fields=json.loads(json.dumps(dict(spec.fields), default=str)),
             enrichment_result_id=result_id,
             state=GRAPH_INTENT_PENDING,
@@ -1051,6 +1082,7 @@ def _intent_record(row: Any) -> GraphIntentRecord:
         endpoint=m["endpoint"],
         contract_digest=m["contract_digest"],
         cartridge_revision=m["cartridge_revision"],
+        origin=m["origin"],
         fields=dict(m["fields"] or {}),
         enrichment_result_id=m["enrichment_result_id"],
         state=m["state"],
@@ -1090,6 +1122,7 @@ async def claim_graph_intents(
     tenant_id: str | None = None,
     effect_key: str | None = None,
     now: datetime | None = None,
+    held_origins: frozenset[str] = frozenset(),
 ) -> list[GraphIntentRecord]:
     """Atomically lease due intents to `owner` (cross-process safe).
 
@@ -1104,25 +1137,47 @@ async def claim_graph_intents(
       (`retry_exhausted`) -- never left to loop.
 
     `tenant_id` + `effect_key` narrows the claim to one operation (the inline
-    leg). Each claim counts as an attempt.
+    leg). Each claim counts as an attempt, and each call leases under a fresh
+    fencing token (`lease_owner` = `owner#<token>`): only that claim can settle
+    the row, even when the same process re-claims it after its lease expired.
+
+    A subject is the graph row a version writes: tenant, entity and resolved
+    endpoint. "Sent" means claimed at least once (`attempts > 0`), whatever the
+    state since -- a newer version whose ack was lost is back to `pending` but
+    may already be in the graph. An older version is never claimed once a
+    newer one was sent, and is `superseded` instead.
+
+    `held_origins` are left untouched -- neither claimed nor resolved -- while
+    their workflow is switched off (e.g. converge graph sync disabled).
     """
     if (tenant_id is None) != (effect_key is None):
         msg = "claim one operation with both tenant_id and effect_key, or neither"
         raise ValueError(msg)
     at = now or datetime.now(UTC)
+    lease_token = f"{owner[:100]}#{uuid.uuid4().hex[:16]}"
     intent = GraphSyncIntent
     older_or_newer = aliased(GraphSyncIntent)
 
     def scope(table: Any) -> list[Any]:
-        if tenant_id is None:
-            return []
-        return [table.tenant_id == tenant_id, table.effect_key == effect_key]
+        conditions: list[Any] = []
+        if held_origins:
+            conditions.append(table.origin.not_in(sorted(held_origins)))
+        if tenant_id is not None:
+            conditions += [table.tenant_id == tenant_id, table.effect_key == effect_key]
+        return conditions
 
     def same_subject(subject: Any) -> Any:
         return and_(
             older_or_newer.tenant_id == subject.tenant_id,
             older_or_newer.entity_id == subject.entity_id,
-            older_or_newer.node_label.is_not_distinct_from(subject.node_label),
+            older_or_newer.endpoint.is_not_distinct_from(subject.endpoint),
+        )
+
+    def newer_sent(subject: Any) -> Any:
+        return exists().where(
+            same_subject(subject),
+            older_or_newer.seq > subject.seq,
+            older_or_newer.attempts > 0,
         )
 
     supersede = (
@@ -1130,11 +1185,7 @@ async def claim_graph_intents(
         .where(
             intent.state == GRAPH_INTENT_PENDING,
             *scope(intent),
-            exists().where(
-                same_subject(intent),
-                older_or_newer.seq > intent.seq,
-                older_or_newer.state.in_((GRAPH_INTENT_ACKNOWLEDGED, GRAPH_INTENT_DISPATCHING)),
-            ),
+            newer_sent(intent),
         )
         .values(
             state=GRAPH_INTENT_SUPERSEDED,
@@ -1180,6 +1231,9 @@ async def claim_graph_intents(
                 older_or_newer.seq < candidate.seq,
                 older_or_newer.state.in_((GRAPH_INTENT_PENDING, GRAPH_INTENT_DISPATCHING)),
             ),
+            # Repeated here, not only in `supersede`: under Read Committed an
+            # older row committed after `supersede` ran is visible to this claim.
+            ~newer_sent(candidate),
         )
         .order_by(candidate.seq)
         .limit(limit)
@@ -1190,7 +1244,7 @@ async def claim_graph_intents(
         .where(intent.id.in_(due.scalar_subquery()))
         .values(
             state=GRAPH_INTENT_DISPATCHING,
-            lease_owner=owner,
+            lease_owner=lease_token,
             lease_expires_at=at + timedelta(seconds=lease_seconds),
             attempts=intent.attempts + 1,
             updated_at=at,
@@ -1204,7 +1258,7 @@ async def claim_graph_intents(
         rows = (await session.execute(claim)).all()
     claimed = sorted((_intent_record(r) for r in rows), key=lambda r: r.seq)
     if claimed:
-        logger.info("graph_intents_claimed", owner=owner, count=len(claimed))
+        logger.info("graph_intents_claimed", owner=lease_token, count=len(claimed))
     return claimed
 
 
@@ -1227,9 +1281,10 @@ async def settle_graph_intent(
 ) -> str | None:
     """Record one attempt's outcome; returns the new state, None if the lease was lost.
 
-    `outcome` is `acknowledged`, `retry` or `terminal`. Only the lease holder
-    settles: a holder whose lease expired and was re-claimed by another worker
-    settles nothing (that worker owns the attempt now). A `retry` past
+    `owner` is the claim's fencing token (the claimed record's `lease_owner`).
+    `outcome` is `acknowledged`, `retry` or `terminal`. Only that claim settles:
+    one whose lease expired and was re-claimed -- by another worker or by this
+    one -- settles nothing (the newer claim owns the attempt now). A `retry` past
     `max_attempts` becomes `failed_terminal` with `retry_exhausted`.
     """
     at = now or datetime.now(UTC)

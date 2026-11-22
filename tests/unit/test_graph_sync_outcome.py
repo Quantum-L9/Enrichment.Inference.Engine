@@ -306,3 +306,73 @@ async def test_a_node_ack_with_rejected_rows_is_not_acknowledged(
     assert (ack is not None) is confirmed
     expected = GraphSyncOutcomeKind.ACKNOWLEDGED if confirmed else GraphSyncOutcomeKind.RETRYABLE
     assert outcomes[0].kind is expected
+
+
+def test_the_contract_digest_pins_the_target_node(tmp_path: Path) -> None:
+    """A revision that moves the endpoint to another node changes the pin."""
+    router = _router(tmp_path)
+    before = router.graph_sync_pin(TENANT, node_label="Depot")
+    moved = {
+        **SYNTH_SPEC,
+        "ontology": {
+            "nodes": [
+                {**SYNTH_SPEC["ontology"]["nodes"][0], "label": "Warehouse"},
+            ]
+        },
+        "sync": {
+            "endpoints": [
+                {"path": "/v1/sync/depots", "targetnode": "Warehouse", "idproperty": "depot_id"}
+            ]
+        },
+    }
+    after = _router(tmp_path / "moved", moved).graph_sync_pin(TENANT)
+    assert before is not None and after is not None
+    assert before.entity_type == after.entity_type == "depots"
+    assert before.contract_digest != after.contract_digest
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"status": "all_rejected", "entity_type": "other", "synced_count": 0},
+        {"status": "all_rejected", "entity_type": "depots", "synced_count": 1},
+        {"status": "all_rejected", "entity_type": "depots"},
+        {"status": "all_rejected", "entity_type": "depots", "synced_count": False},
+    ],
+    ids=["other-endpoint", "nonzero-count", "no-count", "bool-count"],
+)
+@pytest.mark.asyncio
+async def test_a_rejection_that_is_not_this_requests_stays_retryable(
+    tmp_path: Path, answer: dict[str, Any]
+) -> None:
+    router = _router(tmp_path)
+    with patch.object(
+        router._client, "execute", new_callable=AsyncMock, return_value=_answer(answer)
+    ):
+        ack, outcomes = await _sync(router)
+    assert ack is None
+    assert outcomes[0].kind is GraphSyncOutcomeKind.RETRYABLE
+
+
+@pytest.mark.asyncio
+async def test_the_idempotency_key_binds_the_operation_as_well_as_the_row(
+    tmp_path: Path,
+) -> None:
+    """1 -> 2 -> 1: the third version never reuses the first's Gate key."""
+    router = _router(tmp_path)
+    keys: list[str] = []
+    with patch.object(
+        router._client, "execute", new_callable=AsyncMock, return_value=_answer(OK)
+    ) as execute:
+        for operation in ("op-1", "op-1", "op-3"):
+            await router.notify_graph_sync(
+                tenant_id=TENANT,
+                entity_id="d-1",
+                fields={"capacity": 1.0},
+                domain=TENANT,
+                node_label="Depot",
+                operation_key=operation,
+            )
+        keys = [c.kwargs["idempotency_key"] for c in execute.await_args_list]
+    assert keys[0] == keys[1], "a retry of one operation reuses its key"
+    assert keys[2] != keys[0], "another operation with the same row gets its own key"

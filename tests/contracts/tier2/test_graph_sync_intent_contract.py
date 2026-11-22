@@ -30,6 +30,7 @@ COLUMNS = {
     "endpoint",
     "contract_digest",
     "cartridge_revision",
+    "origin",
     "fields",
     "enrichment_result_id",
     "state",
@@ -77,7 +78,7 @@ def test_due_and_subject_indexes_match_the_migration() -> None:
     assert indexes["ix_graph_sync_intents_subject"] == (
         "tenant_id",
         "entity_id",
-        "node_label",
+        "endpoint",
         "seq",
     )
     source = MIGRATION.read_text(encoding="utf-8")

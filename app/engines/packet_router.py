@@ -108,6 +108,9 @@ class GraphSyncContract:
     id_property: str
     source: str
     row_schema: dict[str, dict[str, Any]] | None = field(default=None, compare=False, repr=False)
+    # The ontology node the endpoint writes (``targetnode``); None for the
+    # settings fallback. Part of the pinned contract digest (A2).
+    target_node: str | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +212,7 @@ def resolve_graph_sync_contract(
         id_property=id_property,
         source=GRAPH_SYNC_SOURCE_DOMAIN_SPEC,
         row_schema=row_properties(domain_spec, target) if target else None,
+        target_node=target,
     )
 
 
@@ -282,11 +286,12 @@ class GraphSyncPin:
 
 
 def graph_sync_contract_digest(contract: GraphSyncContract) -> str:
-    """Digest of an endpoint contract: entity type, id property, typed row schema."""
+    """Digest of an endpoint contract: entity type, id property, target node, row schema."""
     material = json.dumps(
         {
             "entity_type": contract.entity_type,
             "id_property": contract.id_property,
+            "target_node": contract.target_node,
             "row_schema": contract.row_schema,
         },
         sort_keys=True,
@@ -453,10 +458,21 @@ def project_graph_sync_row(
     return GraphSyncRowProjection(row=row, dropped=tuple(dropped))
 
 
-def _sync_idempotency_key(tenant_id: str, entity_id: str, row: dict[str, Any]) -> str:
-    digest = hashlib.sha256(
-        json.dumps(row, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()[:16]
+def _sync_idempotency_key(
+    tenant_id: str, entity_id: str, row: dict[str, Any], operation_key: str | None = None
+) -> str:
+    """Gate key of one sync send.
+
+    With ``operation_key`` (the durable operation identity, A2) the key binds
+    that operation as well as the row: retries of one committed version reuse
+    it, while two versions that happen to produce the same row -- 1 -> 2 -> 1 --
+    never share it, so Gate's cache cannot answer the third with the first's
+    acknowledgment while the graph still holds 2.
+    """
+    material = json.dumps(row, sort_keys=True, default=str)
+    if operation_key is not None:
+        material = f"{operation_key}\n{material}"
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
     return f"eie:sync:{tenant_id}:{entity_id}:{digest}"
 
 
@@ -1045,6 +1061,7 @@ class PacketRouter:
         node_label: str | None = None,
         expected_contract_digest: str | None = None,
         on_outcome: Callable[[GraphSyncOutcome], None] | None = None,
+        operation_key: str | None = None,
     ) -> dict[str, Any] | None:
         """
         Sync enriched entity fields into the graph through Gate (action `sync`,
@@ -1077,7 +1094,8 @@ class PacketRouter:
         contract a durable intent was admitted against: when the tenant's
         current contract differs, nothing is sent and the attempt is refused as
         ``contract_changed`` rather than addressed to a contract the pinned
-        fields were never checked against.
+        fields were never checked against. ``operation_key`` binds the Gate
+        idempotency key to the durable operation (:func:`_sync_idempotency_key`).
         """
 
         def settle(
@@ -1156,7 +1174,7 @@ class PacketRouter:
                 tenant_id,
                 {"entity_type": contract.entity_type, "batch": batch},
                 correlation_id,
-                idempotency_key=_sync_idempotency_key(tenant_id, entity_id, row),
+                idempotency_key=_sync_idempotency_key(tenant_id, entity_id, row, operation_key),
             )
         except NodeUnreachableError as exc:
             logger.warning("graph_sync_failed", entity_id=entity_id, error=str(exc))
@@ -1174,9 +1192,16 @@ class PacketRouter:
                 entity_type=ack.get("entity_type"),
                 expected_entity_type=contract.entity_type,
             )
-            if ack.get("status") == "all_rejected":
-                # CEG validated the batch against its own tenant spec and
-                # refused every row: the same row is refused again.
+            if (
+                ack.get("status") == "all_rejected"
+                and ack.get("entity_type") == contract.entity_type
+                and ack.get("synced_count") == 0
+                and not isinstance(ack.get("synced_count"), bool)
+            ):
+                # CEG validated this batch at this endpoint against its own
+                # tenant spec and wrote none of it: the same row is refused
+                # again. A rejection naming another endpoint, or any count,
+                # is not this request's answer and stays retryable.
                 return settle(GraphSyncOutcomeKind.REFUSED, "all_rejected")
             return settle(GraphSyncOutcomeKind.RETRYABLE, "unacknowledged")
         return settle(GraphSyncOutcomeKind.ACKNOWLEDGED, "acknowledged", ack)
