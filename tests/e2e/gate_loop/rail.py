@@ -59,6 +59,14 @@ class ProbeError(RuntimeError):
     """A probe did not complete. The case must record NOT_RUN, never a result."""
 
 
+class StackUnusableError(ProbeError):
+    """A case could not put the stack back (a container or registration it changed is not restored).
+
+    Every later case would run against a modified stack, so the run stops: this case and every
+    remaining one are NOT_RUN and the process exits non-zero.
+    """
+
+
 def env() -> dict[str, str]:
     out = {}
     for line in ENV_FILE.read_text().splitlines():
@@ -850,7 +858,7 @@ def c_ceg_down(p: str) -> list[Result]:
         start = sh(["docker", "start", "l9e2e-ceg"], timeout=120)
         ready = wait_ready()
         if start.returncode != 0 or not ready.get("ready"):
-            raise ProbeError(
+            raise StackUnusableError(
                 f"CEG did not come back after the outage case (start rc {start.returncode}, {ready})"
             )
     time.sleep(15)
@@ -1241,7 +1249,7 @@ def c_rogue_signer(p: str) -> list[Result]:
         back = rail("compose", "up", "-d", "--no-deps", "--force-recreate", "graph")
         rec = wait_ready()
         if back.returncode != 0 or not rec.get("ready"):
-            raise ProbeError(
+            raise StackUnusableError(
                 f"trusted graph worker not restored after the rogue-signer case (rc {back.returncode}, {rec})"
             )
     digests = sdk_digests()
@@ -1349,11 +1357,11 @@ def c_registration(p: str) -> list[Result]:
         if restore.get("http_status") not in (200, 201) or restored.get("graph") != sorted(
             GRAPH_REG["supported_actions"]
         ):
-            raise ProbeError(
+            raise StackUnusableError(
                 f"graph registration not restored (HTTP {restore.get('http_status')}); stop using this stack"
             )
         if registry_url("graph") != GRAPH_REG["internal_url"]:
-            raise ProbeError(
+            raise StackUnusableError(
                 "graph registration restored with the wrong internal_url; stop using this stack"
             )
     after = drive("execute", MATCH_PROBE)
@@ -1736,6 +1744,42 @@ def write_json(path: Path, obj: object) -> None:
     path.write_text(redact(json.dumps(obj, indent=1, default=str)) + "\n")
 
 
+def run_cases(names: list[str], profile: str, ev: Path) -> tuple[list[Result], str | None]:
+    """Run the named cases in order. A harness failure is NOT_RUN, never PASS.
+
+    StackUnusableError stops the run: that case and every case after it are recorded NOT_RUN, and the
+    reason is returned so main() exits non-zero. Raw exception text is never recorded.
+    """
+    results: list[Result] = []
+    aborted: str | None = None
+    for name in names:
+        if aborted is not None:
+            res = [
+                not_run(cid, "A8", profile, "harness", f"not run: {aborted}")
+                for cid in CASE_IDS.get(name, (name,))
+            ]
+        else:
+            try:
+                res = CASES[name](profile)
+            except Exception as exc:
+                why = (
+                    f"ProbeError: {redact(str(exc))[:200]}"
+                    if isinstance(exc, ProbeError)
+                    else type(exc).__name__
+                )
+                if isinstance(exc, StackUnusableError):
+                    aborted = f"stack unusable after case {name!r}: {redact(str(exc))[:200]}"
+                res = [
+                    not_run(cid, "A8", profile, "harness", why)
+                    for cid in CASE_IDS.get(name, (name,))
+                ]
+        for r in res:
+            results.append(r)
+            print(f"{r.id:5} {r.verdict:14} {r.reason[:100]}", flush=True)
+            write_json(ev / f"{r.id}.json", asdict(r))
+    return results, aborted
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["run"])
@@ -1760,25 +1804,7 @@ def main() -> int:
     rs = release_set(a.profile)
     RELEASE_SET.update(rs)
     write_json(ev / "release_set.json", rs)
-    results: list[Result] = []
-    for name in a.cases.split(","):
-        try:
-            res = CASES[name](a.profile)
-        except (
-            Exception
-        ) as exc:  # a harness failure is NOT_RUN, never PASS; raw exception text is never recorded
-            why = (
-                f"ProbeError: {redact(str(exc))[:200]}"
-                if isinstance(exc, ProbeError)
-                else type(exc).__name__
-            )
-            res = [
-                not_run(cid, "A8", a.profile, "harness", why) for cid in CASE_IDS.get(name, (name,))
-            ]
-        for r in res:
-            results.append(r)
-            print(f"{r.id:5} {r.verdict:14} {r.reason[:100]}", flush=True)
-            write_json(ev / f"{r.id}.json", asdict(r))
+    results, aborted = run_cases(a.cases.split(","), a.profile, ev)
     leaks = [f.name for f in ev.glob("*.json") for s in secrets_() if s in f.read_text()]
     summary = {
         "stamp": run_stamp,
@@ -1786,11 +1812,16 @@ def main() -> int:
         "observed_signing_algorithm": dict(OBSERVED_PROFILE),
         "release_set": rs,
         "leak_check": leaks or "clean",
+        "aborted": aborted,
         "results": [{"id": r.id, "verdict": r.verdict, "reason": r.reason} for r in results],
     }
     write_json(ev / "summary.json", summary)
-    print(json.dumps({"evidence": str(ev), "leak_check": summary["leak_check"]}))
-    return 0 if not leaks else 3
+    print(
+        json.dumps({"evidence": str(ev), "leak_check": summary["leak_check"], "aborted": aborted})
+    )
+    if leaks:
+        return 3
+    return 5 if aborted else 0
 
 
 if __name__ == "__main__":
