@@ -79,10 +79,67 @@ repos:
     hooks:
       - id: pytest-unit
         name: pytest unit tests
-        # Local protection stays the unit marker. Pull-request pytest is
-        # repo-test; this hook must not start a second catalog under Actions.
-        # No `2>/dev/null || true`: a failing local unit test must fail the hook.
-        entry: "bash -c 'if [ -n \"${GITHUB_ACTIONS:-}\" ]; then echo pytest-unit-not-a-pr-catalog; exit 0; fi; PYTHONPATH=\"${PYTHONPATH}:.\" python3 -m pytest tests/ -m unit --tb=short -q'"
+        # Local protection stays the unit marker over every test path under
+        # tests/. The selection is literal so the Core PR test-expense judge can
+        # read it (a shell wrapper, or a bare tests/, is "no literal entry"):
+        # args lists each tests/ child that holds test files, and
+        # tests/unit/test_eie_native_hyg_precommit_entry.py fails when one is
+        # missing, so a new directory cannot silently drop out. No workflow runs
+        # pre-commit (guarded by the same test), so this never starts a second
+        # catalog under Actions. No `|| true`: a failing unit test fails the hook.
+        entry: python3 -m pytest -m unit --tb=short -q
+        args:
+          - tests/architecture
+          - tests/ci
+          - tests/compliance
+          - tests/contracts
+          - tests/e2e
+          - tests/engines
+          - tests/eval
+          - tests/integration
+          - tests/services
+          - tests/unit
+          - tests/test_agents.py
+          - tests/test_api.py
+          - tests/test_consensus_engine.py
+          - tests/test_convergence_controller.py
+          - tests/test_cost_tracker.py
+          - tests/test_crm_clients.py
+          - tests/test_crm_field_scanner.py
+          - tests/test_crm_integration.py
+          - tests/test_crm_writeback_orchestrator.py
+          - tests/test_discover_scan_endpoints.py
+          - tests/test_enrichment_orchestrator.py
+          - tests/test_enrichment_profile.py
+          - tests/test_enrichment_sources.py
+          - tests/test_field_classifier.py
+          - tests/test_field_confidence.py
+          - tests/test_field_evidence_response_v2.py
+          - tests/test_grade_engine.py
+          - tests/test_inference_bridge_adapter.py
+          - tests/test_kb_resolver.py
+          - tests/test_loop_schemas.py
+          - tests/test_loop_state.py
+          - tests/test_meta_prompt_planner.py
+          - tests/test_pass_telemetry.py
+          - tests/test_pplx_research.py
+          - tests/test_pr20_import_fix.py
+          - tests/test_pr21_packet_router.py
+          - tests/test_pr21_persistence.py
+          - tests/test_pr22_converge_endpoint.py
+          - tests/test_pr22_fields_endpoint.py
+          - tests/test_rate_limiter.py
+          - tests/test_rule_engine.py
+          - tests/test_rule_loader.py
+          - tests/test_schema_proposer.py
+          - tests/test_schema_string_validators.py
+          - tests/test_search_optimizer.py
+          - tests/test_simulation_bridge.py
+          - tests/test_telemetry.py
+          - tests/test_uncertainty_engine.py
+          - tests/test_validation_engine.py
+          - tests/test_waterfall_autoregister.py
+          - tests/test_waterfall_enrichment.py
         language: system
         pass_filenames: false
         always_run: true
