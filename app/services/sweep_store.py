@@ -149,7 +149,11 @@ class PgSweepStore:
                     stats=dict(record.stats),
                     completed_at=record.completed_at,
                 )
-                .on_conflict_do_nothing(constraint="uq_enrichment_sweeps_tenant_key")
+                # Any conflict, not only (tenant, key): `sweep_id` is derived from
+                # the same pair, so two concurrent deliveries of one request can
+                # meet on the primary key first. Either way the row that exists is
+                # this request's sweep, read back below.
+                .on_conflict_do_nothing()
                 .returning(EnrichmentSweepRecord.sweep_id)
             )
             if inserted.scalar_one_or_none() is not None:
