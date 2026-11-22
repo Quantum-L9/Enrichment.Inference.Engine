@@ -1154,7 +1154,7 @@ async def claim_graph_intents(
         msg = "claim one operation with both tenant_id and effect_key, or neither"
         raise ValueError(msg)
     at = now or datetime.now(UTC)
-    lease_token = f"{owner[:100]}#{uuid.uuid4().hex[:16]}"
+    claim_owner = f"{owner[:100]}#{uuid.uuid4().hex[:16]}"
     intent = GraphSyncIntent
     older_or_newer = aliased(GraphSyncIntent)
 
@@ -1244,7 +1244,7 @@ async def claim_graph_intents(
         .where(intent.id.in_(due.scalar_subquery()))
         .values(
             state=GRAPH_INTENT_DISPATCHING,
-            lease_owner=lease_token,
+            lease_owner=claim_owner,
             lease_expires_at=at + timedelta(seconds=lease_seconds),
             attempts=intent.attempts + 1,
             updated_at=at,
@@ -1258,7 +1258,7 @@ async def claim_graph_intents(
         rows = (await session.execute(claim)).all()
     claimed = sorted((_intent_record(r) for r in rows), key=lambda r: r.seq)
     if claimed:
-        logger.info("graph_intents_claimed", owner=lease_token, count=len(claimed))
+        logger.info("graph_intents_claimed", owner=claim_owner, count=len(claimed))
     return claimed
 
 
