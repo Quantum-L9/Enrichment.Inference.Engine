@@ -1,6 +1,6 @@
 {
- "run": "20261122T183011Z-ed25519",
  "id": "P33",
+ "run": "20261122T185228Z-ed25519",
  "slice": "A8",
  "profile": "ed25519",
  "assertion": "valid polymer capability in the declared direction matches; hard gates before rank",
@@ -103,7 +103,7 @@
    "PM-NEG-02-WRONG-DIRECTION": {
     "fixture_ids": [],
     "off_fixture_candidates": [
-     "gl-p19-f748dd"
+     "gl-p19-413c1e"
     ],
     "expect_fixture_ids": [],
     "status": "success",
@@ -112,7 +112,7 @@
      {
       "candidate": {
        "name": "dup",
-       "facility_id": "gl-p19-f748dd",
+       "facility_id": "gl-p19-413c1e",
        "_tenant": "plasticos"
       },
       "score": 0.05,
@@ -171,5 +171,5 @@
    }
   }
  },
- "timestamp": "2026-11-22T18:31:53.019517+00:00"
+ "timestamp": "2026-11-22T18:54:14.962637+00:00"
 }

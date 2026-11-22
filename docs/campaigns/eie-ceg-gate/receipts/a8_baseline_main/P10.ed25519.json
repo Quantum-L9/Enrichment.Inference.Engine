@@ -1,6 +1,6 @@
 {
- "run": "20261122T183011Z-ed25519",
  "id": "P10",
+ "run": "20261122T185228Z-ed25519",
  "slice": "A7",
  "profile": "ed25519",
  "assertion": "worker score refused by the kind rule; worker health-assess only from enrichment-engine (operator consumer allowed by its policy); graph-inference-result only from graph; refusals before execution",
@@ -295,5 +295,5 @@
    }
   ]
  },
- "timestamp": "2026-11-22T18:31:07.180379+00:00"
+ "timestamp": "2026-11-22T18:53:27.866930+00:00"
 }

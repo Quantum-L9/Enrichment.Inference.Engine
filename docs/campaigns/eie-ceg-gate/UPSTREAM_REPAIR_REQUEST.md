@@ -12,7 +12,7 @@ This document is the repair brief for the Gate_SDK and Constellation.Gate owners
 | Gate_SDK head | `dc4e69c4ab99cf5bd4957bbbc49a595409be76b4`. D-1 and D-2 below are byte-identical at head. |
 | Constellation.Gate | `b451b68b98b315f57f0c4f9b99090a437e9dac23` |
 | EIE / CEG | `aabf855f` / `9d17d01b` |
-| Run | `20261122T183011Z-ed25519`. Staging Gate, all six identities ed25519. The observed signing algorithm is `ed25519` in all three containers. |
+| Run | `20261122T185228Z-ed25519` (same release set as `20261122T183011Z`). Staging Gate, all six identities ed25519. The observed signing algorithm is `ed25519` in all three containers. |
 
 ## Common reproducer and rail
 

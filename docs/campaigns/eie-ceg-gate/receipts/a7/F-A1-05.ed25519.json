@@ -1,6 +1,6 @@
 {
  "id": "F-A1-05",
- "run": "20261122T184452Z-ed25519",
+ "run": "20261122T185228Z-ed25519",
  "slice": "A7",
  "profile": "ed25519",
  "assertion": "witness: an admin-token holder can repoint a canonical owner's registration; the replacement is accepted, then the worker rejects the mis-routed packet (403, Gate 502)",
@@ -33,11 +33,13 @@
   },
   "call_while_hijacked": {
    "ok": false,
-   "elapsed_s": 0.074,
+   "elapsed_s": 0.067,
    "error": "GateHTTPError: Gate execute returned HTTP 502"
   },
   "gate_log": [
-   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker 'graph' execute returned HTTP 403\", \"error_type\": \"WorkerHTTPError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"439231ba-01ee-439c-9888-4a8b042aa590\", \"request_id\": \"4daf48d73d2c407f8d333c2035afffeb\", \"root_id\": \"439231ba-01ee-439c-9888-4a8b042aa590\", \"source_node\": \"odoo\"}",
+   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker response failed transport validation: TransportAuthenticationError: no verifying key available for transport signature verification\", \"error_type\": \"GateDispatchSecurityError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"404730c8-8d68-4999-91c0-db86eb7ea38f\", \"request_id\": \"c4651c67c0034d31bc22390029b5e589\", \"root_id\": \"404730c8-8d68-4999-91c0-db86eb7ea38f\", \"source_node\": \"odoo\"}",
+   "{\"level\": \"error\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\"}",
+   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker 'graph' execute returned HTTP 403\", \"error_type\": \"WorkerHTTPError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"3c486bb4-87c4-41e5-894a-e935e2f45790\", \"request_id\": \"42497e87ba074fd6a4761ffb1a682ec5\", \"root_id\": \"3c486bb4-87c4-41e5-894a-e935e2f45790\", \"source_node\": \"odoo\"}",
    "{\"level\": \"error\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\"}"
   ],
   "restore_register": {
@@ -50,5 +52,5 @@
    "gate_signature_valid": true
   }
  },
- "timestamp": "2026-11-22T18:45:00.346066+00:00"
+ "timestamp": "2026-11-22T19:00:18.480840+00:00"
 }

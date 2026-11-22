@@ -1,6 +1,6 @@
 {
- "run": "20261122T183011Z-ed25519",
  "id": "P09",
+ "run": "20261122T185228Z-ed25519",
  "slice": "A7",
  "profile": "ed25519",
  "assertion": "Gate restart: readiness degrades truthfully, no peer fallback, recovery by live re-registration",
@@ -116,7 +116,7 @@
   },
   "call_during_outage": {
    "ok": false,
-   "elapsed_s": 0.058,
+   "elapsed_s": 0.059,
    "error": "GateHTTPError: Gate execute returned HTTP 404"
   },
   "registry_after_call": {},
@@ -141,5 +141,5 @@
    ]
   }
  },
- "timestamp": "2026-11-22T18:37:22.207562+00:00"
+ "timestamp": "2026-11-22T18:59:42.883935+00:00"
 }

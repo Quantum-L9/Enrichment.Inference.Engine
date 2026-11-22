@@ -1,6 +1,6 @@
 {
  "id": "P11-owner-collision",
- "run": "20261122T184452Z-ed25519",
+ "run": "20261122T185228Z-ed25519",
  "slice": "A7",
  "profile": "ed25519",
  "assertion": "a registration claiming a canonical action under the wrong owner is refused",
@@ -12,5 +12,5 @@
    "body": "{\"detail\":{\"code\":\"invalid_request\",\"message\":\"action 'match' is owned by 'ceg'; registration claims owner 'eie'\"}}"
   }
  },
- "timestamp": "2026-11-22T18:45:00.346102+00:00"
+ "timestamp": "2026-11-22T19:00:18.562785+00:00"
 }

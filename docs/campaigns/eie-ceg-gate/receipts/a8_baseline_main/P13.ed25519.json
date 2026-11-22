@@ -1,6 +1,6 @@
 {
- "run": "20261122T183011Z-ed25519",
  "id": "P13",
+ "run": "20261122T185228Z-ed25519",
  "slice": "A7",
  "profile": "ed25519",
  "assertion": "a replayed packet id adds no effect; an expired deadline is refused",
@@ -28,5 +28,5 @@
    "expired deadline refused": true
   }
  },
- "timestamp": "2026-11-22T18:31:11.396097+00:00"
+ "timestamp": "2026-11-22T18:53:32.221345+00:00"
 }

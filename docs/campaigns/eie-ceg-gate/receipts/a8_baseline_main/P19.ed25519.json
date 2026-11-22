@@ -1,6 +1,6 @@
 {
- "run": "20261122T183011Z-ed25519",
  "id": "P19",
+ "run": "20261122T185228Z-ed25519",
  "slice": "A8",
  "profile": "ed25519",
  "assertion": "same relationship evidence twice: both acknowledged, no duplicate edge",
@@ -26,7 +26,7 @@
     "1"
    ]
   ],
-  "facility_id": "gl-p19-f748dd"
+  "facility_id": "gl-p19-413c1e"
  },
- "timestamp": "2026-11-22T18:31:45.038171+00:00"
+ "timestamp": "2026-11-22T18:54:06.550498+00:00"
 }
