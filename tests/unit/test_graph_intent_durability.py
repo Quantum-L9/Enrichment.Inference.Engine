@@ -1,0 +1,444 @@
+"""A2: the graph leg of a committed result is a durable obligation.
+
+`SideEffectCoordinator` records the graph intent inside the result's own
+persistence call (`pg_store.graph_intent_scope`), sends it under a lease, and
+settles each attempt as acknowledged / retry / terminal. A fresh coordinator --
+a restarted process -- recovers what the old one left with its pinned input.
+
+The store here is an in-memory stand-in with `pg_store`'s claim/settle
+semantics; `tests/integration/test_graph_intent_store_pg.py` proves the same
+semantics on PostgreSQL (atomicity, leases across workers, version order).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from dataclasses import dataclass, field, replace
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from app.engines.packet_router import GraphSyncOutcome, GraphSyncOutcomeKind, GraphSyncPin
+from app.services import pg_store
+from app.services.side_effect_coordinator import SideEffectCoordinator
+
+TENANT = "synthco"
+ACK = {"status": "success", "entity_type": "depots", "synced_count": 1}
+PIN = GraphSyncPin(entity_type="depots", contract_digest="c" * 64)
+SETTINGS = SimpleNamespace(gate_url="https://gate.example")
+
+
+@dataclass
+class _Row:
+    id: uuid.UUID
+    seq: int
+    tenant_id: str
+    effect_key: str
+    entity_id: str
+    node_label: str | None
+    domain: str | None
+    endpoint: str | None
+    contract_digest: str | None
+    fields: dict[str, Any]
+    state: str = "pending"
+    attempts: int = 0
+    max_attempts: int = 8
+    lease_owner: str | None = None
+    due: bool = True
+    last_error: str | None = None
+    last_ack: dict[str, Any] | None = None
+    cartridge_revision: str | None = None
+
+    @property
+    def terminal(self) -> bool:
+        return self.state in pg_store.GRAPH_INTENT_TERMINAL_STATES
+
+
+@dataclass
+class FakeIntents:
+    """`pg_store` graph-intent semantics, in memory, shared across 'processes'."""
+
+    rows: dict[tuple[str, str], _Row] = field(default_factory=dict)
+    settles: list[tuple[str, str]] = field(default_factory=list)
+
+    def record(self, spec: pg_store.GraphIntentSpec) -> None:
+        key = (spec.tenant_id, spec.effect_key)
+        if key in self.rows:
+            raise pg_store.GraphIntentDuplicateError(spec.tenant_id, spec.effect_key)
+        self.rows[key] = _Row(
+            id=uuid.uuid4(),
+            seq=len(self.rows) + 1,
+            tenant_id=spec.tenant_id,
+            effect_key=spec.effect_key,
+            entity_id=spec.entity_id,
+            node_label=spec.node_label,
+            domain=spec.domain,
+            endpoint=spec.endpoint,
+            contract_digest=spec.contract_digest,
+            fields=dict(spec.fields),
+            max_attempts=spec.max_attempts,
+        )
+
+    def _lease(self, row: _Row, owner: str) -> _Row:
+        row.state = "dispatching"
+        row.lease_owner = owner
+        row.attempts += 1
+        return replace(row)
+
+    def _claimable(self, row: _Row) -> bool:
+        return row.state == "pending" and row.due and row.attempts < row.max_attempts
+
+    async def claim(self, *, owner: str, tenant_id: str, effect_key: str) -> list[Any]:
+        row = self.rows.get((tenant_id, effect_key))
+        return [self._lease(row, owner)] if row and self._claimable(row) else []
+
+    async def claim_due(self, *, owner: str, limit: int) -> list[Any]:
+        due = [r for r in self.rows.values() if self._claimable(r)][:limit]
+        return [self._lease(r, owner) for r in due]
+
+    async def get(self, tenant_id: str, effect_key: str) -> Any | None:
+        row = self.rows.get((tenant_id, effect_key))
+        return replace(row) if row else None
+
+    async def settle(
+        self, intent_id: Any, *, owner: str, outcome: str, error: str | None, ack: Any
+    ) -> str | None:
+        row = next(r for r in self.rows.values() if r.id == intent_id)
+        if row.state != "dispatching" or row.lease_owner != owner:
+            return None
+        row.lease_owner = None
+        self.settles.append((row.effect_key, outcome))
+        if outcome == "acknowledged":
+            row.state, row.last_ack = "acknowledged", dict(ack or {})
+        elif outcome == "terminal":
+            row.state, row.last_error = "failed_terminal", error
+        elif row.attempts >= row.max_attempts:
+            row.state, row.last_error = "failed_terminal", f"retry_exhausted:{error}"
+        else:
+            row.state, row.last_error = "pending", error
+        return row.state
+
+    def only(self) -> _Row:
+        (row,) = self.rows.values()
+        return row
+
+
+def _router(*answers: Any) -> MagicMock:
+    """A router whose `notify_graph_sync` answers in turn and reports each outcome."""
+    queue = list(answers)
+
+    async def notify(**kwargs: Any) -> Any:
+        answer = queue.pop(0) if queue else None
+        on_outcome = kwargs["on_outcome"]
+        if isinstance(answer, GraphSyncOutcome):
+            on_outcome(answer)
+            return answer.ack
+        if isinstance(answer, BaseException):
+            raise answer
+        if answer is None:
+            on_outcome(
+                GraphSyncOutcome(GraphSyncOutcomeKind.RETRYABLE, "route:NodeUnreachableError")
+            )
+            return None
+        on_outcome(GraphSyncOutcome(GraphSyncOutcomeKind.ACKNOWLEDGED, "acknowledged", answer))
+        return answer
+
+    router = MagicMock()
+    router.notify_graph_sync = AsyncMock(side_effect=notify)
+    router.graph_sync_pin = MagicMock(return_value=PIN)
+    return router
+
+
+@dataclass
+class _World:
+    intents: FakeIntents
+    persist: AsyncMock
+    emitter: MagicMock
+
+
+def _world() -> _World:
+    intents = FakeIntents()
+
+    async def persist(**_: Any) -> uuid.UUID:
+        spec = pg_store._graph_intent_var.get()
+        if spec is not None:
+            intents.record(spec)  # same "transaction" as the result
+        return uuid.uuid4()
+
+    emitter = MagicMock()
+    emitter.emit_enrichment_completed = AsyncMock()
+    return _World(intents=intents, persist=AsyncMock(side_effect=persist), emitter=emitter)
+
+
+async def _commit(
+    coord: SideEffectCoordinator, world: _World, router: MagicMock, **kwargs: Any
+) -> Any:
+    with (
+        patch("app.models.schemas.EnrichResponse.model_validate", return_value=MagicMock()),
+        patch("app.services.result_store.ResultStore") as store_cls,
+        patch("app.engines.packet_router.get_router", return_value=router),
+        patch("app.services.event_emitter.get_emitter", return_value=world.emitter),
+    ):
+        store_cls.return_value.persist_enrich_response = world.persist
+        return await coord.commit_after_enrich(
+            tenant=TENANT,
+            entity_id=kwargs.pop("entity_id", "d-1"),
+            object_type="Depot",
+            domain=TENANT,
+            response_dict={
+                "state": "completed",
+                "fields": kwargs.pop("fields", {"capacity": 2.5}),
+                "confidence": 0.9,
+            },
+            settings=SETTINGS,
+            node_label="Depot",
+            **kwargs,
+        )
+
+
+async def _recover(coord: SideEffectCoordinator, router: MagicMock) -> int:
+    with patch("app.engines.packet_router.get_router", return_value=router):
+        return await coord.recover_graph_intents(SETTINGS)
+
+
+# ── P14: completion is independent of graph availability ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_deferred_leg_is_durable_at_completion_with_pinned_input() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    router = _router()
+    report = await _commit(
+        coord,
+        world,
+        router,
+        idempotency_key="op-1",
+        graph_sync=False,
+        defer_graph_sync=True,
+        require_persistence=True,
+        graph_fields={"capacity": 2.5},
+    )
+    assert report.persisted and report.graph_durable and report.graph_deferred
+    router.notify_graph_sync.assert_not_awaited()  # nothing awaited on the answer's path
+    row = world.intents.only()
+    assert row.state == "pending"
+    assert (row.tenant_id, row.entity_id, row.node_label) == (TENANT, "d-1", "Depot")
+    assert row.fields == {"capacity": 2.5}
+    assert (row.endpoint, row.contract_digest) == (PIN.entity_type, PIN.contract_digest)
+
+
+@pytest.mark.asyncio
+async def test_ceg_down_keeps_completion_and_leaves_the_intent_retryable() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    report = await _commit(coord, world, _router(None), idempotency_key="op-1")
+    assert report.persisted and report.event_emitted and not report.graph_synced
+    assert not report.graph_terminal
+    assert world.intents.only().state == "pending"
+    assert world.intents.settles == [(report.key, "retry")]
+
+
+# ── P15: restart before dispatch ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_restart_before_dispatch_recovers_and_sends_the_pinned_values() -> None:
+    world = _world()
+    first_life = SideEffectCoordinator(intents=world.intents)
+    await _commit(
+        first_life,
+        world,
+        _router(),
+        idempotency_key="op-1",
+        graph_sync=False,
+        defer_graph_sync=True,
+        graph_fields={"capacity": 2.5},
+    )
+    # The process dies before `schedule_graph_leg`; a new one starts empty.
+    second_life = SideEffectCoordinator(intents=world.intents)
+    router = _router(ACK)
+    assert await _recover(second_life, router) == 1
+    sent = router.notify_graph_sync.await_args.kwargs
+    assert (sent["tenant_id"], sent["entity_id"], sent["node_label"]) == (TENANT, "d-1", "Depot")
+    assert sent["fields"] == {"capacity": 2.5}
+    assert sent["expected_contract_digest"] == PIN.contract_digest
+    assert world.intents.only().state == "acknowledged"
+    assert world.persist.await_count == 1
+    assert world.emitter.emit_enrichment_completed.await_count == 1
+
+
+# ── P16: CEG wrote, the ack was lost, EIE restarts ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_lost_ack_then_restart_replays_once_without_duplicate_effects() -> None:
+    world = _world()
+    first_life = SideEffectCoordinator(intents=world.intents)
+    lost = _router(None)  # CEG wrote; the answer never arrived
+    await _commit(first_life, world, lost, idempotency_key="op-1")
+    first_sent = lost.notify_graph_sync.await_args.kwargs
+
+    second_life = SideEffectCoordinator(intents=world.intents)
+    replay = _router(ACK)
+    await _recover(second_life, replay)
+    replay_sent = replay.notify_graph_sync.await_args.kwargs
+    for name in ("tenant_id", "entity_id", "fields", "node_label", "expected_contract_digest"):
+        assert replay_sent[name] == first_sent[name], name  # same row -> same MERGE/key
+    assert world.intents.only().state == "acknowledged"
+    assert world.persist.await_count == 1
+    assert world.emitter.emit_enrichment_completed.await_count == 1
+    # A caller retrying the operation in yet another fresh process is a durable
+    # duplicate: its commit rolls back on the intent key, and nothing re-runs.
+    third_life = SideEffectCoordinator(intents=world.intents)
+    third = await _commit(third_life, world, _router(ACK), idempotency_key="op-1")
+    assert third.skipped is True
+    assert world.persist.await_count == 2  # attempted, rolled back as duplicate
+    assert world.emitter.emit_enrichment_completed.await_count == 1
+
+
+# ── P17: refusal is terminal, accurate, never replayed ──────────────────────
+
+
+@pytest.mark.parametrize("reason", ["row_type", "contract_changed", "no_contract", "all_rejected"])
+@pytest.mark.asyncio
+async def test_refusal_is_terminal_and_never_replayed(reason: str) -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    refused = GraphSyncOutcome(GraphSyncOutcomeKind.REFUSED, reason)
+    router = _router(refused)
+    report = await _commit(coord, world, router, idempotency_key="op-1")
+    assert report.graph_terminal and not report.graph_synced
+    assert f"graph_sync:refused:{reason}" in report.errors
+    assert world.intents.only().state == "failed_terminal"
+    assert await _recover(SideEffectCoordinator(intents=world.intents), _router(ACK)) == 0
+    again = await _commit(coord, world, router, idempotency_key="op-1")
+    assert again.skipped is True
+    assert router.notify_graph_sync.await_count == 1
+
+
+# ── P20: same-key concurrency, and a later legitimate version ───────────────
+
+
+@pytest.mark.asyncio
+async def test_two_simultaneous_same_key_completions_send_once() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    router = _router(ACK, ACK)
+    a, b = await asyncio.gather(
+        _commit(coord, world, router, idempotency_key="op-1"),
+        _commit(coord, world, router, idempotency_key="op-1"),
+    )
+    assert sorted([a.skipped, b.skipped]) == [False, True]
+    assert router.notify_graph_sync.await_count == 1
+    assert world.emitter.emit_enrichment_completed.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_same_key_from_another_worker_is_a_durable_duplicate() -> None:
+    world = _world()
+    worker_a = SideEffectCoordinator(intents=world.intents)
+    worker_b = SideEffectCoordinator(intents=world.intents)
+    await _commit(worker_a, world, _router(ACK), idempotency_key="op-1")
+    router_b = _router(ACK)
+    dup = await _commit(worker_b, world, router_b, idempotency_key="op-1")
+    assert dup.skipped is True
+    router_b.notify_graph_sync.assert_not_awaited()
+    assert world.emitter.emit_enrichment_completed.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_later_legitimate_version_is_recorded_and_sent() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    router = _router(ACK, ACK)
+    await _commit(coord, world, router, idempotency_key="op-1", fields={"capacity": 1.0})
+    newer = await _commit(coord, world, router, idempotency_key="op-2", fields={"capacity": 2.0})
+    assert newer.graph_synced is True
+    assert router.notify_graph_sync.await_args.kwargs["fields"] == {"capacity": 2.0}
+    assert {r.state for r in world.intents.rows.values()} == {"acknowledged"}
+
+
+# ── P21: bounded retries, terminal failure observable ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_spent_retries_end_terminal_and_never_claim_synced() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    await _commit(coord, world, _router(None), idempotency_key="op-1")
+    row = world.intents.only()
+    row.max_attempts = 3
+    for _ in range(5):
+        await _recover(SideEffectCoordinator(intents=world.intents), _router(None))
+    assert row.state == "failed_terminal"
+    assert row.attempts == 3
+    assert row.last_error and row.last_error.startswith("retry_exhausted")
+    assert [o for _k, o in world.intents.settles] == ["retry", "retry", "retry"]
+
+
+@pytest.mark.asyncio
+async def test_retry_exhaustion_on_the_inline_leg_is_reported_terminal() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+
+    async def persist(**_: Any) -> uuid.UUID:
+        spec = pg_store._graph_intent_var.get()
+        assert spec is not None
+        world.intents.record(replace(spec, max_attempts=1))
+        return uuid.uuid4()
+
+    world.persist.side_effect = persist
+    report = await _commit(coord, world, _router(None), idempotency_key="op-1")
+    assert report.graph_terminal and not report.graph_synced
+    assert "graph_sync:retry_exhausted" in report.errors
+
+
+# ── A held or out-of-order intent is never sent twice ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_an_intent_leased_elsewhere_is_deferred_not_sent() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    await _commit(
+        coord, world, _router(), idempotency_key="op-1", graph_sync=False, defer_graph_sync=True
+    )
+    await world.intents.claim(owner="other-worker", tenant_id=TENANT, effect_key=coord_key(world))
+    router = _router(ACK)
+    with patch("app.engines.packet_router.get_router", return_value=router):
+        assert coord.schedule_graph_leg(coord_key(world), settings=SETTINGS)
+        await coord.drain_graph_legs()
+    router.notify_graph_sync.assert_not_awaited()
+    assert world.intents.only().state == "dispatching"
+
+
+def coord_key(world: _World) -> str:
+    return world.intents.only().effect_key
+
+
+@pytest.mark.asyncio
+async def test_store_unreachable_still_sends_the_leg_unclaimed() -> None:
+    """A store outage after commit must not drop the leg; a replay is a MERGE."""
+    world = _world()
+    broken = MagicMock()
+    broken.claim = AsyncMock(side_effect=RuntimeError("db down"))
+    broken.get = AsyncMock(side_effect=RuntimeError("db down"))
+    broken.settle = AsyncMock()
+    coord = SideEffectCoordinator(intents=broken)
+    router = _router(ACK)
+    report = await _commit(coord, world, router, idempotency_key="op-1")
+    assert report.graph_synced is True
+    broken.settle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_graph_leg_asked_records_no_intent() -> None:
+    world = _world()
+    coord = SideEffectCoordinator(intents=world.intents)
+    report = await _commit(coord, world, _router(), idempotency_key="op-1", graph_sync=False)
+    assert report.graph_skipped and not report.graph_durable
+    assert world.intents.rows == {}
