@@ -56,6 +56,12 @@ def test_r19_authored_node_key_is_not_retained() -> None:
 
 def test_r19_rule_fires_on_the_other_node_reusing_the_field() -> None:
     """The reproduced cross-node firing the owner decision must resolve."""
+    declaring = [
+        node["label"]
+        for node in _SPEC["ontology"]["nodes"]
+        if any(p["name"] == "capacity" for p in node["properties"])
+    ]
+    assert declaring == ["Plant", "Depot"]  # the field is genuinely shared
     depot_entity = {"capacity": 50.0}  # a Depot record
     result = infer(depot_entity, parse_rules([_RULE], strict=True))
     assert result.derived_fields == {"size": "large"}
