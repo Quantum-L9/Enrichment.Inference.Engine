@@ -1,20 +1,20 @@
 {
- "run": "20261122T180328Z-ed25519",
+ "run": "20261122T183011Z-ed25519",
  "id": "P12",
  "slice": "A7",
  "profile": "ed25519",
  "assertion": "SDK lock mismatch blocked AND untrusted response signer refused",
  "verdict": "NOT_RUN",
- "reason": "signer sub-assertion PASS; lock-mismatch sub-assertion not exercised: every image installs the same SDK code (no mismatched image exists)",
+ "reason": "signer sub-assertion PASS; lock-mismatch sub-assertion not exercisable: every image installs the same SDK code, and building a mismatched image would mean altering an owner's lock (outside this lane)",
  "observed": {
   "unauthorized_signer_subcase": "PASS",
   "call": {
    "ok": false,
-   "elapsed_s": 0.094,
+   "elapsed_s": 0.116,
    "error": "GateHTTPError: Gate execute returned HTTP 502"
   },
   "gate_log": [
-   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker response failed transport validation: TransportAuthenticationError: no verifying key available for transport signature verification\", \"error_type\": \"GateDispatchSecurityError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"01b296dd-34ab-4117-8196-2743d2976df8\", \"request_id\": \"b22096039eda435c8d6f728576a6ea42\", \"root_id\": \"01b296dd-34ab-4117-8196-2743d2976df8\", \"source_node\": \"odoo\"}"
+   "{\"action\": \"match\", \"destination_node\": \"gate\", \"error_message\": \"worker response failed transport validation: TransportAuthenticationError: no verifying key available for transport signature verification\", \"error_type\": \"GateDispatchSecurityError\", \"event\": \"gate.failure\", \"generation\": 0, \"hop_count\": 0, \"http_method\": \"POST\", \"http_path\": \"/v1/execute\", \"level\": \"info\", \"logger\": \"constellation_gate.execute\", \"message\": \"gate.failure\", \"origin_kind\": \"node\", \"packet_id\": \"9569ddca-225f-4730-8ea2-1b5c2fdc03fe\", \"request_id\": \"833daa468aac450499c4b93ef4f488c4\", \"root_id\": \"9569ddca-225f-4730-8ea2-1b5c2fdc03fe\", \"source_node\": \"odoo\"}"
   ],
   "recovery": {
    "ready": true,
@@ -26,5 +26,5 @@
    "l9e2e-ceg": "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929"
   }
  },
- "timestamp": "2026-11-22T18:04:04.847142+00:00"
+ "timestamp": "2026-11-22T18:37:54.476364+00:00"
 }

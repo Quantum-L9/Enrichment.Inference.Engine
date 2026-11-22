@@ -1,9 +1,9 @@
 {
- "run": "20261122T181723Z-ed25519",
+ "run": "20261122T183011Z-ed25519",
  "id": "P33",
  "slice": "A8",
  "profile": "ed25519",
- "assertion": "valid polymer capability in declared direction matches; hard gates before rank",
+ "assertion": "valid polymer capability in the declared direction matches; hard gates before rank",
  "verdict": "PASS",
  "reason": "",
  "observed": {
@@ -12,13 +12,20 @@
    "entity_type": "facilities",
    "synced_count": 3
   },
+  "per_vector_match": {
+   "PM-POS-01": true,
+   "PM-NEG-01-WRONG-POLYMER": true,
+   "PM-NEG-02-WRONG-DIRECTION": true,
+   "PM-NEG-03-NO-ACTIVE-SUPPLY": true
+  },
   "match": {
    "PM-POS-01": {
-    "ids": [
+    "fixture_ids": [
      "tp-fac-001",
      "tp-fac-002"
     ],
-    "expect": [
+    "off_fixture_candidates": [],
+    "expect_fixture_ids": [
      "tp-fac-001",
      "tp-fac-002"
     ],
@@ -86,24 +93,26 @@
     ]
    },
    "PM-NEG-01-WRONG-POLYMER": {
-    "ids": [],
-    "expect": [],
+    "fixture_ids": [],
+    "off_fixture_candidates": [],
+    "expect_fixture_ids": [],
     "status": "success",
     "error": null,
     "first": []
    },
    "PM-NEG-02-WRONG-DIRECTION": {
-    "ids": [
-     "gl-p19"
+    "fixture_ids": [],
+    "off_fixture_candidates": [
+     "gl-p19-f748dd"
     ],
-    "expect": [],
+    "expect_fixture_ids": [],
     "status": "success",
     "error": null,
     "first": [
      {
       "candidate": {
        "name": "dup",
-       "facility_id": "gl-p19",
+       "facility_id": "gl-p19-f748dd",
        "_tenant": "plasticos"
       },
       "score": 0.05,
@@ -153,13 +162,14 @@
     ]
    },
    "PM-NEG-03-NO-ACTIVE-SUPPLY": {
-    "ids": [],
-    "expect": [],
+    "fixture_ids": [],
+    "off_fixture_candidates": [],
+    "expect_fixture_ids": [],
     "status": "success",
     "error": null,
     "first": []
    }
   }
  },
- "timestamp": "2026-11-22T18:18:50.726929+00:00"
+ "timestamp": "2026-11-22T18:31:53.019517+00:00"
 }

@@ -1,9 +1,9 @@
 {
- "run": "20261122T181906Z-ed25519",
+ "run": "20261122T183011Z-ed25519",
  "id": "F-A1-11",
  "slice": "A7",
  "profile": "ed25519",
- "assertion": "witness: Gate rail's staging env (no L9_KEY_ALLOWED_ACTIONS_JSON) is refused by Gate settings; its driver signs as gate-e2e (run_e2e.sh drive(), source)",
+ "assertion": "witness: the Gate rail's staging env (no L9_KEY_ALLOWED_ACTIONS_JSON) is refused by Gate settings; its driver signs as gate-e2e (run_e2e.sh drive(), source)",
  "verdict": "WITNESSED",
  "reason": "BLOCKED_WITH_EXACT_OWNER: Constellation.Gate tests/e2e/docker (rail). This rail builds its own caller policy and separate consumer keys, so P02/P10/P11 do not depend on it.",
  "observed": {
@@ -13,5 +13,5 @@
    "    For further information visit https://errors.pydantic.dev/2.13/v/value_error"
   ]
  },
- "timestamp": "2026-11-22T18:19:13.152060+00:00"
+ "timestamp": "2026-11-22T18:37:58.676876+00:00"
 }

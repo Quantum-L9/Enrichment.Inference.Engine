@@ -1,12 +1,16 @@
 {
- "run": "20261122T181723Z-ed25519",
+ "run": "20261122T183011Z-ed25519",
  "id": "P19",
  "slice": "A8",
  "profile": "ed25519",
- "assertion": "same relationship evidence twice: no duplicate edge",
+ "assertion": "same relationship evidence twice: both acknowledged, no duplicate edge",
  "verdict": "PASS",
- "reason": "node GRAPH_ACKNOWLEDGED per the F-A1-01 disposition (tenant, entity_type, synced_count == len(batch), no rejected_count) plus a Neo4j edge count",
+ "reason": "node GRAPH_ACKNOWLEDGED (F-A1-01 disposition) plus a Neo4j edge count; fresh ids per run",
  "observed": {
+  "checks": {
+   "both deliveries GRAPH_ACKNOWLEDGED": true,
+   "exactly one PROCESSES edge": true
+  },
   "ack1": {
    "status": "success",
    "entity_type": "facilities",
@@ -22,7 +26,7 @@
     "1"
    ]
   ],
-  "graph_acknowledged_both": true
+  "facility_id": "gl-p19-f748dd"
  },
- "timestamp": "2026-11-22T18:18:25.340607+00:00"
+ "timestamp": "2026-11-22T18:31:45.038171+00:00"
 }

@@ -1,11 +1,11 @@
 {
- "run": "20261122T174815Z-ed25519",
+ "run": "20261122T183011Z-ed25519",
  "id": "P13",
  "slice": "A7",
  "profile": "ed25519",
- "assertion": "replay of a packet id yields no extra effect; expired deadline refused",
+ "assertion": "a replayed packet id adds no effect; an expired deadline is refused",
  "verdict": "PASS",
- "reason": "",
+ "reason": "effect count: the replay returned the cached answer (same query_id), i.e. no second execution",
  "observed": {
   "http_status": {
    "baseline_valid": 200,
@@ -21,7 +21,12 @@
    "replay_first": 200,
    "replay_second_same_packet_id": 200,
    "expired_deadline": 400
+  },
+  "checks": {
+   "first execution succeeded with a query_id": true,
+   "same packet id: replay refused or the identical cached answer": true,
+   "expired deadline refused": true
   }
  },
- "timestamp": "2026-11-22T17:49:11.713732+00:00"
+ "timestamp": "2026-11-22T18:31:11.396097+00:00"
 }

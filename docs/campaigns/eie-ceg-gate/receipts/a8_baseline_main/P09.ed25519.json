@@ -1,22 +1,128 @@
 {
- "run": "20261122T174815Z-ed25519",
+ "run": "20261122T183011Z-ed25519",
  "id": "P09",
  "slice": "A7",
  "profile": "ed25519",
- "assertion": "Gate restart: readiness degrades truthfully, no peer fallback, recovers by live re-registration",
+ "assertion": "Gate restart: readiness degrades truthfully, no peer fallback, recovery by live re-registration",
  "verdict": "PASS",
  "reason": "",
  "observed": {
   "registry_after_restart": {},
-  "ready_after_restart": "{\"ready\":false,\"status\":\"not_ready\",\"required_actions\":[\"converge\",\"enrich\",\"enrich-and-sync\",\"graph-inference-result\",\"match\",\"sync\",\"outcomes\",\"resolve\"],\"actions\":[{\"action\":\"converge\",\"routable\":false,\"required_owner\":\"eie\",\"resolved_node\":null,\"advertising_nodes\":[],\"healthy_advertising_nodes\":",
+  "ready_after_restart": {
+   "ready": false,
+   "status": "not_ready",
+   "required_actions": [
+    "converge",
+    "enrich",
+    "enrich-and-sync",
+    "graph-inference-result",
+    "match",
+    "sync",
+    "outcomes",
+    "resolve"
+   ],
+   "actions": [
+    {
+     "action": "converge",
+     "routable": false,
+     "required_owner": "eie",
+     "resolved_node": null,
+     "advertising_nodes": [],
+     "healthy_advertising_nodes": [],
+     "owners": {},
+     "problem": "no healthy node resolves 'converge'"
+    },
+    {
+     "action": "enrich",
+     "routable": false,
+     "required_owner": "eie",
+     "resolved_node": null,
+     "advertising_nodes": [],
+     "healthy_advertising_nodes": [],
+     "owners": {},
+     "problem": "no healthy node resolves 'enrich'"
+    },
+    {
+     "action": "enrich-and-sync",
+     "routable": false,
+     "required_owner": "eie",
+     "resolved_node": null,
+     "advertising_nodes": [],
+     "healthy_advertising_nodes": [],
+     "owners": {},
+     "problem": "no healthy node resolves 'enrich-and-sync'"
+    },
+    {
+     "action": "graph-inference-result",
+     "routable": false,
+     "required_owner": "eie",
+     "resolved_node": null,
+     "advertising_nodes": [],
+     "healthy_advertising_nodes": [],
+     "owners": {},
+     "problem": "no healthy node resolves 'graph-inference-result'"
+    },
+    {
+     "action": "match",
+     "routable": false,
+     "required_owner": "ceg",
+     "resolved_node": null,
+     "advertising_nodes": [],
+     "healthy_advertising_nodes": [],
+     "owners": {},
+     "problem": "no healthy node resolves 'match'"
+    },
+    {
+     "action": "sync",
+     "routable": false,
+     "required_owner": "ceg",
+     "resolved_node": null,
+     "advertising_nodes": [],
+     "healthy_advertising_nodes": [],
+     "owners": {},
+     "problem": "no healthy node resolves 'sync'"
+    },
+    {
+     "action": "outcomes",
+     "routable": false,
+     "required_owner": "ceg",
+     "resolved_node": null,
+     "advertising_nodes": [],
+     "healthy_advertising_nodes": [],
+     "owners": {},
+     "problem": "no healthy node resolves 'outcomes'"
+    },
+    {
+     "action": "resolve",
+     "routable": false,
+     "required_owner": "ceg",
+     "resolved_node": null,
+     "advertising_nodes": [],
+     "healthy_advertising_nodes": [],
+     "owners": {},
+     "problem": "no healthy node resolves 'resolve'"
+    }
+   ],
+   "problems": [
+    "no healthy node resolves 'converge'",
+    "no healthy node resolves 'enrich'",
+    "no healthy node resolves 'enrich-and-sync'",
+    "no healthy node resolves 'graph-inference-result'",
+    "no healthy node resolves 'match'",
+    "no healthy node resolves 'sync'",
+    "no healthy node resolves 'outcomes'",
+    "no healthy node resolves 'resolve'"
+   ]
+  },
   "call_during_outage": {
    "ok": false,
-   "elapsed_s": 0.075,
+   "elapsed_s": 0.058,
    "error": "GateHTTPError: Gate execute returned HTTP 404"
   },
+  "registry_after_call": {},
   "recovery": {
    "ready": true,
-   "waited_s": 260.5
+   "waited_s": 275.6
   },
   "registry_after_recovery": {
    "enrichment-engine": [
@@ -35,5 +141,5 @@
    ]
   }
  },
- "timestamp": "2026-11-22T17:54:03.703545+00:00"
+ "timestamp": "2026-11-22T18:37:22.207562+00:00"
 }

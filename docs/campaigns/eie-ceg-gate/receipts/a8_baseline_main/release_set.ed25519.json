@@ -1,11 +1,25 @@
 {
- "profile": "ed25519",
- "images": {
-  "gate": "b451b68b98b315f57f0c4f9b99090a437e9dac23 sha256:939257c7bc22189049ff92e2988900a5e0100fba9dd4caf5e379eaea31c3ca70",
-  "eie": "aabf855f3f027dab87a78cf09bcb3f465b1be397 sha256:a5c2a50de8bb9a9183b636a1a2df4a59fd3095e0a06c4dae895a57b3a06510ff",
-  "ceg": "9d17d01b13671c58376f1e659e34958ced445e0c sha256:e53854fc2e56781fffa86fc9e7dc7603fd0118f00626ce8540bd56af0d5a50be"
+ "requested_profile": "ed25519",
+ "observed_signing_algorithm": {
+  "l9e2e-gate": "ed25519",
+  "l9e2e-eie": "ed25519",
+  "l9e2e-ceg": "ed25519"
  },
- "sdk_record_sha256": {
+ "images": {
+  "l9e2e-gate": {
+   "image_id": "sha256:939257c7bc22189049ff92e2988900a5e0100fba9dd4caf5e379eaea31c3ca70",
+   "revision": "b451b68b98b315f57f0c4f9b99090a437e9dac23"
+  },
+  "l9e2e-eie": {
+   "image_id": "sha256:a5c2a50de8bb9a9183b636a1a2df4a59fd3095e0a06c4dae895a57b3a06510ff",
+   "revision": "aabf855f3f027dab87a78cf09bcb3f465b1be397"
+  },
+  "l9e2e-ceg": {
+   "image_id": "sha256:e53854fc2e56781fffa86fc9e7dc7603fd0118f00626ce8540bd56af0d5a50be",
+   "revision": "9d17d01b13671c58376f1e659e34958ced445e0c"
+  }
+ },
+ "sdk_code_digest": {
   "l9e2e-gate": "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929",
   "l9e2e-eie": "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929",
   "l9e2e-ceg": "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929"

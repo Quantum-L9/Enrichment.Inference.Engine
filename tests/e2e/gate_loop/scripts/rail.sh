@@ -78,12 +78,23 @@ case "${1:-status}" in
     COMPOSE up -d --wait --wait-timeout 300 || true
     neo4j_dbs
     docker restart l9e2e-ceg >/dev/null
+    n=0
     for _ in $(seq 1 60); do
       n="$(registry_json | python3 "$HERE/registry_view.py" count)"
       [[ "$n" == "2" ]] && break
       sleep 5
     done
-    "$0" status ;;
+    "$0" status || true
+    # The boot is best effort until here (databases must exist before CEG can
+    # serve); from here it fails unless both workers registered and Gate is ready.
+    [[ "$n" == "2" ]] || { echo "FAIL: $n of 2 workers registered" >&2; exit 1; }
+    ready=""
+    for _ in $(seq 1 24); do
+      ready="$(curl -sS --noproxy '*' --max-time 10 -o /dev/null -w '%{http_code}' http://127.0.0.1:19000/v1/ready || true)"
+      [[ "$ready" == "200" ]] && break
+      sleep 5
+    done
+    [[ "$ready" == "200" ]] || { echo "FAIL: Gate /v1/ready answered ${ready:-nothing}" >&2; exit 1; } ;;
   down) compose_env; COMPOSE down -v --remove-orphans ;;
   status)
     compose_env

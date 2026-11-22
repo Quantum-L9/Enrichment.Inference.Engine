@@ -1,32 +1,32 @@
 {
- "run": "20261122T174815Z-ed25519",
+ "run": "20261122T183011Z-ed25519",
  "id": "P18",
  "slice": "A8",
  "profile": "ed25519",
- "assertion": "typed processed_polymers -> PROCESSES child edges (direction/form on edge), no JSON-string map",
+ "assertion": "typed processed_polymers -> PROCESSES edge with direction in and form Regrind; Facility carries no processed_polymers property (no JSON-string map)",
  "verdict": "BLOCKED",
- "reason": "no row reached CEG",
+ "reason": "EIE egress GateClient carries no ed25519 key from env (F-A1-04, owner Gate_SDK)",
  "observed": {
-  "entity_id": "gl-plas-76d5e9",
+  "entity_id": "gl-plas-e876ad",
   "converge": {
    "ok": true,
-   "elapsed_s": 0.187,
+   "elapsed_s": 0.188,
    "error": null,
    "gate_signature_valid": true
   },
   "response": {
-   "packet_id": "87b3785b-f84f-4ce1-8825-f669eb736429",
+   "packet_id": "87f016b9-1b43-4b5b-95c2-38efb338789a",
    "packet_type": "response",
    "action": "converge",
    "source_node": "enrichment-engine",
    "destination_node": "gate",
    "reply_to": "enrichment-engine",
    "tenant": "plasticos",
-   "root_id": "8fcc351e-ddf2-44bd-8dee-6a49a183d071",
-   "parent_id": "98d37586-c377-490d-ba0e-559d5e2b6ecb",
+   "root_id": "69ffa07a-fe32-4e32-b2c9-933f34105a61",
+   "parent_id": "99aabee4-7dd7-42cf-a80a-4b2832e21c29",
    "generation": 2,
-   "causation_id": "98d37586-c377-490d-ba0e-559d5e2b6ecb",
-   "idempotency_key": "gl:converge:plasticos:gl-plas-76d5e9:049ccd00",
+   "causation_id": "99aabee4-7dd7-42cf-a80a-4b2832e21c29",
+   "idempotency_key": "gl:converge:plasticos:gl-plas-e876ad:09c551fc",
    "signing_key_id": "gate-gl",
    "signature_algorithm": "ed25519",
    "hop_trace": [
@@ -51,24 +51,20 @@
    "1"
   ],
   "graph": {
-   "rows": [
-    [
-     "CYPHER_ERROR",
-     "on_tolerance, p.code, r.line_id, r.direction, r.form, apoc.meta.cypher.type(f.processed_polymers)\"\n                                                                                                                                                                                                        ^"
-    ]
-   ],
+   "rows": [],
    "facility_count": 0
   },
+  "gate_sync_events": [],
   "eie_log": [
-   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-76d5e9:049ccd00:enrich\", \"entity_id\": \"gl-plas-76d5e9\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T17:49:12.946958Z\"}",
-   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-76d5e9:049ccd00:enrich\", \"entity_id\": \"gl-plas-76d5e9\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T17:49:12.947060Z\"}",
-   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-76d5e9:049ccd00:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T17:49:12.947210Z\"}",
-   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T17:49:12.990324Z\"}",
-   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T17:49:12.990412Z\"}",
-   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T17:49:12.991138Z\"}",
-   "{\"entity_id\": \"gl-plas-76d5e9\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T17:49:12.991187Z\"}",
-   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-76d5e9:049ccd00:enrich\", \"entity_id\": \"gl-plas-76d5e9\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T17:49:12.991217Z\"}"
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-e876ad:09c551fc:enrich\", \"entity_id\": \"gl-plas-e876ad\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:31:12.635962Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-e876ad:09c551fc:enrich\", \"entity_id\": \"gl-plas-e876ad\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:31:12.636056Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-e876ad:09c551fc:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:31:12.636217Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:31:12.680129Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T18:31:12.680220Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:31:12.681095Z\"}",
+   "{\"entity_id\": \"gl-plas-e876ad\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:31:12.681150Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-e876ad:09c551fc:enrich\", \"entity_id\": \"gl-plas-e876ad\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T18:31:12.681192Z\"}"
   ]
  },
- "timestamp": "2026-11-22T17:49:23.410090+00:00"
+ "timestamp": "2026-11-22T18:31:23.338455+00:00"
 }

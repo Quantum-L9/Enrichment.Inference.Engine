@@ -1,11 +1,11 @@
 {
- "run": "20261122T174815Z-ed25519",
+ "run": "20261122T183011Z-ed25519",
  "id": "P11",
  "slice": "A7",
  "profile": "ed25519",
- "assertion": "unknown action, wrong tenant, forgery, unsigned, HMAC downgrade all fail closed",
+ "assertion": "unknown action, wrong tenant, forgery, unsigned and HMAC downgrade all fail closed",
  "verdict": "BLOCKED",
- "reason": "hmac_downgrade_with_public_key accepted: SDK verifier honours packet-declared algorithm (BLOCKED owner Gate_SDK)",
+ "reason": "hmac_downgrade_with_public_key accepted (F-A7-03, owner Gate_SDK: the verifier honours the packet-declared algorithm)",
  "observed": {
   "http_status": {
    "baseline_valid": 200,
@@ -83,5 +83,5 @@
    }
   }
  },
- "timestamp": "2026-11-22T17:49:11.713711+00:00"
+ "timestamp": "2026-11-22T18:31:11.396074+00:00"
 }

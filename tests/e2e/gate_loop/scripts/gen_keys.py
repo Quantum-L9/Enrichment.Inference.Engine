@@ -60,6 +60,9 @@ def main(out: str) -> None:
     }
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(
+        fd, 0o600
+    )  # an existing file keeps its mode on open(); force 0600 before writing secrets
     with os.fdopen(fd, "w") as f:
         for k, v in env.items():
             f.write(f"{k}='{v}'\n")

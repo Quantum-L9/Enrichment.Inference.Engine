@@ -1,12 +1,22 @@
 {
- "run": "20261122T174815Z-ed25519",
+ "run": "20261122T183011Z-ed25519",
  "id": "P10",
  "slice": "A7",
  "profile": "ed25519",
- "assertion": "worker score refused; only enrichment-engine may originate health-assess; graph-inference-result only from graph; refusals before execution",
+ "assertion": "worker score refused by the kind rule; worker health-assess only from enrichment-engine (operator consumer allowed by its policy); graph-inference-result only from graph; refusals before execution",
  "verdict": "PASS",
  "reason": "",
  "observed": {
+  "checks": {
+   "eie worker score: kind rule": true,
+   "ceg worker score: kind rule": true,
+   "ceg worker health-assess: kind rule": true,
+   "eie worker health-assess: reaches graph": true,
+   "operator consumer health-assess: reaches graph (WORKER_ORIGINATED applies to workers only)": true,
+   "odoo consumer health-assess: refused by its policy": true,
+   "ceg worker graph-inference-result: reaches enrichment-engine": true,
+   "eie worker graph-inference-result: refused": true
+  },
   "cells": [
    {
     "key_id": "odoo-gl",
@@ -285,5 +295,5 @@
    }
   ]
  },
- "timestamp": "2026-11-22T17:49:07.206262+00:00"
+ "timestamp": "2026-11-22T18:31:07.180379+00:00"
 }
