@@ -37,7 +37,12 @@ from ..models.schemas import (
     EnrichResponse,
     resolve_field_thresholds,
 )
-from ..services.graph_return_channel import EnrichmentTarget, GraphReturnChannel
+from ..services.graph_return_channel import (
+    REJECT_FIELD_NOT_IN_SCHEMA,
+    EnrichmentTarget,
+    GraphReturnChannel,
+    GraphReturnClaim,
+)
 from ..services.idempotency import IdempotencyStore
 from ..services.request_deadline import current_deadline
 from .convergence.acquisition_order import latest_withheld
@@ -290,6 +295,9 @@ async def run_convergence_loop(
     # Seed known_fields from the entity's existing data
     state.known_fields = {k: v for k, v in request.entity.items() if v is not None}
 
+    # A4: what each pass did with the graph-return targets it leased.
+    graph_ledger = GraphConsumption()
+
     for pass_num in range(1, config.max_passes + 1):
         confidence_tracker.begin_pass(pass_num)
         logger.info(
@@ -323,10 +331,12 @@ async def run_convergence_loop(
         graph_seeded: dict[str, Any] = {}
         if tenant_id and entity_id:
             graph_seeded = _apply_graph_targets(
-                GraphReturnChannel.get_instance().take_for_entity(tenant_id, entity_id),
+                await _claim_graph_targets(graph_ledger, tenant_id, entity_id),
                 state,
                 confidence_tracker,
                 pass_num,
+                declared_fields=_declared_fields(domain_classification),
+                ledger=graph_ledger,
             )
 
         # --- META-PROMPT PLANNING ---
@@ -613,6 +623,7 @@ async def run_convergence_loop(
         # The for-loop ran out of passes without any stop condition firing.
         state.convergence_reason = "max_passes_reached"
 
+    await _settle_graph_consumption(graph_ledger, _consumption_key(request, tenant_id, entity_id))
     elapsed = int((time.monotonic() - start) * 1000)
     return _assemble_convergence_response(
         state,
@@ -674,11 +685,107 @@ def _retract_derivation(
     logger.info("inference_derivation_retracted", pass_number=pass_num, field=name)
 
 
+@dataclass
+class GraphConsumption:
+    """The graph-return targets one converge leased, and what it did with each (A4).
+
+    Keyed by `EnrichmentTarget.intake_id`; a target from the in-process queue
+    has none and is recorded nowhere.
+    """
+
+    claims: list[GraphReturnClaim] = field(default_factory=list)
+    outcomes: dict[str, str] = field(default_factory=dict)
+    rejections: dict[str, str] = field(default_factory=dict)
+    seeded_by: dict[str, str] = field(default_factory=dict)
+
+    def record(self, target: EnrichmentTarget, outcome: str) -> None:
+        if target.intake_id is not None:
+            self.outcomes[target.intake_id] = outcome
+
+    def refuse(self, target: EnrichmentTarget, reason: str) -> None:
+        if target.intake_id is not None:
+            self.rejections[target.intake_id] = reason
+
+    def seed(self, target: EnrichmentTarget) -> None:
+        """`target` now holds its field; the target it displaced was outranked."""
+        displaced = self.seeded_by.get(target.field_name)
+        if displaced is not None and displaced != target.intake_id:
+            self.outcomes[displaced] = "outranked"
+        if target.intake_id is not None:
+            self.seeded_by[target.field_name] = target.intake_id
+        self.record(target, "seeded")
+
+
+async def _claim_graph_targets(
+    ledger: GraphConsumption, tenant_id: str, entity_id: str
+) -> list[EnrichmentTarget]:
+    """Lease this entity's graph-return targets; none when the store fails.
+
+    A store that cannot be read leaves the targets retained for a later
+    converge: this pass proceeds without them rather than failing.
+    """
+    try:
+        claim = await GraphReturnChannel.get_instance().claim_for_entity(tenant_id, entity_id)
+    except Exception as exc:  # never fail a converge on its graph-return read
+        logger.warning(
+            "graph_return_claim_failed",
+            tenant_id=tenant_id,
+            entity_id=entity_id,
+            error=type(exc).__name__,
+        )
+        return []
+    ledger.claims.append(claim)
+    return claim.targets
+
+
+async def _settle_graph_consumption(ledger: GraphConsumption, consumed_by: str | None) -> None:
+    """Record each leased target's outcome; a failure leaves it to lease expiry."""
+    channel = GraphReturnChannel.get_instance()
+    for claim in ledger.claims:
+        if not claim.durable:
+            continue
+        try:
+            await channel.settle(
+                claim,
+                outcomes=ledger.outcomes,
+                rejections=ledger.rejections,
+                consumed_by=consumed_by,
+            )
+        except Exception as exc:  # settle failure is retried by lease expiry
+            logger.warning(
+                "graph_return_settle_failed",
+                owner=claim.owner,
+                error=type(exc).__name__,
+            )
+
+
+def _consumption_key(
+    request: EnrichRequest, tenant_id: str | None, entity_id: str | None
+) -> str | None:
+    """Which converge consumed a target: the caller's idempotency key, when it sent one."""
+    key = getattr(request, "idempotency_key", None)
+    if key:
+        return f"converge:{key}"
+    if tenant_id and entity_id:
+        return f"converge:{tenant_id}:{entity_id}"
+    return None
+
+
+def _declared_fields(classification: DomainClassification | None) -> frozenset[str] | None:
+    """The tenant spec's declared fields; None when no spec declares any."""
+    if classification is None or not classification.field_map:
+        return None
+    return frozenset(classification.field_map)
+
+
 def _apply_graph_targets(
     targets: list[EnrichmentTarget],
     state: ConvergenceState,
     confidence_tracker: ConfidenceTracker,
     pass_num: int,
+    *,
+    declared_fields: frozenset[str] | None = None,
+    ledger: GraphConsumption | None = None,
 ) -> dict[str, Any]:
     """Seed graph-inference targets into convergence state.
 
@@ -686,16 +793,25 @@ def _apply_graph_targets(
     produced (it has a confidence_map entry) with lower confidence. It never
     replaces a value the request's entity supplied: that is the record's own
     data, which carries no confidence here, so no inference outranks it. The
-    channel has already applied CONFIDENCE_FLOOR. Returns the fields this pass
-    actually seeded.
+    channel has already applied CONFIDENCE_FLOOR. A target for a field the
+    tenant spec does not declare is refused (`declared_fields`). Returns the
+    fields this pass actually seeded; `ledger` records every target's outcome.
+
+    A seeded value stays a graph inference (GRAPH_INFERENCE_SOURCE): it is
+    never provider evidence, a verified field or a consumer writeback.
     """
+    ledger = ledger if ledger is not None else GraphConsumption()
     seeded: dict[str, Any] = {}
     for target in targets:
         name = target.field_name
-        if name in state.known_fields and (
-            name not in state.confidence_map
-            or state.confidence_map[name] >= target.source_confidence
-        ):
+        if declared_fields is not None and name not in declared_fields:
+            ledger.refuse(target, REJECT_FIELD_NOT_IN_SCHEMA)
+            continue
+        if name in state.known_fields and name not in state.confidence_map:
+            ledger.record(target, "kept_entity_value")
+            continue
+        if name in state.known_fields and state.confidence_map[name] >= target.source_confidence:
+            ledger.record(target, "kept_stronger_value")
             continue
         state.known_fields[name] = target.seed_value
         state.inferred_fields[name] = target.seed_value
@@ -708,6 +824,7 @@ def _apply_graph_targets(
             source=GRAPH_INFERENCE_SOURCE,
         )
         seeded[name] = target.seed_value
+        ledger.seed(target)
     if seeded:
         logger.info(
             "graph_targets_applied",
