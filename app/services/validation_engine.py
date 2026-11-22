@@ -10,6 +10,7 @@ Audit fixes applied:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -117,8 +118,8 @@ def validate_response(
             if isinstance(v, str):
                 normalized[k] = v.strip()[:4096]
             elif isinstance(v, list):
-                # Dedup preserving order
-                normalized[k] = list(dict.fromkeys(str(i).strip()[:256] for i in v[:50] if i))
+                # Dedup preserving order; a mapping member stays a mapping (F05)
+                normalized[k] = _dedup([_free_member(i) for i in v[:50] if i])
             else:
                 normalized[k] = v
 
@@ -153,10 +154,39 @@ def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) 
         return _dedup([_coerce_member(v, items) for v in _list_members(value)])
 
     if expected in (int, float):
-        return expected(value)
+        return _number(value, expected)
 
     # str
     return str(value).strip()[:4096]
+
+
+def _number(value: Any, expected: type) -> int | float:
+    """A finite number of the declared kind; never a bool, NaN, ±Inf or a truncation.
+
+    ``float(True)`` is ``1.0`` and ``int(3.7)`` is ``3``: each would admit a value
+    the provider never stated. Such values raise, so the field is skipped.
+    """
+    if isinstance(value, bool):
+        raise TypeError("a boolean is not a number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("not a finite number")
+    if expected is int:
+        if isinstance(value, float) and not value.is_integer():
+            raise ValueError("a fractional number is not an integer")
+        return int(value)
+    return number
+
+
+def _free_member(value: Any) -> Any:
+    """One member of a schema-free list: a mapping stays a bounded mapping, else trimmed text."""
+    if isinstance(value, Mapping):
+        items = [(key, member) for key, member in value.items() if isinstance(key, str)][:50]
+        return {
+            key: member.strip()[:256] if isinstance(member, str) else member
+            for key, member in items
+        }
+    return str(value).strip()[:256]
 
 
 def _list_members(value: Any) -> list[Any]:
@@ -191,8 +221,13 @@ def _coerce_map(value: Mapping[str, Any], decl: Mapping[str, Any] | None) -> dic
     result: dict[str, Any] = {}
     for prop in properties:
         name = prop.get("name") if isinstance(prop, Mapping) else None
-        if isinstance(name, str) and value.get(name) is not None:
+        if not isinstance(name, str):
+            continue
+        if value.get(name) is not None:
             result[name] = _coerce_property(value[name], prop)
+        elif prop.get("required") is True:
+            # A member without a required property is incomplete, never a fact (F22).
+            raise TypeError(f"declared map property {name} is required")
     return result
 
 
