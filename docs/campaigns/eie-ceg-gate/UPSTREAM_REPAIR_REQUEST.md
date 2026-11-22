@@ -2,7 +2,7 @@
 
 Campaign `EIE-CEG-GATE-COLLAB-2026-11-21`, lane PROOF.
 
-This document requests repairs from the code owners. It is not a patch and it claims no authority: whether to authorize a repair is the operator's decision (CTO answer to Q3). Every defect below was observed at the pinned release set, and every receipt cited is in this directory.
+This document is the repair brief for the Gate_SDK and Constellation.Gate owners. The operator authorized the repair (CTO answer to Q3, option a), and the CTO assigns the repair lane from this brief. It is not a patch: this lane changes neither repository. Every defect below was observed at the pinned release set, and every receipt cited is in this directory. The rail stays unchanged and re-runs on the repaired release set.
 
 ## Release set the defects were observed at
 
@@ -14,88 +14,108 @@ This document requests repairs from the code owners. It is not a patch and it cl
 | EIE / CEG | `aabf855f` / `9d17d01b` |
 | Run | `20261122T183011Z-ed25519`. Staging Gate, all six identities ed25519. The observed signing algorithm is `ed25519` in all three containers. |
 
-## Defects
+## Common reproducer and rail
 
-### D-1 (Gate_SDK) — algorithm-confusion signature forgery (F-A7-03)
-
-**Where:** `src/constellation_node_sdk/security/verification.py:86-92`, in `verify_transport_packet_signature`.
-
-**What:** the verifier chooses its algorithm from the packet's own `security.signature_algorithm`. When a packet declares `hmac-sha256`, the bytes resolved for `signing_key_id` become the HMAC secret, even when those bytes are an ed25519 **public** key. Public keys are not secret, so anyone can forge a packet as any ed25519 participant.
-
-**Observed:**
-- Gate answered the forged packet with HTTP 200: CEG executed `match`, and Gate re-signed the response (`receipts/a7/negatives_main.json`, case `hmac_downgrade_with_public_key`).
-- The control case, an HMAC keyed with a random secret, was refused with 400.
-
-**Requested repair:** bind each key id to exactly one algorithm. The verifier must refuse any packet whose declared algorithm differs from the bound algorithm of its key, before any cryptographic check. Where the mapping is ambient, an ed25519 public key must never be accepted as HMAC key material.
-
-**Secondary owner:** Gate could enforce an allowlist of permitted algorithms at ingress.
-
-### D-2 (Gate_SDK) — a client resolves its own key id to its private key (F-A7-02)
-
-**Where:** `src/constellation_node_sdk/gate/config.py:140-151`, `GateClientConfig.resolve_verifying_key`.
-
-**What:** for the client's own `signing_key_id`, this method returns `self.signing_key`. That only works for symmetric HMAC. Under ed25519, `GateClient._validate_outbound_transport` verifies the client's own packet with its private key, so every ed25519 client fails on send.
-
-**Observed:** the driver failed with `GateSecurityError: outbound packet failed transport validation: TransportAuthenticationError: invalid ed25519 transport signature`. It needed configuration deviation D-3 (its own public key added to its verifying map).
-
-**Requested repair:** for ed25519, resolve the client's own key id to its **public** key, derived from the private key, or skip self-verification of an artifact the client just signed.
-
-### D-3 (Gate_SDK) — ed25519 env layout differs between `GateClient` and the worker runtime (F-A1-04)
-
-**Where:**
-- `src/constellation_node_sdk/gate/config.py:207`: `GateClient` takes `signing_key` only from `L9_SIGNING_KEY` or `L9_SIGNING_SECRET`.
-- `src/constellation_node_sdk/runtime/config.py:203-204`: the worker runtime refuses `L9_SIGNING_KEY` with ed25519 and reads `L9_SIGNING_PRIVATE_KEY` (`:260`).
-
-**What:** a node is both a worker (ingress) and a `GateClient` user (egress), and no single environment satisfies both. EIE's and CEG's egress clients therefore run **unsigned** under ed25519. Gate in staging refuses unsigned packets, so no node-originated packet leaves the node.
-
-**Observed:**
-- EIE's detached `sync` after a converge fails inside EIE with `GateSecurityError … signature required but not present` (`receipts/a8_baseline_main/P07.ed25519.json`, `P05.ed25519.json`).
-- HMAC is not a fallback: CEG staging refuses HMAC from Gate with "Gate must sign with ed25519" (`receipts/a8_baseline_main/hmac_profile_note.json`).
-
-**Requested repair:** the `GateClient` env reader takes the ed25519 private key from `L9_SIGNING_PRIVATE_KEY` when `L9_SIGNING_ALGORITHM=ed25519`, which is the same variable the runtime reads. D-2 must be fixed with it, or the client fails its own validation.
-
-### D-4 (Constellation.Gate) — Gate resolves its own key id to its private key (F-A7-01)
-
-**Where:** `constellation-gate/src/constellation_gate/config/settings.py:424-435`, `GateSettings.resolve_verifying_key`. It is used as the dispatch key resolver at `api/dependencies.py:113` and `:118`.
-
-**What:** this is D-2's pattern in Gate. Gate verifies its own signed dispatch packet with its private key, so under ed25519 every routed call returns 500 (`GateDispatchSecurityError: … invalid ed25519 transport signature`).
-
-**Observed:** on the first all-ed25519 boot, every dispatch failed. The rail works around it with configuration deviation D-2: Gate's public key goes in `L9_VERIFYING_KEYS_JSON`, plus the narrowest caller policy staging accepts.
-
-**Requested repair:** same as D-2. Resolve Gate's own id to its public key, or do not self-verify the packet Gate just signed.
-
-## Minimal reproducer
-
-The rail needs no change to reproduce these defects.
+The rail is not changed for any defect below. Build the three images from clean checkouts, then run the named cases:
 
 ```bash
 gate=<clean Constellation.Gate checkout>/constellation-gate
 L9_E2E_WORKSPACE=<dir with the three repos by GitHub name> bash "$gate/tests/e2e/docker/scripts/build_images.sh" all
 export GL_GATE_RAIL="$gate/tests/e2e/docker" GL_CEG_REPO=<Cognitive.Engine.Graphs checkout>
-python3 tests/e2e/gate_loop/rail.py run --profile ed25519 --cases negatives,converge_plasticos,converge_synthneutral
+python3 tests/e2e/gate_loop/rail.py run --profile ed25519 --cases <cases>
 ```
 
-| Defect | Expected at `bc1c74c` / `b451b68b` |
-|---|---|
-| D-1 | P11 BLOCKED: `hmac_downgrade_with_public_key` = 200 |
-| D-3 | P07, P18 and P05 BLOCKED. The EIE log shows `signature required but not present`. |
-| D-4 | Visible after removing `gate-gl` from `GL_GATE_VERIFYING_KEYS_JSON` in `scripts/gen_keys.py` (deviation D-2 off): every call returns 500. |
-| D-2 | Visible after removing the driver's own public key from `verifying_keys` in `driver/gate_loop_driver.py` (deviation D-3 off). |
+Every acceptance run below is that command at the repaired heads. It passes only when:
+- all three images were rebuilt from the re-pinned locks;
+- `release_set.json` shows one SDK code digest in every process;
+- the observed signing algorithm is ed25519 ×3.
 
-## Acceptance tests the owner fix must pass
+## Lock lines a repaired Gate_SDK release moves
 
-Run the unchanged rail at the repaired heads, with all three images rebuilt from repaired locks and the same SDK code digest in every process.
+D-1, D-2 and D-3 are Gate_SDK fixes. They ship as one new Gate_SDK commit `<repaired sha>` on the `v1` channel, at the version Gate_SDK releases. All four lock entries below move to that sha in the same change set. No manifest changes, because `pyproject.toml` keeps tag `v1` in EIE (`:104`), CEG (`:84`) and Gate (`constellation-gate/pyproject.toml:37`).
 
-1. **D-1:** `rail.py run --cases negatives` records P11 PASS. `hmac_downgrade_with_public_key` gets 400 or 403, and every other P11 sub-check is unchanged.
-2. **D-3 + D-2 (nodes):** `rail.py run --cases converge_plasticos,converge_synthneutral` records P07, P18 and P05 PASS:
-   - Gate shows `gate.ingress` for `sync` from `enrichment-engine`, then `gate.completed` with generation ≥ 2.
-   - The Facility or Station row and its typed child edges are read back from Neo4j.
-3. **D-4 + D-2 (Gate and driver):** the same runs pass with both deviations removed:
-   - `gate-gl` absent from Gate's verifying map;
-   - no own public key in the driver's verifying map;
-   - the `gate-gl` caller policy entry removed.
-4. **Regression:** P03, P09, P10, P13, P17, P19, P33 and P34 stay PASS. P12's signer sub-case still returns 502 `worker_response_untrusted`.
-5. **Unblocks the loop:** with CEG's egress signing, the P08 / P22–P30 cases become runnable on their merits. Their remaining gaps are F-A1-02, F-A1-06 and F-A1-07, owned by the coding lanes.
+| Repo | File:line at the pinned release | Moves from | Moves to |
+|---|---|---|---|
+| EIE `aabf855f` | `uv.lock:172-173` | `version = "1.3.2"`, `source … ?tag=v1#bc1c74c06d70126e82eba73c47df8f2f2af4bc2b` | new version, `#<repaired sha>` (`uv lock --upgrade-package constellation-node-sdk`) |
+| CEG `9d17d01b` | `uv.lock:180-181` | same two fields | same |
+| Gate `b451b68b` | `constellation-gate/requirements.lock:10` | `…/Gate_SDK/archive/bc1c74c0….tar.gz --hash=sha256:cd9d2c20…cd64` | `…/archive/<repaired sha>.tar.gz --hash=sha256:<new archive hash>` |
+| Gate `b451b68b` | `constellation-gate/requirements-dev.lock:12` | same line | same |
+
+D-4 is a Gate source fix. Gate is not a dependency of EIE or CEG, so it moves no EIE or CEG lock. It moves the Gate head the rail builds from, and `release_set.json` records the new `org.opencontainers.image.revision`.
+
+## Defects
+
+### D-1 (Gate_SDK) — algorithm-confusion signature forgery (F-A7-03)
+
+**File:line:** Gate_SDK `bc1c74c` `src/constellation_node_sdk/security/verification.py:86-92`, `verify_transport_packet_signature`. The code is byte-identical at SDK head `dc4e69c4`.
+
+**What:** the verifier takes its algorithm from the packet's own `security.signature_algorithm`. A packet that declares `hmac-sha256` gets its `signing_key_id` bytes used as the HMAC secret, even when those bytes are an ed25519 **public** key. Anyone can therefore forge a packet as any ed25519 participant.
+
+**Observed:** Gate answered HTTP 200 to the forged packet. CEG executed `match`, and Gate re-signed the response (`receipts/a7/negatives_main.json`, case `hmac_downgrade_with_public_key`). The control, HMAC with a random secret, was refused with 400.
+
+**Requested repair:** bind each key id to exactly one algorithm. Refuse a packet whose declared algorithm differs from its key's bound algorithm, before any cryptographic check. Never accept ed25519 public-key bytes as HMAC key material. Secondary owner: Gate could enforce an ingress allowlist of algorithms.
+
+**Minimal reproducer:** `--cases negatives`. Today: P11 BLOCKED with `hmac_downgrade_with_public_key` = 200.
+
+**Acceptance test:** `--cases negatives` records P11 PASS. `hmac_downgrade_with_public_key` gets 400 or 403, and every other P11 sub-check is unchanged.
+
+**Re-pin:** the four Gate_SDK lock lines above.
+
+### D-2 (Gate_SDK) — a client resolves its own key id to its private key (F-A7-02)
+
+**File:line:** Gate_SDK `bc1c74c` `src/constellation_node_sdk/gate/config.py:140-151`, `GateClientConfig.resolve_verifying_key`. The code is byte-identical at SDK head `dc4e69c4`.
+
+**What:** for the client's own `signing_key_id` this returns `self.signing_key`, which is correct only for HMAC. Under ed25519, `GateClient._validate_outbound_transport` verifies the client's own packet with its private key, so every ed25519 client fails on send.
+
+**Observed:** `GateSecurityError: outbound packet failed transport validation: TransportAuthenticationError: invalid ed25519 transport signature`. The driver needs configuration deviation D-3: its own public key in its verifying map.
+
+**Requested repair:** for ed25519, resolve the client's own key id to its **public** key, derived from the private key, or skip self-verification of the artifact it just signed.
+
+**Minimal reproducer:** remove `key_id: PUB[key_id]` from `verifying_keys` in `tests/e2e/gate_loop/driver/gate_loop_driver.py:74`, which turns deviation D-3 off, and run `--cases policy`. Every driver send fails with the error above.
+
+**Acceptance test:** with deviation D-3 removed, `--cases policy,negatives` records P10 PASS and P11 at its D-1 verdict. Every driver call reaches Gate.
+
+**Re-pin:** the four Gate_SDK lock lines above. It ships with D-3, or node egress still fails its own validation.
+
+### D-3 (Gate_SDK) — ed25519 env layout differs between `GateClient` and the worker runtime (F-A1-04)
+
+**File:line:** Gate_SDK `bc1c74c` `src/constellation_node_sdk/gate/config.py:207`: `GateClient` takes `signing_key` only from `L9_SIGNING_KEY` / `L9_SIGNING_SECRET`. Against that, `src/constellation_node_sdk/runtime/config.py:203-204` refuses `L9_SIGNING_KEY` under ed25519, and `:260` reads `L9_SIGNING_PRIVATE_KEY`.
+
+**What:** a node is both a worker (ingress) and a `GateClient` user (egress), and no single environment satisfies both. EIE's and CEG's egress therefore runs **unsigned** under ed25519, and staging Gate refuses unsigned packets.
+
+**Observed:** EIE's detached `sync` after a converge fails inside EIE with `GateSecurityError … signature required but not present` (`receipts/a8_baseline_main/P07.ed25519.json`, `P05.ed25519.json`). HMAC is no fallback: CEG staging refuses HMAC from Gate (`receipts/a8_baseline_main/hmac_profile_note.json`).
+
+**Requested repair:** under `L9_SIGNING_ALGORITHM=ed25519`, the `GateClient` env reader takes the private key from `L9_SIGNING_PRIVATE_KEY`, the same variable the runtime reads.
+
+**Minimal reproducer:** `--cases converge_plasticos,converge_synthneutral`. Today: P07, P18 and P05 BLOCKED, and the EIE log shows `signature required but not present`.
+
+**Acceptance test:** the same cases record P07, P18 and P05 PASS:
+- Gate shows `gate.ingress` for `sync` from `enrichment-engine`, then `gate.completed` with generation ≥ 2;
+- the Facility or Station row and its typed child edges are read back from Neo4j.
+
+**Re-pin:** the four Gate_SDK lock lines above, which also re-pins D-2.
+
+### D-4 (Constellation.Gate) — Gate resolves its own key id to its private key (F-A7-01)
+
+**File:line:** Gate `b451b68b` `constellation-gate/src/constellation_gate/config/settings.py:424-435`, `GateSettings.resolve_verifying_key`. It is used as the dispatch key resolver at `constellation-gate/src/constellation_gate/api/dependencies.py:113` and `:118`.
+
+**What:** this is D-2's pattern inside Gate. Gate verifies its own signed dispatch packet with its private key, so under ed25519 every routed call returns 500 (`GateDispatchSecurityError: … invalid ed25519 transport signature`).
+
+**Observed:** every dispatch failed on the first all-ed25519 boot. The rail works around it with configuration deviation D-2: Gate's public key in `L9_VERIFYING_KEYS_JSON`, plus the narrowest caller policy staging accepts.
+
+**Requested repair:** resolve Gate's own key id to its public key, or do not self-verify the packet Gate just signed.
+
+**Minimal reproducer:** remove `gate-gl` from `TRUSTED_BY_GATE` in `tests/e2e/gate_loop/scripts/gen_keys.py:31`, which feeds `GL_GATE_VERIFYING_KEYS_JSON` (deviation D-2 off), delete `run.env`, and run `--cases policy`. Every routed call returns 500.
+
+**Acceptance test:** with deviation D-2 removed (`gate-gl` absent from Gate's verifying map, and its caller-policy entry removed), `--cases policy,converge_plasticos` records P10 PASS. P07 passes too once D-3 also lands.
+
+**Re-pin:** no EIE or CEG lock moves. The Gate head moves, and the rail rebuilds `l9e2e/gate:local` from it. If the D-4 fix lands in the same Gate change as the SDK re-pin, Gate's two lock lines above move in that change too.
+
+## Regression set for every repair
+
+- P03, P09, P10, P13, P17, P19, P33 and P34 stay PASS.
+- P12's signer sub-case still returns 502 `worker_response_untrusted`.
+- With CEG egress signing, P08 and P22–P30 become runnable on their merits. Their remaining gaps are F-A1-02, F-A1-06 and F-A1-07, owned by the coding lanes.
 
 ## What this request does not ask for
 
