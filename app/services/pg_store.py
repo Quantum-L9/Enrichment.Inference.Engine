@@ -30,7 +30,10 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
+    exists,
     func,
+    or_,
     select,
     text,
     update,
@@ -44,7 +47,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import Mapped, mapped_column, selectinload
+from sqlalchemy.orm import Mapped, aliased, mapped_column, selectinload
 
 from app.engines.convergence.schema_proposer import _is_canonical_field_name
 from app.engines.domain_yaml_reader import is_legal_tenant_id
@@ -1079,53 +1082,6 @@ async def get_graph_intent(tenant_id: str, effect_key: str) -> GraphIntentRecord
     return _orm_intent_record(row) if row is not None else None
 
 
-# Static SQL only (no interpolation). `:tenant_id` / `:effect_key` NULL means
-# "every operation"; both set narrows the statement to one operation. A
-# subject is (tenant, entity, node label), node label compared NULL-safe.
-_SCOPE = (
-    "(CAST(:tenant_id AS TEXT) IS NULL"
-    " OR (i.tenant_id = CAST(:tenant_id AS TEXT) AND i.effect_key = CAST(:effect_key AS TEXT)))"
-)
-
-_SUPERSEDE_SQL = text(
-    "UPDATE graph_sync_intents i SET state = 'superseded',"
-    " last_error = 'superseded_by_newer_version', resolved_at = :now, updated_at = :now"
-    " WHERE i.state = 'pending' AND " + _SCOPE + " AND EXISTS (SELECT 1 FROM graph_sync_intents o"
-    " WHERE o.tenant_id = i.tenant_id AND o.entity_id = i.entity_id"
-    " AND o.node_label IS NOT DISTINCT FROM i.node_label"
-    " AND o.seq > i.seq AND o.state IN ('acknowledged', 'dispatching'))"
-)
-
-_EXHAUST_SQL = text(
-    "UPDATE graph_sync_intents i SET state = 'failed_terminal',"
-    " last_error = 'retry_exhausted:lease_expired', lease_owner = NULL,"
-    " lease_expires_at = NULL, resolved_at = :now, updated_at = :now"
-    " WHERE i.state = 'dispatching' AND i.lease_expires_at <= :now"
-    " AND i.attempts >= i.max_attempts AND " + _SCOPE
-)
-
-_CLAIM_SQL = text(
-    "WITH candidate AS ("
-    " SELECT i.id FROM graph_sync_intents i"
-    " WHERE ((i.state = 'pending' AND i.next_attempt_at <= :now)"
-    "   OR (i.state = 'dispatching' AND i.lease_expires_at <= :now))"
-    "  AND i.attempts < i.max_attempts AND "
-    + _SCOPE
-    + "  AND NOT EXISTS (SELECT 1 FROM graph_sync_intents o"
-    "   WHERE o.tenant_id = i.tenant_id AND o.entity_id = i.entity_id"
-    "   AND o.node_label IS NOT DISTINCT FROM i.node_label"
-    "   AND o.seq < i.seq AND o.state IN ('pending', 'dispatching'))"
-    " ORDER BY i.seq LIMIT :limit FOR UPDATE SKIP LOCKED)"
-    " UPDATE graph_sync_intents u SET state = 'dispatching', lease_owner = :owner,"
-    " lease_expires_at = :lease_until, attempts = u.attempts + 1, updated_at = :now"
-    " FROM candidate WHERE u.id = candidate.id"
-    " RETURNING u.id, u.seq, u.tenant_id, u.effect_key, u.entity_id, u.node_label, u.domain,"
-    " u.endpoint, u.contract_digest, u.cartridge_revision, u.fields, u.enrichment_result_id,"
-    " u.state, u.attempts, u.max_attempts, u.next_attempt_at, u.lease_owner,"
-    " u.lease_expires_at, u.last_error, u.last_ack"
-)
-
-
 async def claim_graph_intents(
     *,
     owner: str,
@@ -1154,18 +1110,98 @@ async def claim_graph_intents(
         msg = "claim one operation with both tenant_id and effect_key, or neither"
         raise ValueError(msg)
     at = now or datetime.now(UTC)
-    params: dict[str, Any] = {
-        "now": at,
-        "owner": owner,
-        "lease_until": at + timedelta(seconds=lease_seconds),
-        "limit": limit,
-        "tenant_id": tenant_id,
-        "effect_key": effect_key,
-    }
+    intent = GraphSyncIntent
+    older_or_newer = aliased(GraphSyncIntent)
+
+    def scope(table: Any) -> list[Any]:
+        if tenant_id is None:
+            return []
+        return [table.tenant_id == tenant_id, table.effect_key == effect_key]
+
+    def same_subject(subject: Any) -> Any:
+        return and_(
+            older_or_newer.tenant_id == subject.tenant_id,
+            older_or_newer.entity_id == subject.entity_id,
+            older_or_newer.node_label.is_not_distinct_from(subject.node_label),
+        )
+
+    supersede = (
+        update(intent)
+        .where(
+            intent.state == GRAPH_INTENT_PENDING,
+            *scope(intent),
+            exists().where(
+                same_subject(intent),
+                older_or_newer.seq > intent.seq,
+                older_or_newer.state.in_((GRAPH_INTENT_ACKNOWLEDGED, GRAPH_INTENT_DISPATCHING)),
+            ),
+        )
+        .values(
+            state=GRAPH_INTENT_SUPERSEDED,
+            last_error="superseded_by_newer_version",
+            resolved_at=at,
+            updated_at=at,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    exhaust = (
+        update(intent)
+        .where(
+            intent.state == GRAPH_INTENT_DISPATCHING,
+            intent.lease_expires_at <= at,
+            intent.attempts >= intent.max_attempts,
+            *scope(intent),
+        )
+        .values(
+            state=GRAPH_INTENT_FAILED_TERMINAL,
+            last_error="retry_exhausted:lease_expired",
+            lease_owner=None,
+            lease_expires_at=None,
+            resolved_at=at,
+            updated_at=at,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    candidate = aliased(GraphSyncIntent)
+    due = (
+        select(candidate.id)
+        .where(
+            or_(
+                and_(candidate.state == GRAPH_INTENT_PENDING, candidate.next_attempt_at <= at),
+                and_(
+                    candidate.state == GRAPH_INTENT_DISPATCHING,
+                    candidate.lease_expires_at <= at,
+                ),
+            ),
+            candidate.attempts < candidate.max_attempts,
+            *scope(candidate),
+            ~exists().where(
+                same_subject(candidate),
+                older_or_newer.seq < candidate.seq,
+                older_or_newer.state.in_((GRAPH_INTENT_PENDING, GRAPH_INTENT_DISPATCHING)),
+            ),
+        )
+        .order_by(candidate.seq)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    claim = (
+        update(intent)
+        .where(intent.id.in_(due.scalar_subquery()))
+        .values(
+            state=GRAPH_INTENT_DISPATCHING,
+            lease_owner=owner,
+            lease_expires_at=at + timedelta(seconds=lease_seconds),
+            attempts=intent.attempts + 1,
+            updated_at=at,
+        )
+        .returning(*GraphSyncIntent.__table__.columns)
+        .execution_options(synchronize_session=False)
+    )
     async with get_session() as session:
-        await session.execute(_SUPERSEDE_SQL, params)
-        await session.execute(_EXHAUST_SQL, params)
-        rows = (await session.execute(_CLAIM_SQL, params)).all()
+        await session.execute(supersede)
+        await session.execute(exhaust)
+        rows = (await session.execute(claim)).all()
     claimed = sorted((_intent_record(r) for r in rows), key=lambda r: r.seq)
     if claimed:
         logger.info("graph_intents_claimed", owner=owner, count=len(claimed))
