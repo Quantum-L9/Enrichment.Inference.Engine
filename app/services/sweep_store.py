@@ -23,13 +23,13 @@ cap that can be passed.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Protocol
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from . import pg_store
@@ -37,6 +37,10 @@ from .pg_models import EnrichmentSweepRecord, EnrichmentSweepResult, SweepBudget
 
 RUNNING = "running"
 COMPLETED = "completed"
+#: The skip reason every candidate an interrupted sweep never handled gets: the
+#: contract's "Unexpected runner error" row (docs/contracts/enrichment-sweep.md,
+#: section 5). An interrupted run is one; no new reason exists for it.
+SWEEP_FAILED = "sweep_failed"
 
 
 @dataclass(frozen=True)
@@ -112,6 +116,39 @@ class SweepStore(Protocol):
     async def purge_expired(self, now: datetime, ttl: timedelta) -> int:
         """Delete sweeps completed more than `ttl` ago, with their results."""
 
+    async def close_stale_sweeps(
+        self, now: datetime, stale_after: timedelta, exclude: Collection[str] = ()
+    ) -> list[str]:
+        """Complete running sweeps whose worker is gone; returns their ids.
+
+        A sweep is stale when nothing has touched it for `stale_after`: not its
+        creation, not a stored result, not its tenant-day ledger row. Every
+        candidate it never handled is skipped `sweep_failed`. The ledger is not
+        touched: a reservation the dead worker held stays charged, never
+        released into a second spend. `exclude` names sweeps this process runs.
+        """
+
+
+def interrupted_progress(
+    record: SweepRecord, handled: Collection[str]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The final skips and counters of a sweep interrupted mid-run.
+
+    The candidates already skipped or enriched (`handled`) keep their outcome;
+    every other one is skipped `sweep_failed`, counted under that reason.
+    """
+    done = {s["entity_id"] for s in record.skipped} | set(handled)
+    skipped = list(record.skipped)
+    stats = dict(record.stats)
+    for candidate in record.candidates:
+        entity_id = candidate["entity_id"]
+        if entity_id in done:
+            continue
+        done.add(entity_id)
+        skipped.append({"entity_id": entity_id, "reason": SWEEP_FAILED})
+        stats[SWEEP_FAILED] = stats.get(SWEEP_FAILED, 0) + 1
+    return skipped, stats
+
 
 def _record(row: EnrichmentSweepRecord) -> SweepRecord:
     return SweepRecord(
@@ -149,7 +186,11 @@ class PgSweepStore:
                     stats=dict(record.stats),
                     completed_at=record.completed_at,
                 )
-                .on_conflict_do_nothing(constraint="uq_enrichment_sweeps_tenant_key")
+                # Any conflict, not only (tenant, key): `sweep_id` is derived from
+                # the same pair, so two concurrent deliveries of one request can
+                # meet on the primary key first. Either way the row that exists is
+                # this request's sweep, read back below.
+                .on_conflict_do_nothing()
                 .returning(EnrichmentSweepRecord.sweep_id)
             )
             if inserted.scalar_one_or_none() is not None:
@@ -184,7 +225,7 @@ class PgSweepStore:
                     ledger.day == day,
                     ledger.spent_usd + ledger.reserved_usd + amount <= cap,
                 )
-                .values(reserved_usd=ledger.reserved_usd + amount)
+                .values(reserved_usd=ledger.reserved_usd + amount, updated_at=func.now())
                 .returning(ledger.tenant_id)
             )
             return granted.scalar_one_or_none() is not None
@@ -198,6 +239,7 @@ class PgSweepStore:
                 .values(
                     reserved_usd=ledger.reserved_usd - reserved,
                     spent_usd=ledger.spent_usd + actual,
+                    updated_at=func.now(),
                 )
             )
 
@@ -236,9 +278,14 @@ class PgSweepStore:
         if completed_at is not None:
             values.update(state=COMPLETED, completed_at=completed_at)
         async with pg_store.get_session() as session:
+            # Only a running sweep moves: once completed -- by its own worker or
+            # closed as stale -- a late write from a worker cannot rewrite it.
             await session.execute(
                 update(EnrichmentSweepRecord)
-                .where(EnrichmentSweepRecord.sweep_id == sweep_id)
+                .where(
+                    EnrichmentSweepRecord.sweep_id == sweep_id,
+                    EnrichmentSweepRecord.state == RUNNING,
+                )
                 .values(**values)
             )
 
@@ -270,13 +317,57 @@ class PgSweepStore:
             )
             return len(purged.scalars().all())
 
+    async def close_stale_sweeps(
+        self, now: datetime, stale_after: timedelta, exclude: Collection[str] = ()
+    ) -> list[str]:
+        sweep, result, ledger = EnrichmentSweepRecord, EnrichmentSweepResult, SweepBudgetLedger
+        last_result = (
+            select(func.max(result.created_at))
+            .where(result.sweep_id == sweep.sweep_id)
+            .scalar_subquery()
+        )
+        last_ledger = (
+            select(ledger.updated_at)
+            .where(ledger.tenant_id == sweep.tenant_id, ledger.day == sweep.day)
+            .scalar_subquery()
+        )
+        # GREATEST ignores NULLs: a sweep with no result or no ledger row yet is
+        # as live as its creation.
+        last_touch = func.greatest(sweep.created_at, last_result, last_ledger)
+        stale = select(sweep).where(sweep.state == RUNNING, last_touch < now - stale_after)
+        if exclude:
+            stale = stale.where(sweep.sweep_id.not_in(sorted(exclude)))
+        closed: list[str] = []
+        async with pg_store.get_session() as session:
+            rows = (
+                await session.execute(stale.with_for_update(of=sweep, skip_locked=True))
+            ).scalars()
+            for row in list(rows):
+                record = _record(row)
+                handled = (
+                    await session.execute(
+                        select(result.entity_id).where(result.sweep_id == record.sweep_id)
+                    )
+                ).scalars()
+                skipped, stats = interrupted_progress(record, set(handled))
+                done = await session.execute(
+                    update(sweep)
+                    .where(sweep.sweep_id == record.sweep_id, sweep.state == RUNNING)
+                    .values(skipped=skipped, stats=stats, state=COMPLETED, completed_at=now)
+                    .returning(sweep.sweep_id)
+                )
+                closed.extend(done.scalars().all())
+        return closed
+
 
 __all__ = [
     "COMPLETED",
     "RUNNING",
+    "SWEEP_FAILED",
     "LedgerState",
     "PgSweepStore",
     "SweepRecord",
     "SweepResultRow",
     "SweepStore",
+    "interrupted_progress",
 ]
