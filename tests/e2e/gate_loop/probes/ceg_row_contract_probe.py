@@ -2,7 +2,10 @@
 
 Observational only. argv: <ceg_pack_root> <vectors.json>
 """
-import json, sys
+
+import json
+import sys
+
 from engine.config.loader import DomainPackLoader
 from engine.sync.row_contract import SyncRowContract
 
@@ -16,5 +19,7 @@ for v in vectors["vectors"]:
     contract = SyncRowContract.from_spec(spec, ep)
     for refuse in (False, True):
         defects = contract.defects([v["row"]], refuse_undeclared=refuse)
-        out.append({"id": v["id"], "refuse_undeclared": refuse, "defects": [str(d) for d in defects]})
+        out.append(
+            {"id": v["id"], "refuse_undeclared": refuse, "defects": [str(d) for d in defects]}
+        )
 print(json.dumps(out, indent=1))
