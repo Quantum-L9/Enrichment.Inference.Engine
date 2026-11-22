@@ -1,0 +1,63 @@
+# TEST_ONLY EIE cartridge for the synthetic neutral tenant (lane PROOF).
+# Counterpart of Cognitive.Engine.Graphs tests/fixtures/test_only_packs/synthneutral/spec.yaml.
+# Never a deployment cartridge. No PlasticOS literal.
+name: synthneutral
+version: "0.1.0"
+description: TEST_ONLY synthetic tenant for domain-neutrality proof.
+authority:
+  owns: [feature evidence extraction, enrichment target schema]
+  does_not_own: [candidate ranking, match gates / scoring dimensions]
+ontology:
+  nodes:
+  - label: Station
+    description: Synthetic candidate node
+    properties:
+    - {name: station_id, type: string, required: true}
+    - {name: title, type: string, required: true}
+    - {name: max_load, type: float}
+    - {name: band, type: string}
+    - name: handled_kinds
+      type: list
+      items:
+        type: map
+        properties:
+        - {name: code, type: string, required: true}
+        - {name: slot_id, type: string}
+        - {name: direction, type: string}
+    - {name: note, type: string, evidenceonly: true}
+    enrichment_hints:
+      objective_template: "Enrich synthetic station profile"
+      priority_fields: [max_load, band, handled_kinds]
+      min_confidence: 0.75
+queryschema:
+  fields:
+  - {name: kind_code, type: string}
+gates: []
+scoring:
+  dimensions: []
+chassisbinding:
+  handleractions:
+  - {name: enrich, description: "Enrich station fields"}
+  - {name: converge, description: "Run convergence"}
+  - {name: sync, description: "Sync station via Gate"}
+  forbidden_actions: [match, outcomes]
+sync:
+  endpoints:
+  - path: /v1/sync/stations
+    targetnode: Station
+    idproperty: station_id
+    batchstrategy: UNWINDMERGE
+    childsync:
+    - field: handled_kinds
+      targetnode: Kind
+      targetid: code
+      edgetype: HANDLES
+      edgedirection: parenttochild
+subjects:
+  roles: [provider]
+  types:
+  - name: station
+    node: Station
+    fields: [title, max_load, band, handled_kinds, note]
+    ceg_owned: []
+inference_rules: []
