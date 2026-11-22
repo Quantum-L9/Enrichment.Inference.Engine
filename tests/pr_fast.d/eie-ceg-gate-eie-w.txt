@@ -11,3 +11,4 @@ tests/unit/test_graph_return_store_logic.py
 tests/contracts/tier2/test_graph_return_intake_contract.py
 # A5: readiness and budgeted sweep
 tests/unit/test_sweep_closed_loop.py
+tests/contracts/tier2/test_enrichment_sweep_store_contract.py
