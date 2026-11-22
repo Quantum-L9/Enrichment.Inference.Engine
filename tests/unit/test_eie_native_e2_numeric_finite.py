@@ -96,3 +96,19 @@ def test_r08_json_infinity_in_a_record_does_not_derive() -> None:
         strict=True,
     )
     assert infer(entity, registry).derived_fields == {}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("free text", id="unparsable-text"),
+        pytest.param({"v": 5}, id="mapping"),
+        pytest.param([5], id="list"),
+        pytest.param(10**400, id="int-overflowing-float"),
+    ],
+)
+@pytest.mark.parametrize("operator", _NUMERIC)
+def test_value_float_cannot_represent_never_satisfies(operator: Operator, value: Any) -> None:
+    """float() raising (TypeError / ValueError / OverflowError) is a non-match, not a crash."""
+    condition = RuleCondition(field="f", operator=operator, value=416.67)
+    assert condition_holds(condition, value) is False
