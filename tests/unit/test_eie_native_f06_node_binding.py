@@ -89,13 +89,28 @@ def test_bound_node_rules() -> None:
 
 
 def test_r19_rule_does_not_fire_on_another_node_reusing_the_field() -> None:
-    """The reproduced cross-node firing (F06), refused once the node is passed."""
+    """R19: the two-node fixture of the retired F06 characterization witness.
+
+    Plant and Depot both declare `capacity`; the rule belongs to Plant and the
+    record is a Depot record. The retired witness showed it firing (no node
+    binding existed); with the node passed it does not, the owning node still
+    fires, and node=None keeps today's behavior on the same fixture.
+    """
     rules = [_rule("plant-size", "capacity", "size", node="Plant")]
     spec = _native("Plant", "Depot")
+    declaring = [
+        n["label"]
+        for n in spec["ontology"]["nodes"]
+        if any(p["name"] == "capacity" for p in n["properties"])
+    ]
+    assert declaring == ["Plant", "Depot"]  # the field is genuinely shared
+    depot_record = {"capacity": 50.0}
     depot = InferenceBridge(rules=rules, domain_spec=spec, node="Depot")
-    assert depot.run({"capacity": 50}).derived_fields == {}
+    assert depot.run(dict(depot_record)).derived_fields == {}
     plant = InferenceBridge(rules=rules, domain_spec=spec, node="Plant")
-    assert plant.run({"capacity": 50}).derived_fields == {"size": "large"}
+    assert plant.run(dict(depot_record)).derived_fields == {"size": "large"}
+    today = InferenceBridge(rules=rules, domain_spec=spec)
+    assert today.run(dict(depot_record)).derived_fields == {"size": "large"}
 
 
 def test_passing_node_filters_to_that_nodes_rules() -> None:
