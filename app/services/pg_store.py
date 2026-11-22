@@ -1646,6 +1646,89 @@ async def _unchanged_facts(
     return {fact for fact, best in rows if best >= by_fact[fact]}
 
 
+def _packet_tenant(intakes: list[GraphReturnIntake]) -> str:
+    """The one tenant every output of a packet shares."""
+    tenants = {i.tenant_id for i in intakes}
+    if len(tenants) != 1:
+        raise ValueError("one packet's outputs share one tenant")
+    return next(iter(tenants))
+
+
+def _intake_row(
+    intake: GraphReturnIntake,
+    reason: str | None,
+    *,
+    at: datetime,
+    ttl_seconds: float,
+    max_attempts: int,
+) -> dict[str, Any]:
+    """The `graph_return_targets` row one output records: rejected with `reason`, else retained."""
+    return {
+        "id": uuid.uuid4(),
+        "tenant_id": intake.tenant_id,
+        "entity_id": intake.entity_id[:256],
+        "field_name": intake.field_name[:128],
+        "rule": intake.rule[:128],
+        "value": json.loads(json.dumps({"value": intake.value}, default=str)),
+        "value_digest": intake.value_digest,
+        "fact_key": intake.fact_key,
+        "intake_key": intake.intake_key,
+        "producer_key": intake.producer_key[:256],
+        "origin_packet_id": intake.origin_packet_id[:128],
+        "confidence": intake.confidence,
+        "state": GRAPH_RETURN_REJECTED if reason else GRAPH_RETURN_RETAINED,
+        "reason": reason,
+        "attempts": 0,
+        "max_attempts": max_attempts,
+        "expires_at": at + timedelta(seconds=ttl_seconds),
+        "resolved_at": at if reason else None,
+        "created_at": at,
+        "updated_at": at,
+    }
+
+
+def _classify_fresh(
+    fresh: list[GraphReturnIntake], unchanged: set[str]
+) -> tuple[list[tuple[GraphReturnIntake, str | None]], int, int, int]:
+    """Each new output with its rejection reason (None: retain), and the three counts.
+
+    An eligible output whose fact an accepted row already holds is
+    `unchanged_fact`; within one packet, a second output of a fact retained
+    earlier in it is unchanged too.
+    """
+    seen = set(unchanged)
+    decided: list[tuple[GraphReturnIntake, str | None]] = []
+    retained = rejected = repeated = 0
+    for intake in fresh:
+        reason = intake.rejection
+        if reason is not None:
+            rejected += 1
+        elif intake.fact_key in seen:
+            reason = "unchanged_fact"
+            repeated += 1
+        else:
+            retained += 1
+            seen.add(intake.fact_key)
+        decided.append((intake, reason))
+    return decided, retained, rejected, repeated
+
+
+async def _require_capacity(
+    session: AsyncSession, tenant_id: str, incoming: int, capacity: int
+) -> None:
+    """Refuse, recording nothing, when `incoming` more open rows would pass `capacity`."""
+    open_count = (
+        await session.execute(
+            select(func.count()).where(
+                GraphReturnTarget.tenant_id == tenant_id,
+                GraphReturnTarget.state.in_(GRAPH_RETURN_OPEN_STATES),
+            )
+        )
+    ).scalar_one()
+    if int(open_count) + incoming > capacity:
+        raise GraphReturnCapacityError(tenant_id, int(open_count), incoming, capacity)
+
+
 async def retain_graph_return_targets(
     intakes: list[GraphReturnIntake],
     *,
@@ -1673,10 +1756,7 @@ async def retain_graph_return_targets(
     """
     if not intakes:
         return GraphReturnIntakeResult(retained=0, duplicates=0, unchanged=0, rejected=0)
-    tenants = {i.tenant_id for i in intakes}
-    if len(tenants) != 1:
-        raise ValueError("one packet's outputs share one tenant")
-    tenant_id = next(iter(tenants))
+    tenant_id = _packet_tenant(intakes)
     at = now or datetime.now(UTC)
     by_key: dict[str, GraphReturnIntake] = {}
     for intake in intakes:
@@ -1697,56 +1777,16 @@ async def retain_graph_return_targets(
         unchanged = await _unchanged_facts(
             session, tenant_id, [i for i in fresh if i.rejection is None]
         )
-        rows: list[dict[str, Any]] = []
-        retained_new = rejected_new = unchanged_new = 0
-        for intake in fresh:
-            reason = intake.rejection
-            if reason is None and intake.fact_key in unchanged:
-                reason = "unchanged_fact"
-                unchanged_new += 1
-            elif reason is not None:
-                rejected_new += 1
-            else:
-                retained_new += 1
-            rows.append(
-                {
-                    "id": uuid.uuid4(),
-                    "tenant_id": tenant_id,
-                    "entity_id": intake.entity_id[:256],
-                    "field_name": intake.field_name[:128],
-                    "rule": intake.rule[:128],
-                    "value": json.loads(json.dumps({"value": intake.value}, default=str)),
-                    "value_digest": intake.value_digest,
-                    "fact_key": intake.fact_key,
-                    "intake_key": intake.intake_key,
-                    "producer_key": intake.producer_key[:256],
-                    "origin_packet_id": intake.origin_packet_id[:128],
-                    "confidence": intake.confidence,
-                    "state": GRAPH_RETURN_REJECTED if reason else GRAPH_RETURN_RETAINED,
-                    "reason": reason,
-                    "attempts": 0,
-                    "max_attempts": max_attempts,
-                    "expires_at": at + timedelta(seconds=ttl_seconds),
-                    "resolved_at": at if reason else None,
-                    "created_at": at,
-                    "updated_at": at,
-                }
-            )
-            # Within one packet a second output of the same fact is unchanged.
-            if reason is None:
-                unchanged.add(intake.fact_key)
+        decided, retained_new, rejected_new, unchanged_new = _classify_fresh(fresh, unchanged)
         if retained_new:
-            open_count = (
-                await session.execute(
-                    select(func.count()).where(
-                        GraphReturnTarget.tenant_id == tenant_id,
-                        GraphReturnTarget.state.in_(GRAPH_RETURN_OPEN_STATES),
-                    )
+            await _require_capacity(session, tenant_id, retained_new, capacity)
+        if decided:
+            rows = [
+                _intake_row(
+                    intake, reason, at=at, ttl_seconds=ttl_seconds, max_attempts=max_attempts
                 )
-            ).scalar_one()
-            if int(open_count) + retained_new > capacity:
-                raise GraphReturnCapacityError(tenant_id, int(open_count), retained_new, capacity)
-        if rows:
+                for intake, reason in decided
+            ]
             await session.execute(
                 insert(GraphReturnTarget)
                 .values(rows)

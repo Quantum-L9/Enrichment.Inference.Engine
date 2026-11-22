@@ -340,9 +340,11 @@ class PgSweepStore:
         closed: list[str] = []
         async with pg_store.get_session() as session:
             rows = (
-                await session.execute(stale.with_for_update(of=sweep, skip_locked=True))
-            ).scalars()
-            for row in list(rows):
+                (await session.execute(stale.with_for_update(of=sweep, skip_locked=True)))
+                .scalars()
+                .all()
+            )
+            for row in rows:
                 record = _record(row)
                 handled = (
                     await session.execute(

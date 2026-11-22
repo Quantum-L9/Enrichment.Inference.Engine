@@ -51,6 +51,8 @@ from .domain_yaml_reader import DomainEnrichmentConfig, default_node_label
 from .spec_types import node_properties
 
 logger = structlog.get_logger("enrichment_sweep")
+# The structured-log event of every "budget ledger cannot be read or written" stop.
+_LEDGER_UNAVAILABLE_EVENT = "enrichment_sweep.ledger_unavailable"
 
 ASSESS_ACTION = "health-assess"
 ASSESS_SUBACTION = "health_batch_assess"
@@ -619,9 +621,7 @@ class SweepRunner:
                 run.seq += 1
                 await self._store.add_result(record.sweep_id, run.seq, entity_id, response, cost)
         except Exception as exc:
-            logger.error(
-                "enrichment_sweep.ledger_unavailable", sweep_id=record.sweep_id, error=str(exc)
-            )
+            logger.error(_LEDGER_UNAVAILABLE_EVENT, sweep_id=record.sweep_id, error=str(exc))
             return "budget_ledger_unavailable"
         if response is None:
             run.skip(entity_id, "converge_failed")
@@ -639,9 +639,7 @@ class SweepRunner:
         try:
             current = await self._store.get_sweep(record.tenant_id, record.sweep_id)
         except Exception as exc:
-            logger.error(
-                "enrichment_sweep.ledger_unavailable", sweep_id=record.sweep_id, error=str(exc)
-            )
+            logger.error(_LEDGER_UNAVAILABLE_EVENT, sweep_id=record.sweep_id, error=str(exc))
             return "budget_ledger_unavailable"
         if current is None or current.state != RUNNING:
             logger.warning("enrichment_sweep.closed_while_running", sweep_id=record.sweep_id)
@@ -653,9 +651,7 @@ class SweepRunner:
         try:
             granted = await self._store.reserve(record.tenant_id, record.day, estimate, cap)
         except Exception as exc:
-            logger.error(
-                "enrichment_sweep.ledger_unavailable", sweep_id=record.sweep_id, error=str(exc)
-            )
+            logger.error(_LEDGER_UNAVAILABLE_EVENT, sweep_id=record.sweep_id, error=str(exc))
             return "budget_ledger_unavailable"
         return None if granted else "budget_exhausted"
 
