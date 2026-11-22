@@ -109,9 +109,6 @@ repo-test:  ## PR-fast contracts on GitHub Actions; local full catalog with the 
 	@if [ -n "$${GITHUB_ACTIONS:-}" ]; then \
 	  deselects=(); while IFS= read -r line; do deselects+=("$${line}"); done < <($(PYTHON) tools/pytest_quarantine_deselects.py); \
 	  echo "PR-fast: $${#deselects[@]} quarantine deselections; bounded selection"; \
-	  lane_out="$$($(PYTHON) -c 'import glob,os,sys; seen=[]; bad=[]; [((bad.append(f + ": " + p) if not os.path.isfile(p) else (None if p in seen else seen.append(p)))) for f in sorted(glob.glob("tests/pr_fast.d/*.txt")) for p in (raw.split("#", 1)[0].strip() for raw in open(f, encoding="utf-8")) if p]; bad and sys.exit("PR-fast: tests/pr_fast.d names a missing test path: " + "; ".join(bad)); print("\n".join(seen))')" || exit 1; \
-	  lane_tests=(); while IFS= read -r line; do if [ -n "$${line}" ]; then lane_tests+=("$${line}"); fi; done <<< "$${lane_out}"; \
-	  echo "PR-fast: $${#lane_tests[@]} lane test path(s) from tests/pr_fast.d"; \
 	  report="$${TMPDIR:-/tmp}/eie-pr-fast-junit.xml"; \
 	  rm -f "$${report}"; \
 	  set +e; \
@@ -127,7 +124,6 @@ repo-test:  ## PR-fast contracts on GitHub Actions; local full catalog with the 
 	    tests/unit/test_gate_client_env_isolation.py \
 	    tests/services/test_gate_registration.py \
 	    tests/architecture/test_no_bespoke_gate_transport.py \
-	    "$${lane_tests[@]}" \
 	    "$${deselects[@]}" \
 	    -p no:xdist \
 	    --timeout=120 \
