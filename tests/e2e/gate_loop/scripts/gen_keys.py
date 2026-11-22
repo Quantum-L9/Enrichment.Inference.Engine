@@ -23,6 +23,7 @@ import json
 import os
 import secrets
 import sys
+import tempfile
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -59,13 +60,22 @@ def main(out: str) -> None:
         "GL_PG_PASSWORD": secrets.token_urlsafe(18).replace("-", "x").replace("_", "y"),
     }
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(
-        fd, 0o600
-    )  # an existing file keeps its mode on open(); force 0600 before writing secrets
-    with os.fdopen(fd, "w") as f:
-        for k, v in env.items():
-            f.write(f"{k}='{v}'\n")
+    # Write a private temp file beside the target and publish it only once it is complete and
+    # fsynced: a failed run leaves any previous file untouched and no partial file behind
+    # (rail.sh regenerates only when run.env is absent).
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out) or ".", prefix=".run.env.", suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            for k, v in env.items():
+                f.write(f"{k}='{v}'\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, out)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
     print(
         json.dumps(
             {

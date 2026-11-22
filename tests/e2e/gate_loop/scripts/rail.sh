@@ -66,7 +66,7 @@ neo4j_dbs() {
 # checked-in script; no fetched content is ever executed.
 registry_json() {
   local out="$STATE/registry.json"
-  curl -sS --noproxy '*' -H "X-Admin-Token: $GL_ADMIN_TOKEN" -o "$out" \
+  curl -sS --noproxy '*' --max-time 10 -H "X-Admin-Token: $GL_ADMIN_TOKEN" -o "$out" \
     http://127.0.0.1:19000/v1/registry 2>/dev/null || printf '{}' >"$out"
   cat "$out"
 }
@@ -94,13 +94,16 @@ case "${1:-status}" in
       [[ "$ready" == "200" ]] && break
       sleep 5
     done
-    [[ "$ready" == "200" ]] || { echo "FAIL: Gate /v1/ready answered ${ready:-nothing}" >&2; exit 1; } ;;
+    [[ "$ready" == "200" ]] || { echo "FAIL: Gate /v1/ready answered ${ready:-nothing}" >&2; exit 1; }
+    # Readiness may not depend on registrations, so count them again after it.
+    n="$(registry_json | python3 "$HERE/registry_view.py" count)"
+    [[ "$n" == "2" ]] || { echo "FAIL: $n of 2 workers registered after readiness" >&2; exit 1; } ;;
   down) compose_env; COMPOSE down -v --remove-orphans ;;
   status)
     compose_env
     COMPOSE ps --format '{{.Name}} {{.State}} {{.Health}}'
     echo "registry:"; registry_json | python3 "$HERE/registry_view.py" actions || true
-    echo "ready:"; curl -sS --noproxy '*' http://127.0.0.1:19000/v1/ready; echo ;;
+    echo "ready:"; curl -sS --noproxy '*' --max-time 10 http://127.0.0.1:19000/v1/ready || true; echo ;;
   compose) shift; compose_env; COMPOSE "$@" ;;
   *) echo "usage: $0 up|down|status|compose <args>" >&2; exit 2 ;;
 esac

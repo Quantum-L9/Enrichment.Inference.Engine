@@ -49,6 +49,8 @@ EIE_ROOT = HERE.parents[2]
 STATE = Path(os.environ.get("GL_STATE_DIR", "/root/l9e2e/gate_loop"))
 ENV_FILE = Path(os.environ.get("GL_ENV_FILE", STATE / "run.env"))
 OBSERVED_PROFILE: dict[str, str] = {}
+# Set by main() from the running containers; probes that start a container use these image ids.
+RELEASE_SET: dict = {}
 
 
 # ───────────────────────────── plumbing ─────────────────────────────
@@ -130,7 +132,7 @@ def cypher(db: str, query: str) -> list[list[str]]:
     )
     if r.returncode != 0:
         raise ProbeError(
-            f"cypher on {db} failed (rc {r.returncode}): {redact(r.stderr.strip()[-300:])}"
+            f"cypher on {db} failed (rc {r.returncode}): {redact(r.stderr.strip())[-300:]}"
         )
     lines = [ln for ln in r.stdout.strip().splitlines() if ln.strip()]
     return [ln.split(", ") for ln in lines[1:]]
@@ -142,12 +144,16 @@ def psql(query: str) -> list[str]:
         timeout=120,
     )
     if r.returncode != 0:
-        raise ProbeError(f"psql failed (rc {r.returncode}): {redact(r.stderr.strip()[-300:])}")
+        raise ProbeError(f"psql failed (rc {r.returncode}): {redact(r.stderr.strip())[-300:]}")
     return r.stdout.strip().splitlines()
 
 
 def logs(container: str, since: str = "2m", grep: tuple[str, ...] = ()) -> list[str]:
     r = sh(["docker", "logs", container, "--since", since], timeout=60)
+    if r.returncode != 0:
+        raise ProbeError(
+            f"docker logs {container} failed (rc {r.returncode}): {redact(r.stderr.strip())[-300:]}"
+        )
     lines = (r.stdout + r.stderr).splitlines()
     lines = [ln for ln in lines if "otel" not in ln and "opentelemetry" not in ln]
     if grep:
@@ -250,26 +256,34 @@ def registry() -> dict:
 
 def stamp() -> str:
     """A docker-logs --since value meaning 'from now on'."""
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def running_signing() -> dict:
-    """The signing algorithm each running container was actually started with."""
+    """The signing algorithm each container was started with, or NOT_RUNNING / UNAVAILABLE."""
     out = {}
     for c in ("l9e2e-gate", "l9e2e-eie", "l9e2e-ceg"):
         r = sh(
-            ["docker", "inspect", c, "--format", "{{range .Config.Env}}{{println .}}{{end}}"],
+            [
+                "docker",
+                "inspect",
+                c,
+                "--format",
+                "running={{.State.Running}}\n{{range .Config.Env}}{{println .}}{{end}}",
+            ],
             timeout=30,
         )
+        lines = r.stdout.splitlines()
         alg = next(
-            (
-                ln.split("=", 1)[1]
-                for ln in r.stdout.splitlines()
-                if ln.startswith("L9_SIGNING_ALGORITHM=")
-            ),
+            (ln.split("=", 1)[1] for ln in lines if ln.startswith("L9_SIGNING_ALGORITHM=")),
             None,
         )
-        out[c] = alg if r.returncode == 0 and alg else "UNAVAILABLE"
+        if r.returncode != 0 or not alg:
+            out[c] = "UNAVAILABLE"
+        elif "running=true" not in lines:
+            out[c] = "NOT_RUNNING"
+        else:
+            out[c] = alg
     return out
 
 
@@ -289,12 +303,19 @@ class Result:
 
 
 def verdict(ok: bool, profile: str, *, signed_claim: bool) -> str:
-    """PASS only on the target profile *as observed in the running containers*."""
+    """PASS only on the target profile as observed in the running containers at verdict time.
+
+    OBSERVED_PROFILE is the startup record; every PASS re-reads the containers after the case's
+    last lifecycle action, so a container that was recreated or stopped cannot inherit it.
+    """
     del signed_claim  # every claim needs the observed target profile for PASS
     if not ok:
         return "FAIL"
     if profile != "ed25519" or set(OBSERVED_PROFILE.values()) != {"ed25519"}:
         return "DIAGNOSTIC_OK"
+    now = running_signing()
+    if set(now.values()) != {"ed25519"}:
+        raise ProbeError(f"signing profile at verdict time is not ed25519 x3: {now}")
     return "PASS"
 
 
@@ -690,6 +711,12 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
     return out
 
 
+def _started_at(container: str) -> str:
+    """The container's State.StartedAt; empty when it cannot be inspected."""
+    r = sh(["docker", "inspect", container, "--format", "{{.State.StartedAt}}"], timeout=30)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
 def c_ceg_down(p: str) -> list[Result]:
     """P14: EIE completes while CEG is down; durable result; the pending graph intent survives an EIE restart."""
     a = "EIE completes while CEG is down; durable result; pending graph intent recovered after EIE restart"
@@ -722,7 +749,14 @@ def c_ceg_down(p: str) -> list[Result]:
             "select table_name from information_schema.tables where table_schema='public' "
             "and (table_name ilike '%pending%' or table_name ilike '%outbox%')"
         )
-        sh(["docker", "restart", "l9e2e-eie"], timeout=180)
+        started_before = _started_at("l9e2e-eie")
+        restart = sh(["docker", "restart", "l9e2e-eie"], timeout=180)
+        started_after = _started_at("l9e2e-eie")
+        if restart.returncode != 0 or not started_after or started_after == started_before:
+            raise ProbeError(
+                f"EIE restart not proven (rc {restart.returncode}, "
+                f"StartedAt {started_before} -> {started_after})"
+            )
     except ProbeError as exc:
         return [not_run("P14", "A8", p, a, str(exc), entity_id=eid)]
     finally:
@@ -754,6 +788,7 @@ def c_ceg_down(p: str) -> list[Result]:
                 "absent_while_down": absent_before,
                 "eie_log_down": eie_log,
                 "ready_after": ready,
+                "eie_restart": {"started_before": started_before, "started_after": started_after},
                 "graph_after_recovery": g,
                 "durable_intent_tables": outbox,
             },
@@ -1035,6 +1070,8 @@ def c_gate_restart(p: str) -> list[Result]:
     }
     if reg0.get("unavailable") or "ready" not in r0:
         return [not_run("P09", "A7", p, a, "Gate did not answer after the restart", **obs)]
+    if "driver_error" in m:
+        return [not_run("P09", "A7", p, a, "the outage call returned no driver result", **obs)]
     if m.get("ok") is True and reg_after_call and not reg_after_call.get("unavailable"):
         return [
             not_run(
@@ -1210,6 +1247,10 @@ def c_registration(p: str) -> list[Result]:
 def c_gate_rail_policy(p: str) -> list[Result]:
     """A7 witness for F-A1-11: Gate's own Docker rail config (staging, no caller policy) is refused by Gate settings."""
     e = env()
+    # The probe runs the exact Gate image recorded in the release set, never a mutable local tag.
+    gate_image = ((RELEASE_SET.get("images") or {}).get("l9e2e-gate") or {}).get("image_id")
+    if not gate_image:
+        raise ProbeError("no Gate image id in the release set; the settings probe cannot run")
     probe = "\n".join(
         [
             "from constellation_gate.config.settings import get_settings",
@@ -1254,7 +1295,7 @@ def c_gate_rail_policy(p: str) -> list[Result]:
             "L9_TRUSTED_INGRESS_BOUNDARY=signature",
             "--entrypoint",
             "python",
-            "l9e2e/gate:local",
+            gate_image,
             "-c",
             probe,
         ],
@@ -1271,7 +1312,7 @@ def c_gate_rail_policy(p: str) -> list[Result]:
             "witness: the Gate rail's staging env (no L9_KEY_ALLOWED_ACTIONS_JSON) is "
             "refused by Gate settings; its driver signs as gate-e2e (run_e2e.sh drive(), source)",
             "WITNESSED" if refused else "NOT_WITNESSED",
-            observed={"settings_probe": out},
+            observed={"settings_probe": out, "gate_image_id": gate_image},
             reason="BLOCKED_WITH_EXACT_OWNER: Constellation.Gate tests/e2e/docker (rail). This rail builds its "
             "own caller policy and separate consumer keys, so P02/P10/P11 do not depend on it.",
         )
@@ -1546,6 +1587,7 @@ def main() -> int:
     OBSERVED_PROFILE.update(running_signing())
     write_json(ev / "ready.json", wait_ready())
     rs = release_set(a.profile)
+    RELEASE_SET.update(rs)
     write_json(ev / "release_set.json", rs)
     results: list[Result] = []
     for name in a.cases.split(","):
