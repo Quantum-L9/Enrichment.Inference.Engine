@@ -322,3 +322,38 @@ def test_d14_low_confidence_fact_is_still_rederived() -> None:
     bridge = InferenceBridge(domain_spec=_legacy({"g": _edge("p")}))
     result = bridge.run({"p": "x", "g": "weak"}, {"p": 0.9, "g": 0.3})
     assert result.derived_fields == {"g": "from:p"}
+
+
+# ── Review findings on #395: cycles through a conflict; unlock credit ───────
+
+
+@pytest.mark.usefixtures("probe_rule")
+def test_cycle_through_a_conflicting_target_stays_blocked() -> None:
+    """Plant: a <- b, b <- a; Depot: b <- p. Dropping b before the sort let a derive."""
+    graph = build_derivation_graph(
+        _two_nodes({"a": _edge("b"), "b": _edge("a")}, {"b": _edge("p")})
+    )
+    assert graph.topo_order == []
+    result = run_inference(graph, {"b": "seed"}, {"b": 0.65})
+    assert result.derived == {}
+    assert result.blocked["a"].status is InferenceStatus.CYCLE
+    assert result.blocked["a"].missing_inputs == ["b"]
+    assert result.blocked["b"].status is InferenceStatus.NO_RULE
+
+
+@pytest.mark.usefixtures("probe_rule")
+def test_dependent_of_a_conflict_without_a_cycle_still_runs_on_facts() -> None:
+    graph = build_derivation_graph(
+        _two_nodes({"t": _edge("p"), "d": _edge("t")}, {"t": _edge("q")})
+    )
+    assert graph.topo_order == ["d"]
+    result = run_inference(graph, {"t": "fact"}, {"t": 0.9})
+    assert result.derived["d"].value == "from:t"
+    assert "t" not in result.derived
+
+
+def test_unlock_credit_only_for_executable_edges() -> None:
+    graph = build_derivation_graph(_legacy({"a": _edge("a"), "t": _edge("x"), "c": _edge("y")}))
+    assert run_inference(graph, {}, {}).unlock_map == {"x": 1.0, "y": 1.0}
+    conflict = build_derivation_graph(_two_nodes({"t": _edge("p")}, {"t": _edge("q")}))
+    assert run_inference(conflict, {}, {}).unlock_map == {}

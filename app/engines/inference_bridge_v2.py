@@ -148,8 +148,10 @@ def build_derivation_graph(domain_spec: dict[str, Any]) -> DerivationGraph:
         for inp in edge.inputs:
             children_of.setdefault(inp, []).append(edge.target)
 
-    # Topological sort (Kahn's algorithm) over the unambiguous edges
-    topo_order = _topo_sort([e for e in edges if e.target not in conflicts], edge_map)
+    # Topological sort (Kahn's algorithm) over every edge, so a cycle running
+    # through a conflicting target stays visible; conflicting targets are then
+    # dropped from the executable order.
+    topo_order = [t for t in _topo_sort(edges, edge_map) if t not in conflicts]
 
     logger.info(
         "derivation_graph.built",
@@ -427,7 +429,9 @@ def _block_cycle_targets(
         blocked[target] = FieldInferenceResult(
             field=target,
             status=InferenceStatus.CYCLE,
-            missing_inputs=[i for i in dict.fromkeys(edge.inputs) if i in unresolved],
+            missing_inputs=[
+                i for i in dict.fromkeys(edge.inputs) if i in unresolved or i in graph._conflicts
+            ],
             rule_used=edge.inference_rule,
         )
 
@@ -571,10 +575,15 @@ def _compute_unlock_values(
     ONLY missing input. Higher = search this field first.
 
     This is the strategic targeting signal for search_optimizer_v2.
+    Only executable edges count: finding an input of a cycle-blocked or
+    conflicting target cannot unlock a derivation that is never attempted.
     """
     unlock: dict[str, float] = {}
+    executable = set(graph.topo_order)
 
     for edge in graph.edges:
+        if edge.target not in executable:
+            continue
         missing_for_edge = []
         for inp in edge.inputs:
             val = entity.get(inp)
