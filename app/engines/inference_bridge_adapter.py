@@ -58,13 +58,14 @@ rule outcome and the convergence confidence map:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
 
 from .inference.rule_engine import RuleFired, condition_holds, infer
-from .inference.rule_loader import RuleDefinition, RuleRegistry, parse_rules
+from .inference.rule_loader import RuleDefinition, RuleRegistry, bound_node, parse_rules
 from .inference_bridge_v2 import (
     DerivationGraph,
     InferenceStatus,
@@ -128,7 +129,20 @@ class InferenceBridge:
         self,
         rules: list[dict] | None = None,
         domain_spec: dict[str, Any] | None = None,
+        node: str | None = None,
     ):
+        """`node` is the request's resolved ontology node (see `node_for_subject`).
+
+        Given a `node` and a spec, inference is bound to that node: only the
+        condition rules bound to it run (a rule that cannot be bound to one
+        declared node refuses the set), and the derivation graph is built from
+        that node's declarations. With `node=None` the bridge runs exactly what
+        it ran before node binding existed; it never picks a node for the
+        request. Runtime filtering therefore activates only when the caller
+        passes `node` (caller wiring: convergence_controller.py / handlers.py).
+        The spec contract (domain_spec_schema._rules) refuses unbound rules at
+        load and publish whatever the caller passes.
+        """
         self._rules: list[dict] = []
         self._domain_spec = domain_spec
         self._graph: DerivationGraph | None = None
@@ -139,14 +153,24 @@ class InferenceBridge:
         self._run_errors: list[str] = []
         self._last_unlock_map: dict[str, float] = {}
 
+        # Binding needs both a node and the spec that declares the node labels.
+        labels = _node_labels(domain_spec) if domain_spec is not None and node is not None else None
+        self._node = node
+
         if domain_spec:
-            self._graph = build_derivation_graph(domain_spec)
+            scoped = domain_spec
+            if labels is not None and node is not None:  # undeclared node: no declarations
+                scoped = _scope_to_node(domain_spec, node)
+            self._graph = build_derivation_graph(scoped)
 
         if rules is None or rules == []:
             return
         if not isinstance(rules, list) or _is_condition_rule_set(rules):
             try:
-                self._registry = parse_rules(rules, source="domain inference_rules", strict=True)
+                registry = parse_rules(rules, source="domain inference_rules", strict=True)
+                if labels is not None:
+                    registry = _rules_for_node(registry, labels, node)
+                self._registry = registry
             except ValueError as exc:
                 self._rule_errors = [str(exc)]
                 logger.error("inference_rules_refused", error=str(exc))
@@ -189,7 +213,14 @@ class InferenceBridge:
         entity: dict[str, Any],
         confidence_map: dict[str, float] | None = None,
     ) -> InferenceResult:
-        """Execute inference and return v1-shaped result."""
+        """Execute inference and return v1-shaped result.
+
+        A refused rule set (STATUS_INVALID) runs nothing, the derivation graph
+        included: a refusal is of the domain's inference, not of one executor.
+        """
+        if self._rule_errors:
+            self._last_unlock_map = {}
+            return InferenceResult()
         result = self._run_derivation_graph(entity, confidence_map or {})
         if self._registry is not None:
             self._run_condition_rules(self._registry, entity, confidence_map or {}, result)
@@ -375,6 +406,91 @@ class InferenceBridge:
     def graph(self) -> DerivationGraph | None:
         """Direct access to v2 graph for advanced consumers."""
         return self._graph
+
+
+def _spec_nodes(domain_spec: dict[str, Any]) -> Any:
+    """The spec's node declarations, read as build_derivation_graph reads them."""
+    ontology = domain_spec.get("ontology", domain_spec)
+    if not isinstance(ontology, dict):
+        return []
+    return ontology.get("nodes", ontology.get("entities", {}))
+
+
+def _node_labels(domain_spec: dict[str, Any]) -> list[str]:
+    """Declared node labels: native list entries' `label`, or legacy mapping keys."""
+    nodes = _spec_nodes(domain_spec)
+    if isinstance(nodes, dict):
+        return [str(k) for k in nodes]
+    if isinstance(nodes, list):
+        return [
+            n["label"] for n in nodes if isinstance(n, dict) and isinstance(n.get("label"), str)
+        ]
+    return []
+
+
+def _scope_to_node(domain_spec: dict[str, Any], node: str) -> dict[str, Any]:
+    """A shallow copy of the spec whose ontology declares only `node`.
+
+    A malformed ontology (not a mapping, or nodes neither a list nor a mapping)
+    scopes to no declarations rather than raising.
+    """
+    nodes = _spec_nodes(domain_spec)
+    if isinstance(nodes, dict):
+        kept: Any = {k: v for k, v in nodes.items() if str(k) == node}
+    elif isinstance(nodes, list):
+        kept = [n for n in nodes if isinstance(n, dict) and n.get("label") == node]
+    else:
+        kept = []
+    ontology = domain_spec.get("ontology", domain_spec)
+    if not isinstance(ontology, dict):
+        return {**domain_spec, "ontology": {"nodes": []}}
+    key = "nodes" if "nodes" in ontology else "entities"
+    scoped_ontology = {**ontology, key: kept}
+    if "ontology" in domain_spec:
+        return {**domain_spec, "ontology": scoped_ontology}
+    return scoped_ontology
+
+
+def _rules_for_node(registry: RuleRegistry, labels: list[str], node: str | None) -> RuleRegistry:
+    """The accepted rules bound to `node`; refuse the set if any rule is unbound.
+
+    Raises:
+        ValueError: a rule names no node in a multi-node spec, or an undeclared one
+    """
+    errors: list[str] = []
+    scoped = RuleRegistry()
+    for rule in registry.all_rules():
+        try:
+            bound = bound_node(rule.rule_id, rule.node, labels)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if bound == node:
+            scoped.add_rule(rule)
+    if errors:
+        raise ValueError("Invalid inference_rules node binding: " + "; ".join(errors))
+    return scoped
+
+
+def node_for_subject(
+    domain_spec: dict[str, Any] | None, subject: Mapping[str, Any] | None
+) -> str | None:
+    """The node a resolved request subject belongs to, from the spec's own vocabulary.
+
+    `subjects.types[].node` for the type the subject names, when that node is
+    declared; otherwise None (no node is guessed).
+    """
+    if not domain_spec or not subject:
+        return None
+    subjects = domain_spec.get("subjects")
+    types = subjects.get("types") if isinstance(subjects, dict) else None
+    if not isinstance(types, list):
+        return None
+    for entry in types:
+        if isinstance(entry, dict) and entry.get("name") == subject.get("type"):
+            node = entry.get("node")
+            return node if node in _node_labels(domain_spec) else None
+    return None
 
 
 def _provenance_record(
