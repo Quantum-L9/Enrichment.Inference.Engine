@@ -154,7 +154,7 @@ class InferenceBridge:
         self._last_unlock_map: dict[str, float] = {}
 
         # Binding needs both a node and the spec that declares the node labels.
-        labels = _node_labels(domain_spec) if domain_spec and node is not None else None
+        labels = _node_labels(domain_spec) if domain_spec is not None and node is not None else None
         self._node = node
 
         if domain_spec:

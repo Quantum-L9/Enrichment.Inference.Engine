@@ -290,3 +290,13 @@ def test_refused_rule_set_does_not_run_the_derivation_graph(
         rules=[_rule("r", "p", "q", node="Plant")], domain_spec=spec, node="Plant"
     )
     assert accepted.run({"p": 1}, {"p": 0.9}).derived_fields.get("g") == "v"
+
+
+def test_empty_spec_with_a_node_declares_nothing_and_refuses() -> None:
+    """An empty spec is still a spec: binding applies and nothing is declared (review on #400)."""
+    rules = [_rule("r", "capacity", "size", node="Plant")]
+    bridge = InferenceBridge(rules=rules, domain_spec={}, node="Plant")
+    assert bridge.status == STATUS_INVALID
+    assert bridge.run({"capacity": 50}).derived_fields == {}
+    unbound = InferenceBridge(rules=rules, node="Plant")  # no spec: rules-only path unchanged
+    assert unbound.run({"capacity": 50}).derived_fields == {"size": "large"}
