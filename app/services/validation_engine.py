@@ -96,6 +96,22 @@ def validate_response(
                 continue
 
             field_type_str, items = _declared_type(declared)
+            if field_type_str.lower() == "map":
+                # A declared map is a mapping restricted to its declared
+                # properties, with required ones present -- never accepted as-is.
+                try:
+                    if not isinstance(value, Mapping):
+                        raise TypeError("declared map is not a mapping")
+                    decl = declared if isinstance(declared, Mapping) else None
+                    normalized[field_name] = _coerce_map(value, decl)
+                except (ValueError, TypeError):
+                    logger.debug(
+                        "field_coercion_skipped",
+                        field=field_name,
+                        expected=field_type_str,
+                        got_type=type(value).__name__,
+                    )
+                continue
             expected = TYPE_MAP.get(field_type_str.lower())
             if expected is None:
                 # Unknown type — accept as-is
