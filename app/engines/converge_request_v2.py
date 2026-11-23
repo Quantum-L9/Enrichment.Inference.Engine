@@ -209,11 +209,17 @@ def _check_selectors(payload: Mapping[str, Any], cartridge_id: str, node: str) -
 
 def _targets(
     value: object, declared: Mapping[str, Mapping[str, Any]], node: str
-) -> tuple[dict[str, str], dict[str, float]]:
-    """The v1 `schema` and `field_thresholds` the targets resolve to."""
+) -> tuple[dict[str, str | dict[str, Any]], dict[str, float]]:
+    """The `schema` and `field_thresholds` the targets resolve to.
+
+    A scalar target keeps the v1 type-name form (``"float"``). A ``list`` or
+    ``map`` target carries its typed declaration (``type`` / ``items`` /
+    ``properties`` / ``required``), so validation enforces declared members
+    instead of a bare ``"list"`` (F04).
+    """
     if not isinstance(value, list) or not value:
         raise ConvergeRequestRefusedError("invalid_request", "targets must be a nonempty list")
-    schema: dict[str, str] = {}
+    schema: dict[str, str | dict[str, Any]] = {}
     thresholds: dict[str, float] = {}
     for entry in value:
         if not isinstance(entry, Mapping) or entry.keys() - {"field", "type", "min_confidence"}:
@@ -234,7 +240,14 @@ def _targets(
             _check_type(name, entry["type"], declaration)
         if "min_confidence" in entry:
             thresholds[name] = _confidence(name, entry["min_confidence"])
-        schema[name] = str(declaration.get("type"))
+        if declaration.get("type") in ("list", "map"):
+            schema[name] = {
+                key: declaration[key]
+                for key in ("type", "items", "properties", "required")
+                if key in declaration
+            }
+        else:
+            schema[name] = str(declaration.get("type"))
     return schema, thresholds
 
 

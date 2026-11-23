@@ -180,8 +180,9 @@ class EnrichRequest(BaseModel):
         description="Source object API name.",
     )
 
-    # What fields to enrich — JSON dict of {field_name: type_string}
-    schema_: dict[str, str] | None = Field(
+    # What fields to enrich — JSON dict of {field_name: type_string}, or of
+    # {field_name: typed declaration} for a list/map target (spec_types syntax).
+    schema_: dict[str, str | dict[str, Any]] | None = Field(
         default=None,
         validation_alias="schema",
         description="Target fields: {field_api_name: type}.",

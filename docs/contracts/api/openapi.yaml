@@ -94,11 +94,14 @@ components:
         schema:
           type: object
           additionalProperties:
-            type: string
+            oneOf:
+              - type: string
+              - type: object
           nullable: true
           description: |
             Target fields to enrich: {field_api_name: type}. Accepts JSON string
-            (from Salesforce LongTextArea) or dict.
+            (from Salesforce LongTextArea) or dict. A value is a type name, or a
+            typed declaration object (spec_types syntax) for a list/map target.
           example:
             recycling_grade: "string"
             annual_tonnage: "number"
