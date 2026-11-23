@@ -1,0 +1,12 @@
+{"action": "converge", "tenant": "plasticos", "key_id": "odoo-gl", "idempotency_key": "gl:converge:plasticos:tp-fac-010:v1",
+ "payload": {
+  "entity": {"id": "tp-fac-010", "facility_id": "tp-fac-010", "name": "TEST_ONLY Converge Facility",
+             "city": "Testville", "contamination_tolerance": 5.0,
+             "processed_polymers": [{"code": "HDPE", "line_id": "tp-line-010", "direction": "in", "form": "Regrind"}]},
+  "entity_id": "tp-fac-010",
+  "object_type": "plasticos", "domain": "plasticos", "node_label": "Facility",
+  "objective": "TEST_ONLY converge for gate_loop P07/P14/P18",
+  "kb_context": "plasticos",
+  "schema": {"name": "string", "min_density": "float", "max_density": "float", "capacity_tons_month": "float", "tier": "string"},
+  "max_variations": 2, "consensus_threshold": 0.8,
+  "idempotency_key": "gl:converge:plasticos:tp-fac-010:v1"}}

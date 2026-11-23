@@ -235,10 +235,8 @@ class InferenceBridge:
                         "confidence": fir.confidence,
                     }
                 )
-            elif fir.status == InferenceStatus.ALREADY_SET:
-                # Already set fields pass through (v1 didn't track these)
-                derived_fields[name] = fir.value
-                conf_map[name] = fir.confidence
+            # ALREADY_SET is a fact the entity carried, not a derivation: it is
+            # never reported as derived (the caller would record it as inferred).
 
         for name, fir in v2_result.blocked.items():
             blocked[name] = fir.status.value

@@ -1,0 +1,214 @@
+{
+ "compatibility": {
+  "plasticos": {
+   "rule_set": "eie-ceg-sync/v2",
+   "verdict": "pass",
+   "tenant_id": "plasticos",
+   "eie_version": "0.6.2",
+   "ceg_version": "1.6.0",
+   "endpoints_checked": 1,
+   "ceg_endpoints_not_produced": [
+    "/v1/sync/buyer-demands",
+    "/v1/sync/materialforms",
+    "/v1/sync/polymerfamilies",
+    "/v1/sync/supply-opportunities"
+   ],
+   "ceg_properties_not_produced": {
+    "/v1/sync/facilities": [
+     "community_id",
+     "credit_score",
+     "entity_ref",
+     "food_grade_certified",
+     "last_transaction_date",
+     "lat",
+     "lon",
+     "rate_confidence",
+     "rate_per_ton"
+    ]
+   },
+   "defects": [],
+   "field_mappings": {}
+  },
+  "synthneutral": {
+   "rule_set": "eie-ceg-sync/v2",
+   "verdict": "pass",
+   "tenant_id": "synthneutral",
+   "eie_version": "0.1.0",
+   "ceg_version": "0.1.0",
+   "endpoints_checked": 1,
+   "ceg_endpoints_not_produced": [],
+   "ceg_properties_not_produced": {
+    "/v1/sync/stations": []
+   },
+   "defects": [],
+   "field_mappings": {}
+  }
+ },
+ "projection": [
+  {
+   "id": "PX-POS-01",
+   "entity_type": "facilities",
+   "result": {
+    "row": {
+     "facility_id": "tp-fac-001",
+     "name": "TEST_ONLY Facility A",
+     "min_density": 0.94,
+     "max_density": 0.97,
+     "contamination_tolerance": 5.0,
+     "capacity_tons_month": 500.0,
+     "tier": "standard",
+     "processed_polymers": [
+      {
+       "code": "HDPE",
+       "line_id": "tp-line-001",
+       "direction": "in",
+       "form": "Regrind"
+      },
+      {
+       "code": "PP",
+       "line_id": "tp-line-002",
+       "direction": "out",
+       "form": "Pellet"
+      }
+     ]
+    },
+    "defects": [],
+    "dropped": []
+   }
+  },
+  {
+   "id": "PX-POS-02-UNKNOWN-TOLERANCE",
+   "entity_type": "facilities",
+   "result": {
+    "row": {
+     "facility_id": "tp-fac-002",
+     "name": "TEST_ONLY Facility B (tolerance unknown)",
+     "processed_polymers": [
+      {
+       "code": "HDPE",
+       "line_id": "tp-line-003",
+       "direction": "in",
+       "form": "Flake"
+      }
+     ]
+    },
+    "defects": [],
+    "dropped": []
+   }
+  },
+  {
+   "id": "PX-POS-03-KNOWN-UNACCEPTABLE",
+   "entity_type": "facilities",
+   "result": {
+    "row": {
+     "facility_id": "tp-fac-003",
+     "name": "TEST_ONLY Facility C (tolerance 1%)",
+     "contamination_tolerance": 1.0,
+     "processed_polymers": [
+      {
+       "code": "HDPE",
+       "line_id": "tp-line-004",
+       "direction": "in",
+       "form": "Regrind"
+      }
+     ]
+    },
+    "defects": [],
+    "dropped": []
+   }
+  },
+  {
+   "id": "PX-NEG-01-STRINGIFIED-MAP",
+   "entity_type": "facilities",
+   "result": {
+    "row": null,
+    "defects": [
+     "processed_polymers: declared list<map{code,line_id,direction,form}>, got string (not a list)"
+    ],
+    "dropped": []
+   }
+  },
+  {
+   "id": "PX-NEG-02-WRONG-TYPE",
+   "entity_type": "facilities",
+   "result": {
+    "row": null,
+    "defects": [
+     "min_density: declared float, got string (not a number)"
+    ],
+    "dropped": []
+   }
+  },
+  {
+   "id": "PX-NEG-03-MISSING-CHILD-CODE",
+   "entity_type": "facilities",
+   "result": {
+    "row": null,
+    "defects": [
+     "processed_polymers[0].code: declared string, got missing (required)"
+    ],
+    "dropped": []
+   }
+  },
+  {
+   "id": "PX-NEG-04-UNDECLARED-FIELD",
+   "entity_type": "facilities",
+   "result": {
+    "row": {
+     "facility_id": "tp-fac-n04",
+     "name": "neg"
+    },
+    "defects": [],
+    "dropped": [
+     "bogus_field"
+    ]
+   }
+  },
+  {
+   "id": "PX-NEG-05-CEG-OWNED-FIELD",
+   "entity_type": "facilities",
+   "result": {
+    "row": {
+     "facility_id": "tp-fac-n05",
+     "name": "neg"
+    },
+    "defects": [],
+    "dropped": [
+     "credit_score"
+    ]
+   }
+  },
+  {
+   "id": "SN-POS-01",
+   "entity_type": "stations",
+   "result": {
+    "row": {
+     "station_id": "sn-st-001",
+     "title": "TEST_ONLY Station 1",
+     "max_load": 40.0,
+     "band": "b2",
+     "handled_kinds": [
+      {
+       "code": "K1",
+       "slot_id": "sn-slot-001",
+       "direction": "in"
+      }
+     ]
+    },
+    "defects": [],
+    "dropped": []
+   }
+  },
+  {
+   "id": "SN-NEG-01-WRONG-TYPE",
+   "entity_type": "stations",
+   "result": {
+    "row": null,
+    "defects": [
+     "max_load: declared float, got string (not a number)"
+    ],
+    "dropped": []
+   }
+  }
+ ]
+}
