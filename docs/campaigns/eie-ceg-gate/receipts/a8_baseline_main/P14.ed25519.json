@@ -1,0 +1,58 @@
+{
+ "id": "P14",
+ "run": "20261122T192809Z-ed25519",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "EIE completes while CEG is down; durable result; pending graph intent recovered after EIE restart",
+ "verdict": "FAIL",
+ "reason": "graph rows after CEG recovery and an EIE restart: 0, not 1; durable pending-intent table: none (F-A1-06, EIE-W)",
+ "observed": {
+  "entity_id": "gl-down-6c9413",
+  "state": "completed",
+  "elapsed_s": 0.162,
+  "persisted": [
+   "1"
+  ],
+  "absent_while_down": true,
+  "eie_log_down": [
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-086c94:a6b3f810:enrich\", \"entity_id\": \"gl-plas-086c94\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:00.251176Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-086c94:a6b3f810:enrich\", \"entity_id\": \"gl-plas-086c94\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:00.251363Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-086c94:a6b3f810:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:00.251635Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:00.326224Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:00.326343Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:00.327144Z\"}",
+   "{\"entity_id\": \"gl-plas-086c94\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:00.327211Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-086c94:a6b3f810:enrich\", \"entity_id\": \"gl-plas-086c94\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:00.327248Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-717372:84259276:enrich\", \"entity_id\": \"gl-synt-717372\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:14.428719Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-717372:84259276:enrich\", \"entity_id\": \"gl-synt-717372\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:14.428874Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-717372:84259276:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:14.429137Z\"}",
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:14.446507Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:14.446678Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:14.447644Z\"}",
+   "{\"entity_id\": \"gl-synt-717372\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:14.447849Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-717372:84259276:enrich\", \"entity_id\": \"gl-synt-717372\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:14.447984Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-down-6c9413:7c48b72c:enrich\", \"entity_id\": \"gl-down-6c9413\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:51.791100Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-down-6c9413:7c48b72c:enrich\", \"entity_id\": \"gl-down-6c9413\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:51.791188Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-down-6c9413:7c48b72c:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:51.791359Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:51.823317Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-22T19:30:51.823432Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateSecurityError\", \"detail\": \"outbound packet failed transport validation: TransportAuthenticationError: signature required but not present\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:51.824090Z\"}",
+   "{\"entity_id\": \"gl-down-6c9413\", \"error\": \"Gate-routed 'sync' for graph failed: GateSecurityError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:51.824136Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-down-6c9413:7c48b72c:enrich\", \"entity_id\": \"gl-down-6c9413\", \"ack\": \"none\", \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-22T19:30:51.824163Z\"}"
+  ],
+  "ready_after": {
+   "ready": true,
+   "waited_s": 10.0
+  },
+  "eie_restart": {
+   "started_before": "2026-11-22T19:28:31.580031217Z",
+   "started_after": "2026-11-22T19:31:04.052766199Z"
+  },
+  "graph_after_recovery": {
+   "rows": [],
+   "facility_count": 0
+  },
+  "durable_intent_tables": []
+ },
+ "timestamp": "2026-11-22T19:31:31.530430+00:00"
+}

@@ -1,0 +1,104 @@
+{
+ "id": "P17",
+ "run": "20261122T192809Z-ed25519",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "CEG refuses wrong type / undeclared endpoint: whole batch, nothing written",
+ "verdict": "PASS",
+ "reason": "sent with the eie-gl key held by the driver (worker-key misassignment rig); EIE never builds such a row",
+ "observed": {
+  "checks": {
+   "wrong type: CEG answered SyncRowRejectedError": true,
+   "undeclared endpoint: CEG answered ValidationError": true,
+   "nothing written (Neo4j read-back empty)": true
+  },
+  "wrong_type": {
+   "ok": true,
+   "elapsed_s": 0.067,
+   "response": {
+    "packet_id": "2e4f5c4f-9f73-4dd6-ace1-fe9741eddd77",
+    "packet_type": "failure",
+    "action": "sync",
+    "source_node": "graph",
+    "destination_node": "gate",
+    "reply_to": "graph",
+    "tenant": "plasticos",
+    "root_id": "0c9dedcd-c46c-481b-a47c-1f015bfc78fc",
+    "parent_id": "245aa1f3-6a12-43ce-83b6-3f178d718a9b",
+    "generation": 2,
+    "causation_id": "245aa1f3-6a12-43ce-83b6-3f178d718a9b",
+    "idempotency_key": null,
+    "signing_key_id": "gate-gl",
+    "signature_algorithm": "ed25519",
+    "hop_trace": [
+     {
+      "node": "graph",
+      "direction": "response",
+      "status": "failed",
+      "target_node": null,
+      "signed": false
+     }
+    ],
+    "provenance": {
+     "origin_kind": "gate",
+     "requested_action": "sync",
+     "resolved_by_gate": true,
+     "route_kind": "external_ingress",
+     "original_source_node": "enrichment-engine"
+    }
+   },
+   "gate_signature_valid": true,
+   "payload": {
+    "status": "failed",
+    "error": "SyncRowRejectedError",
+    "message": "SyncRowRejectedError",
+    "packet_id": "245aa1f3-6a12-43ce-83b6-3f178d718a9b"
+   }
+  },
+  "undeclared": {
+   "ok": true,
+   "elapsed_s": 0.073,
+   "response": {
+    "packet_id": "17256804-f2a7-4572-8d4c-b5ebb6d6a693",
+    "packet_type": "failure",
+    "action": "sync",
+    "source_node": "graph",
+    "destination_node": "gate",
+    "reply_to": "graph",
+    "tenant": "plasticos",
+    "root_id": "6147c484-d114-40ca-98fc-1cbab7bac826",
+    "parent_id": "8303294c-e1c9-46fd-8f8f-3129bb911f37",
+    "generation": 2,
+    "causation_id": "8303294c-e1c9-46fd-8f8f-3129bb911f37",
+    "idempotency_key": null,
+    "signing_key_id": "gate-gl",
+    "signature_algorithm": "ed25519",
+    "hop_trace": [
+     {
+      "node": "graph",
+      "direction": "response",
+      "status": "failed",
+      "target_node": null,
+      "signed": false
+     }
+    ],
+    "provenance": {
+     "origin_kind": "gate",
+     "requested_action": "sync",
+     "resolved_by_gate": true,
+     "route_kind": "external_ingress",
+     "original_source_node": "enrichment-engine"
+    }
+   },
+   "gate_signature_valid": true,
+   "payload": {
+    "status": "failed",
+    "error": "ValidationError",
+    "message": "ValidationError",
+    "packet_id": "8303294c-e1c9-46fd-8f8f-3129bb911f37"
+   }
+  },
+  "graph": []
+ },
+ "timestamp": "2026-11-22T19:30:37.916670+00:00"
+}

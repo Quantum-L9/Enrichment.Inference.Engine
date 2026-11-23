@@ -1,0 +1,24 @@
+{
+ "id": "P23",
+ "run": "20261122T192809Z-ed25519",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "an unchanged echo of an inference result enqueues nothing new",
+ "verdict": "FAIL",
+ "reason": "EIE intake has no dedup (F-A1-07, EIE-W): a second identical delivery is queued again",
+ "observed": {
+  "first": {
+   "status": "accepted",
+   "targets_queued": 1,
+   "packet_id": "a5aea1bd-f789-4b25-b532-bce50289d0ab",
+   "tenant": "plasticos"
+  },
+  "second": {
+   "status": "accepted",
+   "targets_queued": 1,
+   "packet_id": "c982c295-07fe-498e-95ef-9283c5041f4c",
+   "tenant": "plasticos"
+  }
+ },
+ "timestamp": "2026-11-22T19:30:49.794398+00:00"
+}
