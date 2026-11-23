@@ -15,7 +15,7 @@ services:
       # EIE's worker key keeps its own post-converge egress actions.
       L9_KEY_ALLOWED_ACTIONS_JSON: >-
         {"odoo-e2e": {"node": "odoo", "kind": "consumer", "tenants": ["plasticos"], "actions": ["converge"]},
-         "eie-e2e": {"node": "enrichment-engine", "kind": "worker", "tenants": ["plasticos"], "actions": ["score-invalidate", "sync"]}}
+         "eie-e2e": {"node": "enrichment-engine", "kind": "worker", "tenants": ["plasticos"], "actions": ["sync"]}}
 
   enrichment-engine:
     environment:

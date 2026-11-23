@@ -1,0 +1,129 @@
+{
+ "schema": "l9.proof.diagnostic-note/v1",
+ "profile": "hmac (class D)",
+ "run": "20261122T175629Z-hmac",
+ "observation": "Every Gate->graph dispatch signed hmac-sha256 was refused by CEG Gate-only ingress (HTTP 403, surfaced by Gate as 502 worker_transport_failed). CEG log: 'Gate-only ingress rejected packet: hmac-sha256 cannot prove Gate authorship here; Gate must sign with ed25519'.",
+ "meaning": "CEG (staging) fails closed on an HMAC-signed Gate packet: positive evidence for the no-HMAC-downgrade requirement at CEG ingress. The HMAC profile cannot exercise CEG, so its per-case results are not evidence about the product and are not recorded as case verdicts.",
+ "policy_cells": [
+  {
+   "key_id": "odoo-gl",
+   "action": "score",
+   "http_status": 502,
+   "message": "worker 'graph' execute returned HTTP 403"
+  },
+  {
+   "key_id": "odoo-gl",
+   "action": "health-assess",
+   "http_status": 403,
+   "message": "key 'odoo-gl' is not permitted to invoke action 'health-assess'"
+  },
+  {
+   "key_id": "odoo-gl",
+   "action": "graph-inference-result",
+   "http_status": 403,
+   "message": "key 'odoo-gl' is not permitted to invoke action 'graph-inference-result'"
+  },
+  {
+   "key_id": "odoo-gl",
+   "action": "sync",
+   "http_status": 403,
+   "message": "key 'odoo-gl' is not permitted to invoke action 'sync'"
+  },
+  {
+   "key_id": "odoo-gl",
+   "action": "match",
+   "http_status": 502,
+   "message": "worker 'graph' execute returned HTTP 403"
+  },
+  {
+   "key_id": "op-gl",
+   "action": "score",
+   "http_status": 502,
+   "message": "worker 'graph' execute returned HTTP 403"
+  },
+  {
+   "key_id": "op-gl",
+   "action": "health-assess",
+   "http_status": 502,
+   "message": "worker 'graph' execute returned HTTP 403"
+  },
+  {
+   "key_id": "op-gl",
+   "action": "graph-inference-result",
+   "http_status": 403,
+   "message": "key 'op-gl' is not permitted to invoke action 'graph-inference-result'"
+  },
+  {
+   "key_id": "op-gl",
+   "action": "sync",
+   "http_status": 403,
+   "message": "key 'op-gl' is not permitted to invoke action 'sync'"
+  },
+  {
+   "key_id": "op-gl",
+   "action": "match",
+   "http_status": 502,
+   "message": "worker 'graph' execute returned HTTP 403"
+  },
+  {
+   "key_id": "eie-gl",
+   "action": "score",
+   "http_status": 403,
+   "message": "worker key 'eie-gl' may not invoke operator-only action 'score'"
+  },
+  {
+   "key_id": "eie-gl",
+   "action": "health-assess",
+   "http_status": 502,
+   "message": "worker 'graph' execute returned HTTP 403"
+  },
+  {
+   "key_id": "eie-gl",
+   "action": "graph-inference-result",
+   "http_status": 403,
+   "message": "key 'eie-gl' is not permitted to invoke action 'graph-inference-result'"
+  },
+  {
+   "key_id": "eie-gl",
+   "action": "sync",
+   "http_status": 502,
+   "message": "worker 'graph' execute returned HTTP 403"
+  },
+  {
+   "key_id": "eie-gl",
+   "action": "match",
+   "http_status": 502,
+   "message": "worker 'graph' execute returned HTTP 403"
+  },
+  {
+   "key_id": "ceg-gl",
+   "action": "score",
+   "http_status": 403,
+   "message": "worker key 'ceg-gl' may not invoke operator-only action 'score'"
+  },
+  {
+   "key_id": "ceg-gl",
+   "action": "health-assess",
+   "http_status": 403,
+   "message": "worker key 'ceg-gl' may not invoke operator-only action 'health-assess'"
+  },
+  {
+   "key_id": "ceg-gl",
+   "action": "graph-inference-result",
+   "http_status": 200,
+   "message": ""
+  },
+  {
+   "key_id": "ceg-gl",
+   "action": "sync",
+   "http_status": 403,
+   "message": "key 'ceg-gl' is not permitted to invoke action 'sync'"
+  },
+  {
+   "key_id": "ceg-gl",
+   "action": "match",
+   "http_status": 403,
+   "message": "key 'ceg-gl' is not permitted to invoke action 'match'"
+  }
+ ]
+}
