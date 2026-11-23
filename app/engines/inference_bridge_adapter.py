@@ -213,7 +213,14 @@ class InferenceBridge:
         entity: dict[str, Any],
         confidence_map: dict[str, float] | None = None,
     ) -> InferenceResult:
-        """Execute inference and return v1-shaped result."""
+        """Execute inference and return v1-shaped result.
+
+        A refused rule set (STATUS_INVALID) runs nothing, the derivation graph
+        included: a refusal is of the domain's inference, not of one executor.
+        """
+        if self._rule_errors:
+            self._last_unlock_map = {}
+            return InferenceResult()
         result = self._run_derivation_graph(entity, confidence_map or {})
         if self._registry is not None:
             self._run_condition_rules(self._registry, entity, confidence_map or {}, result)

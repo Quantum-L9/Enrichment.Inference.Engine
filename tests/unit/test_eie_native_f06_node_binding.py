@@ -254,3 +254,39 @@ def test_malformed_ontology_with_a_node_declares_nothing(spec: dict[str, Any]) -
     assert bridge.graph is not None
     assert bridge.graph.edges == []
     assert bridge.run({"capacity": 50}).derived_fields == {}
+
+
+# ── refusal runs nothing (review finding on #400) ────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        pytest.param([_rule("r", "capacity", "size")], id="unbindable-node"),
+        pytest.param([{"rule_id": "bad", "conditions": [], "outputs": []}], id="invalid-rule"),
+    ],
+)
+def test_refused_rule_set_does_not_run_the_derivation_graph(
+    rules: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """STATUS_INVALID means nothing runs, including a graph edge that could derive."""
+    from app.engines import inference_bridge_v2 as v2
+
+    monkeypatch.setitem(v2._RULE_REGISTRY, "probe", lambda _i, _e: ("v", 0.95))
+    spec = {
+        "ontology": {
+            "nodes": {
+                "Plant": {"properties": {"g": {"derived_from": ["p"], "inference_rule": "probe"}}},
+                "Depot": {"properties": {}},
+            }
+        }
+    }
+    bridge = InferenceBridge(rules=rules, domain_spec=spec, node="Plant")
+    assert bridge.status == STATUS_INVALID
+    result = bridge.run({"p": 1}, {"p": 0.9})
+    assert result.derived_fields == {}
+    assert result.unlock_map == {}
+    accepted = InferenceBridge(
+        rules=[_rule("r", "p", "q", node="Plant")], domain_spec=spec, node="Plant"
+    )
+    assert accepted.run({"p": 1}, {"p": 0.9}).derived_fields.get("g") == "v"
