@@ -161,3 +161,31 @@ def test_prompt_and_schema_hash_accept_a_typed_declaration(reader: Any) -> None:
     )
     assert "members" in str(payload) and "weight (float)" in str(payload)
     assert build_schema_hash(schema) == build_schema_hash(dict(schema or {}))
+
+
+# ── Review follow-up (#394): a top-level map target is validated, not passed ──
+
+PROFILE = {
+    "type": "map",
+    "properties": [
+        {"name": "code", "type": "string", "required": True},
+        {"name": "n", "type": "int"},
+    ],
+}
+
+
+def test_a_top_level_map_missing_a_required_property_is_refused() -> None:
+    out = validate_response({"fields": {"profile": {"n": 3}}}, {"profile": PROFILE})
+    assert "profile" not in out
+
+
+@pytest.mark.parametrize("value", ["oops", ["code"], 7])
+def test_a_top_level_map_target_refuses_a_non_mapping(value: Any) -> None:
+    assert "profile" not in validate_response({"fields": {"profile": value}}, {"profile": PROFILE})
+
+
+def test_a_top_level_map_keeps_only_declared_typed_properties() -> None:
+    out = validate_response(
+        {"fields": {"profile": {"code": "A1", "n": "4", "extra": 1}}}, {"profile": PROFILE}
+    )
+    assert out["profile"] == {"code": "A1", "n": 4}
