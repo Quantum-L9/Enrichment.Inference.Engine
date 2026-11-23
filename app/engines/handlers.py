@@ -428,7 +428,7 @@ async def _run_canonical_converge(
         or request.kb_context
         or request.object_type
     )
-    domain_hints, inference_rules, domain_spec = await _load_domain_converge_bundle(
+    domain_hints, inference_rules, domain_spec, node_label = await _load_domain_converge_bundle(
         domain_id=domain_id,
         node_label=payload.get("node_label"),
         config=cartridge,
@@ -461,6 +461,10 @@ async def _run_canonical_converge(
         domain_spec=domain_spec,
         tenant_id=tenant,
         entity_id=entity_id,
+        # F06: inference is bound to the node this request addresses -- the
+        # resolved node of a v2 request (its body carries it), else the v1
+        # body's `node_label`, else the spec's only node. None runs every rule.
+        node_label=node_label,
         **loop_kwargs,
     )
     result = response.model_dump()
@@ -576,7 +580,7 @@ async def _load_domain_convergence_context(
     node_label: str | None,
 ) -> tuple[dict[str, Any], Any]:
     """Domain hints + inference rules; see `_load_domain_converge_bundle`."""
-    hints, rules, _spec = await _load_domain_converge_bundle(
+    hints, rules, _spec, _node = await _load_domain_converge_bundle(
         domain_id=domain_id, node_label=node_label
     )
     return hints, rules
@@ -587,11 +591,14 @@ async def _load_domain_converge_bundle(
     domain_id: str | None,
     node_label: str | None,
     config: DomainEnrichmentConfig | None = None,
-) -> tuple[dict[str, Any], Any, dict[str, Any] | None]:
-    """Load optional domain hints + inference rules + the full spec for converge.
+) -> tuple[dict[str, Any], Any, dict[str, Any] | None, str | None]:
+    """Load optional domain hints + inference rules + the full spec + the node for converge.
 
     The third element is the effective revision's raw spec, or None when no
-    domain resolved; all three come from one `DomainYamlReader.load`.
+    domain resolved; all three come from one `DomainYamlReader.load`. The
+    fourth is the node the request addresses (F06): `node_label` when given,
+    else the spec's only node; None when a multi-node spec names none or no
+    domain resolved. It is the same label the hints were read for.
 
     An unknown domain converges without inference. A loaded domain's rules come
     from `inference_rules_path`, else the spec's own `inference_rules`; they are
@@ -613,7 +620,7 @@ async def _load_domain_converge_bundle(
     domain_hints: dict[str, Any] = {}
     inference_rules: Any = []
     if not domain_id or not _domain_reader:
-        return domain_hints, inference_rules, None
+        return domain_hints, inference_rules, None, None
 
     # Resolve once: pointer publication between two reads must never pair old
     # enrichment hints with a different revision's rules.
@@ -630,8 +637,9 @@ async def _load_domain_converge_bundle(
             domain_id=domain_id,
             error=str(exc),
         )
-        return domain_hints, inference_rules, None
-    domain_hints = _node_hints(config, domain_id, node_label)
+        return domain_hints, inference_rules, None, None
+    node = node_label or default_node_label(config)
+    domain_hints = _node_hints(config, domain_id, node)
     logger.info(
         "handlers.converge_effective_revision",
         domain_id=domain_id,
@@ -645,7 +653,7 @@ async def _load_domain_converge_bundle(
     else:
         inference_rules = config.raw_spec.get("inference_rules") or []
 
-    return domain_hints, inference_rules, config.raw_spec or None
+    return domain_hints, inference_rules, config.raw_spec or None, node
 
 
 def _node_hints(
