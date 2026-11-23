@@ -197,6 +197,7 @@ async def run_convergence_loop(
     response_contract: str | None = None,
     subject: Mapping[str, str] | None = None,
     observations: tuple[Mapping[str, Any], ...] = (),
+    node_label: str | None = None,
 ) -> EnrichResponse:
     """
     Multi-pass convergence loop.
@@ -236,6 +237,13 @@ async def run_convergence_loop(
     observations : tuple of mappings
         Request v2.1 observations, already validated against the cartridge. They
         are evidence only, folded into a v2 response; they never steer the loop.
+    node_label : str | None
+        The ontology node the request addresses, resolved by the caller (F06):
+        the v2 request's resolved node, else the v1 body's ``node_label``, else
+        the spec's only node. Inference is bound to it -- only that node's rules
+        run and only its declarations build the derivation graph. None (a
+        multi-node spec named no node, or no domain resolved) runs exactly what
+        ran before node binding. Never chosen here.
     """
     if response_contract not in (None, RESPONSE_CONTRACT_V2):
         raise ValueError(f"unsupported_contract: {response_contract!r}")
@@ -244,6 +252,7 @@ async def run_convergence_loop(
     bridge = InferenceBridge(
         rules=inference_rules or [],
         domain_spec=domain_spec,
+        node=node_label,
     )
 
     # ── Convergence config ─────────────────────────────────
