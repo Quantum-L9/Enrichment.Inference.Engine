@@ -74,6 +74,8 @@ class DerivationGraph:
     topo_order: list[str]  # target fields in safe execution order
     children_of: dict[str, list[str]]  # input_field → [target fields it enables]
     _edge_map: dict[str, DerivationEdge] = field(default_factory=dict, repr=False)
+    # target → node labels that each declare it; such a target is not executable
+    _conflicts: dict[str, tuple[str, ...]] = field(default_factory=dict, repr=False)
 
 
 def _collect_edges_from_node(node_def: dict) -> list[DerivationEdge]:
@@ -106,8 +108,13 @@ def build_derivation_graph(domain_spec: dict[str, Any]) -> DerivationGraph:
     Only fields with explicit `derived_from` lists become derivation edges.
     No implicit inference. No heuristic guessing.
     """
-    domain_name = domain_spec.get("domain") or domain_spec.get("metadata", {}).get(
-        "domain", "unknown"
+    # Legacy specs name the domain under `domain` / `metadata.domain`; a native
+    # cartridge names itself with top-level `name`.
+    domain_name = (
+        domain_spec.get("domain")
+        or domain_spec.get("metadata", {}).get("domain")
+        or domain_spec.get("name")
+        or "unknown"
     )
 
     ontology = domain_spec.get("ontology", domain_spec)
@@ -115,14 +122,25 @@ def build_derivation_graph(domain_spec: dict[str, Any]) -> DerivationGraph:
 
     edges: list[DerivationEdge] = []
     edge_map: dict[str, DerivationEdge] = {}
+    declared_by: dict[str, list[str]] = {}
 
     node_iter = nodes.items() if isinstance(nodes, dict) else enumerate(nodes)
-    for _, node_def in node_iter:
+    for key, node_def in node_iter:
         if not isinstance(node_def, dict):
             continue
+        label = str(key) if isinstance(nodes, dict) else str(node_def.get("label", f"nodes[{key}]"))
         for edge in _collect_edges_from_node(node_def):
             edges.append(edge)
             edge_map[edge.target] = edge
+            declared_by.setdefault(edge.target, []).append(label)
+
+    # One target name derived on two nodes has no single derivation: neither
+    # declaration may silently replace the other. Both leave the executable
+    # graph and are reported blocked by run_inference (no node selector exists).
+    conflicts = {t: tuple(labels) for t, labels in declared_by.items() if len(labels) > 1}
+    for target, labels in conflicts.items():
+        del edge_map[target]
+        logger.error("derivation_graph.target_conflict", field=target, nodes=list(labels))
 
     # Build children_of: which targets does each input unlock?
     children_of: dict[str, list[str]] = {}
@@ -130,8 +148,10 @@ def build_derivation_graph(domain_spec: dict[str, Any]) -> DerivationGraph:
         for inp in edge.inputs:
             children_of.setdefault(inp, []).append(edge.target)
 
-    # Topological sort (Kahn's algorithm)
-    topo_order = _topo_sort(edges, edge_map)
+    # Topological sort (Kahn's algorithm) over every edge, so a cycle running
+    # through a conflicting target stays visible; conflicting targets are then
+    # dropped from the executable order.
+    topo_order = [t for t in _topo_sort(edges, edge_map) if t not in conflicts]
 
     logger.info(
         "derivation_graph.built",
@@ -147,6 +167,7 @@ def build_derivation_graph(domain_spec: dict[str, Any]) -> DerivationGraph:
         topo_order=topo_order,
         children_of=children_of,
         _edge_map=edge_map,
+        _conflicts=conflicts,
     )
 
 
@@ -158,11 +179,17 @@ def _topo_sort(
 
     Handles multi-hop: if field C derives from B, and B derives from A,
     then order is [B, C] so B is computed before C needs it.
+
+    The order is the executable order and holds only targets with a valid
+    derivation order. A target in a dependency cycle, or one that depends on
+    such a target, has none: it is left out (``run_inference`` reports it as
+    ``InferenceStatus.CYCLE``) rather than appended as if it could run. Ties
+    break by declaration order, so the order never depends on hash seeding.
     """
     in_degree: dict[str, int] = {}
     graph: dict[str, list[str]] = {}
 
-    targets = {e.target for e in edges}
+    targets = dict.fromkeys(e.target for e in edges)
     for t in targets:
         in_degree.setdefault(t, 0)
         graph.setdefault(t, [])
@@ -186,14 +213,11 @@ def _topo_sort(
                 queue.append(child)
 
     if len(order) != len(targets):
-        cycle_fields = targets - set(order)
+        ordered = set(order)
         logger.error(
             "derivation_graph.cycle_detected",
-            fields=sorted(cycle_fields),
+            fields=sorted(t for t in targets if t not in ordered),
         )
-        # Append remaining in arbitrary order (they won't fire due to
-        # missing inputs, but we don't crash)
-        order.extend(sorted(cycle_fields))
 
     return order
 
@@ -382,6 +406,36 @@ def _resolve_rule_fn(
     return rule_fn, None
 
 
+def _block_cycle_targets(
+    graph: DerivationGraph,
+    blocked: dict[str, FieldInferenceResult],
+) -> None:
+    """Report every edge target absent from the executable order as blocked.
+
+    A target two nodes declare (``graph._conflicts``, named on the
+    ``derivation_graph.target_conflict`` log) has no single rule: NO_RULE.
+    Every other absent target is in, or depends on, a cycle: CYCLE.
+    """
+    for target in graph._conflicts:
+        blocked[target] = FieldInferenceResult(field=target, status=InferenceStatus.NO_RULE)
+    executable = set(graph.topo_order)
+    unresolved = [
+        t
+        for t in dict.fromkeys(e.target for e in graph.edges)
+        if t not in executable and t not in graph._conflicts
+    ]
+    for target in unresolved:
+        edge = graph._edge_map[target]
+        blocked[target] = FieldInferenceResult(
+            field=target,
+            status=InferenceStatus.CYCLE,
+            missing_inputs=[
+                i for i in dict.fromkeys(edge.inputs) if i in unresolved or i in graph._conflicts
+            ],
+            rule_used=edge.inference_rule,
+        )
+
+
 def run_inference(
     graph: DerivationGraph,
     entity: dict[str, Any],
@@ -399,6 +453,8 @@ def run_inference(
     4. Newly derived values are added to a working copy so downstream
        derivations in the same pass can chain off them
     5. No speculative inference. No cross-entity inference. No guessing.
+    6. A target with no valid derivation order (in or behind a cycle) is
+       blocked as CYCLE, naming the inputs that cannot be resolved.
 
     Args:
         graph: DerivationGraph built from YAML
@@ -474,6 +530,10 @@ def run_inference(
         else:
             blocked[target_field] = result
 
+    # Targets left out of the executable order sit in, or depend on, a cycle:
+    # no derivation is valid, so none is attempted or reported as produced.
+    _block_cycle_targets(graph, blocked)
+
     # Build unlock map for search optimizer
     unlock_map = _compute_unlock_values(graph, working_entity, working_confidence)
 
@@ -515,10 +575,15 @@ def _compute_unlock_values(
     ONLY missing input. Higher = search this field first.
 
     This is the strategic targeting signal for search_optimizer_v2.
+    Only executable edges count: finding an input of a cycle-blocked or
+    conflicting target cannot unlock a derivation that is never attempted.
     """
     unlock: dict[str, float] = {}
+    executable = set(graph.topo_order)
 
     for edge in graph.edges:
+        if edge.target not in executable:
+            continue
         missing_for_edge = []
         for inp in edge.inputs:
             val = entity.get(inp)

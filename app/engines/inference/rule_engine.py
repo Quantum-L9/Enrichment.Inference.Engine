@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from typing import Any
 
 import structlog
@@ -39,15 +41,37 @@ class InferenceResult(BaseModel):
 # Every operator is therefore total — a shape it cannot interpret evaluates to
 # False, never to an exception. Collection members are compared by equality,
 # not hashed, so a list of objects is a legitimate non-match rather than a
-# TypeError; `in` is only applied to the shapes that support it.
+# TypeError; `in` is only applied to the shapes that support it. A mapping
+# CONTAINS target is the one subset comparison (see `_mapping_matches`).
 
 _COLLECTIONS = (list, tuple, set, frozenset)
 
 
+def _mapping_matches(element: Any, target: Mapping[Any, Any]) -> bool:
+    """True iff every key `target` names is in `element` with an equal normalised value.
+
+    Keys `element` carries beyond the target neither match nor fail: a declared
+    `list` of `map` names more properties than any one rule tests. An empty
+    target names nothing and so matches nothing; it is not a wildcard.
+    """
+    if not target or not isinstance(element, Mapping):
+        return False
+    return all(
+        key in element and _normalise(element[key]) == _normalise(want)
+        for key, want in target.items()
+    )
+
+
 def _eval_contains(value: Any, target: Any) -> bool:
-    """Check if target is contained within value (collection or string)."""
+    """Check if target is contained within value (collection or string).
+
+    A mapping target is matched against mapping members by the keys it names
+    (`_mapping_matches`); any other target by normalised equality.
+    """
     needle = _normalise(target)
     if isinstance(value, _COLLECTIONS):
+        if isinstance(target, Mapping):
+            return any(_mapping_matches(v, target) for v in value)
         return any(_normalise(v) == needle for v in value)
     if isinstance(value, str):
         return isinstance(needle, str) and needle in _normalise(value)
@@ -67,11 +91,27 @@ def _eval_not_in(value: Any, target: Any) -> bool:
     return not _eval_in(value, target)
 
 
-def _finite_floats(left: Any, right: Any) -> tuple[float, float] | None:
-    try:
-        return float(left), float(right)
-    except (TypeError, ValueError):
+def _finite_float(value: Any) -> float | None:
+    """`value` as a finite float, else None.
+
+    A boolean is not a number here (as in spec_types._check_float), and NaN or
+    an infinity — which Python's JSON decoder accepts as `NaN` / `Infinity`, and
+    `float()` parses from provider text — would otherwise satisfy GT/LT bounds.
+    """
+    if isinstance(value, bool):
         return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _finite_floats(left: Any, right: Any) -> tuple[float, float] | None:
+    left_num, right_num = _finite_float(left), _finite_float(right)
+    if left_num is None or right_num is None:
+        return None
+    return left_num, right_num
 
 
 def _eval_numeric(op: Operator, value: Any, target: Any) -> bool:
