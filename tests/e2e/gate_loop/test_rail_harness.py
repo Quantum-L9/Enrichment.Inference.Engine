@@ -466,14 +466,14 @@ def test_p18_missing_edge_alone_is_blocked_on_the_operator_contract(
     _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
     p18 = _by_id(rail.c_converge_sync("ed25519"))["P18"]
     assert p18.verdict == "BLOCKED"
-    assert p18.reason == rail.TYPED_SYNC_BLOCKED
+    assert p18.reason == f"{rail.TYPED_SYNC_BLOCKED}; {rail.GATE_BINDING_LIMIT}"
 
 
 def test_p18_stringified_property_stays_fail_without_an_edge(mp: pytest.MonkeyPatch) -> None:
     _rig_converge_sync(mp, polymers_prop='"{\\"HDPE\\": \\"in\\"}"', state="completed")
     p18 = _by_id(rail.c_converge_sync("ed25519"))["P18"]
     assert p18.verdict == "FAIL"
-    assert p18.reason != rail.TYPED_SYNC_BLOCKED
+    assert rail.TYPED_SYNC_BLOCKED not in p18.reason
 
 
 def test_p05_missing_edge_alone_is_blocked_on_the_operator_contract(
@@ -482,7 +482,7 @@ def test_p05_missing_edge_alone_is_blocked_on_the_operator_contract(
     _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
     p05 = _by_id(rail.c_converge_sync("ed25519", tenant="synthneutral"))["P05"]
     assert p05.verdict == "BLOCKED"
-    assert p05.reason == rail.TYPED_SYNC_BLOCKED
+    assert p05.reason == f"{rail.TYPED_SYNC_BLOCKED}; {rail.GATE_BINDING_LIMIT}"
 
 
 def test_p05_incomplete_converge_stays_fail_without_an_edge(mp: pytest.MonkeyPatch) -> None:

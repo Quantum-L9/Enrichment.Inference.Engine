@@ -899,7 +899,9 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         for res in out:
             if res.id in typed_ids:
                 res.verdict = "BLOCKED"
-                res.reason = TYPED_SYNC_BLOCKED
+                # The operator-contract wording first, then the limit of the Gate evidence that
+                # sync_via_gate rests on, which this reason must not drop.
+                res.reason = f"{TYPED_SYNC_BLOCKED}; {GATE_BINDING_LIMIT}"
     if not stored and egress_blocked:
         for res in out:
             res.verdict = "BLOCKED"
