@@ -95,6 +95,19 @@ def test_resync_witness_waits_for_completion_and_never_reads_absence_early(
     assert evaluated == []
 
 
+def test_mixed_alg_pass_explains_its_expected_502() -> None:
+    events = [
+        {
+            "event": "gate.failure",
+            "error_type": "GateDispatchSecurityError",
+            "error_message": "worker response failed transport validation: x",
+        }
+    ]
+    assert rail.mixed_alg_outcome(502, events) == "accepted"
+    assert "502 is expected" in rail.MIX_ALG_ACCEPTED_REASON
+    assert "401/403" in rail.MIX_ALG_ACCEPTED_REASON
+
+
 def test_feedback_no_longer_claims_p22_and_graph_trigger_owns_it() -> None:
     assert "P22" not in rail.CASE_IDS["feedback"]
     assert rail.CASE_IDS["graph_trigger"] == ("P22",)
@@ -652,16 +665,3 @@ def test_cypher_classifies_only_the_sh_timeout_as_a_probe_timeout(mp: pytest.Mon
     with pytest.raises(rail.ProbeError) as err:
         rail.cypher("plasticos", "RETURN 1")
     assert not isinstance(err.value, rail.ProbeTimeoutError)
-
-
-def test_mixed_alg_pass_explains_its_expected_502() -> None:
-    events = [
-        {
-            "event": "gate.failure",
-            "error_type": "GateDispatchSecurityError",
-            "error_message": "worker response failed transport validation: x",
-        }
-    ]
-    assert rail.mixed_alg_outcome(502, events) == "accepted"
-    assert "502 is expected" in rail.MIX_ALG_ACCEPTED_REASON
-    assert "401/403" in rail.MIX_ALG_ACCEPTED_REASON
