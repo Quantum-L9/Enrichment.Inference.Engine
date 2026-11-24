@@ -7,6 +7,8 @@ and main() reports the abort (non-zero exit).
 
 from __future__ import annotations
 
+import itertools
+import json
 import sys
 from pathlib import Path
 
@@ -136,6 +138,42 @@ def test_init_schema_timeout_is_a_probe_timeout(mp: pytest.MonkeyPatch) -> None:
     mp.setattr(rail.subprocess, "run", slow)
     with pytest.raises(rail.ProbeTimeoutError):
         rail.ceg_init_schema("synthneutral")
+
+
+def test_resync_witness_needs_this_entitys_graph_leg_not_other_traffic(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    """An unrelated sync completing and being evaluated in the window does not end the wait."""
+    clock = itertools.count(0.0, 10.0)
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(
+        rail,
+        "gate_events",
+        lambda since, action: [
+            {"event": "gate.ingress", "source_node": "enrichment-engine", "request_id": "other"},
+            {"event": "gate.completed", "source_node": "graph", "request_id": "other"},
+        ],
+    )
+    other_leg = json.dumps(
+        {"event": "side_effects_graph_leg_resolved", "entity_id": "sn-other", "synced": True}
+    )
+
+    def fake_logs(container: str, *a: object, **k: object) -> list[str]:
+        return [other_leg] if container == "l9e2e-eie" else ["graph inference after sync"]
+
+    mp.setattr(rail, "logs", fake_logs)
+    calls: list[int] = []
+    real = rail.graph_leg_outcomes
+
+    def counted(log: list[str], eid: str) -> list[bool]:
+        calls.append(1)
+        return real(log, eid)
+
+    mp.setattr(rail, "graph_leg_outcomes", counted)
+    rail._wait_resync_evaluated("t0", 90.0, frozenset(), "sn-tr-1")
+    # Polled until the budget ran out: the other entity's leg never satisfied the wait.
+    assert len(calls) > 1
 
 
 def test_feedback_no_longer_claims_p22_and_graph_trigger_owns_it() -> None:

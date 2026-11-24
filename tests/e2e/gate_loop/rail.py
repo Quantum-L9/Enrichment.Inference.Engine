@@ -2128,7 +2128,7 @@ def eie_target_cites(targets: list[dict], accepted_key: str, wire_key: str | Non
 
 
 def _wait_resync_evaluated(
-    since: str, budget_s: float, exclude: frozenset[str] = frozenset()
+    since: str, budget_s: float, exclude: frozenset[str] = frozenset(), entity_id: str = ""
 ) -> tuple[list[dict], list[str]]:
     """Poll until the resync's own sync completed at Gate, and CEG logged its evaluation.
 
@@ -2137,6 +2137,10 @@ def _wait_resync_evaluated(
     answers (engine/handlers.py:1625 _schedule_graph_inference), so that completion proves CEG
     evaluated this sync; the evaluation log line is recorded alongside. The caller isolates the window
     (``since`` stamped a full second after the earlier pass settled).
+
+    With ``entity_id`` the wait also needs EIE's own graph-leg record for that entity, synced, in the
+    window: EIE resolves the leg only after the sync's answer came back, so the record binds the
+    completion to this entity's resync rather than to other traffic (a recovery sync, for one).
     """
     deadline = time.monotonic() + budget_s
     syncs: list[dict] = []
@@ -2144,7 +2148,10 @@ def _wait_resync_evaluated(
     while time.monotonic() < deadline:
         syncs = gate_events(since, "sync")
         evaluated = logs("l9e2e-ceg", since, ("graph inference after sync",), limit=None)
-        if sync_completions(syncs, exclude) and evaluated:
+        leg_done = not entity_id or True in graph_leg_outcomes(
+            logs("l9e2e-eie", since, ("side_effects_graph_leg_resolved",), limit=None), entity_id
+        )
+        if sync_completions(syncs, exclude) and evaluated and leg_done:
             return syncs, evaluated
         time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
     return syncs, evaluated
@@ -2198,7 +2205,10 @@ def c_graph_trigger(p: str) -> list[Result]:
         # EIE's graph leg runs detached, so the converge can answer before its sync reaches CEG.
         # The no-result witness is read only after the resync completed at Gate and CEG logged its
         # evaluation; a budget that runs out leaves the witness unproven, never vacuously true.
-        syncs2, ceg_log2 = _wait_resync_evaluated(since2, P22_WITNESS_S, c1_sync_ids)
+        syncs2, ceg_log2 = _wait_resync_evaluated(since2, P22_WITNESS_S, c1_sync_ids, eid)
+        resync_leg = graph_leg_outcomes(
+            logs("l9e2e-eie", since2, ("side_effects_graph_leg_resolved",), limit=None), eid
+        )
         # A delivery is scheduled only after CEG answered the sync; give it a bounded window to show.
         if sync_completions(syncs2, c1_sync_ids):
             time.sleep(P22_DELIVERY_GRACE_S)
@@ -2227,7 +2237,10 @@ def c_graph_trigger(p: str) -> list[Result]:
         obligation_accepted=ob1.get("status") == "accepted",
         revisions_cited=cited,
         eie_target_cites_ceg=eie_cites,
-        resync_through_gate=_completed(c2) and bool(resync_done) and bool(ceg_log2),
+        resync_through_gate=_completed(c2)
+        and bool(resync_done)
+        and bool(ceg_log2)
+        and True in resync_leg,
         resync_results=len(
             [e for e in results2 if e["source_node"] == "graph" and e["event"] == "gate.ingress"]
         ),
