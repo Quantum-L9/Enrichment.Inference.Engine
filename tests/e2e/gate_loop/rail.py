@@ -160,7 +160,10 @@ def psql(query: str) -> list[str]:
     return r.stdout.strip().splitlines()
 
 
-def logs(container: str, since: str = "2m", grep: tuple[str, ...] = ()) -> list[str]:
+def logs(
+    container: str, since: str = "2m", grep: tuple[str, ...] = (), limit: int | None = 40
+) -> list[str]:
+    """Container log lines since ``since``, optionally filtered; the last ``limit`` (None: all)."""
     r = sh(["docker", "logs", container, "--since", since], timeout=60)
     if r.returncode != 0:
         raise ProbeError(
@@ -170,13 +173,15 @@ def logs(container: str, since: str = "2m", grep: tuple[str, ...] = ()) -> list[
     lines = [ln for ln in lines if "otel" not in ln and "opentelemetry" not in ln]
     if grep:
         lines = [ln for ln in lines if any(g in ln for g in grep)]
-    return [redact(ln) for ln in lines[-40:]]
+    if limit is not None:
+        lines = lines[-limit:]
+    return [redact(ln) for ln in lines]
 
 
 def gate_events(since: str, action: str) -> list[dict]:
     """Gate's structured ingress/completion events for one action since a docker-logs timestamp."""
     out = []
-    for ln in logs("l9e2e-gate", since, (f'"action": "{action}"',)):
+    for ln in logs("l9e2e-gate", since, (f'"action": "{action}"',), limit=None):
         try:
             ev = json.loads(ln)
         except ValueError:
@@ -725,14 +730,20 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
             not_run(i, "A8", p, "converge -> sync read-back", str(exc), entity_id=eid) for i in ids
         ]
     sync_events = gate_events(since, "sync")
-    eie_log = logs(
-        "l9e2e-eie", "1m", ("graph_sync", "packet_route_error", "graph_leg", "side_effects")
+    # Verdict evidence from the case start, untruncated: a probe delay or later traffic must not
+    # push this entity's graph-leg record out of the window. Only the recorded excerpt is capped.
+    eie_all = logs(
+        "l9e2e-eie",
+        since,
+        ("graph_sync", "packet_route_error", "graph_leg", "side_effects"),
+        limit=None,
     )
+    eie_log = eie_all[-40:]
     # Bound to this converge by its entity, not by lineage: EIE starts every Gate egress as a new
     # root packet (app/engines/packet_router.py route(): "The SDK builds the root packet"), so the
     # sync never shares the converge's root_id. The binding is EIE's own graph-leg record for this
     # run's unique entity id, plus Gate's sync from EIE completed by the graph worker in this window.
-    leg_synced = graph_leg_synced(eie_log, eid)
+    leg_synced = graph_leg_synced(eie_all, eid)
     ingress = [
         e
         for e in sync_events
@@ -758,7 +769,7 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         and bool(completed)
         and all((c.get("generation") or 0) >= 2 for c in completed)
     )
-    egress_blocked = any("signature required but not present" in ln for ln in eie_log)
+    egress_blocked = any("signature required but not present" in ln for ln in eie_all)
     state = (r.get("payload") or {}).get("state")
     obs = {
         "entity_id": eid,

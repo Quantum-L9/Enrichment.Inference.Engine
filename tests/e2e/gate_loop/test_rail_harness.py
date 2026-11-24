@@ -336,3 +336,17 @@ def test_graph_leg_synced_binds_the_sync_to_this_entity() -> None:
     assert rail.graph_leg_synced(log, "gl-1") is False
     assert rail.graph_leg_synced([*log, rec(entity_id="gl-1", synced=True)], "gl-1") is True
     assert rail.graph_leg_synced([json.dumps(["list"])], "gl-1") is False
+
+
+def test_logs_keeps_every_matching_line_when_unlimited(mp: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    lines = "\n".join(f"line {i} side_effects" for i in range(60))
+    mp.setattr(
+        rail,
+        "sh",
+        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout=lines, stderr=""),
+    )
+    assert len(rail.logs("l9e2e-eie", "t0", ("side_effects",))) == 40
+    full = rail.logs("l9e2e-eie", "t0", ("side_effects",), limit=None)
+    assert len(full) == 60 and full[0] == "line 0 side_effects"
