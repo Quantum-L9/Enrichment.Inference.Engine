@@ -55,6 +55,12 @@ ruling 2026-11-24; the field-set rules are
 `docs/contracts/data/graph_sync_intents.md` *Field set and provenance*). It is
 defined here once and keyed only on declarations:
 
+> **Status:** target contract. These sending rules take effect with the
+> implementation that follows this contract (campaign PR-2). Until then every
+> graph-sync row carries admitted values only and no provenance property,
+> which is the legacy mode below.
+
+
 - A row field `F` of an endpoint's row contract carries its provenance in the
   companion row property **`F_provenance`**: a declared scalar `enum` with
   `values: [observed, enriched]`, declared on the same target node and not
@@ -78,9 +84,15 @@ defined here once and keyed only on declarations:
   | Full | declared | observed and enriched values, each labelled |
 
   An observed value never syncs to a field whose provenance property is not
-  declared. CEG declares the same properties with the identical shape, so the
-  compatibility contract compares them like any other row property, and CEG
-  applies the over-time precedence (G3) by reading them.
+  declared.
+- **Prerequisite on CEG.** CEG must declare `F_provenance` and the item
+  `provenance` with the identical `enum` shape `[observed, enriched]` on the
+  target node before EIE sends them; the compatibility contract then compares
+  them like any other row property. The pinned CEG revision
+  (`tests/contracts/ceg_revision.py`, snapshot
+  `tests/fixtures/ceg/plasticos.spec.yaml`) must be moved to a revision that
+  declares them before the implementation merges. CEG applies the over-time
+  precedence (G3) by reading them, once they are declared.
 
 ## Published filesystem layout
 
