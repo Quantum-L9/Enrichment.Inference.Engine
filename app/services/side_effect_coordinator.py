@@ -194,6 +194,9 @@ class SideEffectReport:
 #: so a live attempt is never re-claimed under it; a holder that died releases
 #: the intent when the lease expires.
 GRAPH_LEASE_SECONDS = 60.0
+# Mirrors pg_store.GRAPH_RETRIED_IN_CLAIM (pinned equal by a test); this module
+# imports pg_store lazily.
+GRAPH_RETRIED_IN_CLAIM = "retried_in_claim"
 #: Backoff between durable graph-leg attempts (doubles per attempt, capped).
 GRAPH_RETRY_BASE_SECONDS = 2.0
 GRAPH_RETRY_CAP_SECONDS = 300.0
@@ -457,6 +460,9 @@ class SideEffectCoordinator:
         disposition, error = self._classify_graph_outcome(
             key, entity_id, ack, outcome, raised, report
         )
+        if disposition != "retry" and getattr(outcome, "retried", False):
+            # An earlier request of this claim may still land (rule 5).
+            error = ";".join(filter(None, (error, GRAPH_RETRIED_IN_CLAIM)))
         if record is not None:
             await self._settle_intent(
                 record, disposition, error, ack if report.graph_synced else None, report

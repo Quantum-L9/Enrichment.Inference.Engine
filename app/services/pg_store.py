@@ -841,6 +841,9 @@ GRAPH_INTENT_DEFAULT_MAX_ATTEMPTS = 8
 # (graph_sync_intents.md *Ordering*). A newer version of the subject is not
 # sent until the window of every uncertain older version has passed.
 GRAPH_MAX_APPLY_SECONDS = 300.0
+# Recorded in `last_error` when the transport retried inside one claim: the
+# claim's earlier request may still be applied, so the version is uncertain.
+GRAPH_RETRIED_IN_CLAIM = "retried_in_claim"
 
 
 class GraphSyncIntent(Base):
@@ -1222,9 +1225,10 @@ async def claim_graph_intents(
     At most one version of a subject is in flight. A version is also held while
     an older one is *uncertain* and resolved less than `max_apply_seconds` ago:
     a request of it may still be applied late (graph_sync_intents.md
-    *Ordering*). Uncertain means sent and not settled by a single attempt that
-    was acknowledged or definitively refused -- a retried version, or one that
-    ended `retry_exhausted`, may have a request CEG has not applied yet.
+    *Ordering*). Uncertain means sent and not settled by a single request that
+    was acknowledged or definitively refused -- a version claimed more than
+    once, retried by the transport inside one claim (`GRAPH_RETRIED_IN_CLAIM`),
+    or ended `retry_exhausted`, may have a request CEG has not applied yet.
     """
     if (tenant_id is None) != (effect_key is None):
         msg = "claim one operation with both tenant_id and effect_key, or neither"
@@ -1258,6 +1262,7 @@ async def claim_graph_intents(
                 older.attempts > 1,
                 older.state.not_in((GRAPH_INTENT_ACKNOWLEDGED, GRAPH_INTENT_FAILED_TERMINAL)),
                 older.last_error.like("retry_exhausted%"),
+                older.last_error.like(f"%{GRAPH_RETRIED_IN_CLAIM}%"),
             ),
         )
 
@@ -1442,7 +1447,7 @@ async def settle_graph_intent(
         if outcome == "acknowledged":
             row.state = GRAPH_INTENT_ACKNOWLEDGED
             row.last_ack = json.loads(json.dumps(dict(ack or {}), default=str))
-            row.last_error = None
+            row.last_error = error  # None, or why an earlier request is uncertain
             row.resolved_at = at
         elif outcome == "terminal":
             row.state = GRAPH_INTENT_FAILED_TERMINAL

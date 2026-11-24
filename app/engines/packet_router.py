@@ -274,6 +274,8 @@ class GraphSyncOutcome:
     kind: GraphSyncOutcomeKind
     reason: str
     ack: dict[str, Any] | None = None
+    retried: bool = False
+    """True when the transport retried within this attempt: an earlier request may still land."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -976,6 +978,7 @@ class PacketRouter:
         correlation_id: str | None = None,
         *,
         idempotency_key: str | None = None,
+        on_retry: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """
         Dispatch one logical operation through Gate.
@@ -983,6 +986,8 @@ class PacketRouter:
         The SDK builds the root packet (destination Gate, EIE identity, one
         deadline, signing); this layer owns only the domain payload, the
         logical-operation identity, and the bounded retry policy above.
+        ``on_retry`` is called before each retry: the earlier request's outcome
+        is unknown and it may still be applied (graph_sync_intents.md rule 5).
         """
         last_exc: Exception | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -1044,6 +1049,8 @@ class PacketRouter:
                 )
                 if not retry:
                     break
+                if on_retry is not None:
+                    on_retry()
                 await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
 
         raise NodeUnreachableError(
@@ -1136,11 +1143,15 @@ class PacketRouter:
         idempotency key to the durable operation (:func:`_sync_idempotency_key`).
         """
 
+        retried: list[bool] = []
+
         def settle(
             kind: GraphSyncOutcomeKind, reason: str, ack: dict[str, Any] | None = None
         ) -> dict[str, Any] | None:
             if on_outcome is not None:
-                on_outcome(GraphSyncOutcome(kind=kind, reason=reason, ack=ack))
+                on_outcome(
+                    GraphSyncOutcome(kind=kind, reason=reason, ack=ack, retried=bool(retried))
+                )
             return ack if kind is GraphSyncOutcomeKind.ACKNOWLEDGED else None
 
         if domain and domain != tenant_id:
@@ -1213,6 +1224,7 @@ class PacketRouter:
                 {"entity_type": contract.entity_type, "batch": batch},
                 correlation_id,
                 idempotency_key=_sync_idempotency_key(tenant_id, entity_id, row, operation_key),
+                on_retry=lambda: retried.append(True),
             )
         except NodeUnreachableError as exc:
             logger.warning("graph_sync_failed", entity_id=entity_id, error=str(exc))

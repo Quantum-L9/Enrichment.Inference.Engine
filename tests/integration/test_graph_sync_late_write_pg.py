@@ -16,14 +16,18 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
 from app.engines import sync_field_set as fs
+from app.engines.packet_router import GraphSyncOutcome, GraphSyncOutcomeKind, GraphSyncPin
 from app.services import pg_store
+from app.services.side_effect_coordinator import SideEffectCoordinator
 from tests.conftest import skip_or_fail_unavailable
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -186,3 +190,67 @@ async def test_the_window_holds_only_the_same_subject(db: None) -> None:
             )
         )
     assert await _claim(t0 + timedelta(seconds=22)) == ["other"]
+
+
+# ── Through the coordinator: a transport retry inside one claim ─────────────
+
+SETTINGS = SimpleNamespace(gate_url="https://gate.example")
+ACK = {"status": "success", "entity_type": ENDPOINT, "synced_count": 1}
+
+
+def _spec(key: str, value: str) -> pg_store.GraphIntentSpec:
+    return pg_store.GraphIntentSpec(
+        tenant_id=TENANT,
+        effect_key=key,
+        entity_id=ENTITY,
+        fields={"band": value},
+        domain=TENANT,
+        node_label="Station",
+        endpoint=ENDPOINT,
+        contract_digest="c" * 64,
+    )
+
+
+async def _commit(key: str, value: str) -> None:
+    with pg_store.graph_intent_scope(_spec(key, value)):
+        await pg_store.save_enrichment_result(
+            tenant_id=TENANT,
+            entity_id=ENTITY,
+            object_type="Station",
+            fields={"band": value},
+            confidence=0.9,
+            uncertainty_score=0.1,
+            tokens_used=1,
+            processing_time_ms=1,
+            pass_count=1,
+            idempotency_key=key,
+        )
+
+
+def _retrying_router() -> MagicMock:
+    """Acknowledges after the transport retried inside the claim."""
+
+    async def notify(**kwargs: Any) -> Any:
+        kind = GraphSyncOutcomeKind.ACKNOWLEDGED
+        kwargs["on_outcome"](GraphSyncOutcome(kind, "acknowledged", ACK, retried=True))
+        return ACK
+
+    router = MagicMock()
+    router.notify_graph_sync = AsyncMock(side_effect=notify)
+    router.graph_sync_pin = MagicMock(
+        return_value=GraphSyncPin(entity_type=ENDPOINT, contract_digest="c" * 64)
+    )
+    return router
+
+
+async def test_an_ack_after_an_in_claim_retry_holds_the_newer_version(db: None) -> None:
+    await _commit("b", "B1")
+    with patch("app.engines.packet_router.get_router", return_value=_retrying_router()):
+        assert await SideEffectCoordinator().recover_graph_intents(SETTINGS) == 1
+    b = await pg_store.get_graph_intent(TENANT, "b")
+    assert b is not None and b.state == "acknowledged" and b.attempts == 1
+    assert b.last_error == pg_store.GRAPH_RETRIED_IN_CLAIM
+    await _commit("a", "B2")
+    later = datetime.now(UTC) + timedelta(seconds=5)
+    assert await _claim(later) == []  # B's first request may still land
+    assert await _claim(later + timedelta(seconds=WINDOW)) == ["a"]
