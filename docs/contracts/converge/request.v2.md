@@ -273,6 +273,10 @@ Rules:
 - A `field` the node does not declare is refused as `target_not_declared`.
 - An observation is evidence only. In the response it is reported with state `observed`
   and source type `request_observation`, and it is never admitted into `fields`.
+- An observation of a field the resolved sync endpoint declares reaches the graph as
+  that field's `observed` value, unless an admitted (enriched) value of the same field
+  wins in this converge (operator ruling 2026-11-24;
+  `docs/contracts/data/graph_sync_intents.md` *Field set and provenance*).
 - An observation speaks only to its own field. It is never generalized into another
   field, another subject or a capability.
 - `observations` on a body without `contract` is `v2_member_without_contract`.

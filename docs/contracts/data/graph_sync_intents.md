@@ -38,7 +38,7 @@ leaves none.
 | `contract_digest` | VARCHAR(64) NULL | SHA-256 of the endpoint contract (entity type, id property, target node, typed row schema) the fields were admitted against. NULL when no contract resolved at commit; such a row is refused at dispatch (`refused:unpinned`), never sent. |
 | `cartridge_revision` | VARCHAR(128) NULL | Reserved for the effective spec revision; not populated by A2. |
 | `origin` | VARCHAR(32) | Workflow the obligation belongs to: `enrich` or `converge`. Recovery holds `converge` rows while `CONVERGE_GRAPH_SYNC_ENABLED` is off. |
-| `fields` | JSONB | Exactly the admitted typed fields the leg sends (a `list<map>` stays a list of maps). |
+| `fields` | JSONB | Exactly the typed fields the leg sends, each with its declared provenance property (see *Field set and provenance*); a `list<map>` stays a list of maps. |
 | `enrichment_result_id` | UUID NULL | The `enrichment_results` row this obligation follows. |
 | `state` | VARCHAR(32) | See *States*. |
 | `attempts` / `max_attempts` | INTEGER | Claims so far; the ceiling (default 8). |
@@ -115,6 +115,32 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
 9. **Recovery.** `SideEffectCoordinator.recover_graph_intents` claims due rows
    and replays them; startup registration runs it every 30 s in-process, so a
    restarted idle node recovers without traffic.
+
+## Field set and provenance
+
+Operator ruling 2026-11-24 (revision of the #351 rule "observed / request values
+never reach the graph"): **a converge graph sync carries both admitted
+(enriched) values and consumer-observed values** for every field the effective
+spec declares on the resolved sync endpoint's row contract, childsync
+`list<map>` fields included. Before this ruling `fields` held admitted values
+only. Response admission is unchanged: an observed value is still never
+admitted into a response's `fields` (`docs/contracts/converge/response.v2.md`
+§3). This section governs only what the graph leg sends.
+
+The field set of one converge is built per declared row field `F`, in this
+order:
+
+| Guardrail | Rule |
+|---|---|
+| **G1 Provenance** | Every field sent carries its provenance, `observed` or `enriched`, as a **declared spec property**, by the convention of `docs/contracts/EIE_NATIVE_DOMAIN_SPEC.md` *Sync provenance*: a row field `F` is accompanied by its companion property `F_provenance`; every item of a childsync `list<map>` carries the item property `provenance`. A field whose provenance property the endpoint does not declare is not sent. An observed value is never labelled `enriched`. |
+| **G2 Precedence within one converge** | An admitted value (`inferred` or `external_claim`, `admitted: true`) is sent as `enriched` and wins over an observed value of the same field. Otherwise the consumer's observed value for `F` (the request entity, or a v2 observation) is sent as `observed`. A conflicting set of observations sends nothing for `F`. |
+| **G3 Precedence over time** | Enforced by CEG, not EIE: in the graph a later `observed` value replaces an `enriched` one, and an `enriched` value never overwrites an `observed` one. An enriched value CEG displaces is not lost: it remains EIE evidence (`enrichment_results`, `field_evidence`). |
+| **G4 Echo guard** | `F` is not sent when its value and provenance equal those of the entity's last **acknowledged** intent for the same subject (tenant, entity, endpoint). A value that originated from a CEG `graph-inference-result` (evidence source type `graph`) is never sent. A field set left empty sends no row and records no intent. |
+| **G5 No clears** | A `null` or missing observed value is never sent, so it never deletes a graph property; the same holds for admitted values. |
+| **G6 Domain-agnostic** | The field set is keyed only on the endpoint's declared row properties and its `childsync` entries. No field name, node label or cartridge is known to the code that builds it. |
+
+Rule 8 (*Verified replay*) applies to the whole pinned field set: an observed
+field is verified against the replay request's own value for that field.
 
 ## Outcome classification (`PacketRouter.notify_graph_sync(on_outcome=…)`)
 
