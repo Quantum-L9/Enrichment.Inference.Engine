@@ -1,0 +1,91 @@
+{
+ "id": "P11",
+ "slice": "A7",
+ "profile": "ed25519",
+ "assertion": "unknown action, wrong tenant, forgery, unsigned and HMAC downgrade all fail closed",
+ "verdict": "PASS",
+ "reason": "",
+ "observed": {
+  "http_status": {
+   "baseline_valid": 200,
+   "unknown_action": 403,
+   "wrong_tenant": 403,
+   "unsigned": 400,
+   "unknown_key_rogue": 400,
+   "corrupted_signature": 400,
+   "key_claims_other_node": 403,
+   "consumer_claims_registered_node_name": 403,
+   "hmac_downgrade_with_public_key": 400,
+   "hmac_downgrade_with_random_secret": 400,
+   "replay_first": 200,
+   "replay_second_same_packet_id": 200,
+   "expired_deadline": 400
+  },
+  "detail": {
+   "baseline_valid": null,
+   "unknown_action": {
+    "detail": {
+     "code": "action_not_permitted",
+     "message": "key 'odoo-gl' is not permitted to invoke action 'teleport'"
+    }
+   },
+   "wrong_tenant": {
+    "detail": {
+     "code": "action_not_permitted",
+     "message": "key 'odoo-gl' is not permitted to act for tenant 'othertenant'"
+    }
+   },
+   "unsigned": {
+    "detail": {
+     "code": "invalid_transport_packet",
+     "message": "signature required but not present"
+    }
+   },
+   "unknown_key_rogue": {
+    "detail": {
+     "code": "invalid_transport_packet",
+     "message": "no verifying key available for transport signature verification"
+    }
+   },
+   "corrupted_signature": {
+    "detail": {
+     "code": "invalid_transport_packet",
+     "message": "invalid ed25519 transport signature"
+    }
+   },
+   "key_claims_other_node": {
+    "detail": {
+     "code": "action_not_permitted",
+     "message": "key 'odoo-gl' is not permitted to claim source_node 'enrichment-engine'"
+    }
+   },
+   "consumer_claims_registered_node_name": {
+    "detail": {
+     "code": "action_not_permitted",
+     "message": "key 'odoo-gl' is not permitted to claim source_node 'graph'"
+    }
+   },
+   "hmac_downgrade_with_public_key": {
+    "detail": {
+     "code": "invalid_transport_packet",
+     "message": "transport signature algorithm 'hmac-sha256' does not match the algorithm 'ed25519' bound to signing key id 'odoo-gl'"
+    }
+   },
+   "hmac_downgrade_with_random_secret": {
+    "detail": {
+     "code": "invalid_transport_packet",
+     "message": "transport signature algorithm 'hmac-sha256' does not match the algorithm 'ed25519' bound to signing key id 'odoo-gl'"
+    }
+   },
+   "replay_first": null,
+   "replay_second_same_packet_id": null,
+   "expired_deadline": {
+    "detail": {
+     "code": "invalid_transport_packet",
+     "message": "packet TTL exceeded"
+    }
+   }
+  }
+ },
+ "timestamp": "2026-11-24T15:59:02.813530+00:00"
+}
