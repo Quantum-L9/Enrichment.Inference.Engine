@@ -123,17 +123,36 @@ def select(
     for name in row_schema:
         if name in meta or name in (id_property, SYNC_VERSION) or not full_mode(name, row_schema):
             continue
-        if name in admitted and name not in from_graph and admitted[name] is not None:
-            values[name], provenance[name] = admitted[name], ENRICHED
-        elif name not in conflicts and observed.get(name) is not None:
-            # A consumer observation is untyped input: one that does not match
-            # its declaration is dropped here, so it can never make the row
-            # projection refuse the other fields of the same row.
-            if value_defects(observed[name], row_schema[name], name):
-                rejected.append(name)
-                continue
-            values[name], provenance[name] = observed[name], OBSERVED
+        choice = _choose(name, admitted, observed, from_graph, conflicts, row_schema[name])
+        if choice == _REJECTED:
+            rejected.append(name)
+        elif choice is not None:
+            provenance[name], values[name] = choice
     return Selection(values=values, provenance=provenance, rejected=tuple(rejected))
+
+
+_REJECTED = ("rejected", None)
+
+
+def _choose(
+    name: str,
+    admitted: Mapping[str, Any],
+    observed: Mapping[str, Any],
+    from_graph: frozenset[str],
+    conflicts: frozenset[str],
+    declaration: Mapping[str, Any],
+) -> tuple[str, Any] | None:
+    """One full-mode field: (provenance, value), ``_REJECTED``, or None (G2, G5)."""
+    if name in admitted and name not in from_graph and admitted[name] is not None:
+        return ENRICHED, admitted[name]
+    if name in conflicts or observed.get(name) is None:
+        return None
+    # A consumer observation is untyped input: one that does not match its
+    # declaration is dropped here, so it can never make the row projection
+    # refuse the other fields of the same row.
+    if value_defects(observed[name], declaration, name):
+        return _REJECTED
+    return OBSERVED, observed[name]
 
 
 def _labelled_item(item: Any, provenance: str) -> Any:
