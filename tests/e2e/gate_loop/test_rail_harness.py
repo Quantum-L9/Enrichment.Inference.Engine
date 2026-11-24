@@ -535,9 +535,44 @@ def test_recovery_poll_never_gives_a_probe_more_than_a_sub_second_budget(
 
     def timed_out(db: str, fid: str, timeout: float = 120) -> dict:
         calls.append(timeout)
-        raise rail.ProbeError("cypher on plasticos failed (rc 124)")
+        raise rail.ProbeTimeoutError("cypher on plasticos failed (rc 124)")
 
     mp.setattr(rail, "facility", timed_out)
     g = rail.poll_recovered_facility("gl-down-1", budget_s=120)
     assert calls == [pytest.approx(0.4)]
     assert g["facility_count"] is None
+
+
+def test_recovery_poll_raises_a_non_timeout_error_at_the_deadline(mp: pytest.MonkeyPatch) -> None:
+    clock = iter([0.0, 119.6, 120.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+
+    def broken(db: str, fid: str, timeout: float = 120) -> dict:
+        raise rail.ProbeError("cypher on plasticos failed (rc 1): auth failure")
+
+    mp.setattr(rail, "facility", broken)
+    with pytest.raises(rail.ProbeError, match="auth failure"):
+        rail.poll_recovered_facility("gl-down-1", budget_s=120)
+
+
+def test_cypher_classifies_only_the_sh_timeout_as_a_probe_timeout(mp: pytest.MonkeyPatch) -> None:
+    mp.setattr(rail, "env", lambda: {"GL_NEO4J_SECRET": "x"})
+    mp.setattr(
+        rail,
+        "sh",
+        lambda cmd, timeout=600, extra_env=None: rail.subprocess.CompletedProcess(
+            cmd[:1], 124, "", "docker: timed out after 0.4s"
+        ),
+    )
+    with pytest.raises(rail.ProbeTimeoutError):
+        rail.cypher("plasticos", "RETURN 1", timeout=0.4)
+    mp.setattr(
+        rail,
+        "sh",
+        lambda cmd, timeout=600, extra_env=None: rail.subprocess.CompletedProcess(
+            cmd[:1], 1, "", "auth failure"
+        ),
+    )
+    with pytest.raises(rail.ProbeError) as err:
+        rail.cypher("plasticos", "RETURN 1")
+    assert not isinstance(err.value, rail.ProbeTimeoutError)

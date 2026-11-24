@@ -60,6 +60,10 @@ class ProbeError(RuntimeError):
     """A probe did not complete. The case must record NOT_RUN, never a result."""
 
 
+class ProbeTimeoutError(ProbeError):
+    """A probe ran out of its time budget (sh's own timeout), as opposed to failing."""
+
+
 class StackUnusableError(ProbeError):
     """A case could not put the stack back (a container or registration it changed is not restored).
 
@@ -92,6 +96,10 @@ def redact(text: str) -> str:
     return text
 
 
+SH_TIMEOUT_RC = 124
+SH_TIMEOUT_MARK = "timed out after"
+
+
 def sh(
     cmd: list[str], *, timeout: float = 600, extra_env: dict | None = None
 ) -> subprocess.CompletedProcess:
@@ -101,7 +109,7 @@ def sh(
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=e)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
-            cmd[:1], 124, "", f"{cmd[0]}: timed out after {timeout:g}s"
+            cmd[:1], SH_TIMEOUT_RC, "", f"{cmd[0]}: {SH_TIMEOUT_MARK} {timeout:g}s"
         )
 
 
@@ -143,9 +151,10 @@ def cypher(db: str, query: str, timeout: float = 120) -> list[list[str]]:
         timeout=timeout,
     )
     if r.returncode != 0:
-        raise ProbeError(
-            f"cypher on {db} failed (rc {r.returncode}): {redact(r.stderr.strip())[-300:]}"
-        )
+        msg = f"cypher on {db} failed (rc {r.returncode}): {redact(r.stderr.strip())[-300:]}"
+        if r.returncode == SH_TIMEOUT_RC and SH_TIMEOUT_MARK in r.stderr:
+            raise ProbeTimeoutError(msg)
+        raise ProbeError(msg)
     lines = [ln for ln in r.stdout.strip().splitlines() if ln.strip()]
     return [ln.split(", ") for ln in lines[1:]]
 
@@ -1018,7 +1027,7 @@ def poll_recovered_facility(entity_id: str, budget_s: float) -> dict:
 
     Every probe gets at most the remaining budget, the wait between probes never outlasts it, and a
     row read after the deadline does not count, so the reported window is the observed one. A
-    probe that fails only because the budget ran out ends the poll; any earlier failure raises.
+    probe that times out at the deadline ends the poll; any other failure, or an early timeout, raises.
     """
     deadline = time.monotonic() + budget_s
     g: dict = {"facility_count": None, "within_s": budget_s}
@@ -1027,7 +1036,9 @@ def poll_recovered_facility(entity_id: str, budget_s: float) -> dict:
             # The exact remaining budget, fractional: truncating it would time the probe out
             # before the deadline, and a floor would let it run past one.
             got = facility("plasticos", entity_id, timeout=remaining)
-        except ProbeError:
+        except ProbeTimeoutError:
+            # Only running out of the budget ends the poll; any other probe failure, at the
+            # deadline or not, raises so the case records NOT_RUN rather than a verdict.
             if time.monotonic() >= deadline:
                 break
             raise
