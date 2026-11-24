@@ -576,3 +576,24 @@ def test_cypher_classifies_only_the_sh_timeout_as_a_probe_timeout(mp: pytest.Mon
     with pytest.raises(rail.ProbeError) as err:
         rail.cypher("plasticos", "RETURN 1")
     assert not isinstance(err.value, rail.ProbeTimeoutError)
+
+
+def test_uncorrelated_egress_signing_error_never_turns_a_failure_into_blocked(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    """Another entity's signing error in the window must not relabel this entity's FAIL."""
+    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+    mp.setattr(rail, "facility", lambda db, fid, timeout=120: {"rows": [], "facility_count": 0})
+    mp.setattr(rail, "graph_leg_outcomes", lambda log, eid: [False])
+    mp.setattr(
+        rail,
+        "logs",
+        lambda *a, **k: [
+            '{"event": "packet_route_error", "detail": "TransportAuthenticationError: '
+            'signature required but not present"}'
+        ],
+    )
+    results = _by_id(rail.c_converge_sync("ed25519"))
+    for case in ("P07", "P18"):
+        assert results[case].verdict == "FAIL"
+        assert rail.EGRESS_SIGNING_UNCORRELATED in results[case].reason

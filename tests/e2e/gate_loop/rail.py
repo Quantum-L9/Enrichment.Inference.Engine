@@ -706,6 +706,14 @@ GATE_BINDING_LIMIT = (
 )
 
 
+# EIE's signing-error line has no entity id, so it may belong to another converge in the window.
+EGRESS_SIGNING_UNCORRELATED = (
+    "EIE logged 'signature required but not present' for a graph sync in this window while this "
+    "entity's graph leg resolved unsynced; the line carries no entity id, so it is not attributed "
+    "to this entity (F-A1-04 not asserted)"
+)
+
+
 def typed_sync_blocked(
     *, stored: bool, sync_via_gate: bool, typed_edges: bool, other_requirements_met: bool
 ) -> bool:
@@ -831,9 +839,10 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         and bool(completed)
         and all((c.get("generation") or 0) >= 2 for c in completed)
     )
-    # The signing error carries no entity id, so it only counts for this case when EIE's own
-    # graph-leg record for this entity resolved without syncing.
-    egress_blocked = False in graph_leg_outcomes(eie_all, eid) and any(
+    # EIE's signing-error line (packet_route_error) carries no entity, request or packet id, and an
+    # unsynced graph leg has other causes (a CEG refusal, for one), so the error cannot be tied to
+    # this entity. It is recorded as an uncorrelated observation; it never changes the verdict.
+    egress_signing_error_seen = False in graph_leg_outcomes(eie_all, eid) and any(
         "signature required but not present" in ln for ln in eie_all
     )
     state = (r.get("payload") or {}).get("state")
@@ -911,12 +920,9 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
                 # The operator-contract wording first, then the limit of the Gate evidence that
                 # sync_via_gate rests on, which this reason must not drop.
                 res.reason = f"{TYPED_SYNC_BLOCKED}; {GATE_BINDING_LIMIT}"
-    if not stored and egress_blocked:
+    if not stored and egress_signing_error_seen:
         for res in out:
-            res.verdict = "BLOCKED"
-            res.reason = (
-                "EIE egress GateClient carries no ed25519 key from env (F-A1-04, owner Gate_SDK)"
-            )
+            res.reason = f"{res.reason}; {EGRESS_SIGNING_UNCORRELATED}"
     return out
 
 
