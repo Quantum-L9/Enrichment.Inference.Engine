@@ -576,3 +576,48 @@ def test_cypher_classifies_only_the_sh_timeout_as_a_probe_timeout(mp: pytest.Mon
     with pytest.raises(rail.ProbeError) as err:
         rail.cypher("plasticos", "RETURN 1")
     assert not isinstance(err.value, rail.ProbeTimeoutError)
+
+
+def test_uncorrelated_egress_signing_error_never_turns_a_failure_into_blocked(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    """Another entity's signing error in the window must not relabel this entity's FAIL."""
+    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+    mp.setattr(rail, "facility", lambda db, fid, timeout=120: {"rows": [], "facility_count": 0})
+    mp.setattr(rail, "graph_leg_outcomes", lambda log, eid: [False])
+    mp.setattr(
+        rail,
+        "logs",
+        lambda *a, **k: [
+            '{"event": "packet_route_error", "detail": "TransportAuthenticationError: '
+            'signature required but not present"}'
+        ],
+    )
+    results = _by_id(rail.c_converge_sync("ed25519"))
+    for case in ("P07", "P18"):
+        assert results[case].verdict == "FAIL"
+        assert rail.EGRESS_SIGNING_UNCORRELATED in results[case].reason
+
+
+def test_p27_requires_the_consuming_converge_to_have_completed() -> None:
+    ok = {
+        "accepted": True,
+        "converge1_completed": True,
+        "consumed": True,
+        "retained": True,
+        "consumed_row": True,
+    }
+    assert all(rail.p27_requirements(**ok).values())
+    failed = rail.p27_requirements(**{**ok, "converge1_completed": False})
+    assert not all(failed.values())
+    assert [k for k, v in failed.items() if not v] == ["converge completed"]
+
+
+def test_p27_counts_only_a_target_the_first_converge_consumed() -> None:
+    consumed = {"state": "consumed", "consumed_by": "converge:op-1", "outcome": "seeded"}
+    retained = {"state": "retained", "consumed_by": "", "outcome": ""}
+    assert rail.c1_consumed_rows([consumed]) == [consumed]
+    # c1 left it retained; whatever the second converge did is not c1's evidence.
+    assert rail.c1_consumed_rows([retained]) == []
+    assert rail.c1_consumed_rows([{**consumed, "outcome": "superseded"}]) == []
+    assert rail.c1_consumed_rows([{**consumed, "consumed_by": "sweep:1"}]) == []

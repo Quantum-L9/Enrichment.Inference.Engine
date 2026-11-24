@@ -706,6 +706,14 @@ GATE_BINDING_LIMIT = (
 )
 
 
+# EIE's signing-error line has no entity id, so it may belong to another converge in the window.
+EGRESS_SIGNING_UNCORRELATED = (
+    "EIE logged 'signature required but not present' for a graph sync in this window while this "
+    "entity's graph leg resolved unsynced; the line carries no entity id, so it is not attributed "
+    "to this entity (F-A1-04 not asserted)"
+)
+
+
 def typed_sync_blocked(
     *, stored: bool, sync_via_gate: bool, typed_edges: bool, other_requirements_met: bool
 ) -> bool:
@@ -831,9 +839,10 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         and bool(completed)
         and all((c.get("generation") or 0) >= 2 for c in completed)
     )
-    # The signing error carries no entity id, so it only counts for this case when EIE's own
-    # graph-leg record for this entity resolved without syncing.
-    egress_blocked = False in graph_leg_outcomes(eie_all, eid) and any(
+    # EIE's signing-error line (packet_route_error) carries no entity, request or packet id, and an
+    # unsynced graph leg has other causes (a CEG refusal, for one), so the error cannot be tied to
+    # this entity. It is recorded as an uncorrelated observation; it never changes the verdict.
+    egress_signing_error_seen = False in graph_leg_outcomes(eie_all, eid) and any(
         "signature required but not present" in ln for ln in eie_all
     )
     state = (r.get("payload") or {}).get("state")
@@ -911,12 +920,9 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
                 # The operator-contract wording first, then the limit of the Gate evidence that
                 # sync_via_gate rests on, which this reason must not drop.
                 res.reason = f"{TYPED_SYNC_BLOCKED}; {GATE_BINDING_LIMIT}"
-    if not stored and egress_blocked:
+    if not stored and egress_signing_error_seen:
         for res in out:
-            res.verdict = "BLOCKED"
-            res.reason = (
-                "EIE egress GateClient carries no ed25519 key from env (F-A1-04, owner Gate_SDK)"
-            )
+            res.reason = f"{res.reason}; {EGRESS_SIGNING_UNCORRELATED}"
     return out
 
 
@@ -1785,6 +1791,38 @@ def c_gate_rail_policy(p: str) -> list[Result]:
     ]
 
 
+def c1_consumed_rows(targets_after_c1: list[dict]) -> list[dict]:
+    """Targets the first converge consumed (consumed_by converge:<op>, outcome seeded).
+
+    Only the state read right after c1 counts: a target the second converge consumed is not
+    evidence that c1, whose answer P27 judges, consumed it.
+    """
+    return [
+        t
+        for t in targets_after_c1
+        if t["state"] == "consumed"
+        and t["consumed_by"].startswith("converge:")
+        and t["outcome"] == "seeded"
+    ]
+
+
+def p27_requirements(
+    *, accepted: bool, converge1_completed: bool, consumed: bool, retained: bool, consumed_row: bool
+) -> dict[str, bool]:
+    """Every P27 requirement by name; P27 passes only when all hold.
+
+    The consume must come from a converge that completed: a region read from a failed or
+    partial converge answer is not a consume.
+    """
+    return {
+        "accepted (targets_queued 1)": accepted,
+        "converge completed": converge1_completed,
+        "consumed (converge region=West)": consumed,
+        "retained row after intake": retained,
+        "consumed row (consumed_by converge:<op>, outcome seeded)": consumed_row,
+    }
+
+
 def c_feedback(p: str) -> list[Result]:
     """F-A1-08 disposition: synthneutral changed-fact witness (P27, P22/P30 parts) and the plasticos justified no-op.
 
@@ -1887,24 +1925,16 @@ def c_feedback(p: str) -> list[Result]:
         },
     }
     retained = any(t["state"] == "retained" for t in targets_intake)
-    consumed_rows = [
-        t
-        for t in targets_after_c1 + targets_after_c2
-        if t["state"] == "consumed"
-        and t["consumed_by"].startswith("converge:")
-        and t["outcome"] == "seeded"
-    ]
-    ok27 = acc_ok and consumed and retained and bool(consumed_rows)
-    missing27 = [
-        k
-        for k, v in {
-            "accepted (targets_queued 1)": acc_ok,
-            "consumed (converge region=West)": consumed,
-            "retained row after intake": retained,
-            "consumed row (consumed_by converge:<op>, outcome seeded)": bool(consumed_rows),
-        }.items()
-        if not v
-    ]
+    consumed_rows = c1_consumed_rows(targets_after_c1)
+    req27 = p27_requirements(
+        accepted=acc_ok,
+        converge1_completed=c1_ok,
+        consumed=consumed,
+        retained=retained,
+        consumed_row=bool(consumed_rows),
+    )
+    ok27 = all(req27.values())
+    missing27 = [k for k, v in req27.items() if not v]
     p27 = Result(
         "P27",
         "A8",
