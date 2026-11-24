@@ -1,0 +1,31 @@
+{
+ "id": "P19",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "same relationship evidence twice: both acknowledged, no duplicate edge",
+ "verdict": "PASS",
+ "reason": "node GRAPH_ACKNOWLEDGED (F-A1-01 disposition) plus a Neo4j edge count; fresh ids per run",
+ "observed": {
+  "checks": {
+   "both deliveries GRAPH_ACKNOWLEDGED": true,
+   "exactly one PROCESSES edge": true
+  },
+  "ack1": {
+   "status": "success",
+   "entity_type": "facilities",
+   "synced_count": 1
+  },
+  "ack2": {
+   "status": "success",
+   "entity_type": "facilities",
+   "synced_count": 1
+  },
+  "edge_count": [
+   [
+    "1"
+   ]
+  ],
+  "facility_id": "gl-p19-4fba33"
+ },
+ "timestamp": "2026-11-24T15:59:36.568751+00:00"
+}

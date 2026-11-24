@@ -1,0 +1,178 @@
+{
+ "stamp": "20261124T155758Z",
+ "profile": "ed25519",
+ "observed_signing_algorithm": {
+  "l9e2e-gate": "ed25519",
+  "l9e2e-eie": "ed25519",
+  "l9e2e-ceg": "ed25519"
+ },
+ "release_set": {
+  "requested_profile": "ed25519",
+  "observed_signing_algorithm": {
+   "l9e2e-gate": "ed25519",
+   "l9e2e-eie": "ed25519",
+   "l9e2e-ceg": "ed25519"
+  },
+  "images": {
+   "l9e2e-gate": {
+    "image_id": "sha256:cc5ff2ff071fa0c59e8001c46c5f983a88e14c67c666fb626b1c3b0ef6c0c326",
+    "revision": "7903fa76e67fd5cbb2d8f6387eacb54b9f9b8427"
+   },
+   "l9e2e-eie": {
+    "image_id": "sha256:2ce8214cf32271062d1e7435e74a2bb31dc804afc1feb37c615a8d73d56c2603",
+    "revision": "ebf34525aebb1771200357f74979d5e08b0e3024"
+   },
+   "l9e2e-ceg": {
+    "image_id": "sha256:edcd6032405a029d1da377c0c7e604d8147de91a63d2ee74e49e33db9e3ce79f",
+    "revision": "afd6aaac457edbee5b5d95bd1f6ed111600faa4f"
+   }
+  },
+  "sdk_code_digest": {
+   "l9e2e-gate": "1.3.4 51 08b787178555e68532ea3f71500eb1e56c2ff03672febd2230a9e4f4add6f95e",
+   "l9e2e-eie": "1.3.4 51 08b787178555e68532ea3f71500eb1e56c2ff03672febd2230a9e4f4add6f95e",
+   "l9e2e-ceg": "1.3.4 51 08b787178555e68532ea3f71500eb1e56c2ff03672febd2230a9e4f4add6f95e"
+  },
+  "packs": {
+   "plasticos": "e6ec5b013c35ad7c6053a26f79bb7734fd110186247c162fe944fc93a8034448",
+   "synthneutral": "72aa88c8c237dfa2b61d754aa237e7a3051191668ef3ae93206fe9e52701d519",
+   "eie:plasticos": "dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe",
+   "eie:synthneutral": "65f68382b5c5143dfe36683daac0f1a582b86f514646d62d1c721e0f59ff805b"
+  },
+  "provider_class": "deterministic (app/services/deterministic_provider.py, L9_ENVIRONMENT=test)",
+  "registry": {
+   "enrichment-engine": [
+    "converge",
+    "enrich",
+    "enrich-and-sync",
+    "graph-inference-result"
+   ],
+   "graph": [
+    "health-assess",
+    "match",
+    "outcomes",
+    "resolve",
+    "score",
+    "sync"
+   ]
+  },
+  "sdk_pin": {
+   "expected": "1.3.4 51 08b787178555e68532ea3f71500eb1e56c2ff03672febd2230a9e4f4add6f95e",
+   "match": true,
+   "mismatched": {}
+  }
+ },
+ "leak_check": "clean",
+ "aborted": null,
+ "results": [
+  {
+   "id": "P03",
+   "verdict": "PASS",
+   "reason": "topology witness only; source-level absence of raw peer HTTP is EIE-W/CEG-W's P03 share"
+  },
+  {
+   "id": "P10",
+   "verdict": "PASS",
+   "reason": ""
+  },
+  {
+   "id": "P11",
+   "verdict": "PASS",
+   "reason": ""
+  },
+  {
+   "id": "P13",
+   "verdict": "PASS",
+   "reason": "Gate answered the replayed packet id from its cache (gate.cached, the same response packet and payload) after a single gate.completed: no second execution"
+  },
+  {
+   "id": "P07",
+   "verdict": "PASS",
+   "reason": "Gate's sync events carry no entity field (observability/logging.py:37-47); per-entity binding is EIE's graph-leg record plus the CEG row, not Gate's events"
+  },
+  {
+   "id": "P18",
+   "verdict": "BLOCKED",
+   "reason": "BLOCKED pending an operator contract decision (the sync row carries only admitted fields, by design since #351); Gate's sync events carry no entity field (observability/logging.py:37-47); per-entity binding is EIE's graph-leg record plus the CEG row, not Gate's events"
+  },
+  {
+   "id": "P05",
+   "verdict": "BLOCKED",
+   "reason": "BLOCKED pending an operator contract decision (the sync row carries only admitted fields, by design since #351); Gate's sync events carry no entity field (observability/logging.py:37-47); per-entity binding is EIE's graph-leg record plus the CEG row, not Gate's events"
+  },
+  {
+   "id": "P17",
+   "verdict": "PASS",
+   "reason": "sent with the eie-gl key held by the driver (worker-key misassignment rig); EIE never builds such a row"
+  },
+  {
+   "id": "P19",
+   "verdict": "PASS",
+   "reason": "node GRAPH_ACKNOWLEDGED (F-A1-01 disposition) plus a Neo4j edge count; fresh ids per run"
+  },
+  {
+   "id": "P33",
+   "verdict": "PASS",
+   "reason": ""
+  },
+  {
+   "id": "P34",
+   "verdict": "PASS",
+   "reason": ""
+  },
+  {
+   "id": "P23",
+   "verdict": "PASS",
+   "reason": ""
+  },
+  {
+   "id": "P14",
+   "verdict": "PASS",
+   "reason": ""
+  },
+  {
+   "id": "P09",
+   "verdict": "PASS",
+   "reason": ""
+  },
+  {
+   "id": "P12",
+   "verdict": "NOT_RUN",
+   "reason": "signer sub-assertion PASS; lock-mismatch sub-assertion not exercisable: every image installs the same SDK code, and building a mismatched image would mean altering an owner's lock (outside this lane)"
+  },
+  {
+   "id": "MIX-ALG-01",
+   "verdict": "PASS",
+   "reason": ""
+  },
+  {
+   "id": "F-A1-05",
+   "verdict": "WITNESSED",
+   "reason": "BLOCKED_WITH_EXACT_OWNER: Constellation.Gate (registration not bound to the node key; admin token compared with != in services/admin_registration_service.py:64-68, source-level)"
+  },
+  {
+   "id": "P11-owner-collision",
+   "verdict": "PASS",
+   "reason": ""
+  },
+  {
+   "id": "F-A1-11",
+   "verdict": "WITNESSED",
+   "reason": "BLOCKED_WITH_EXACT_OWNER: Constellation.Gate tests/e2e/docker (rail). This rail builds its own caller policy and separate consumer keys, so P02/P10/P11 do not depend on it."
+  },
+  {
+   "id": "P27",
+   "verdict": "PASS",
+   "reason": "accepted through Gate; retained in graph_return_targets after intake; consumed by the next converge (consumed_by converge:<op>, outcome seeded). The inference is the driver's ceg-gl rig: CEG has no Gate-routable inference trigger (F-A1-02, CEG-W)"
+  },
+  {
+   "id": "P30",
+   "verdict": "BLOCKED",
+   "reason": "changed fact observed in the converge answer; resync to CEG observed (Station.region = West right after that pass); plasticos justified no-op observed (region undeclared, absent from fields). BLOCKED, not PASS: the inference is the driver's ceg-gl rig, because CEG has no Gate-routable inference trigger (F-A1-02, CEG-W), so the integrated CEG origin is unproven"
+  },
+  {
+   "id": "P22",
+   "verdict": "BLOCKED",
+   "reason": "CEG inference only via operator admin (not a Gate action, not advertised) from the caller entity, not a graph read (F-A1-02, CEG-W)"
+  }
+ ]
+}

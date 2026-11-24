@@ -1496,6 +1496,16 @@ def c_rogue_signer(p: str) -> list[Result]:
     ]
 
 
+# The 502 a MIX-ALG-01 PASS records is expected, and its cause is what the case proves.
+MIX_ALG_ACCEPTED_REASON = (
+    "the hmac-sha256 worker verified Gate's ed25519 dispatch and answered: Gate's failure is its own "
+    "response check (GateDispatchSecurityError, worker response failed transport validation), which "
+    "is reachable only after the worker accepted the dispatch. The 502 is expected: Gate binds every "
+    "verifying key to one algorithm, so an hmac worker answer is outside Gate's contract. A worker "
+    "refusal would be HTTP 401/403 (FAIL)"
+)
+
+
 def mixed_alg_outcome(http_status: object, events: list[dict]) -> str:
     """Classify one Gate->worker call made while the worker signs hmac-sha256 and Gate ed25519.
 
@@ -1569,7 +1579,7 @@ def c_mixed_alg(p: str) -> list[Result]:
             verdict(outcome == "accepted", p, signed_claim=True),
             observed=obs,
             reason=(
-                ""
+                MIX_ALG_ACCEPTED_REASON
                 if outcome == "accepted"
                 else "the hmac worker refused Gate's ed25519 dispatch (owner Gate_SDK: a peer key bound to "
                 "the node's own algorithm, the D-1 regression seen in 1.3.3)"
@@ -1824,7 +1834,7 @@ def p27_requirements(
 
 
 def c_feedback(p: str) -> list[Result]:
-    """F-A1-08 disposition: synthneutral changed-fact witness (P27, P22/P30 parts) and the plasticos justified no-op.
+    """F-A1-08 disposition: synthneutral changed-fact witness (P27, P30 part) and the plasticos justified no-op.
 
     The inference packet is sent with the ceg-gl key held by the driver (rig): CEG's inference is reachable
     only through operator admin, not a Gate action (F-A1-02). The rig output is exactly what
@@ -1982,21 +1992,352 @@ def c_feedback(p: str) -> list[Result]:
             "Gate-routable inference trigger (F-A1-02, CEG-W), so the integrated CEG origin is unproven"
         ),
     )
-    p22 = Result(
-        "P22",
-        "A8",
-        p,
-        "material graph change with an authorized rule: CEG uses graph-read evidence and sends "
-        "one cited finding",
-        "BLOCKED",
-        observed={
-            "rule_declared": "synthneutral plugins.inference_rules",
-            "trigger": "none Gate-routable",
-        },
-        reason="CEG inference only via operator admin (not a Gate action, not advertised) from the caller "
-        "entity, not a graph read (F-A1-02, CEG-W)",
+    return [p27, p30]
+
+
+P22_POSTAL_CODE = "94105"
+P22_EXPECTED_REGION = "West"  # infer_geography_from_postal_code for US zip 94105
+P22_SETTLE_S = 60.0
+P22_WITNESS_S = 90.0  # budget for the resync to complete at Gate and CEG to evaluate it
+# After the resync completed, how long a delivery CEG scheduled from it has to reach Gate.
+P22_DELIVERY_GRACE_S = 15.0
+
+
+def obligation(entity_id: str) -> dict:
+    """CEG's durable inference obligation for one synthneutral Station (empty when none exists)."""
+    rows = cypher(
+        "synthneutral",
+        "MATCH (o:CegInferenceObligation {tenant:'synthneutral', entity_type:'Station', "
+        f"entity_id:'{entity_id}'}}) RETURN o.status, o.decision, o.evidence_revision, "
+        "o.rule_revision, o.attempts, o.accepted_key, o.wire_key, o.accepted_findings_digest",
     )
-    return [p27, p30, p22]
+    if not rows:
+        return {}
+    keys = (
+        "status",
+        "decision",
+        "evidence_revision",
+        "rule_revision",
+        "attempts",
+        "accepted_key",
+        "wire_key",
+        "accepted_findings_digest",
+    )
+    return {k: (v.strip('"') if v != "NULL" else None) for k, v in zip(keys, rows[0], strict=False)}
+
+
+def return_target_citations(entity_id: str) -> list[dict]:
+    """EIE's received graph-return targets for one synthneutral entity, with what they cite."""
+    rows = psql(
+        "select field_name, rule, value::text, producer_key, origin_packet_id, state "
+        "from graph_return_targets "
+        f"where tenant_id='synthneutral' and entity_id='{entity_id}' order by created_at"
+    )
+    keys = ("field", "rule", "value", "producer_key", "origin_packet_id", "state")
+    return [dict(zip(keys, (r.split("|") + [""] * 6)[:6], strict=False)) for r in rows]
+
+
+def ceg_init_schema(tenant: str) -> dict:
+    """Declared operator step: CEG's own admin init_schema, run inside the CEG container.
+
+    admin is operator-only and not advertised to Gate, so this is a deployment step, not a Gate call.
+    scripts/ceg_init_schema.py calls engine.handlers.handle_admin; no constraint is restated here.
+    Returns CEG's answer, the constraints present afterwards, and CEG's warnings.
+    """
+    script = (HERE / "scripts" / "ceg_init_schema.py").read_text()
+    try:
+        r = subprocess.run(
+            ["docker", "exec", "-i", "l9e2e-ceg", "python", "-", tenant],
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ProbeTimeoutError(f"CEG admin init_schema for {tenant} timed out after 120s") from exc
+    lines = [ln for ln in r.stdout.strip().splitlines() if ln.strip()]
+    try:
+        answer = json.loads(lines[-1]) if lines else {}
+    except ValueError:
+        answer = {}
+    if r.returncode != 0 or answer.get("status") != "schema_initialized":
+        raise ProbeError(f"CEG admin init_schema for {tenant} did not complete (rc {r.returncode})")
+    present = [
+        row[0].strip('"') for row in cypher(tenant, "SHOW CONSTRAINTS YIELD name RETURN name")
+    ]
+    warnings = [redact(ln)[-300:] for ln in r.stderr.splitlines() if "failed" in ln.lower()]
+    return {"answer": answer, "constraints_present": present, "ceg_warnings": warnings}
+
+
+def p22_requirements(
+    *,
+    changed_converge_completed: bool,
+    input_synced: bool,
+    first_leg_resolved: bool,
+    graph_results: int,
+    graph_results_completed: int,
+    obligation_accepted: bool,
+    revisions_cited: bool,
+    eie_target_cites_ceg: bool,
+    resync_through_gate: bool,
+    resync_results: int,
+    revisions_unchanged: bool,
+) -> dict[str, bool]:
+    """Every P22 requirement by name; P22 passes only when all hold."""
+    return {
+        "changed-fact converge completed": changed_converge_completed,
+        "rule input (postal_code) synced to the Station": input_synced,
+        "first converge's graph leg resolved before the resync window": first_leg_resolved,
+        "exactly one graph-inference-result from graph through Gate": graph_results == 1,
+        "that result completed at Gate": graph_results_completed == 1,
+        "CEG obligation accepted (EIE intake ack)": obligation_accepted,
+        "evidence_revision and rule_revision cited": revisions_cited,
+        "EIE target cites CEG's rule and graph provenance": eie_target_cites_ceg,
+        "identical resync reached CEG through Gate": resync_through_gate,
+        "identical resync sent no graph-inference-result": resync_results == 0,
+        "obligation revisions unchanged by the identical resync": revisions_unchanged,
+    }
+
+
+def graph_result_completions(events: list[dict], ingress: list[dict]) -> list[dict]:
+    """Gate's completions of CEG's graph-inference-result: the answering worker is EIE.
+
+    Gate stamps a completion with the node that answered, not the one that sent, so a result CEG sent
+    completes as source_node enrichment-engine under the same request_id.
+    """
+    ids = {i["request_id"] for i in ingress}
+    return [
+        e
+        for e in events
+        if e["event"] == "gate.completed"
+        and e["source_node"] == "enrichment-engine"
+        and e["request_id"] in ids
+    ]
+
+
+def sync_completions(events: list[dict], exclude: frozenset[str] = frozenset()) -> list[dict]:
+    """Gate's completions of EIE's syncs: answered by graph under the ingress request_id.
+
+    ``exclude`` drops request ids already seen before this window, so an earlier sync whose events
+    share the window's first second never counts as this one.
+    """
+    ids = {
+        e["request_id"]
+        for e in events
+        if e["event"] == "gate.ingress"
+        and e["source_node"] == "enrichment-engine"
+        and e["request_id"] not in exclude
+    }
+    return [
+        e
+        for e in events
+        if e["event"] == "gate.completed" and e["source_node"] == "graph" and e["request_id"] in ids
+    ]
+
+
+def eie_target_cites(targets: list[dict], accepted_key: str, wire_key: str | None) -> bool:
+    """EIE retained exactly CEG's finding (region = West by the authorized rule) under CEG's key."""
+    if not accepted_key:
+        return False
+    keys = {accepted_key, wire_key or accepted_key}
+    for t in targets:
+        try:
+            value = json.loads(t["value"])
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            value = value.get("value")
+        if (
+            t["state"] == "retained"
+            and t["rule"] == "infer_geography_from_postal_code"
+            and t["field"] == "region"
+            and value == P22_EXPECTED_REGION
+            and t["producer_key"] in keys
+        ):
+            return True
+    return False
+
+
+def wait_leg_resolved(since: str, entity_id: str, budget_s: float) -> bool:
+    """Poll until EIE logged this entity's graph leg as resolved and synced, within the budget."""
+    deadline = time.monotonic() + budget_s
+    while True:
+        lines = logs("l9e2e-eie", since, ("side_effects_graph_leg_resolved",), limit=None)
+        if True in graph_leg_outcomes(lines, entity_id):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(3.0, remaining))
+
+
+def _wait_resync_evaluated(
+    since: str, budget_s: float, exclude: frozenset[str] = frozenset(), entity_id: str = ""
+) -> tuple[list[dict], list[str]]:
+    """Poll until the resync's own sync completed at Gate, and CEG logged its evaluation.
+
+    The binding is the completion: Gate's completion of a sync whose request_id the earlier pass did
+    not use (``exclude``). CEG's sync handler awaits the trigger evaluation and logs it before it
+    answers (engine/handlers.py:1625 _schedule_graph_inference), so that completion proves CEG
+    evaluated this sync; the evaluation log line is recorded alongside. The caller isolates the window
+    (``since`` stamped a full second after the earlier pass settled).
+
+    With ``entity_id`` the wait also needs EIE's own graph-leg record for that entity, synced, in the
+    window: EIE resolves the leg only after the sync's answer came back, so the record binds the
+    completion to this entity's resync rather than to other traffic (a recovery sync, for one).
+    """
+    deadline = time.monotonic() + budget_s
+    syncs: list[dict] = []
+    evaluated: list[str] = []
+    while time.monotonic() < deadline:
+        syncs = gate_events(since, "sync")
+        evaluated = logs("l9e2e-ceg", since, ("graph inference after sync",), limit=None)
+        leg_done = not entity_id or True in graph_leg_outcomes(
+            logs("l9e2e-eie", since, ("side_effects_graph_leg_resolved",), limit=None), entity_id
+        )
+        if sync_completions(syncs, exclude) and evaluated and leg_done:
+            return syncs, evaluated
+        time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
+    return syncs, evaluated
+
+
+def _wait_obligation_settled(entity_id: str, budget_s: float) -> dict:
+    deadline = time.monotonic() + budget_s
+    ob: dict = {}
+    while time.monotonic() < deadline:
+        ob = obligation(entity_id)
+        if ob.get("status") not in (None, "pending"):
+            return ob
+        time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
+    return ob
+
+
+def c_graph_trigger(p: str) -> list[Result]:
+    """P22: a material graph change through EIE's own sync makes CEG send one cited finding.
+
+    CEG's graph-read trigger (A3, CEG #540, GRAPH_INFERENCE_TRIGGER_ENABLED) evaluates the synced
+    Station as stored, runs the rule the synthneutral pack authorizes
+    (plugins.inference_rules: infer_geography_from_postal_code) and sends one graph-inference-result
+    through Gate. The converge schema names postal_code, which the deterministic provider echoes from
+    the entity, so postal_code is an admitted field of EIE's sync row. An identical resync is the
+    no-change witness: the revisions are unchanged and nothing is sent.
+    """
+    eid = f"sn-tr-{uuid.uuid4().hex[:6]}"
+    sch = {"postal_code": "string", "band": "string"}
+    extra = {"postal_code": P22_POSTAL_CODE}
+    try:
+        operator_step = ceg_init_schema("synthneutral")
+        since = stamp()
+        c1 = drive("execute", converge_payload(eid, "synthneutral", extra=extra, schema=sch))
+        ob1 = _wait_obligation_settled(eid, P22_SETTLE_S)
+        node = cypher(
+            "synthneutral",
+            f"MATCH (s:Station {{station_id:'{eid}'}}) RETURN s.postal_code, s.region",
+        )
+        results1 = gate_events(since, "graph-inference-result")
+        targets = return_target_citations(eid)
+        ceg_log1 = logs("l9e2e-ceg", since, ("graph inference",), limit=None)
+
+        # Isolate the resync's window: c1 has settled (its obligation decided), its sync request ids are
+        # excluded, and a full second passes so second-precision `since2` starts after c1's events.
+        # c1's own graph leg must have resolved before c2's window opens: EIE runs the leg detached,
+        # and a late c1 record inside c2's window would satisfy c2's entity-bound wait.
+        c1_leg_done = wait_leg_resolved(since, eid, P22_WITNESS_S)
+        c1_sync_ids = frozenset(
+            e["request_id"] for e in gate_events(since, "sync") if e.get("request_id")
+        )
+        time.sleep(1.1)
+        since2 = stamp()
+        c2 = drive("execute", converge_payload(eid, "synthneutral", extra=extra, schema=sch))
+        # EIE's graph leg runs detached, so the converge can answer before its sync reaches CEG.
+        # The no-result witness is read only after the resync completed at Gate and CEG logged its
+        # evaluation; a budget that runs out leaves the witness unproven, never vacuously true.
+        syncs2, ceg_log2 = _wait_resync_evaluated(since2, P22_WITNESS_S, c1_sync_ids, eid)
+        resync_leg = graph_leg_outcomes(
+            logs("l9e2e-eie", since2, ("side_effects_graph_leg_resolved",), limit=None), eid
+        )
+        # A delivery is scheduled only after CEG answered the sync; give it a bounded window to show.
+        if sync_completions(syncs2, c1_sync_ids):
+            time.sleep(P22_DELIVERY_GRACE_S)
+        ob2 = obligation(eid)
+        results2 = gate_events(since2, "graph-inference-result")
+    except ProbeError as exc:
+        return [not_run("P22", "A8", p, "graph-read inference trigger", str(exc), entity_id=eid)]
+
+    def _completed(r: dict) -> bool:
+        return r.get("ok") is True and (r.get("payload") or {}).get("state") == "completed"
+
+    ingress = [e for e in results1 if e["event"] == "gate.ingress" and e["source_node"] == "graph"]
+    completed = graph_result_completions(results1, ingress)
+    resync_done = sync_completions(syncs2, c1_sync_ids)
+    ev_rev, rule_rev = ob1.get("evidence_revision") or "", ob1.get("rule_revision") or ""
+    # CEG's accepted key (obligation_key) binds tenant, entity, both revisions and the finding set;
+    # EIE records the packet's idempotency key as producer_key, so equal keys join the two records.
+    accepted_key = ob1.get("accepted_key") or ""
+    cited = bool(ev_rev and rule_rev and accepted_key)
+    eie_cites = eie_target_cites(targets, accepted_key, ob1.get("wire_key"))
+    req = p22_requirements(
+        changed_converge_completed=_completed(c1),
+        input_synced=bool(node) and node[0][0] == f'"{P22_POSTAL_CODE}"',
+        first_leg_resolved=c1_leg_done,
+        graph_results=len(ingress),
+        graph_results_completed=len(completed),
+        obligation_accepted=ob1.get("status") == "accepted",
+        revisions_cited=cited,
+        eie_target_cites_ceg=eie_cites,
+        resync_through_gate=_completed(c2)
+        and bool(resync_done)
+        and bool(ceg_log2)
+        and True in resync_leg,
+        resync_results=len(
+            [e for e in results2 if e["source_node"] == "graph" and e["event"] == "gate.ingress"]
+        ),
+        revisions_unchanged=bool(ob2)
+        and (ob2.get("evidence_revision"), ob2.get("rule_revision")) == (ev_rev, rule_rev),
+    )
+    ok = all(req.values())
+    obs = {
+        "entity_id": eid,
+        "operator_step": {"ceg_admin_init_schema": operator_step},
+        "changed_fact": {
+            "converge": {k: c1.get(k) for k in ("ok", "elapsed_s", "error")},
+            "state": (c1.get("payload") or {}).get("state"),
+            "station": node,
+            "gate_graph_inference_results": results1,
+            "obligation": ob1,
+            "eie_return_targets": targets,
+            "ceg_log": ceg_log1[-20:],
+        },
+        "no_change_witness": {
+            "converge": {k: c2.get(k) for k in ("ok", "elapsed_s", "error")},
+            "state": (c2.get("payload") or {}).get("state"),
+            "gate_sync_events": syncs2,
+            "gate_graph_inference_results": results2,
+            "obligation": ob2,
+            "ceg_log": ceg_log2[-20:],
+        },
+        "requirements": req,
+    }
+    return [
+        Result(
+            "P22",
+            "A8",
+            p,
+            "material graph change with an authorized rule: CEG uses graph-read evidence and sends "
+            "one cited finding; an identical resync sends nothing",
+            verdict(ok, p, signed_claim=True),
+            observed=obs,
+            reason=(
+                "CEG's graph-read trigger sent exactly one graph-inference-result through Gate, citing "
+                "evidence_revision and rule_revision, accepted by EIE; the identical resync sent none. "
+                "Rig: the obligation constraint is installed from CEG's own statement because "
+                "init_schema is reachable only through CEG admin, which CEG does not advertise to Gate"
+            )
+            if ok
+            else "not observed: " + "; ".join(k for k, v in req.items() if not v),
+        )
+    ]
 
 
 CASES: dict[str, Callable[[str], list[Result]]] = {
@@ -2015,6 +2356,7 @@ CASES: dict[str, Callable[[str], list[Result]]] = {
     "registration": c_registration,
     "gate_rail_policy": c_gate_rail_policy,
     "feedback": c_feedback,
+    "graph_trigger": c_graph_trigger,
 }
 
 # Ledger case ids each scenario produces; test_gate_loop.py derives its expectations from this map.
@@ -2033,7 +2375,8 @@ CASE_IDS: dict[str, tuple[str, ...]] = {
     "mixed_alg": ("MIX-ALG-01",),
     "registration": ("F-A1-05", "P11-owner-collision"),
     "gate_rail_policy": ("F-A1-11",),
-    "feedback": ("P27", "P30", "P22"),
+    "feedback": ("P27", "P30"),
+    "graph_trigger": ("P22",),
 }
 
 

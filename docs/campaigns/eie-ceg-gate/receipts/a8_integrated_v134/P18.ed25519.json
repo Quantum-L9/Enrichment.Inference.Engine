@@ -1,0 +1,108 @@
+{
+ "id": "P18",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "typed processed_polymers -> PROCESSES edge with direction in and form Regrind; Facility carries no processed_polymers property (no JSON-string map)",
+ "verdict": "BLOCKED",
+ "reason": "BLOCKED pending an operator contract decision (the sync row carries only admitted fields, by design since #351); Gate's sync events carry no entity field (observability/logging.py:37-47); per-entity binding is EIE's graph-leg record plus the CEG row, not Gate's events",
+ "observed": {
+  "entity_id": "gl-plas-f55bc3",
+  "converge": {
+   "ok": true,
+   "elapsed_s": 0.189,
+   "error": null,
+   "gate_signature_valid": true
+  },
+  "response": {
+   "packet_id": "1d47f3b9-1ad2-42da-801f-0ee7953d9cd6",
+   "packet_type": "response",
+   "action": "converge",
+   "source_node": "enrichment-engine",
+   "destination_node": "gate",
+   "reply_to": "enrichment-engine",
+   "tenant": "plasticos",
+   "root_id": "32e42ab1-58cc-40a8-a8a8-1d2c07db844b",
+   "parent_id": "6b7c93e1-f71e-40f8-a13c-f0a41d0beb8a",
+   "generation": 2,
+   "causation_id": "6b7c93e1-f71e-40f8-a13c-f0a41d0beb8a",
+   "idempotency_key": "gl:converge:plasticos:gl-plas-f55bc3:dc276a9e",
+   "signing_key_id": "gate-gl",
+   "signature_algorithm": "ed25519",
+   "hop_trace": [
+    {
+     "node": "enrichment-engine",
+     "direction": "response",
+     "status": "completed",
+     "target_node": null,
+     "signed": false
+    }
+   ],
+   "provenance": {
+    "origin_kind": "gate",
+    "requested_action": "converge",
+    "resolved_by_gate": true,
+    "route_kind": "external_ingress",
+    "original_source_node": "odoo"
+   }
+  },
+  "state": "completed",
+  "eie_persisted_rows": [
+   "1"
+  ],
+  "graph": {
+   "rows": [
+    [
+     "\"gl-plas-f55bc3\"",
+     "\"TEST_ONLY gl-plas-f55bc3\"",
+     "NULL",
+     "NULL",
+     "NULL",
+     "NULL",
+     "NULL",
+     "\"NULL\""
+    ]
+   ],
+   "facility_count": 1
+  },
+  "gate_sync_events": [
+   {
+    "event": "gate.ingress",
+    "action": "sync",
+    "source_node": "enrichment-engine",
+    "origin_kind": "node",
+    "generation": 0,
+    "hop_count": 0,
+    "request_id": "58fb9b1d9f2f463d813a7523c20fa06b",
+    "root_id": "a7273ee5-df3c-4438-a1c1-97ccc3966c00",
+    "packet_id": "a7273ee5-df3c-4438-a1c1-97ccc3966c00",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.completed",
+    "action": "sync",
+    "source_node": "graph",
+    "origin_kind": "gate",
+    "generation": 2,
+    "hop_count": 1,
+    "request_id": "58fb9b1d9f2f463d813a7523c20fa06b",
+    "root_id": "a7273ee5-df3c-4438-a1c1-97ccc3966c00",
+    "packet_id": "6ec3d6d0-5eff-4f20-aefa-3990619df34d",
+    "error_type": null,
+    "error_message": null
+   }
+  ],
+  "eie_graph_leg_synced": true,
+  "eie_log": [
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T15:59:04.051715Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T15:59:04.051798Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-f55bc3:dc276a9e:enrich\", \"entity_id\": \"gl-plas-f55bc3\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-24T15:59:04.075319Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-f55bc3:dc276a9e:enrich\", \"entity_id\": \"gl-plas-f55bc3\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-24T15:59:04.075416Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-f55bc3:dc276a9e:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-24T15:59:04.075587Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T15:59:04.125710Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T15:59:04.125840Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-f55bc3:dc276a9e:enrich\", \"entity_id\": \"gl-plas-f55bc3\", \"synced\": true, \"terminal\": false, \"event\": \"side_effects_graph_leg_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T15:59:04.202025Z\"}"
+  ]
+ },
+ "timestamp": "2026-11-24T15:59:14.807561+00:00"
+}

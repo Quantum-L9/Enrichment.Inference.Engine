@@ -1,0 +1,13 @@
+{
+ "id": "P22",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "material graph change with an authorized rule: CEG uses graph-read evidence and sends one cited finding",
+ "verdict": "BLOCKED",
+ "reason": "CEG inference only via operator admin (not a Gate action, not advertised) from the caller entity, not a graph read (F-A1-02, CEG-W)",
+ "observed": {
+  "rule_declared": "synthneutral plugins.inference_rules",
+  "trigger": "none Gate-routable"
+ },
+ "timestamp": "2026-11-24T16:06:42.777451+00:00"
+}
