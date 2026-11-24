@@ -129,6 +129,15 @@ def test_resync_witness_ignores_an_earlier_sync_completing_in_its_window(
     assert rail.sync_completions(syncs) != []
 
 
+def test_init_schema_timeout_is_a_probe_timeout(mp: pytest.MonkeyPatch) -> None:
+    def slow(*a: object, **k: object) -> object:
+        raise rail.subprocess.TimeoutExpired(cmd="docker", timeout=120)
+
+    mp.setattr(rail.subprocess, "run", slow)
+    with pytest.raises(rail.ProbeTimeoutError):
+        rail.ceg_init_schema("synthneutral")
+
+
 def test_feedback_no_longer_claims_p22_and_graph_trigger_owns_it() -> None:
     assert "P22" not in rail.CASE_IDS["feedback"]
     assert rail.CASE_IDS["graph_trigger"] == ("P22",)

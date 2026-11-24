@@ -1969,6 +1969,8 @@ P22_POSTAL_CODE = "94105"
 P22_EXPECTED_REGION = "West"  # infer_geography_from_postal_code for US zip 94105
 P22_SETTLE_S = 60.0
 P22_WITNESS_S = 90.0  # budget for the resync to complete at Gate and CEG to evaluate it
+# After the resync completed, how long a delivery CEG scheduled from it has to reach Gate.
+P22_DELIVERY_GRACE_S = 15.0
 
 
 def obligation(entity_id: str) -> dict:
@@ -2013,14 +2015,17 @@ def ceg_init_schema(tenant: str) -> dict:
     Returns CEG's answer, the constraints present afterwards, and CEG's warnings.
     """
     script = (HERE / "scripts" / "ceg_init_schema.py").read_text()
-    r = subprocess.run(
-        ["docker", "exec", "-i", "l9e2e-ceg", "python", "-", tenant],
-        input=script,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    try:
+        r = subprocess.run(
+            ["docker", "exec", "-i", "l9e2e-ceg", "python", "-", tenant],
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ProbeTimeoutError(f"CEG admin init_schema for {tenant} timed out after 120s") from exc
     lines = [ln for ln in r.stdout.strip().splitlines() if ln.strip()]
     try:
         answer = json.loads(lines[-1]) if lines else {}
@@ -2125,10 +2130,13 @@ def eie_target_cites(targets: list[dict], accepted_key: str, wire_key: str | Non
 def _wait_resync_evaluated(
     since: str, budget_s: float, exclude: frozenset[str] = frozenset()
 ) -> tuple[list[dict], list[str]]:
-    """Poll until EIE's resync completed at Gate and CEG logged a trigger evaluation after it.
+    """Poll until the resync's own sync completed at Gate, and CEG logged its evaluation.
 
-    The caller isolates the window (``since`` stamped after the earlier pass settled and a full second
-    later) and passes the earlier pass's sync request ids as ``exclude``.
+    The binding is the completion: Gate's completion of a sync whose request_id the earlier pass did
+    not use (``exclude``). CEG's sync handler awaits the trigger evaluation and logs it before it
+    answers (engine/handlers.py:1625 _schedule_graph_inference), so that completion proves CEG
+    evaluated this sync; the evaluation log line is recorded alongside. The caller isolates the window
+    (``since`` stamped a full second after the earlier pass settled).
     """
     deadline = time.monotonic() + budget_s
     syncs: list[dict] = []
@@ -2191,6 +2199,9 @@ def c_graph_trigger(p: str) -> list[Result]:
         # The no-result witness is read only after the resync completed at Gate and CEG logged its
         # evaluation; a budget that runs out leaves the witness unproven, never vacuously true.
         syncs2, ceg_log2 = _wait_resync_evaluated(since2, P22_WITNESS_S, c1_sync_ids)
+        # A delivery is scheduled only after CEG answered the sync; give it a bounded window to show.
+        if sync_completions(syncs2, c1_sync_ids):
+            time.sleep(P22_DELIVERY_GRACE_S)
         ob2 = obligation(eid)
         results2 = gate_events(since2, "graph-inference-result")
     except ProbeError as exc:
