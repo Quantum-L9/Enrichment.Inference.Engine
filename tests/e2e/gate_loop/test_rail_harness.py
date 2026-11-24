@@ -350,3 +350,29 @@ def test_logs_keeps_every_matching_line_when_unlimited(mp: pytest.MonkeyPatch) -
     assert len(rail.logs("l9e2e-eie", "t0", ("side_effects",))) == 40
     full = rail.logs("l9e2e-eie", "t0", ("side_effects",), limit=None)
     assert len(full) == 60 and full[0] == "line 0 side_effects"
+
+
+def test_graph_return_targets_parses_psql_rows(mp: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def fake_psql(query: str) -> list[str]:
+        seen.append(query)
+        return ["retained|||2026-11-24 15:00:00+00", "consumed|converge:op-1|seeded|2026-11-24"]
+
+    mp.setattr(rail, "psql", fake_psql)
+    rows = rail.graph_return_targets("sn-fb-1")
+    assert "entity_id='sn-fb-1'" in seen[0] and "tenant_id='synthneutral'" in seen[0]
+    assert rows[0]["state"] == "retained" and rows[0]["consumed_by"] == ""
+    assert rows[1] == {
+        "state": "consumed",
+        "consumed_by": "converge:op-1",
+        "outcome": "seeded",
+        "created_at": "2026-11-24",
+    }
+
+
+def test_typed_sync_reason_is_the_operator_contract_wording() -> None:
+    assert rail.TYPED_SYNC_BLOCKED == (
+        "BLOCKED pending an operator contract decision (the sync row carries only admitted fields, "
+        "by design since #351)"
+    )

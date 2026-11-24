@@ -681,6 +681,33 @@ def c_negatives(p: str) -> list[Result]:
     return [r11, r13]
 
 
+TYPED_SYNC_BLOCKED = (
+    "BLOCKED pending an operator contract decision (the sync row carries only admitted fields, "
+    "by design since #351)"
+)
+
+
+def graph_return_targets(entity_id: str) -> list[dict]:
+    """EIE's durable graph-return targets for one synthneutral entity (retained -> consuming -> consumed)."""
+    rows = psql(
+        "select state, coalesce(consumed_by, ''), coalesce(outcome, ''), created_at "
+        "from graph_return_targets "
+        f"where tenant_id='synthneutral' and entity_id='{entity_id}' order by created_at"
+    )
+    out = []
+    for row in rows:
+        state, consumed_by, outcome, created_at = (row.split("|") + ["", "", "", ""])[:4]
+        out.append(
+            {
+                "state": state,
+                "consumed_by": consumed_by,
+                "outcome": outcome,
+                "created_at": created_at,
+            }
+        )
+    return out
+
+
 def graph_leg_synced(eie_log: list[str], entity_id: str) -> bool:
     """EIE recorded its graph leg for this entity as synced (side_effects_graph_leg_resolved)."""
     for line in eie_log:
@@ -823,6 +850,14 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
                 reason="" if stored else "no row reached CEG",
             )
         )
+    # The node arrived through Gate but no typed child edge did: EIE's sync row carries only the
+    # admitted (enriched) fields by design since #351, which leaves the edge contract to an operator.
+    typed_ids = ("P18",) if tenant == "plasticos" else ("P05",)
+    if stored and sync_via_gate and not typed_edges:
+        for res in out:
+            if res.id in typed_ids:
+                res.verdict = "BLOCKED"
+                res.reason = TYPED_SYNC_BLOCKED
     if not stored and egress_blocked:
         for res in out:
             res.verdict = "BLOCKED"
@@ -842,6 +877,7 @@ def c_ceg_down(p: str) -> list[Result]:
     """P14: EIE completes while CEG is down; durable result; the pending graph intent survives an EIE restart."""
     a = "EIE completes while CEG is down; durable result; pending graph intent recovered after EIE restart"
     eid = f"gl-down-{uuid.uuid4().hex[:6]}"
+    case_since = stamp()
     stop = sh(["docker", "stop", "l9e2e-ceg"], timeout=120)
     running = sh(
         ["docker", "inspect", "l9e2e-ceg", "--format", "{{.State.Running}}"], timeout=30
@@ -866,10 +902,7 @@ def c_ceg_down(p: str) -> list[Result]:
         eie_log = logs(
             "l9e2e-eie", "1m", ("graph_sync", "packet_route_error", "graph_leg", "side_effects")
         )
-        outbox = psql(
-            "select table_name from information_schema.tables where table_schema='public' "
-            "and (table_name ilike '%pending%' or table_name ilike '%outbox%')"
-        )
+        intent_down = graph_sync_intents(eid)
         started_before = _started_at("l9e2e-eie")
         restart = sh(["docker", "restart", "l9e2e-eie"], timeout=180)
         started_after = _started_at("l9e2e-eie")
@@ -892,13 +925,30 @@ def c_ceg_down(p: str) -> list[Result]:
             raise StackUnusableError(
                 f"CEG did not come back after the outage case (start rc {start.returncode}, {ready})"
             )
-    time.sleep(15)
+    # EIE's recovery pass runs 30 s after startup and then every 30 s, and an in-flight intent is
+    # held by its 60 s lease, so recovery is polled for up to 120 s rather than read once.
     try:
-        g = facility("plasticos", eid)
+        g: dict = {"facility_count": None}
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            g = facility("plasticos", eid)
+            if g["facility_count"] == 1:
+                break
+            time.sleep(10)
+        intent_after = graph_sync_intents(eid)
     except ProbeError as exc:
         return [not_run("P14", "A8", p, a, str(exc), entity_id=eid)]
+    # The recovery record carries only an attempted count (side_effect_coordinator.py), not the entity:
+    # it is evidence that a recovery pass ran in this case's window; the graph row binds the entity.
+    recovered_log = logs("l9e2e-eie", case_since, ("side_effects_graph_recovered",), limit=None)
     st = (r.get("payload") or {}).get("state")
-    ok = st == "completed" and persisted == ["1"] and absent_before and g["facility_count"] == 1
+    ok = (
+        st == "completed"
+        and persisted == ["1"]
+        and absent_before
+        and bool(intent_down)
+        and g["facility_count"] == 1
+    )
     return [
         Result(
             "P14",
@@ -916,15 +966,25 @@ def c_ceg_down(p: str) -> list[Result]:
                 "ready_after": ready,
                 "eie_restart": {"started_before": started_before, "started_after": started_after},
                 "graph_after_recovery": g,
-                "durable_intent_tables": outbox,
+                "graph_sync_intents_while_down": intent_down,
+                "graph_sync_intents_after_recovery": intent_after,
+                "eie_side_effects_graph_recovered": recovered_log,
             },
-            reason="" if ok else _p14_reason(st, persisted, absent_before, g, outbox),
+            reason="" if ok else _p14_reason(st, persisted, absent_before, g, intent_down),
         )
     ]
 
 
+def graph_sync_intents(entity_id: str) -> list[str]:
+    """EIE's durable graph-sync intents for one entity, as 'state|attempts|lease_expires_at' rows."""
+    return psql(
+        "select state, attempts, lease_expires_at from graph_sync_intents "
+        f"where entity_id='{entity_id}'"
+    )
+
+
 def _p14_reason(
-    state: str | None, persisted: list[str], absent: bool, graph: dict, outbox: list[str]
+    state: str | None, persisted: list[str], absent: bool, graph: dict, intents: list[str]
 ) -> str:
     """The P14 failure reason, from what was observed rather than a fixed string."""
     parts = []
@@ -934,14 +994,12 @@ def _p14_reason(
         parts.append(f"EIE durable result rows {persisted}, not exactly one")
     if not absent:
         parts.append("the row was already in the graph while CEG was down (outage not effective)")
+    if not intents:
+        parts.append("no graph_sync_intents row for the entity while CEG was down")
     if graph.get("facility_count") != 1:
         parts.append(
-            f"graph rows after CEG recovery and an EIE restart: {graph.get('facility_count')}, not 1"
-        )
-        parts.append(
-            "durable pending-intent table: "
-            + (", ".join(outbox) if outbox else "none")
-            + " (F-A1-06, EIE-W)"
+            f"graph rows within 120 s of CEG recovery and an EIE restart: "
+            f"{graph.get('facility_count')}, not 1"
         )
     return "; ".join(parts)
 
@@ -1680,10 +1738,12 @@ def c_feedback(p: str) -> list[Result]:
         },
     )
     sch = {"region": "string", "band": "string"}
+    targets_intake = graph_return_targets(eid)
     c1 = drive(
         "execute", converge_payload(eid, "synthneutral", extra={"postal_code": "94105"}, schema=sch)
     )
     seeded_log = logs("l9e2e-eie", "1m", ("graph", eid))
+    targets_after_c1 = graph_return_targets(eid)
     time.sleep(8)
     try:
         after_c1 = cypher(
@@ -1694,6 +1754,7 @@ def c_feedback(p: str) -> list[Result]:
     c2 = drive(
         "execute", converge_payload(eid, "synthneutral", extra={"postal_code": "94105"}, schema=sch)
     )
+    targets_after_c2 = graph_return_targets(eid)
     f1, f2 = (
         (c1.get("payload") or {}).get("fields") or {},
         (c2.get("payload") or {}).get("fields") or {},
@@ -1733,6 +1794,11 @@ def c_feedback(p: str) -> list[Result]:
         "converge1_fields": f1,
         "converge2_fields": f2,
         "eie_log": seeded_log,
+        "graph_return_targets": {
+            "after_intake": targets_intake,
+            "after_converge1": targets_after_c1,
+            "after_converge2": targets_after_c2,
+        },
         "graph_after_c1": after_c1,
         "graph_after": synced,
         "converge1_completed": c1_ok,
@@ -1744,21 +1810,39 @@ def c_feedback(p: str) -> list[Result]:
             "observed": noop,
         },
     }
+    retained = any(t["state"] == "retained" for t in targets_intake)
+    consumed_rows = [
+        t
+        for t in targets_after_c1 + targets_after_c2
+        if t["state"] == "consumed"
+        and t["consumed_by"].startswith("converge:")
+        and t["outcome"] == "seeded"
+    ]
+    ok27 = acc_ok and consumed and retained and bool(consumed_rows)
+    missing27 = [
+        k
+        for k, v in {
+            "accepted (targets_queued 1)": acc_ok,
+            "consumed (converge region=West)": consumed,
+            "retained row after intake": retained,
+            "consumed row (consumed_by converge:<op>, outcome seeded)": bool(consumed_rows),
+        }.items()
+        if not v
+    ]
     p27 = Result(
         "P27",
         "A8",
         p,
         "accepted then consumed on a later pass, with distinct accepted/retained/consumed evidence",
-        "BLOCKED" if acc_ok and consumed else "FAIL",
+        verdict(ok27, p, signed_claim=False),
         observed=obs,
         reason=(
-            "partial: accepted and consumed observed through Gate (consumed once; the next pass re-derives "
-            "region from the provider). Retained has no observable evidence: in-memory only (F-A1-06, "
-            "EIE-W). The inference came from the ceg-gl rig: CEG has no Gate-routable inference trigger "
-            "(F-A1-02, CEG-W)"
+            "accepted through Gate; retained in graph_return_targets after intake; consumed by the next "
+            "converge (consumed_by converge:<op>, outcome seeded). The inference is the driver's ceg-gl "
+            "rig: CEG has no Gate-routable inference trigger (F-A1-02, CEG-W)"
         )
-        if acc_ok and consumed
-        else "accepted/consumed not both observed (see observed)",
+        if ok27
+        else "not observed: " + "; ".join(missing27),
     )
     resynced = after_c1 == [['"West"']]
     p30 = Result(
