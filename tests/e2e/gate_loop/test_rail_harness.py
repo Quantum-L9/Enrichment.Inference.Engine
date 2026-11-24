@@ -207,3 +207,52 @@ def test_rogue_signer_continues_only_on_the_verified_graph_image(
         # A rebuilt restore stops the run whether or not the probe failed.
         with pytest.raises(rail.StackUnusableError, match="not the verified image"):
             rail.c_rogue_signer("ed25519")
+
+
+@pytest.mark.parametrize("probe_fails", [False, True])
+def test_unverifiable_graph_restore_stops_later_cases(
+    tmp_path: Path, mp: pytest.MonkeyPatch, probe_fails: bool
+) -> None:
+    import subprocess
+
+    mp.setattr(
+        rail,
+        "RELEASE_SET",
+        {
+            "sdk_pin": {"expected": rail.EXPECTED_SDK},
+            "images": {"l9e2e-ceg": {"image_id": "sha256:verified"}},
+        },
+    )
+    mp.setattr(
+        rail, "rail", lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="", stderr="")
+    )
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(rail, "stamp", lambda: "t0")
+    mp.setattr(rail, "gate_events_for", lambda since, pid: [])
+    mp.setattr(rail, "wait_ready", lambda: {"ready": True})
+
+    def drive(*a: object, **k: object) -> dict:
+        if probe_fails:
+            raise rail.ProbeError("driver exited 1")
+        return {"http_status": 502, "request_packet_id": "pk"}
+
+    def docker_unavailable() -> dict:
+        raise OSError("docker: not found")
+
+    mp.setattr(rail, "drive", drive)
+    mp.setattr(rail, "sdk_digests", docker_unavailable)
+    ran: list[str] = []
+
+    def later(p: str) -> list[rail.Result]:
+        ran.append("later")
+        return [rail.Result("T2", "A8", p, "later", "PASS")]
+
+    mp.setattr(rail, "CASES", {"rogue": rail.c_rogue_signer, "later": later})
+    mp.setattr(rail, "CASE_IDS", {"rogue": ("P12",), "later": ("T2",)})
+    mp.setattr(rail, "ENV_FILE", tmp_path / "absent.env")
+
+    results, aborted = rail.run_cases(["rogue", "later"], "ed25519", tmp_path)
+
+    assert ran == []
+    assert aborted is not None and "could not be verified" in aborted
+    assert [(r.id, r.verdict) for r in results] == [("P12", "NOT_RUN"), ("T2", "NOT_RUN")]

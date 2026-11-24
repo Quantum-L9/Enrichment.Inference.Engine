@@ -1245,6 +1245,29 @@ def _verify_restored_graph() -> dict:
     return digests
 
 
+def _restore_trusted_graph() -> tuple[dict, dict]:
+    """Recreate the trusted graph worker and verify it; any failure here stops the run.
+
+    Runs on every exit of c_rogue_signer, including a setup or probe error: later cases may run only
+    on the image (and so the SDK) verified at startup, and the recreation resolves the service from its
+    tag. An exception while restoring or verifying (docker unavailable, timeout) means provenance
+    cannot be established, so it becomes StackUnusableError too.
+    """
+    try:
+        back = rail("compose", "up", "-d", "--no-deps", "--force-recreate", "graph")
+        rec = wait_ready()
+        if back.returncode != 0 or not rec.get("ready"):
+            raise StackUnusableError(
+                f"trusted graph worker not restored after the rogue-signer case (rc {back.returncode}, {rec})"
+            )
+        return rec, _verify_restored_graph()
+    except StackUnusableError:
+        raise
+    except Exception as exc:
+        msg = f"graph worker restoration could not be verified ({type(exc).__name__})"
+        raise StackUnusableError(msg) from exc
+
+
 def c_rogue_signer(p: str) -> list[Result]:
     """P12: a worker response signed by a key Gate does not trust is refused; SDK code digest identical."""
     a = "SDK lock mismatch blocked AND untrusted response signer refused"
@@ -1268,15 +1291,7 @@ def c_rogue_signer(p: str) -> list[Result]:
         rpid = str(m.get("request_packet_id") or "")
         events = gate_events_for(since, rpid) if rpid else []
     finally:
-        back = rail("compose", "up", "-d", "--no-deps", "--force-recreate", "graph")
-        rec = wait_ready()
-        if back.returncode != 0 or not rec.get("ready"):
-            raise StackUnusableError(
-                f"trusted graph worker not restored after the rogue-signer case (rc {back.returncode}, {rec})"
-            )
-        # Runs on every exit, including a setup or probe error: later cases may run only on the image
-        # (and so the SDK) verified at startup, and the recreation resolves the service from its tag.
-        digests = _verify_restored_graph()
+        rec, digests = _restore_trusted_graph()
     pinned = (RELEASE_SET.get("sdk_pin") or {}).get("expected")
     valid = [v for v in digests.values() if not v.startswith("UNAVAILABLE")]
     # Identical across processes AND equal to the release the run is judged at.
