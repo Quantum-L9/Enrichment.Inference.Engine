@@ -708,8 +708,9 @@ def graph_return_targets(entity_id: str) -> list[dict]:
     return out
 
 
-def graph_leg_synced(eie_log: list[str], entity_id: str) -> bool:
-    """EIE recorded its graph leg for this entity as synced (side_effects_graph_leg_resolved)."""
+def graph_leg_outcomes(eie_log: list[str], entity_id: str) -> list[bool]:
+    """The synced flag of every side_effects_graph_leg_resolved record EIE logged for this entity."""
+    out = []
     for line in eie_log:
         try:
             rec = json.loads(line)
@@ -719,10 +720,14 @@ def graph_leg_synced(eie_log: list[str], entity_id: str) -> bool:
             isinstance(rec, dict)
             and rec.get("event") == "side_effects_graph_leg_resolved"
             and rec.get("entity_id") == entity_id
-            and rec.get("synced") is True
         ):
-            return True
-    return False
+            out.append(rec.get("synced") is True)
+    return out
+
+
+def graph_leg_synced(eie_log: list[str], entity_id: str) -> bool:
+    """EIE recorded its graph leg for this entity as synced (side_effects_graph_leg_resolved)."""
+    return True in graph_leg_outcomes(eie_log, entity_id)
 
 
 def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
@@ -796,7 +801,11 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         and bool(completed)
         and all((c.get("generation") or 0) >= 2 for c in completed)
     )
-    egress_blocked = any("signature required but not present" in ln for ln in eie_all)
+    # The signing error carries no entity id, so it only counts for this case when EIE's own
+    # graph-leg record for this entity resolved without syncing.
+    egress_blocked = False in graph_leg_outcomes(eie_all, eid) and any(
+        "signature required but not present" in ln for ln in eie_all
+    )
     state = (r.get("payload") or {}).get("state")
     obs = {
         "entity_id": eid,

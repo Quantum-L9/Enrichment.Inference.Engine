@@ -376,3 +376,15 @@ def test_typed_sync_reason_is_the_operator_contract_wording() -> None:
         "BLOCKED pending an operator contract decision (the sync row carries only admitted fields, "
         "by design since #351)"
     )
+
+
+def test_graph_leg_outcomes_are_per_entity() -> None:
+    import json
+
+    def rec(**kw: object) -> str:
+        return json.dumps({"event": "side_effects_graph_leg_resolved", **kw})
+
+    log = [rec(entity_id="other", synced=False), rec(entity_id="gl-1", synced=True)]
+    assert rail.graph_leg_outcomes(log, "gl-1") == [True]
+    assert rail.graph_leg_outcomes(log, "other") == [False]
+    assert rail.graph_leg_outcomes(log, "absent") == []
