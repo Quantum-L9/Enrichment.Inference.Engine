@@ -97,7 +97,11 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
    resolved endpoint. A row is not claimed while an older row of its subject is
    `pending` or `dispatching`, nor once a newer row was **sent** (claimed at
    least once, in any state since); such an older `pending` row is
-   `superseded`.
+   `superseded`. Version order governs which row EIE claims and sends; it
+   cannot stop CEG from applying an earlier request that timed out in transit
+   after a later one was acknowledged. The echo guard (G4, *Field set and
+   provenance*) therefore never treats an acknowledgment as proof of the graph
+   state while such an earlier outcome is unknown.
 6. **Bounded retries.** Retryable outcomes back off 2 s doubling to 300 s; at
    `max_attempts` the row is `failed_terminal` with `retry_exhausted:*`.
 7. **Ownership before sending.** A store that cannot confirm a claim sends
@@ -147,7 +151,7 @@ in this order:
 | **G1 Provenance** | Every field sent in full mode carries its provenance, `observed` or `enriched`, as a **declared spec property**, by the convention of `docs/contracts/EIE_NATIVE_DOMAIN_SPEC.md` *Sync provenance*: a row field `F` is accompanied by its companion property `F_provenance`; every item of a childsync `list<map>` carries the item property `provenance`. An observed value is never labelled `enriched`, and never sent unlabelled. |
 | **G2 Precedence within one converge** | Candidates first exclude any value that originated from a CEG `graph-inference-result` (evidence source type `graph`; see G4). Of the rest, an admitted value (`inferred` or `external_claim`, `admitted: true`) is sent as `enriched` and wins over an observed value of the same field. Otherwise the consumer's observed value for `F` (the request entity, or a v2 observation) is sent as `observed` -- including when the only admitted value was graph-origin and so excluded. A conflicting set of observations sends nothing for `F`. |
 | **G3 Precedence over time** | Enforced by CEG, not EIE: in the graph a later `observed` value replaces an `enriched` one, and an `enriched` value never overwrites an `observed` one. An enriched value CEG displaces is not lost: it remains EIE evidence (`enrichment_results`, `field_evidence`). |
-| **G4 Echo guard** | `F` is not sent only when the subject's (tenant, entity, endpoint) most recent intent carrying `F`, in any state, is `acknowledged` with the same value and provenance. So `F` is always sent while an intent carrying `F` is `pending` or `dispatching` (version order, rule 5, makes the later value win, and if that intent ends `failed_terminal` the later one still delivers), and whenever a newer intent carrying `F` ended `failed_terminal` or `superseded`: CEG may have applied it with the acknowledgment lost, so the graph state is uncertain and `F` is sent to reconcile it. A value that originated from a CEG `graph-inference-result` (evidence source type `graph`) is never sent (excluded before G2). A field set left empty sends no row and records no intent. |
+| **G4 Echo guard** | `F` is not sent only when both hold: (1) the subject's (tenant, entity, endpoint) most recent intent carrying `F` is `acknowledged` with the same value and provenance, and (2) every intent of the subject carrying `F` that was ever sent (claimed at least once) ended `acknowledged`. An acknowledgment is not proof of the graph state while any sent intent's outcome is unknown: an intent that was sent and ended `failed_terminal` or `superseded` may still be applied by CEG later (Gate: after a transport failure the graph "may or may not hold the row"), even after a newer acknowledgment, so `F` is then always resent to reconcile. `F` is always sent while an intent carrying `F` is `pending` or `dispatching`. A value that originated from a CEG `graph-inference-result` (evidence source type `graph`) is never sent (excluded before G2). A field set left empty sends no row and records no intent. |
 | **G5 No clears** | A `null` or missing observed value is never sent, so it never deletes a graph property; the same holds for admitted values. |
 | **G6 Domain-agnostic** | The field set is keyed only on the endpoint's declared row properties and its `childsync` entries. No field name, node label or cartridge is known to the code that builds it. |
 
