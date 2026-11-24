@@ -2079,12 +2079,18 @@ def graph_result_completions(events: list[dict], ingress: list[dict]) -> list[di
     ]
 
 
-def sync_completions(events: list[dict]) -> list[dict]:
-    """Gate's completions of EIE's syncs: answered by graph under the ingress request_id."""
+def sync_completions(events: list[dict], exclude: frozenset[str] = frozenset()) -> list[dict]:
+    """Gate's completions of EIE's syncs: answered by graph under the ingress request_id.
+
+    ``exclude`` drops request ids already seen before this window, so an earlier sync whose events
+    share the window's first second never counts as this one.
+    """
     ids = {
         e["request_id"]
         for e in events
-        if e["event"] == "gate.ingress" and e["source_node"] == "enrichment-engine"
+        if e["event"] == "gate.ingress"
+        and e["source_node"] == "enrichment-engine"
+        and e["request_id"] not in exclude
     }
     return [
         e
@@ -2116,15 +2122,21 @@ def eie_target_cites(targets: list[dict], accepted_key: str, wire_key: str | Non
     return False
 
 
-def _wait_resync_evaluated(since: str, budget_s: float) -> tuple[list[dict], list[str]]:
-    """Poll until EIE's resync completed at Gate and CEG logged a trigger evaluation after it."""
+def _wait_resync_evaluated(
+    since: str, budget_s: float, exclude: frozenset[str] = frozenset()
+) -> tuple[list[dict], list[str]]:
+    """Poll until EIE's resync completed at Gate and CEG logged a trigger evaluation after it.
+
+    The caller isolates the window (``since`` stamped after the earlier pass settled and a full second
+    later) and passes the earlier pass's sync request ids as ``exclude``.
+    """
     deadline = time.monotonic() + budget_s
     syncs: list[dict] = []
     evaluated: list[str] = []
     while time.monotonic() < deadline:
         syncs = gate_events(since, "sync")
         evaluated = logs("l9e2e-ceg", since, ("graph inference after sync",), limit=None)
-        if sync_completions(syncs) and evaluated:
+        if sync_completions(syncs, exclude) and evaluated:
             return syncs, evaluated
         time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
     return syncs, evaluated
@@ -2167,12 +2179,18 @@ def c_graph_trigger(p: str) -> list[Result]:
         targets = return_target_citations(eid)
         ceg_log1 = logs("l9e2e-ceg", since, ("graph inference",), limit=None)
 
+        # Isolate the resync's window: c1 has settled (its obligation decided), its sync request ids are
+        # excluded, and a full second passes so second-precision `since2` starts after c1's events.
+        c1_sync_ids = frozenset(
+            e["request_id"] for e in gate_events(since, "sync") if e.get("request_id")
+        )
+        time.sleep(1.1)
         since2 = stamp()
         c2 = drive("execute", converge_payload(eid, "synthneutral", extra=extra, schema=sch))
         # EIE's graph leg runs detached, so the converge can answer before its sync reaches CEG.
         # The no-result witness is read only after the resync completed at Gate and CEG logged its
         # evaluation; a budget that runs out leaves the witness unproven, never vacuously true.
-        syncs2, ceg_log2 = _wait_resync_evaluated(since2, P22_WITNESS_S)
+        syncs2, ceg_log2 = _wait_resync_evaluated(since2, P22_WITNESS_S, c1_sync_ids)
         ob2 = obligation(eid)
         results2 = gate_events(since2, "graph-inference-result")
     except ProbeError as exc:
@@ -2183,7 +2201,7 @@ def c_graph_trigger(p: str) -> list[Result]:
 
     ingress = [e for e in results1 if e["event"] == "gate.ingress" and e["source_node"] == "graph"]
     completed = graph_result_completions(results1, ingress)
-    resync_done = sync_completions(syncs2)
+    resync_done = sync_completions(syncs2, c1_sync_ids)
     ev_rev, rule_rev = ob1.get("evidence_revision") or "", ob1.get("rule_revision") or ""
     # CEG's accepted key (obligation_key) binds tenant, entity, both revisions and the finding set;
     # EIE records the packet's idempotency key as producer_key, so equal keys join the two records.

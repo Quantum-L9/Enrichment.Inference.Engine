@@ -108,6 +108,27 @@ def test_mixed_alg_pass_explains_its_expected_502() -> None:
     assert "401/403" in rail.MIX_ALG_ACCEPTED_REASON
 
 
+def test_resync_witness_ignores_an_earlier_sync_completing_in_its_window(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    """c1's sync and evaluation sharing c2's first second must not end the wait."""
+    clock = iter([0.0, 0.0, 10.0, 95.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(
+        rail,
+        "gate_events",
+        lambda since, action: [
+            {"event": "gate.ingress", "source_node": "enrichment-engine", "request_id": "c1"},
+            {"event": "gate.completed", "source_node": "graph", "request_id": "c1"},
+        ],
+    )
+    mp.setattr(rail, "logs", lambda *a, **k: ["graph inference after sync tenant=synthneutral"])
+    syncs, _ = rail._wait_resync_evaluated("t0", 90.0, frozenset({"c1"}))
+    assert rail.sync_completions(syncs, frozenset({"c1"})) == []
+    assert rail.sync_completions(syncs) != []
+
+
 def test_feedback_no_longer_claims_p22_and_graph_trigger_owns_it() -> None:
     assert "P22" not in rail.CASE_IDS["feedback"]
     assert rail.CASE_IDS["graph_trigger"] == ("P22",)
