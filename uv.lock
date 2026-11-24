@@ -169,8 +169,8 @@ wheels = [
 
 [[package]]
 name = "constellation-node-sdk"
-version = "1.3.3"
-source = { git = "https://github.com/Quantum-L9/Gate_SDK.git?tag=v1#e5159c668c011d9d1dd26c8c856aecd019408f84" }
+version = "1.3.4"
+source = { git = "https://github.com/Quantum-L9/Gate_SDK.git?tag=v1#5c1cfc2049b7d8d762d6a08289b465929d6f732e" }
 dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },
