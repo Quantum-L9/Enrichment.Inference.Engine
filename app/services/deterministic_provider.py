@@ -40,6 +40,7 @@ key, not a provider outage, not a circuit-breaker trip.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from typing import Any
 
 import structlog
@@ -84,10 +85,22 @@ def _digest(entity_key: str, field: str) -> str:
     return hashlib.sha256(f"{entity_key}|{field}".encode()).hexdigest()
 
 
-def _synthesize(entity_key: str, field: str, declared_type: str) -> Any:
-    """Derive a stable, type-correct, visibly-synthetic value for one field."""
+def _synthesize(entity_key: str, field: str, declared_type: Any) -> Any:
+    """Derive a stable, type-correct, visibly-synthetic value for one field.
+
+    `declared_type` is either a type name (``"float"``, ``"list"``) or a typed
+    declaration (``{"type": "list", "items": {...}}``, ``{"type": "map",
+    "properties": [...]}``) -- the form a request schema carries for a ``list``
+    or ``map`` target. A declaration is honoured structurally: a ``list`` with
+    ``items`` is one synthetic element of that item type, a ``map`` is its
+    declared properties, each synthesized by its own declaration. Every string
+    leaf keeps the ``det:`` marker. A bare ``"list"`` names no item type, so it
+    stays a one-element list of marked strings.
+    """
     digest = _digest(entity_key, field)
-    kind = str(declared_type or "string").strip().casefold()
+    declaration = declared_type if isinstance(declared_type, Mapping) else None
+    raw = declaration.get("type") if declaration is not None else declared_type
+    kind = str(raw or "string").strip().casefold()
 
     if kind in {"int", "integer"}:
         return int(digest[:8], 16) % 1000
@@ -96,8 +109,23 @@ def _synthesize(entity_key: str, field: str, declared_type: str) -> Any:
     if kind in {"bool", "boolean"}:
         return int(digest[:2], 16) % 2 == 0
     if kind in {"list", "array"}:
+        items = declaration.get("items") if declaration is not None else None
+        if isinstance(items, Mapping):
+            return [_synthesize(entity_key, f"{field}[0]", items)]
         return [f"{DETERMINISTIC_VALUE_PREFIX}{digest[:8]}"]
+    if kind == "map" and declaration is not None:
+        return _synthesize_map(entity_key, field, declaration.get("properties"))
     return f"{DETERMINISTIC_VALUE_PREFIX}{field}:{digest[:12]}"
+
+
+def _synthesize_map(entity_key: str, field: str, properties: Any) -> dict[str, Any]:
+    """One synthetic map: each declared property, synthesized by its own declaration."""
+    synthesized: dict[str, Any] = {}
+    for prop in properties if isinstance(properties, list) else []:
+        name = prop.get("name") if isinstance(prop, Mapping) else None
+        if isinstance(name, str) and name:
+            synthesized[name] = _synthesize(entity_key, f"{field}.{name}", prop)
+    return synthesized
 
 
 def build_deterministic_payload(
@@ -119,7 +147,7 @@ def build_deterministic_payload(
         if existing not in (None, ""):
             fields[field] = existing
         else:
-            fields[field] = _synthesize(entity_key, str(field), str(declared_type))
+            fields[field] = _synthesize(entity_key, str(field), declared_type)
             synthetic.append(str(field))
     # `synthetic_fields` is the provider-level identity of every invented value,
     # including the int/float/bool ones no prefix can mark. The validator keeps
