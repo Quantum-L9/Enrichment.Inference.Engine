@@ -24,10 +24,8 @@ services:
       L9_SIGNING_KEY_ID: gate-gl
       L9_VERIFYING_KEYS_JSON: ${GL_GATE_VERIFYING_KEYS_JSON:?}
       GATE_ADMIN_TOKEN: ${GL_ADMIN_TOKEN:?}
-      # One policy per verifying key (staging requires it). gate-gl is present
-      # only because Gate's public key must be in its own verifying map under
-      # ed25519 (deviation D-2, finding F-A7-01); its policy is the narrowest
-      # non-empty one staging accepts and no scenario uses it. Worker lists include
+      # One policy per verifying key (staging requires it). Gate's own key id is
+      # not a caller and has no entry (D-4 repaired in Gate 2384923). Worker lists include
       # the operator actions on purpose: refusing them must come from the
       # kind rule (ingress_validator.py:211-220), not from a missing list entry.
       L9_KEY_ALLOWED_ACTIONS_JSON: >-
@@ -39,8 +37,7 @@ services:
          "eie-gl":  {"node": "enrichment-engine", "kind": "worker", "tenants": ["plasticos", "synthneutral"],
                      "actions": ["sync", "health-assess", "score", "match"]},
          "ceg-gl":  {"node": "graph", "kind": "worker", "tenants": ["plasticos", "synthneutral"],
-                     "actions": ["graph-inference-result", "health-assess", "score"]},
-         "gate-gl": {"node": "gate", "kind": "worker", "tenants": ["plasticos"], "actions": ["match"]}}
+                     "actions": ["graph-inference-result", "health-assess", "score"]}}
 
   enrichment-engine:
     environment:
@@ -70,8 +67,9 @@ services:
   graph:
     environment:
       GATE_ADMIN_TOKEN: ${GL_ADMIN_TOKEN:?}
-      L9_SIGNING_ALGORITHM: ed25519
-      L9_SIGNING_KEY: ""
+      # ed25519 except in the MIX-ALG-01 window (scripts/rail.sh GL_MIXED_CEG=1).
+      L9_SIGNING_ALGORITHM: ${GL_CEG_ALG:-ed25519}
+      L9_SIGNING_KEY: ${GL_CEG_HMAC_KEY:-}
       L9_SIGNING_PRIVATE_KEY: ${GL_PRIV_CEG:?}
       L9_SIGNING_KEY_ID: ${GL_CEG_KEY_ID:-ceg-gl}
       L9_VERIFYING_KEYS_JSON: ${GL_WORKER_VERIFYING_KEYS_JSON:?}

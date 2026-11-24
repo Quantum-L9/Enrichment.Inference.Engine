@@ -1224,6 +1224,50 @@ def c_gate_restart(p: str) -> list[Result]:
     return [Result("P09", "A7", p, a, verdict(ok, p, signed_claim=False), observed=obs)]
 
 
+def _verify_restored_graph() -> dict:
+    """Stop the run unless l9e2e-ceg runs the startup-verified image and the pinned SDK; return digests."""
+    digests = sdk_digests()
+    pinned = (RELEASE_SET.get("sdk_pin") or {}).get("expected")
+    graph_image = sh(["docker", "inspect", "l9e2e-ceg", "--format", "{{.Image}}"], timeout=30)
+    verified_image = ((RELEASE_SET.get("images") or {}).get("l9e2e-ceg") or {}).get("image_id")
+    if (
+        not pinned
+        or not verified_image
+        or graph_image.returncode != 0
+        or graph_image.stdout.strip() != verified_image
+        or digests.get("l9e2e-ceg") != pinned
+    ):
+        raise StackUnusableError(
+            "restored graph worker is not the verified image/SDK "
+            f"(image {graph_image.stdout.strip()[:19]} vs {str(verified_image)[:19]}, "
+            f"sdk {digests.get('l9e2e-ceg')})"
+        )
+    return digests
+
+
+def _restore_trusted_graph() -> tuple[dict, dict]:
+    """Recreate the trusted graph worker and verify it; any failure here stops the run.
+
+    Runs on every exit of c_rogue_signer, including a setup or probe error: later cases may run only
+    on the image (and so the SDK) verified at startup, and the recreation resolves the service from its
+    tag. An exception while restoring or verifying (docker unavailable, timeout) means provenance
+    cannot be established, so it becomes StackUnusableError too.
+    """
+    try:
+        back = rail("compose", "up", "-d", "--no-deps", "--force-recreate", "graph")
+        rec = wait_ready()
+        if back.returncode != 0 or not rec.get("ready"):
+            raise StackUnusableError(
+                f"trusted graph worker not restored after the rogue-signer case (rc {back.returncode}, {rec})"
+            )
+        return rec, _verify_restored_graph()
+    except StackUnusableError:
+        raise
+    except Exception as exc:
+        msg = f"graph worker restoration could not be verified ({type(exc).__name__})"
+        raise StackUnusableError(msg) from exc
+
+
 def c_rogue_signer(p: str) -> list[Result]:
     """P12: a worker response signed by a key Gate does not trust is refused; SDK code digest identical."""
     a = "SDK lock mismatch blocked AND untrusted response signer refused"
@@ -1247,15 +1291,11 @@ def c_rogue_signer(p: str) -> list[Result]:
         rpid = str(m.get("request_packet_id") or "")
         events = gate_events_for(since, rpid) if rpid else []
     finally:
-        back = rail("compose", "up", "-d", "--no-deps", "--force-recreate", "graph")
-        rec = wait_ready()
-        if back.returncode != 0 or not rec.get("ready"):
-            raise StackUnusableError(
-                f"trusted graph worker not restored after the rogue-signer case (rc {back.returncode}, {rec})"
-            )
-    digests = sdk_digests()
+        rec, digests = _restore_trusted_graph()
+    pinned = (RELEASE_SET.get("sdk_pin") or {}).get("expected")
     valid = [v for v in digests.values() if not v.startswith("UNAVAILABLE")]
-    same = len(valid) == 3 and len({v.split()[-1] for v in valid}) == 1
+    # Identical across processes AND equal to the release the run is judged at.
+    same = len(valid) == 3 and set(valid) == {pinned}
     # Refusal tied to this request: Gate's own gate.failure for its packet id, naming the response check.
     untrusted = m.get("http_status") == 502 and any(
         e["event"] == "gate.failure"
@@ -1282,6 +1322,87 @@ def c_rogue_signer(p: str) -> list[Result]:
             gate_events_for_request=events,
             recovery=rec,
             sdk_code_digest=digests,
+        )
+    ]
+
+
+def mixed_alg_outcome(http_status: object, events: list[dict]) -> str:
+    """Classify one Gate->worker call made while the worker signs hmac-sha256 and Gate ed25519.
+
+    accepted: the worker verified Gate's ed25519 dispatch and answered; Gate then refused the answer at
+    its own response check (Gate binds every verifying key to one algorithm, so an hmac worker answer
+    is outside its contract). refused: the worker rejected Gate's dispatch (HTTP 401/403), which is
+    the Gate_SDK 1.3.3 D-1 regression (every verifying key bound to the node's own algorithm).
+    """
+    if http_status != 502:
+        return "unproven"
+    for e in events:
+        if e.get("event") != "gate.failure":
+            continue
+        msg = str(e.get("error_message"))
+        if e.get("error_type") == "WorkerHTTPError" and re.search(r"returned HTTP 40[13]", msg):
+            return "refused"
+        if (
+            e.get("error_type") == "GateDispatchSecurityError"
+            and "worker response failed transport validation" in msg
+        ):
+            return "accepted"
+    return "unproven"
+
+
+def c_mixed_alg(p: str) -> list[Result]:
+    """MIX-ALG-01: a worker signing hmac-sha256 still verifies Gate's ed25519 dispatch."""
+    a = "an hmac-sha256 worker verifies Gate's ed25519 dispatch (per-key algorithm, not the node's)"
+    m: dict = {}
+    events: list[dict] = []
+    window: dict = {}
+    try:
+        setup = rail(
+            "compose",
+            "up",
+            "-d",
+            "--no-deps",
+            "--force-recreate",
+            "graph",
+            extra_env={"GL_MIXED_CEG": "1"},
+        )
+        if setup.returncode != 0:
+            raise ProbeError(f"hmac graph worker could not be created (rc {setup.returncode})")
+        time.sleep(25)
+        window = running_signing()
+        if window.get("l9e2e-ceg") != "hmac-sha256" or window.get("l9e2e-gate") != "ed25519":
+            raise ProbeError(f"mixed-algorithm window not established: {window}")
+        since = stamp()
+        m = drive("post_signed", MATCH_PROBE)
+        rpid = str(m.get("request_packet_id") or "")
+        events = gate_events_for(since, rpid) if rpid else []
+    finally:
+        rec, digests = _restore_trusted_graph()
+    outcome = mixed_alg_outcome(m.get("http_status"), events)
+    obs = {
+        "signing_in_window": window,
+        "call": m,
+        "gate_events_for_request": events,
+        "outcome": outcome,
+        "recovery": rec,
+        "sdk_code_digest": digests,
+    }
+    if outcome == "unproven":
+        return [not_run("MIX-ALG-01", "A7", p, a, "outcome not tied to this request", **obs)]
+    return [
+        Result(
+            "MIX-ALG-01",
+            "A7",
+            p,
+            a,
+            verdict(outcome == "accepted", p, signed_claim=True),
+            observed=obs,
+            reason=(
+                ""
+                if outcome == "accepted"
+                else "the hmac worker refused Gate's ed25519 dispatch (owner Gate_SDK: 1.3.3 binds every "
+                "verifying key to the node's own algorithm, D-1 regression)"
+            ),
         )
     ]
 
@@ -1420,12 +1541,13 @@ def c_gate_rail_policy(p: str) -> list[Result]:
         raise ProbeError("no Gate image id in the release set; the settings probe cannot run")
     probe = "\n".join(
         [
+            "import sys",
             "from constellation_gate.config.settings import get_settings",
             "try:",
             "    get_settings()",
-            "    print('SETTINGS_OK')",
+            "    sys.stdout.write('SETTINGS_OK\\n')",
             "except Exception as exc:",
-            "    print('SETTINGS_REFUSED', type(exc).__name__, str(exc)[:400])",
+            "    sys.stdout.write(' '.join(['SETTINGS_REFUSED', type(exc).__name__, str(exc)[:400]]) + '\\n')",
         ]
     )
     keys = json.dumps(
@@ -1649,6 +1771,7 @@ CASES: dict[str, Callable[[str], list[Result]]] = {
     "ceg_down": c_ceg_down,
     "gate_restart": c_gate_restart,
     "rogue_signer": c_rogue_signer,
+    "mixed_alg": c_mixed_alg,
     "registration": c_registration,
     "gate_rail_policy": c_gate_rail_policy,
     "feedback": c_feedback,
@@ -1667,6 +1790,7 @@ CASE_IDS: dict[str, tuple[str, ...]] = {
     "ceg_down": ("P14",),
     "gate_restart": ("P09",),
     "rogue_signer": ("P12",),
+    "mixed_alg": ("MIX-ALG-01",),
     "registration": ("F-A1-05", "P11-owner-collision"),
     "gate_rail_policy": ("F-A1-11",),
     "feedback": ("P27", "P30", "P22"),
@@ -1674,6 +1798,23 @@ CASE_IDS: dict[str, tuple[str, ...]] = {
 
 
 SDK_DIGEST_LINE = re.compile(r"\S+ \d+ [0-9a-f]{64}")
+# The release the integrated rerun is judged at: Gate_SDK v1.3.3 (tag v1.3.3 = v1 = e5159c66), as
+# "<version> <file count> <code digest>" computed by sdk_digests() over src/constellation_node_sdk at
+# that tag. GL_EXPECT_SDK names another release explicitly; it cannot be empty.
+EXPECTED_SDK = "1.3.3 51 e43e18de547a9b18c2c31007f264afa1948930936dfe4bad62610fa460affb0b"
+
+
+def sdk_pin(digests: dict, expected: str) -> dict:
+    """Whether every process runs exactly the expected SDK code. Unavailable or different is a mismatch."""
+    if not SDK_DIGEST_LINE.fullmatch(expected):
+        msg = f"expected SDK line is not '<version> <files> <sha256>': {expected!r}"
+        raise ValueError(msg)
+    mismatched = {c: v for c, v in digests.items() if v != expected}
+    return {
+        "expected": expected,
+        "match": bool(digests) and not mismatched,
+        "mismatched": mismatched,
+    }
 
 
 def sdk_digests() -> dict:
@@ -1683,13 +1824,13 @@ def sdk_digests() -> dict:
     """
     probe = "\n".join(
         [
-            "import hashlib, importlib.metadata as m, pathlib, constellation_node_sdk as s",
+            "import hashlib, importlib.metadata as m, pathlib, sys, constellation_node_sdk as s",
             "root = pathlib.Path(s.__file__).parent",
             "fs = sorted(root.rglob('*.py'))",
             "h = hashlib.sha256()",
             "for f in fs:",
             "    h.update((str(f.relative_to(root)) + ':' + hashlib.sha256(f.read_bytes()).hexdigest() + '\\n').encode())",
-            "print(m.version('constellation-node-sdk'), len(fs), h.hexdigest())",
+            "sys.stdout.write(f\"{m.version('constellation-node-sdk')} {len(fs)} {h.hexdigest()}\\n\")",
         ]
     )
     out = {}
@@ -1784,7 +1925,8 @@ def run_cases(names: list[str], profile: str, ev: Path) -> tuple[list[Result], s
                 ]
         for r in res:
             results.append(r)
-            print(f"{r.id:5} {r.verdict:14} {r.reason[:100]}", flush=True)
+            sys.stdout.write(f"{r.id:5} {r.verdict:14} {r.reason[:100]}\n")
+            sys.stdout.flush()
             write_json(ev / f"{r.id}.json", asdict(r))
     return results, aborted
 
@@ -1806,14 +1948,27 @@ def main() -> int:
         up = rail("up")
         if up.returncode != 0:
             write_json(ev / "boot.json", {"rc": up.returncode, "tail": up.stdout[-800:]})
-            print(json.dumps({"evidence": str(ev), "boot": "FAILED"}))
+            sys.stdout.write(json.dumps({"evidence": str(ev), "boot": "FAILED"}) + "\n")
             return 4
     OBSERVED_PROFILE.update(running_signing())
     write_json(ev / "ready.json", wait_ready())
     rs = release_set(a.profile)
+    rs["sdk_pin"] = sdk_pin(rs["sdk_code_digest"], os.environ.get("GL_EXPECT_SDK", EXPECTED_SDK))
     RELEASE_SET.update(rs)
     write_json(ev / "release_set.json", rs)
-    results, aborted = run_cases(a.cases.split(","), a.profile, ev)
+    aborted: str | None
+    if not rs["sdk_pin"]["match"]:
+        # Verdicts at another SDK are not evidence for this rerun: no case runs.
+        aborted = f"SDK pin mismatch: {rs['sdk_pin']['mismatched']}"
+        results = [
+            not_run(cid, "A8", a.profile, "harness", aborted)
+            for n in a.cases.split(",")
+            for cid in CASE_IDS.get(n, (n,))
+        ]
+        for r in results:
+            write_json(ev / f"{r.id}.json", asdict(r))
+    else:
+        results, aborted = run_cases(a.cases.split(","), a.profile, ev)
     leaks = [f.name for f in ev.glob("*.json") for s in secrets_() if s in f.read_text()]
     summary = {
         "stamp": run_stamp,
@@ -1825,8 +1980,9 @@ def main() -> int:
         "results": [{"id": r.id, "verdict": r.verdict, "reason": r.reason} for r in results],
     }
     write_json(ev / "summary.json", summary)
-    print(
+    sys.stdout.write(
         json.dumps({"evidence": str(ev), "leak_check": summary["leak_check"], "aborted": aborted})
+        + "\n"
     )
     if leaks:
         return 3

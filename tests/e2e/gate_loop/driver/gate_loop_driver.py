@@ -67,11 +67,10 @@ def client(key_id: str = "odoo-gl", timeout: float = 40.0) -> GateClient:
             signing_key_id=key_id,
             signing_algorithm=ALG,
             verify_response_signatures=True,
-            # Own PUBLIC key included on purpose (deviation D-3): the pinned SDK
-            # resolves the client's own key id to its private signing key
-            # (gate/config.py resolve_verifying_key), so an ed25519 client fails
-            # its own outbound validation without it (finding F-A7-02).
-            verifying_keys={**GATE_TRUST, key_id: PUB[key_id]},
+            # Gate's key only: Gate_SDK 1.3.3 derives the client's own ed25519
+            # public key from its private key (D-2), so the former deviation that
+            # added it here is gone.
+            verifying_keys=dict(GATE_TRUST),
         )
     )
 
@@ -366,4 +365,4 @@ SCENARIOS = {
 if __name__ == "__main__":
     name = sys.argv[1]
     args = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
-    print(json.dumps(asyncio.run(SCENARIOS[name](args)), default=str))
+    sys.stdout.write(json.dumps(asyncio.run(SCENARIOS[name](args)), default=str) + "\n")

@@ -22,9 +22,19 @@ Each deviation is a configuration choice; none patches Gate, the SDK or any node
 | Id | Deviation | Finding |
 |---|---|---|
 | D-1 | EIE runs `L9_ENVIRONMENT=test`, as in `compose.converge.yml`, because the deterministic provider requires it. | F-A1-12 |
-| D-2 | Gate's own public key is in Gate's verifying map, with the narrowest caller policy staging accepts. | F-A7-01: Gate resolves its own key id to its private key, so it cannot dispatch under ed25519 without this. |
-| D-3 | The driver's `GateClient` lists its own public key. | F-A7-02: the same defect in SDK `GateClientConfig`. |
+| ~~D-2~~ | Retired for the integrated rerun: Gate's verifying map holds only its callers. Gate resolves its own ed25519 key id to its public key since Constellation.Gate 2384923. | F-A7-01 (repaired, D-4) |
+| ~~D-3~~ | Retired for the integrated rerun: the driver's `GateClient` lists only Gate's key. Gate_SDK 1.3.3 derives the client's own public key. | F-A7-02 (repaired, SDK D-2) |
 | Rig | The driver holds the worker keys only to build key-misassignment negatives (P10), and to push CEG-side fixtures through Gate where EIE's own egress is blocked at main (P17, P19, P33, P34). Every such case says so in its evidence. | — |
+| Rig | MIX-ALG-01 recreates the graph worker signing hmac-sha256 (`GL_MIXED_CEG=1`: its own `GL_HMAC_CEG` secret, key id `ceg-hm-gl`) while Gate signs ed25519, then restores the trusted worker. | Gate_SDK 1.3.3 D-1 regression |
+
+The rerun is judged at one Gate_SDK release: `rail.py` compares every process's SDK code digest
+with `EXPECTED_SDK` and runs no case on a mismatch (`GL_EXPECT_SDK` names another release
+explicitly). `scripts/rail.sh` regenerates a `run.env` written by the older key layout.
+
+MIX-ALG-01 proves the worker side only: an hmac-sha256 worker must verify Gate's ed25519 dispatch.
+PASS means Gate's failure for the request is its own response check; the worker's HTTP 401/403
+(Gate_SDK 1.3.3 binds every verifying key to the node's algorithm) is FAIL. Gate verifying an
+hmac answer is outside Gate's contract: its settings bind every verifying key to one algorithm.
 
 ## Run
 
