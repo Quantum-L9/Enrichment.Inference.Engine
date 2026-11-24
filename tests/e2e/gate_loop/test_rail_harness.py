@@ -396,7 +396,7 @@ def test_recovery_poll_ignores_a_row_read_after_the_deadline(mp: pytest.MonkeyPa
     mp.setattr(rail.time, "sleep", lambda s: None)
     calls: list[int] = []
 
-    def late_row(db: str, fid: str, timeout: int = 120) -> dict:
+    def late_row(db: str, fid: str, timeout: float = 120) -> dict:
         calls.append(timeout)
         return {"rows": [[f'"{fid}"']], "facility_count": 1}
 
@@ -508,3 +508,36 @@ def test_typed_sync_blocked_requires_every_other_requirement() -> None:
     )
     assert not rail.typed_sync_blocked(**{**base, "stored": False}, other_requirements_met=True)
     assert not rail.typed_sync_blocked(**{**base, "typed_edges": True}, other_requirements_met=True)
+
+
+def test_recovery_poll_gives_the_probe_the_fractional_remaining_budget(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    clock = iter([0.0, 118.1, 119.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    calls: list[float] = []
+
+    def row(db: str, fid: str, timeout: float = 120) -> dict:
+        calls.append(timeout)
+        return {"rows": [], "facility_count": 1}
+
+    mp.setattr(rail, "facility", row)
+    assert rail.poll_recovered_facility("gl-down-1", budget_s=120)["facility_count"] == 1
+    assert calls == [pytest.approx(1.9)]
+
+
+def test_recovery_poll_never_gives_a_probe_more_than_a_sub_second_budget(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    clock = iter([0.0, 119.6, 120.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    calls: list[float] = []
+
+    def timed_out(db: str, fid: str, timeout: float = 120) -> dict:
+        calls.append(timeout)
+        raise rail.ProbeError("cypher on plasticos failed (rc 124)")
+
+    mp.setattr(rail, "facility", timed_out)
+    g = rail.poll_recovered_facility("gl-down-1", budget_s=120)
+    assert calls == [pytest.approx(0.4)]
+    assert g["facility_count"] is None

@@ -93,7 +93,7 @@ def redact(text: str) -> str:
 
 
 def sh(
-    cmd: list[str], *, timeout: int = 600, extra_env: dict | None = None
+    cmd: list[str], *, timeout: float = 600, extra_env: dict | None = None
 ) -> subprocess.CompletedProcess:
     """Run a command. A timeout returns rc 124 and a message that names no argument."""
     e = {**os.environ, **(extra_env or {})}
@@ -101,7 +101,7 @@ def sh(
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=e)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
-            cmd[:1], 124, "", f"{cmd[0]}: timed out after {timeout}s"
+            cmd[:1], 124, "", f"{cmd[0]}: timed out after {timeout:g}s"
         )
 
 
@@ -121,7 +121,7 @@ def drive(scenario: str, args: dict | None = None) -> dict:
         return {"driver_error": redact(r.stderr or r.stdout)[-600:]}
 
 
-def cypher(db: str, query: str, timeout: int = 120) -> list[list[str]]:
+def cypher(db: str, query: str, timeout: float = 120) -> list[list[str]]:
     """Rows of a Cypher query (header dropped). Raises ProbeError when the query does not complete."""
     pw = env()["GL_NEO4J_SECRET"]
     r = sh(
@@ -450,7 +450,7 @@ def ceg_refused(r: dict, error: str) -> bool:
     )
 
 
-def facility(db: str, fid: str, timeout: int = 120) -> dict:
+def facility(db: str, fid: str, timeout: float = 120) -> dict:
     """Facility read-back. valueType() is a Neo4j 5 built-in (no APOC). Raises ProbeError on query failure."""
     rows = cypher(
         db,
@@ -1022,7 +1022,9 @@ def poll_recovered_facility(entity_id: str, budget_s: float) -> dict:
     g: dict = {"facility_count": None, "within_s": budget_s}
     while (remaining := deadline - time.monotonic()) > 0:
         try:
-            got = facility("plasticos", entity_id, timeout=max(1, int(remaining)))
+            # The exact remaining budget, fractional: truncating it would time the probe out
+            # before the deadline, and a floor would let it run past one.
+            got = facility("plasticos", entity_id, timeout=remaining)
         except ProbeError:
             if time.monotonic() >= deadline:
                 break
