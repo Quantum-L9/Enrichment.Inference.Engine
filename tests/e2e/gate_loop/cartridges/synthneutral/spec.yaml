@@ -19,6 +19,9 @@ ontology:
     # Sync provenance (EIE_NATIVE_DOMAIN_SPEC.md): `band` and `handled_kinds` sync
     # in full mode (observed and enriched, labelled); every other field is legacy.
     - {name: band_provenance, type: enum, values: [observed, enriched]}
+    # Monotonic per-subject version CEG compares to refuse a stale write
+    # (graph_sync_intents.md rule 6); transport metadata, not a value field.
+    - {name: sync_version, type: int}
     - {name: postal_code, type: string}
     - {name: region, type: string}
     - name: handled_kinds

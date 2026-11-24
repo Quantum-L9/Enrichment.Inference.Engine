@@ -32,6 +32,9 @@ OBSERVED = "observed"
 ENRICHED = "enriched"
 ROW_PROVENANCE_SUFFIX = "_provenance"
 ITEM_PROVENANCE = "provenance"
+# Transport metadata (graph_sync_intents.md rule 6): set at send time from the
+# intent's version, never a value field of the converge.
+SYNC_VERSION = "sync_version"
 
 
 def provenance_property(name: str) -> str:
@@ -105,6 +108,8 @@ def select(
     """
     if not row_schema:
         return Selection(values=dict(admitted))
+    if SYNC_VERSION in row_schema:
+        admitted = {k: v for k, v in admitted.items() if k != SYNC_VERSION}
     from_graph = frozenset(graph_origin)
     conflicts = frozenset(conflicting)
     meta = provenance_properties(row_schema)
@@ -116,7 +121,7 @@ def select(
             continue
         values[name] = value  # legacy: byte-identical to the pre-ruling sync
     for name in row_schema:
-        if name in meta or name == id_property or not full_mode(name, row_schema):
+        if name in meta or name in (id_property, SYNC_VERSION) or not full_mode(name, row_schema):
             continue
         choice = _choose(name, admitted, observed, from_graph, conflicts, row_schema[name])
         if choice == _REJECTED:
