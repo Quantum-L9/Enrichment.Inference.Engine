@@ -1,11 +1,15 @@
-"""A late write of an uncertain send never lands after a newer version (#419 review).
+"""EIE's side of graph-sync ordering: the max-apply hold and the sync_version sent.
 
-Contract: docs/contracts/data/graph_sync_intents.md *Ordering* and G4. Scenario:
-version B is sent, its outcome is never learned (retries exhausted), and CEG
-applies it late. The newer version A of the same subject is held until B's
-max-apply window has passed, so B's late write lands first and A, sent after,
-is the last write: the graph converges to A. A's field is not echo-suppressed,
-because B -- sent, never acknowledged -- leaves it unsettled.
+Contract: docs/contracts/data/graph_sync_intents.md rules 5 and 6, and G4.
+Rule 5's max-apply window is a latency optimisation: it holds a newer version A
+while an older uncertain version B may still be applied, so in the bounded case
+exercised here -- B applied late but inside its window -- A is sent after B and
+the graph converges to A without a correction. It does not guarantee the final
+write: a B applied after its window could still land last. That guarantee is
+rule 6 alone -- the per-subject ``sync_version`` EIE sends (tested below: never
+lower after higher) and CEG's compare-and-set that refuses a stale version.
+A's field is not echo-suppressed, because B -- sent, never acknowledged --
+leaves it unsettled.
 
 Needs a PostgreSQL the test may own: ``EIE_TEST_DATABASE_URL``. Without it the
 module skips -- or fails under ``EIE_REQUIRE_INTEGRATION=1``.
