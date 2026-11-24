@@ -43,6 +43,11 @@ compose_env() {
   # P12 rig: GL_ROGUE_CEG=1 makes the graph worker sign its responses with the
   # well-formed but untrusted rogue-gl key.
   if [[ "${GL_ROGUE_CEG:-0}" == "1" ]]; then export GL_PRIV_CEG="$GL_PRIV_ROGUE" GL_CEG_KEY_ID=rogue-gl; fi
+  # MIX-ALG-01 rig: GL_MIXED_CEG=1 makes the graph worker sign hmac-sha256 (its own
+  # GL_HMAC_CEG secret, key id ceg-hm-gl) while Gate keeps signing ed25519.
+  if [[ "${GL_MIXED_CEG:-0}" == "1" ]]; then
+    export GL_CEG_ALG=hmac-sha256 GL_CEG_HMAC_KEY="$GL_HMAC_CEG" GL_CEG_KEY_ID=ceg-hm-gl
+  fi
   export GL_EIE_DOMAINS="$STATE/eie_domains" GL_CEG_PACKS="$GL_CEG_REPO/tests/fixtures/test_only_packs"
 }
 

@@ -256,3 +256,71 @@ def test_unverifiable_graph_restore_stops_later_cases(
     assert ran == []
     assert aborted is not None and "could not be verified" in aborted
     assert [(r.id, r.verdict) for r in results] == [("P12", "NOT_RUN"), ("T2", "NOT_RUN")]
+
+
+def test_mixed_alg_outcome_classifies_the_worker_side() -> None:
+    accepted = [
+        {
+            "event": "gate.failure",
+            "error_type": "GateDispatchSecurityError",
+            "error_message": "worker response failed transport validation: unknown key",
+        }
+    ]
+    refused = [
+        {
+            "event": "gate.failure",
+            "error_type": "WorkerHTTPError",
+            "error_message": "worker 'graph' execute returned HTTP 401",
+        }
+    ]
+    assert rail.mixed_alg_outcome(502, accepted) == "accepted"
+    assert rail.mixed_alg_outcome(502, refused) == "refused"
+    assert rail.mixed_alg_outcome(502, []) == "unproven"
+    assert rail.mixed_alg_outcome(200, accepted) == "unproven"
+
+
+@pytest.mark.parametrize(
+    ("error_type", "message", "expected"),
+    [
+        ("GateDispatchSecurityError", "worker response failed transport validation", "PASS"),
+        ("WorkerHTTPError", "worker 'graph' execute returned HTTP 403", "FAIL"),
+    ],
+)
+def test_mixed_alg_case_needs_the_window_and_restores_the_worker(
+    mp: pytest.MonkeyPatch, error_type: str, message: str, expected: str
+) -> None:
+    import subprocess
+
+    calls: list[dict] = []
+    mp.setattr(
+        rail,
+        "rail",
+        lambda *a, **k: calls.append(k) or subprocess.CompletedProcess(a, 0, stdout="", stderr=""),
+    )
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(rail, "stamp", lambda: "t0")
+    mp.setattr(rail, "drive", lambda *a, **k: {"http_status": 502, "request_packet_id": "pk"})
+    mp.setattr(
+        rail,
+        "gate_events_for",
+        lambda since, pid: [
+            {"event": "gate.failure", "error_type": error_type, "error_message": message}
+        ],
+    )
+    signing = iter(
+        [
+            {"l9e2e-gate": "ed25519", "l9e2e-eie": "ed25519", "l9e2e-ceg": "hmac-sha256"},
+            dict.fromkeys(("l9e2e-gate", "l9e2e-eie", "l9e2e-ceg"), "ed25519"),
+        ]
+    )
+    mp.setattr(rail, "running_signing", lambda: next(signing))
+    mp.setattr(
+        rail, "OBSERVED_PROFILE", dict.fromkeys(("l9e2e-gate", "l9e2e-eie", "l9e2e-ceg"), "ed25519")
+    )
+    mp.setattr(rail, "_restore_trusted_graph", lambda: ({"ready": True}, {}))
+
+    (res,) = rail.c_mixed_alg("ed25519")
+
+    assert calls[0]["extra_env"] == {"GL_MIXED_CEG": "1"}
+    assert res.id == "MIX-ALG-01"
+    assert res.verdict == expected

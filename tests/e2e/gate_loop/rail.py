@@ -1326,6 +1326,87 @@ def c_rogue_signer(p: str) -> list[Result]:
     ]
 
 
+def mixed_alg_outcome(http_status: object, events: list[dict]) -> str:
+    """Classify one Gate->worker call made while the worker signs hmac-sha256 and Gate ed25519.
+
+    accepted: the worker verified Gate's ed25519 dispatch and answered; Gate then refused the answer at
+    its own response check (Gate binds every verifying key to one algorithm, so an hmac worker answer
+    is outside its contract). refused: the worker rejected Gate's dispatch (HTTP 401/403), which is
+    the Gate_SDK 1.3.3 D-1 regression (every verifying key bound to the node's own algorithm).
+    """
+    if http_status != 502:
+        return "unproven"
+    for e in events:
+        if e.get("event") != "gate.failure":
+            continue
+        msg = str(e.get("error_message"))
+        if e.get("error_type") == "WorkerHTTPError" and re.search(r"returned HTTP 40[13]", msg):
+            return "refused"
+        if (
+            e.get("error_type") == "GateDispatchSecurityError"
+            and "worker response failed transport validation" in msg
+        ):
+            return "accepted"
+    return "unproven"
+
+
+def c_mixed_alg(p: str) -> list[Result]:
+    """MIX-ALG-01: a worker signing hmac-sha256 still verifies Gate's ed25519 dispatch."""
+    a = "an hmac-sha256 worker verifies Gate's ed25519 dispatch (per-key algorithm, not the node's)"
+    m: dict = {}
+    events: list[dict] = []
+    window: dict = {}
+    try:
+        setup = rail(
+            "compose",
+            "up",
+            "-d",
+            "--no-deps",
+            "--force-recreate",
+            "graph",
+            extra_env={"GL_MIXED_CEG": "1"},
+        )
+        if setup.returncode != 0:
+            raise ProbeError(f"hmac graph worker could not be created (rc {setup.returncode})")
+        time.sleep(25)
+        window = running_signing()
+        if window.get("l9e2e-ceg") != "hmac-sha256" or window.get("l9e2e-gate") != "ed25519":
+            raise ProbeError(f"mixed-algorithm window not established: {window}")
+        since = stamp()
+        m = drive("post_signed", MATCH_PROBE)
+        rpid = str(m.get("request_packet_id") or "")
+        events = gate_events_for(since, rpid) if rpid else []
+    finally:
+        rec, digests = _restore_trusted_graph()
+    outcome = mixed_alg_outcome(m.get("http_status"), events)
+    obs = {
+        "signing_in_window": window,
+        "call": m,
+        "gate_events_for_request": events,
+        "outcome": outcome,
+        "recovery": rec,
+        "sdk_code_digest": digests,
+    }
+    if outcome == "unproven":
+        return [not_run("MIX-ALG-01", "A7", p, a, "outcome not tied to this request", **obs)]
+    return [
+        Result(
+            "MIX-ALG-01",
+            "A7",
+            p,
+            a,
+            verdict(outcome == "accepted", p, signed_claim=True),
+            observed=obs,
+            reason=(
+                ""
+                if outcome == "accepted"
+                else "the hmac worker refused Gate's ed25519 dispatch (owner Gate_SDK: 1.3.3 binds every "
+                "verifying key to the node's own algorithm, D-1 regression)"
+            ),
+        )
+    ]
+
+
 def admin_register(body: dict, overwrite: bool = True) -> dict:
     tok = env()["GL_ADMIN_TOKEN"]
     r = sh(
@@ -1690,6 +1771,7 @@ CASES: dict[str, Callable[[str], list[Result]]] = {
     "ceg_down": c_ceg_down,
     "gate_restart": c_gate_restart,
     "rogue_signer": c_rogue_signer,
+    "mixed_alg": c_mixed_alg,
     "registration": c_registration,
     "gate_rail_policy": c_gate_rail_policy,
     "feedback": c_feedback,
@@ -1708,6 +1790,7 @@ CASE_IDS: dict[str, tuple[str, ...]] = {
     "ceg_down": ("P14",),
     "gate_restart": ("P09",),
     "rogue_signer": ("P12",),
+    "mixed_alg": ("MIX-ALG-01",),
     "registration": ("F-A1-05", "P11-owner-collision"),
     "gate_rail_policy": ("F-A1-11",),
     "feedback": ("P27", "P30", "P22"),
