@@ -300,7 +300,8 @@ async def _settled_graph_fields(
         if pg_store._engine is None:
             return {}
         return await pg_store.graph_sync_settled_fields(tenant, entity_id, endpoint)
-    except Exception as exc:  # noqa: BLE001 - no history means resend, never drop
+    # No history means resend, never drop: any failure suppresses nothing.
+    except Exception as exc:  # noqa: BLE001
         logger.warning("handlers.graph_echo_guard_unavailable", error=str(exc))
         return {}
 
