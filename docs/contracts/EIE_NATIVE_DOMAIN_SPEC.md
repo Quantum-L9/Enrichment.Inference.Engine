@@ -69,10 +69,18 @@ defined here once and keyed only on declarations:
   item `provenance` need no provenance of their own (there is no
   `F_provenance_provenance`). Each is sent as an ordinary declared row or item
   property alongside the value it labels, and only with it.
-- A value field whose provenance property is not declared is never synced. CEG
-  declares the same properties with the identical shape, so the compatibility
-  contract compares them like any other row property, and CEG applies the
-  over-time precedence (G3) by reading them.
+- Whether a value field's provenance property is declared selects its sync
+  mode (CEG packs are published independently of EIE releases):
+
+  | Mode | Provenance property | Syncs |
+  |---|---|---|
+  | Legacy | not declared | admitted (enriched) values only, exactly as before, unlabelled (unlabelled means enriched) |
+  | Full | declared | observed and enriched values, each labelled |
+
+  An observed value never syncs to a field whose provenance property is not
+  declared. CEG declares the same properties with the identical shape, so the
+  compatibility contract compares them like any other row property, and CEG
+  applies the over-time precedence (G3) by reading them.
 
 ## Published filesystem layout
 

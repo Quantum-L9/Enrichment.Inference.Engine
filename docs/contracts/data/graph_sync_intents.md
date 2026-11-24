@@ -38,7 +38,7 @@ leaves none.
 | `contract_digest` | VARCHAR(64) NULL | SHA-256 of the endpoint contract (entity type, id property, target node, typed row schema) the fields were admitted against. NULL when no contract resolved at commit; such a row is refused at dispatch (`refused:unpinned`), never sent. |
 | `cartridge_revision` | VARCHAR(128) NULL | Reserved for the effective spec revision; not populated by A2. |
 | `origin` | VARCHAR(32) | Workflow the obligation belongs to: `enrich` or `converge`. Recovery holds `converge` rows while `CONVERGE_GRAPH_SYNC_ENABLED` is off. |
-| `fields` | JSONB | Exactly the typed fields the leg sends, each with its declared provenance property (see *Field set and provenance*); a `list<map>` stays a list of maps. |
+| `fields` | JSONB | Exactly the typed fields the leg sends (see *Field set and provenance*): in full mode each with its provenance property, in legacy mode the admitted values unlabelled; a `list<map>` stays a list of maps. |
 | `enrichment_result_id` | UUID NULL | The `enrichment_results` row this obligation follows. |
 | `state` | VARCHAR(32) | See *States*. |
 | `attempts` / `max_attempts` | INTEGER | Claims so far; the ceiling (default 8). |
@@ -127,12 +127,24 @@ only. Response admission is unchanged: an observed value is still never
 admitted into a response's `fields` (`docs/contracts/converge/response.v2.md`
 §3). This section governs only what the graph leg sends.
 
-The field set of one converge is built per declared row field `F`, in this
-order:
+Each declared row field `F` syncs in one of two modes, decided by whether the
+endpoint declares `F`'s provenance property (`F_provenance`, or the item
+`provenance` of a childsync `list<map>`). CEG packs are published by
+operators independently of EIE releases, so an endpoint that has not declared
+provenance keeps today's behaviour exactly:
+
+| Mode | When | What syncs for `F` |
+|---|---|---|
+| **Legacy** | `F`'s provenance property is not declared | Only the admitted (enriched) value, exactly as before this ruling (`handlers.admitted_fields`), with no provenance property. Unlabelled means enriched by contract. G2–G4 do not apply; G5 holds as before. |
+| **Full** | `F`'s provenance property is declared | The observed or the enriched value, each with its provenance property, under G1–G6 below. |
+
+An observed value **never** syncs to a field whose provenance property is not
+declared. The guardrails of full mode are applied per declared row field `F`,
+in this order:
 
 | Guardrail | Rule |
 |---|---|
-| **G1 Provenance** | Every field sent carries its provenance, `observed` or `enriched`, as a **declared spec property**, by the convention of `docs/contracts/EIE_NATIVE_DOMAIN_SPEC.md` *Sync provenance*: a row field `F` is accompanied by its companion property `F_provenance`; every item of a childsync `list<map>` carries the item property `provenance`. A field whose provenance property the endpoint does not declare is not sent. An observed value is never labelled `enriched`. |
+| **G1 Provenance** | Every field sent in full mode carries its provenance, `observed` or `enriched`, as a **declared spec property**, by the convention of `docs/contracts/EIE_NATIVE_DOMAIN_SPEC.md` *Sync provenance*: a row field `F` is accompanied by its companion property `F_provenance`; every item of a childsync `list<map>` carries the item property `provenance`. An observed value is never labelled `enriched`, and never sent unlabelled. |
 | **G2 Precedence within one converge** | An admitted value (`inferred` or `external_claim`, `admitted: true`) is sent as `enriched` and wins over an observed value of the same field. Otherwise the consumer's observed value for `F` (the request entity, or a v2 observation) is sent as `observed`. A conflicting set of observations sends nothing for `F`. |
 | **G3 Precedence over time** | Enforced by CEG, not EIE: in the graph a later `observed` value replaces an `enriched` one, and an `enriched` value never overwrites an `observed` one. An enriched value CEG displaces is not lost: it remains EIE evidence (`enrichment_results`, `field_evidence`). |
 | **G4 Echo guard** | `F` is not sent when its value and provenance equal those the graph will hold for it once the subject's outstanding intents settle: the value of the subject's (tenant, entity, endpoint) most recent intent, by `seq`, that is `pending`, `dispatching` or `acknowledged` and carries `F`. An outstanding intent with a different value or provenance never suppresses a later one, so a later value is never lost behind a pending update. A value that originated from a CEG `graph-inference-result` (evidence source type `graph`) is never sent. A field set left empty sends no row and records no intent. |
