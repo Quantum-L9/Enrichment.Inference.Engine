@@ -118,15 +118,38 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
    converge selected, unsuppressed for any field an uncertain version carried
    (G4), so the correction is the field's full current value, not a delta.
    Version order and the window govern which row EIE sends and when; they rely
-   on the declared window bounding CEG's application of a request. They hold
-   for every subject, whether or not any field declares provenance.
-6. **Bounded retries.** Retryable outcomes back off 2 s doubling to 300 s; at
+   on the declared window bounding CEG's application of a request, which EIE
+   cannot verify. Rule 5 is therefore a latency optimisation where rule 6
+   applies, and the sole ordering mechanism for an endpoint that does not
+   declare `sync_version`. It holds for every subject, whether or not any field
+   declares provenance.
+6. **Monotonic version.** An endpoint that declares the row property
+   `sync_version` (`integer`) receives on every row the intent's `seq`: a
+   per-subject strictly increasing integer, since a subject's versions are
+   ordered by `seq` (rule 5). Every request of one version -- a transport retry,
+   a re-claim, a replay -- carries the same number, and it is part of the row
+   the idempotency key binds (rule 2). EIE never sends a lower `sync_version`
+   for a subject after a higher one was sent: an older row is never claimed once
+   a newer one was sent (rule 5). CEG applies a row only when its `sync_version`
+   is greater than or equal to the one it stores for the subject: equal is an
+   idempotent replay and changes no value; lower is stale -- refused, logged,
+   and acknowledged as stale, which is neither an error nor retryable: EIE
+   settles a stale acknowledgment of its row `acknowledged`. **Rule 6
+   alone guarantees that the last applied write of a subject is its newest
+   version, whatever the timing**; rule 5 only keeps a newer version from
+   being overwritten and then corrected later. `sync_version` is transport
+   metadata: never a value field, never selected, shaped, echo-guarded or
+   pinned in `fields`, and a value a converge produced under that name is
+   replaced. A process with no durable store (rule 8) has no `seq` and sends no
+   `sync_version`. An endpoint that does not declare it keeps today's behaviour:
+   rule 5 only (legacy).
+7. **Bounded retries.** Retryable outcomes back off 2 s doubling to 300 s; at
    `max_attempts` the row is `failed_terminal` with `retry_exhausted:*`.
-7. **Ownership before sending.** A store that cannot confirm a claim sends
+8. **Ownership before sending.** A store that cannot confirm a claim sends
    nothing for the key; recovery sends it. Only a process with no durable store
    configured sends unclaimed. A CEG answer the row did not record (lease lost,
    store error) leaves the key pending.
-8. **Verified replay.** An idempotent replay attaches its intent to the stored
+9. **Verified replay.** An idempotent replay attaches its intent to the stored
    result only when it carries the same entity and committed fields and every
    graph field it pins equals the stored result's value for that field (a
    shaped or absent graph field cannot be verified). A replay of an operation
@@ -134,7 +157,7 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
    carrying anything else raises `GraphIntentReplayMismatchError`: it is a
    failed persistence for that call (refused when durability is required),
    never a duplicate and never `completed`.
-9. **Recovery.** `SideEffectCoordinator.recover_graph_intents` claims due rows
+10. **Recovery.** `SideEffectCoordinator.recover_graph_intents` claims due rows
    and replays them; startup registration runs it every 30 s in-process, so a
    restarted idle node recovers without traffic.
 
@@ -173,7 +196,7 @@ in this order:
 | **G5 No clears** | A `null` or missing observed value is never sent, so it never deletes a graph property; the same holds for admitted values. |
 | **G6 Domain-agnostic** | The field set is keyed only on the endpoint's declared row properties and its `childsync` entries. No field name, node label or cartridge is known to the code that builds it. |
 
-Rule 8 (*Verified replay*) is unchanged: a replay is verified against the
+Rule 9 (*Verified replay*) is unchanged: a replay is verified against the
 stored result's committed `fields`. The stored result holds admitted values
 only, so a pinned observed field or provenance property is absent from it and
 cannot be verified: such a replay is a `GraphIntentReplayMismatchError` and

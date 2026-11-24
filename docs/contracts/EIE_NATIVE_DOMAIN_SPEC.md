@@ -93,6 +93,12 @@ defined here once and keyed only on declarations:
   `tests/fixtures/ceg/plasticos.spec.yaml`) must be moved to a revision that
   declares them before the implementation merges. CEG applies the over-time
   precedence (G3) by reading them, once they are declared.
+- **`sync_version`** (`integer`, declared on the target node) is the
+  per-subject monotonic version of
+  `docs/contracts/data/graph_sync_intents.md` rule 6, which CEG compares to
+  refuse a stale write. It is transport metadata, not a value field, and is
+  independent of provenance: an endpoint may declare either, both or neither.
+  Undeclared means rule 5 ordering only (legacy).
 
 ## Published filesystem layout
 
