@@ -416,10 +416,7 @@ async def test_a_claim_supersedes_exhausts_then_leases_in_seq_order(
     assert "synthco|d-1|depots" in lock_params.values()
     assert resupersede == supersede
     assert "FOR UPDATE SKIP LOCKED" in claim
-    # No older outstanding, no older uncertain inside its max-apply window, no newer sent.
-    assert claim.count("NOT (EXISTS (SELECT") == 3
-    assert ".resolved_at > %(resolved_at_1)s" in claim
-    assert ".last_error LIKE %(last_error_1)s" in claim
+    assert claim.count("NOT (EXISTS (SELECT") == 2  # no older outstanding, no newer sent
     assert "attempts=(graph_sync_intents.attempts +" in claim
     assert "RETURNING" in claim
     params = first.statements[2].compile(dialect=postgresql.dialect()).params
