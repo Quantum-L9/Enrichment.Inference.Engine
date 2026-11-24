@@ -283,6 +283,15 @@ async def converge_graph_fields(
         row_schema=row_schema,
         id_property=contract.id_property if contract is not None else None,
     )
+    if selection.rejected:
+        logger.warning(
+            "converge_graph_sync_observation_rejected",
+            tenant=tenant,
+            entity_id=entity_id,
+            fields=list(selection.rejected),
+            fix="the request entity's value does not match the endpoint's declared type; "
+            "it is not synced, the other fields are",
+        )
     fields = sync_field_set.label(shape(domain, selection.values), selection.provenance, row_schema)
     if selection.provenance and entity_id and contract is not None:
         settled = await _settled_graph_fields(tenant, entity_id, contract.entity_type)

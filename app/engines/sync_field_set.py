@@ -26,6 +26,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.engines.spec_types import value_defects
+
 OBSERVED = "observed"
 ENRICHED = "enriched"
 ROW_PROVENANCE_SUFFIX = "_provenance"
@@ -82,6 +84,8 @@ class Selection:
 
     values: dict[str, Any]
     provenance: dict[str, str] = field(default_factory=dict)
+    rejected: tuple[str, ...] = ()
+    """Full-mode fields whose observed value did not match its declaration: not sent."""
 
 
 def select(
@@ -106,6 +110,7 @@ def select(
     meta = provenance_properties(row_schema)
     values: dict[str, Any] = {}
     provenance: dict[str, str] = {}
+    rejected: list[str] = []
     for name, value in admitted.items():
         if name in meta or full_mode(name, row_schema):
             continue
@@ -116,8 +121,14 @@ def select(
         if name in admitted and name not in from_graph and admitted[name] is not None:
             values[name], provenance[name] = admitted[name], ENRICHED
         elif name not in conflicts and observed.get(name) is not None:
+            # A consumer observation is untyped input: one that does not match
+            # its declaration is dropped here, so it can never make the row
+            # projection refuse the other fields of the same row.
+            if value_defects(observed[name], row_schema[name], name):
+                rejected.append(name)
+                continue
             values[name], provenance[name] = observed[name], OBSERVED
-    return Selection(values=values, provenance=provenance)
+    return Selection(values=values, provenance=provenance, rejected=tuple(rejected))
 
 
 def _labelled_item(item: Any, provenance: str) -> Any:
