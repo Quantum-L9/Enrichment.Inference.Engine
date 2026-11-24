@@ -376,12 +376,66 @@ def not_run(rid: str, slc: str, p: str, assertion: str, why: str, **obs: object)
     return Result(rid, slc, p, assertion, "NOT_RUN", reason=why, observed=dict(obs))
 
 
+# The child list of each tenant's candidate node, and the edge properties that carry its identity.
+CHILD_FIELD = {"plasticos": "processed_polymers", "synthneutral": "handled_kinds"}
+CHILD_KEYS = {
+    "plasticos": ("code", "line_id", "direction", "form"),
+    "synthneutral": ("code", "slot_id", "direction"),
+}
+# The schema type naming a list of maps (EIE-W's generic enriched path for child lists).
+ENRICHED_CHILD_TYPE = "list<map>"
+
+
+def child_edges(tenant: str, entity_id: str) -> list[dict]:
+    """The typed child edges CEG stored for one candidate node, with the node's tenant."""
+    if tenant == "plasticos":
+        q = (
+            f"MATCH (n:Facility {{facility_id:'{entity_id}'}})-[r:PROCESSES]->(c:PolymerFamily) "
+            "RETURN n._tenant, c.code, r.line_id, r.direction, r.form"
+        )
+    else:
+        q = (
+            f"MATCH (n:Station {{station_id:'{entity_id}'}})-[r:HANDLES]->(c:Kind) "
+            "RETURN n._tenant, c.code, r.slot_id, r.direction"
+        )
+    keys = ("tenant", *CHILD_KEYS[tenant])
+    return [
+        {k: (None if v == "NULL" else v.strip('"')) for k, v in zip(keys, row, strict=False)}
+        for row in cypher(tenant, q)
+    ]
+
+
+def enriched_children_on_graph(
+    tenant: str, enriched: object, edges: list[dict]
+) -> tuple[bool, list[str]]:
+    """Every child the provider supplied is a typed edge with its identity, under the same tenant.
+
+    Returns the verdict and the defects found, so a FAIL names what was missing.
+    """
+    keys = CHILD_KEYS[tenant]
+    defects: list[str] = []
+    if not isinstance(enriched, list) or not enriched:
+        return False, [f"converge answer has no enriched {CHILD_FIELD[tenant]} list"]
+    for item in enriched:
+        if not isinstance(item, dict):
+            defects.append(f"enriched {CHILD_FIELD[tenant]} entry is not a map: {item!r:.80}")
+            continue
+        want = {k: (None if item.get(k) is None else str(item.get(k))) for k in keys}
+        if not any(all(e.get(k) == want[k] for k in keys) for e in edges):
+            defects.append(f"no typed edge for {want}")
+    wrong_tenant = sorted({str(e.get("tenant")) for e in edges if e.get("tenant") != tenant})
+    if wrong_tenant:
+        defects.append(f"edges under another tenant: {wrong_tenant}")
+    return not defects, defects
+
+
 def converge_payload(
     entity_id: str,
     tenant: str = "plasticos",
     idem: str | None = None,
     extra: dict | None = None,
     schema: dict | None = None,
+    enrich_children: bool = False,
 ) -> dict:
     ent: dict = {
         "id": entity_id,
@@ -401,12 +455,20 @@ def converge_payload(
             "handled_kinds": [{"code": "K1", "slot_id": f"{entity_id}-s1", "direction": "in"}],
         }
     ent.update(extra or {})
+    child = CHILD_FIELD[tenant]
+    if enrich_children:
+        # The enriched path (operator ruling 2026-11-24): the request omits the child list and the
+        # schema names it, so the provider supplies it and EIE's sync row carries it.
+        ent.pop(child, None)
     key = idem or f"gl:converge:{tenant}:{entity_id}:{uuid.uuid4().hex[:8]}"
     default_schema = (
         {"name": "string", "capacity_tons_month": "float", "tier": "string"}
         if tenant == "plasticos"
         else {"band": "string"}
     )
+    req_schema = dict(schema or default_schema)
+    if enrich_children:
+        req_schema[child] = ENRICHED_CHILD_TYPE
     return {
         "action": "converge",
         "tenant": tenant,
@@ -420,7 +482,7 @@ def converge_payload(
             "node_label": "Facility" if tenant == "plasticos" else "Station",
             "objective": "TEST_ONLY gate_loop",
             "kb_context": tenant,
-            "schema": schema or default_schema,
+            "schema": req_schema,
             "max_variations": 2,
             "consensus_threshold": 0.8,
             "idempotency_key": key,
@@ -691,11 +753,6 @@ def c_negatives(p: str) -> list[Result]:
     return [r11, r13]
 
 
-TYPED_SYNC_BLOCKED = (
-    "BLOCKED pending an operator contract decision (the sync row carries only admitted fields, "
-    "by design since #351)"
-)
-
 # Gate's packet log context (observability/logging.py:37-47) carries no entity field, so the rail
 # cannot bind a Gate sync event to one entity. It binds each case by EIE's own graph-leg record
 # for the run's unique entity id plus the CEG row, and by request_id between Gate's ingress and
@@ -714,15 +771,21 @@ EGRESS_SIGNING_UNCORRELATED = (
 )
 
 
-def typed_sync_blocked(
-    *, stored: bool, sync_via_gate: bool, typed_edges: bool, other_requirements_met: bool
-) -> bool:
-    """True only when the missing typed edge is the sole failure of a typed-sync case.
-
-    BLOCKED pending the operator contract applies when the row reached CEG through Gate and
-    every other requirement of the case holds. Any other failure stays FAIL (rule 95).
-    """
-    return stored and sync_via_gate and other_requirements_met and not typed_edges
+def typed_child_reason(
+    ok: bool, stored: bool, sync_via_gate: bool, not_stringified: bool, edge_defects: list[str]
+) -> str:
+    """The P18/P05 reason: what failed, always followed by the Gate entity-binding limit."""
+    if ok:
+        return GATE_BINDING_LIMIT
+    parts = []
+    if not stored:
+        parts.append("no row reached CEG")
+    if not sync_via_gate:
+        parts.append("sync not observed through Gate")
+    if not not_stringified:
+        parts.append("the child list is stored as a node property (stringified map)")
+    parts.extend(edge_defects)
+    return "; ".join([*parts, GATE_BINDING_LIMIT])
 
 
 def graph_return_targets(entity_id: str) -> list[dict]:
@@ -772,7 +835,7 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
     """P07 / P18 / P05: consumer converge -> EIE durable -> EIE's own egress sync via Gate -> CEG -> Neo4j."""
     eid = f"gl-{tenant[:4]}-{uuid.uuid4().hex[:6]}"
     since = stamp()
-    r = drive("execute", converge_payload(eid, tenant))
+    r = drive("execute", converge_payload(eid, tenant, enrich_children=True))
     time.sleep(8)
     ids = ("P07", "P18") if tenant == "plasticos" else ("P05",)
     try:
@@ -780,8 +843,6 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         if tenant == "plasticos":
             g = facility(tenant, eid)
             stored = g["facility_count"] == 1
-            edge = [row for row in g["rows"] if len(row) > 7 and row[3] == '"HDPE"']
-            typed_edges = any(row[5] == '"in"' and row[6] == '"Regrind"' for row in edge)
             not_stringified = bool(g["rows"]) and all(
                 row[7] in ("NULL", '"NULL"') for row in g["rows"]
             )
@@ -789,12 +850,14 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
             rows = cypher(
                 tenant,
                 f"MATCH (s:Station {{station_id:'{eid}'}}) "
-                "OPTIONAL MATCH (s)-[h:HANDLES]->(k:Kind) RETURN s.station_id, k.code, h.slot_id",
+                "RETURN s.station_id, valueType(s.handled_kinds)",
             )
             g = {"rows": rows}
             stored = any(row and row[0] == f'"{eid}"' for row in rows)
-            typed_edges = any(len(row) > 1 and row[1] == '"K1"' for row in rows)
-            not_stringified = True
+            not_stringified = bool(rows) and all(
+                row[1] in ("NULL", '"NULL"') for row in rows if len(row) > 1
+            )
+        edges = child_edges(tenant, eid)
     except ProbeError as exc:
         return [
             not_run(i, "A8", p, "converge -> sync read-back", str(exc), entity_id=eid) for i in ids
@@ -846,6 +909,8 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         "signature required but not present" in ln for ln in eie_all
     )
     state = (r.get("payload") or {}).get("state")
+    enriched = ((r.get("payload") or {}).get("fields") or {}).get(CHILD_FIELD[tenant])
+    typed_edges, edge_defects = enriched_children_on_graph(tenant, enriched, edges)
     obs = {
         "entity_id": eid,
         "converge": {k: r.get(k) for k in ("ok", "elapsed_s", "error", "gate_signature_valid")},
@@ -853,6 +918,8 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         "state": state,
         "eie_persisted_rows": persisted,
         "graph": g,
+        "enriched_children": enriched,
+        "child_edges": edges,
         "gate_sync_events": sync_events,
         "eie_graph_leg_synced": leg_synced,
         "eie_log": eie_log,
@@ -876,50 +943,37 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
                 ),
             )
         )
+        ok18 = stored and sync_via_gate and typed_edges and not_stringified
         out.append(
             Result(
                 "P18",
                 "A8",
                 p,
-                "typed processed_polymers -> PROCESSES edge with direction in and form "
-                "Regrind; Facility carries no processed_polymers property (no JSON-string map)",
-                verdict(stored and typed_edges and not_stringified, p, signed_claim=False),
+                "enriched processed_polymers (requested by schema, supplied by the provider) reach "
+                "CEG through Gate as typed PROCESSES edges with line identity, direction and form, "
+                "under the same tenant; Facility carries no processed_polymers property",
+                verdict(ok18, p, signed_claim=False),
                 observed=obs,
-                reason="" if stored else "no row reached CEG",
+                reason=typed_child_reason(
+                    ok18, stored, sync_via_gate, not_stringified, edge_defects
+                ),
             )
         )
     else:
-        ok05 = state == "completed" and stored and typed_edges and sync_via_gate
+        ok05 = state == "completed" and stored and sync_via_gate and typed_edges and not_stringified
         out.append(
             Result(
                 "P05",
                 "A8",
                 p,
-                "synthetic neutral tenant converges and syncs typed child edges via Gate, "
-                "with no PlasticOS literal",
+                "synthetic neutral tenant converges and syncs enriched handled_kinds via Gate as "
+                "typed HANDLES edges with slot identity and direction, with no PlasticOS literal",
                 verdict(ok05, p, signed_claim=False),
                 observed=obs,
-                reason=GATE_BINDING_LIMIT
-                if stored
-                else f"no row reached CEG; {GATE_BINDING_LIMIT}",
+                reason=(f"converge state {state!r}; " if state != "completed" else "")
+                + typed_child_reason(ok05, stored, sync_via_gate, not_stringified, edge_defects),
             )
         )
-    # The node arrived through Gate but no typed child edge did: EIE's sync row carries only the
-    # admitted (enriched) fields by design since #351, which leaves the edge contract to an operator.
-    typed_ids = ("P18",) if tenant == "plasticos" else ("P05",)
-    other_ok = not_stringified if tenant == "plasticos" else state == "completed"
-    if typed_sync_blocked(
-        stored=stored,
-        sync_via_gate=sync_via_gate,
-        typed_edges=typed_edges,
-        other_requirements_met=other_ok,
-    ):
-        for res in out:
-            if res.id in typed_ids:
-                res.verdict = "BLOCKED"
-                # The operator-contract wording first, then the limit of the Gate evidence that
-                # sync_via_gate rests on, which this reason must not drop.
-                res.reason = f"{TYPED_SYNC_BLOCKED}; {GATE_BINDING_LIMIT}"
     if not stored and egress_signing_error_seen:
         for res in out:
             res.reason = f"{res.reason}; {EGRESS_SIGNING_UNCORRELATED}"
