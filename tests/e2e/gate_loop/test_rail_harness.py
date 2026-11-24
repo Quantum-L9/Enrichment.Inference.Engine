@@ -540,7 +540,10 @@ def test_enriched_request_omits_the_child_list_and_names_it_in_the_schema() -> N
         body = rail.converge_payload("e1", tenant, enrich_children=True)["payload"]
         child = rail.CHILD_FIELD[tenant]
         assert child not in body["entity"]
-        assert body["schema"][child] == rail.ENRICHED_CHILD_TYPE
+        decl = body["schema"][child]
+        assert decl["type"] == "list" and decl["items"]["type"] == "map"
+        names = {p["name"] for p in decl["items"]["properties"]}
+        assert set(rail.CHILD_KEYS[tenant]) <= names
         plain = rail.converge_payload("e1", tenant)["payload"]
         assert child in plain["entity"] and child not in plain["schema"]
 

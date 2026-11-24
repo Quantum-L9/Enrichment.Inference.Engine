@@ -382,8 +382,33 @@ CHILD_KEYS = {
     "plasticos": ("code", "line_id", "direction", "form"),
     "synthneutral": ("code", "slot_id", "direction"),
 }
-# The schema type naming a list of maps (EIE-W's generic enriched path for child lists).
-ENRICHED_CHILD_TYPE = "list<map>"
+# The specs EIE loads in the rail (scripts/rail.sh copies exactly these into its domains dir).
+EIE_SPECS = {
+    "plasticos": EIE_ROOT / "domains" / "plasticos" / "spec.yaml",
+    "synthneutral": HERE / "cartridges" / "synthneutral" / "spec.yaml",
+}
+CANDIDATE_NODE = {"plasticos": "Facility", "synthneutral": "Station"}
+
+
+def child_declaration(tenant: str) -> dict:
+    """The child list's own declaration from the spec EIE loads: {"type": "list", "items": {...}}.
+
+    The enriched request names the field with this declaration (the shape #418's deterministic
+    provider synthesizes by), read from the spec rather than restated, so the two cannot drift.
+    """
+    import yaml  # the repo's own dependency; only the enriched request needs it
+
+    spec = yaml.safe_load(EIE_SPECS[tenant].read_text())
+    for node in spec["ontology"]["nodes"]:
+        if node.get("label") != CANDIDATE_NODE[tenant]:
+            continue
+        for prop in node.get("properties", []):
+            if prop.get("name") == CHILD_FIELD[tenant]:
+                return {k: prop[k] for k in ("type", "items") if k in prop}
+    msg = (
+        f"{CHILD_FIELD[tenant]} is not declared on {CANDIDATE_NODE[tenant]} in {EIE_SPECS[tenant]}"
+    )
+    raise ProbeError(msg)
 
 
 def child_edges(tenant: str, entity_id: str) -> list[dict]:
@@ -468,7 +493,7 @@ def converge_payload(
     )
     req_schema = dict(schema or default_schema)
     if enrich_children:
-        req_schema[child] = ENRICHED_CHILD_TYPE
+        req_schema[child] = child_declaration(tenant)
     return {
         "action": "converge",
         "tenant": tenant,
