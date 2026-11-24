@@ -1,0 +1,117 @@
+{
+ "id": "P05",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "synthetic neutral tenant converges and syncs enriched handled_kinds via Gate as typed HANDLES edges with slot identity and direction, with no PlasticOS literal",
+ "verdict": "PASS",
+ "reason": "Gate's sync events carry no entity field (observability/logging.py:37-47); per-entity binding is EIE's graph-leg record plus the CEG row, not Gate's events",
+ "observed": {
+  "entity_id": "gl-synt-3831a5",
+  "converge": {
+   "ok": true,
+   "elapsed_s": 0.111,
+   "error": null,
+   "gate_signature_valid": true
+  },
+  "response": {
+   "packet_id": "901f39e8-2d12-4e66-bac8-4ef5ac0e96a2",
+   "packet_type": "response",
+   "action": "converge",
+   "source_node": "enrichment-engine",
+   "destination_node": "gate",
+   "reply_to": "enrichment-engine",
+   "tenant": "synthneutral",
+   "root_id": "12f26394-0d64-49e7-aea0-c4ac35c52204",
+   "parent_id": "2da0ec95-f6f9-46a4-947f-c7669918e877",
+   "generation": 2,
+   "causation_id": "2da0ec95-f6f9-46a4-947f-c7669918e877",
+   "idempotency_key": "gl:converge:synthneutral:gl-synt-3831a5:d682e0e1",
+   "signing_key_id": "gate-gl",
+   "signature_algorithm": "ed25519",
+   "hop_trace": [
+    {
+     "node": "enrichment-engine",
+     "direction": "response",
+     "status": "completed",
+     "target_node": null,
+     "signed": false
+    }
+   ],
+   "provenance": {
+    "origin_kind": "gate",
+    "requested_action": "converge",
+    "resolved_by_gate": true,
+    "route_kind": "external_ingress",
+    "original_source_node": "odoo"
+   }
+  },
+  "state": "completed",
+  "eie_persisted_rows": [
+   "1"
+  ],
+  "graph": {
+   "rows": [
+    [
+     "\"gl-synt-3831a5\"",
+     "\"NULL\""
+    ]
+   ]
+  },
+  "enriched_children": [
+   {
+    "code": "det:handled_kinds[0].code:830358119b41",
+    "slot_id": "det:handled_kinds[0].slot_id:816eccdcb63d",
+    "direction": "det:handled_kinds[0].direction:898f3b6c5b58",
+    "provenance": "observed"
+   }
+  ],
+  "child_edges": [
+   {
+    "tenant": "synthneutral",
+    "code": "det:handled_kinds[0].code:830358119b41",
+    "slot_id": "det:handled_kinds[0].slot_id:816eccdcb63d",
+    "direction": "det:handled_kinds[0].direction:898f3b6c5b58"
+   }
+  ],
+  "gate_sync_events": [
+   {
+    "event": "gate.ingress",
+    "action": "sync",
+    "source_node": "enrichment-engine",
+    "origin_kind": "node",
+    "generation": 0,
+    "hop_count": 0,
+    "request_id": "e42eb0efbfa04028a87ca40879041189",
+    "root_id": "4b11d3af-9139-48df-bb68-f87846e454ae",
+    "packet_id": "4b11d3af-9139-48df-bb68-f87846e454ae",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.completed",
+    "action": "sync",
+    "source_node": "graph",
+    "origin_kind": "gate",
+    "generation": 2,
+    "hop_count": 1,
+    "request_id": "e42eb0efbfa04028a87ca40879041189",
+    "root_id": "4b11d3af-9139-48df-bb68-f87846e454ae",
+    "packet_id": "7c10feed-9778-4f99-9955-2b0fc548d065",
+    "error_type": null,
+    "error_message": null
+   }
+  ],
+  "eie_graph_leg_synced": true,
+  "eie_log": [
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.133908Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.134029Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-3831a5:d682e0e1:enrich\", \"entity_id\": \"gl-synt-3831a5\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.144839Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-3831a5:d682e0e1:enrich\", \"entity_id\": \"gl-synt-3831a5\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.144945Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-3831a5:d682e0e1:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.145144Z\"}",
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.170925Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.170997Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-3831a5:d682e0e1:enrich\", \"entity_id\": \"gl-synt-3831a5\", \"synced\": true, \"terminal\": false, \"event\": \"side_effects_graph_leg_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.544229Z\"}"
+  ]
+ },
+ "timestamp": "2026-11-24T19:16:51.876437+00:00"
+}
