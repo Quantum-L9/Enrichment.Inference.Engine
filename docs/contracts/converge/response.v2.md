@@ -109,7 +109,11 @@ Rules that hold for every response:
    produced (enriched, inferred or graph-seeded;
    `app/engines/convergence_controller.py::_assemble_convergence_response`),
    and v2 keeps that. Echoing a request value into `fields` would present the
-   consumer's own input back to it as a new result.
+   consumer's own input back to it as a new result. Admission governs this
+   response only: since the operator ruling of 2026-11-24 the converge graph
+   leg also syncs observed values, each labelled `observed` and never
+   `enriched` (`docs/contracts/data/graph_sync_intents.md` *Field set and
+   provenance*). Nothing in this response changes because of it.
 5. **One state per entry.** When a source asserts a value for a field the
    request also supplied, the entry reports the produced value (`inferred` or
    `external_claim`) and may list the request among its `sources`; a
