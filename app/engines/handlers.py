@@ -204,6 +204,107 @@ def admitted_fields(result: Mapping[str, Any]) -> dict[str, Any]:
     return fields
 
 
+def observed_values(
+    request_entity: Mapping[str, Any] | None, result: Mapping[str, Any]
+) -> tuple[dict[str, Any], frozenset[str]]:
+    """The consumer's observed values and the fields whose observations conflict.
+
+    The request entity's non-null values, overridden by a v2 response's
+    ``observed`` evidence (request entity or observation). A field whose v2
+    evidence is ``conflicting`` is returned in the second element: no observed
+    value is sent for it (G2).
+    """
+    observed = {name: value for name, value in (request_entity or {}).items() if value is not None}
+    conflicting: set[str] = set()
+    evidence = result.get("field_evidence")
+    if isinstance(evidence, Mapping):
+        for name, entry in evidence.items():
+            if not isinstance(entry, Mapping):
+                continue
+            if entry.get("state") == "observed" and entry.get("value") is not None:
+                observed[name] = entry["value"]
+            elif entry.get("state") == "conflicting":
+                conflicting.add(name)
+                observed.pop(name, None)
+    return observed, frozenset(conflicting)
+
+
+def graph_origin_fields(result: Mapping[str, Any]) -> frozenset[str]:
+    """Fields whose final value was last written by a graph-inference-result seed.
+
+    Read from the per-pass ``inferences`` in pass order: a later enriched or
+    inferred write supersedes an earlier graph seed of the same field (G4).
+    """
+    last: dict[str, str] = {}
+    for entry in result.get("inferences") or []:
+        if not isinstance(entry, Mapping):
+            continue
+        for name in entry.get("graph_seeded") or []:
+            last[str(name)] = "graph"
+        for key in ("enriched", "inferred"):
+            for name in entry.get(key) or []:
+                last[str(name)] = "run"
+    return frozenset(name for name, source in last.items() if source == "graph")
+
+
+async def converge_graph_fields(
+    *,
+    tenant: str,
+    entity_id: str | None,
+    domain: str,
+    result: Mapping[str, Any],
+    request_entity: Mapping[str, Any] | None,
+    domain_spec: Mapping[str, Any] | None,
+    node_label: str | None,
+    shape: Callable[[str, dict[str, Any]], dict[str, Any]],
+) -> dict[str, Any]:
+    """The converge graph leg's field set (graph_sync_intents.md *Field set and provenance*).
+
+    Legacy fields (provenance undeclared) are ``admitted_fields(result)`` exactly
+    as before. Full-mode fields carry observed or enriched values, labelled. The
+    one single writer ``shape`` runs once over the selected values, before
+    labelling, so a childsync collection is one list per sync.
+    """
+    from app.engines import sync_field_set
+    from app.engines.packet_router import resolve_graph_sync_contract
+
+    contract = (
+        resolve_graph_sync_contract(dict(domain_spec), node_label=node_label)
+        if domain_spec
+        else None
+    )
+    row_schema = contract.row_schema if contract is not None else None
+    observed, conflicting = observed_values(request_entity, result)
+    selection = sync_field_set.select(
+        admitted=admitted_fields(result),
+        observed=observed,
+        graph_origin=graph_origin_fields(result),
+        conflicting=conflicting,
+        row_schema=row_schema,
+        id_property=contract.id_property if contract is not None else None,
+    )
+    fields = sync_field_set.label(shape(domain, selection.values), selection.provenance, row_schema)
+    if selection.provenance and entity_id and contract is not None:
+        settled = await _settled_graph_fields(tenant, entity_id, contract.entity_type)
+        fields = sync_field_set.apply_echo_guard(fields, selection.provenance, settled)
+    return fields
+
+
+async def _settled_graph_fields(
+    tenant: str, entity_id: str, endpoint: str
+) -> dict[str, dict[str, Any]]:
+    """The echo guard's history; empty (suppress nothing) without a durable store."""
+    try:
+        from app.services import pg_store
+
+        if pg_store._engine is None:
+            return {}
+        return await pg_store.graph_sync_settled_fields(tenant, entity_id, endpoint)
+    except Exception as exc:  # noqa: BLE001 - no history means resend, never drop
+        logger.warning("handlers.graph_echo_guard_unavailable", error=str(exc))
+        return {}
+
+
 def _operation_id(packet: Any) -> str | None:
     """The operation identity: the transport header's packet id (D-7), if any."""
     packet_id = getattr(getattr(packet, "header", None), "packet_id", None)
@@ -513,11 +614,17 @@ async def _run_canonical_converge(
         if defer_graph:
             from app.engines.polymer_capability import shape_graph_fields
 
-            graph_fields = shape_graph_fields(
-                resolve_cartridge_id(
+            graph_fields = await converge_graph_fields(
+                tenant=tenant,
+                entity_id=entity_id,
+                domain=resolve_cartridge_id(
                     tenant, requested=domain_id, configured_default=settings.default_domain
                 ),
-                admitted_fields(result),
+                result=result,
+                request_entity=payload.get("entity"),
+                domain_spec=domain_spec,
+                node_label=node_label,
+                shape=shape_graph_fields,
             )
         try:
             report = await _persist_and_sync(

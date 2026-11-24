@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -1447,6 +1447,57 @@ async def graph_intent_status_counts(tenant_id: str | None = None) -> dict[str, 
     async with get_session() as session:
         rows = (await session.execute(stmt)).all()
     return {state: int(count) for state, count in rows}
+
+
+def settled_graph_fields(
+    intents: Iterable[tuple[str, int, Mapping[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    """The labelled values the graph provably holds, per field (echo guard, G4).
+
+    ``intents`` are one subject's ``(state, attempts, fields)`` in ``seq``
+    order. A field is settled only when the latest intent carrying it is
+    acknowledged and every intent carrying it that was ever sent (claimed at
+    least once) ended acknowledged: an unacknowledged sent intent may still be
+    applied by CEG later, so its field is never suppressed.
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    latest_acked: dict[str, bool] = {}
+    uncertain: set[str] = set()
+    for state, attempts, fields in intents:
+        acked = state == GRAPH_INTENT_ACKNOWLEDGED
+        for name, value in fields.items():
+            if name.endswith("_provenance") and name[: -len("_provenance")] in fields:
+                continue  # a companion travels with its value field
+            labelled = {name: value}
+            companion = f"{name}_provenance"
+            if companion in fields:
+                labelled[companion] = fields[companion]
+            latest[name], latest_acked[name] = labelled, acked
+            if attempts > 0 and not acked:
+                uncertain.add(name)
+    return {
+        name: labelled
+        for name, labelled in latest.items()
+        if latest_acked[name] and name not in uncertain
+    }
+
+
+async def graph_sync_settled_fields(
+    tenant_id: str, entity_id: str, endpoint: str
+) -> dict[str, dict[str, Any]]:
+    """:func:`settled_graph_fields` for one subject (tenant, entity, endpoint)."""
+    stmt = (
+        select(GraphSyncIntent.state, GraphSyncIntent.attempts, GraphSyncIntent.fields)
+        .where(
+            GraphSyncIntent.tenant_id == tenant_id,
+            GraphSyncIntent.entity_id == entity_id,
+            GraphSyncIntent.endpoint == endpoint,
+        )
+        .order_by(GraphSyncIntent.seq)
+    )
+    async with get_session() as session:
+        rows = (await session.execute(stmt)).all()
+    return settled_graph_fields((str(s), int(a or 0), dict(f or {})) for s, a, f in rows)
 
 
 # ── Graph-return targets (A4) ─────────────────────────────────────────────
