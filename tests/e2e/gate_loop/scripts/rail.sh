@@ -24,8 +24,8 @@ GL_CEG_REPO="$(cd "$GL_CEG_REPO" && pwd)"
 ENV_FILE="${GL_ENV_FILE:-$STATE/run.env}"
 
 mkdir -p "$STATE"
-# Regenerate when absent or written by an older gen_keys.py layout (GL_KEYSET is not '2').
-if [[ ! -f "$ENV_FILE" ]] || ! grep -q "^GL_KEYSET='2'$" "$ENV_FILE"; then
+# Regenerate when absent or written by an older gen_keys.py layout (GL_KEYSET is not '3').
+if [[ ! -f "$ENV_FILE" ]] || ! grep -q "^GL_KEYSET='3'$" "$ENV_FILE"; then
   python3 "$HERE/gen_keys.py" "$ENV_FILE" >"$STATE/keys.receipt.json"
 fi
 

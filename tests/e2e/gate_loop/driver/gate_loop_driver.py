@@ -28,7 +28,10 @@ import httpx
 from constellation_node_sdk.gate.client import GateClient
 from constellation_node_sdk.gate.config import GateClientConfig
 from constellation_node_sdk.security.signing import sign_transport_packet
-from constellation_node_sdk.security.verification import verify_transport_packet_signature
+from constellation_node_sdk.security.verification import (
+    VerifyingKey,
+    verify_transport_packet_signature,
+)
 from constellation_node_sdk.transport.packet import TransportPacket, create_transport_packet
 
 GATE_URL = os.environ.get("GATE_URL", "http://gate:9000").rstrip("/")
@@ -71,6 +74,9 @@ def client(key_id: str = "odoo-gl", timeout: float = 40.0) -> GateClient:
             # public key from its private key (D-2), so the former deviation that
             # added it here is gone.
             verifying_keys=dict(GATE_TRUST),
+            # Gate_SDK 1.3.4 refuses an undeclared raw 32-byte key when signatures are
+            # required: it may be an ed25519 public key or an HMAC secret.
+            verifying_key_algorithms={"gate-gl": ALG},
         )
     )
 
@@ -108,7 +114,8 @@ def describe(pkt: TransportPacket) -> dict[str, Any]:
 
 def gate_signature_valid(pkt: TransportPacket) -> bool:
     try:
-        return bool(verify_transport_packet_signature(pkt, key_resolver=GATE_TRUST))
+        trust = {"gate-gl": VerifyingKey(ALG, GATE_TRUST["gate-gl"])}
+        return bool(verify_transport_packet_signature(pkt, key_resolver=trust))
     except Exception:
         return False
 
