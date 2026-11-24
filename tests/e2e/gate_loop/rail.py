@@ -676,6 +676,23 @@ def c_negatives(p: str) -> list[Result]:
     return [r11, r13]
 
 
+def graph_leg_synced(eie_log: list[str], entity_id: str) -> bool:
+    """EIE recorded its graph leg for this entity as synced (side_effects_graph_leg_resolved)."""
+    for line in eie_log:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if (
+            isinstance(rec, dict)
+            and rec.get("event") == "side_effects_graph_leg_resolved"
+            and rec.get("entity_id") == entity_id
+            and rec.get("synced") is True
+        ):
+            return True
+    return False
+
+
 def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
     """P07 / P18 / P05: consumer converge -> EIE durable -> EIE's own egress sync via Gate -> CEG -> Neo4j."""
     eid = f"gl-{tenant[:4]}-{uuid.uuid4().hex[:6]}"
@@ -708,26 +725,26 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
             not_run(i, "A8", p, "converge -> sync read-back", str(exc), entity_id=eid) for i in ids
         ]
     sync_events = gate_events(since, "sync")
-    conv_root = (r.get("response") or {}).get("root_id")
-    # Bound to this converge: EIE's sync must derive from the converge packet (same root_id),
-    # so a sync from another case or an earlier run cannot satisfy P07/P05.
+    eie_log = logs(
+        "l9e2e-eie", "1m", ("graph_sync", "packet_route_error", "graph_leg", "side_effects")
+    )
+    # Bound to this converge by its entity, not by lineage: EIE starts every Gate egress as a new
+    # root packet (app/engines/packet_router.py route(): "The SDK builds the root packet"), so the
+    # sync never shares the converge's root_id. The binding is EIE's own graph-leg record for this
+    # run's unique entity id, plus Gate's sync from EIE completed by the graph worker in this window.
+    leg_synced = graph_leg_synced(eie_log, eid)
     ingress = [
         e
         for e in sync_events
-        if e["event"] == "gate.ingress"
-        and e["source_node"] == "enrichment-engine"
-        and conv_root is not None
-        and e["root_id"] == conv_root
+        if e["event"] == "gate.ingress" and e["source_node"] == "enrichment-engine"
     ]
     completed = [
         e
         for e in sync_events
         if e["event"] == "gate.completed"
+        and e["source_node"] == "graph"
         and any(e["request_id"] == i["request_id"] for i in ingress)
     ]
-    eie_log = logs(
-        "l9e2e-eie", "1m", ("graph_sync", "packet_route_error", "graph_leg", "side_effects")
-    )
     resp = r.get("response") or {}
     converge_lineage = (
         resp.get("signing_key_id") == "gate-gl"
@@ -736,7 +753,8 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         and resp.get("causation_id") is not None
     )
     sync_via_gate = (
-        bool(ingress)
+        leg_synced
+        and bool(ingress)
         and bool(completed)
         and all((c.get("generation") or 0) >= 2 for c in completed)
     )
@@ -750,6 +768,7 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         "eie_persisted_rows": persisted,
         "graph": g,
         "gate_sync_events": sync_events,
+        "eie_graph_leg_synced": leg_synced,
         "eie_log": eie_log,
     }
     out: list[Result] = []
@@ -1624,9 +1643,10 @@ def c_gate_rail_policy(p: str) -> list[Result]:
 def c_feedback(p: str) -> list[Result]:
     """F-A1-08 disposition: synthneutral changed-fact witness (P27, P22/P30 parts) and the plasticos justified no-op.
 
-    The inference packet is sent with the ceg-gl key held by the driver (rig). CEG's own egress cannot sign
-    under ed25519 at SDK bc1c74c (F-A1-04), and CEG's inference is reachable only through operator admin
-    (F-A1-02). The rig output is exactly what infer_geography_from_postal_code returns for zip 94105.
+    The inference packet is sent with the ceg-gl key held by the driver (rig): CEG's inference is reachable
+    only through operator admin, not a Gate action (F-A1-02). The rig output is exactly what
+    infer_geography_from_postal_code returns for zip 94105. P30's resync is read from the graph right after
+    the converge that consumed the fact, before the next pass re-derives it.
     """
     eid = f"sn-fb-{uuid.uuid4().hex[:6]}"
     out = {
@@ -1653,6 +1673,13 @@ def c_feedback(p: str) -> list[Result]:
         "execute", converge_payload(eid, "synthneutral", extra={"postal_code": "94105"}, schema=sch)
     )
     seeded_log = logs("l9e2e-eie", "1m", ("graph", eid))
+    time.sleep(8)
+    try:
+        after_c1 = cypher(
+            "synthneutral", f"MATCH (s:Station {{station_id:'{eid}'}}) RETURN s.region"
+        )
+    except ProbeError as exc:
+        after_c1 = [["PROBE_ERROR", str(exc)]]
     c2 = drive(
         "execute", converge_payload(eid, "synthneutral", extra={"postal_code": "94105"}, schema=sch)
     )
@@ -1695,6 +1722,7 @@ def c_feedback(p: str) -> list[Result]:
         "converge1_fields": f1,
         "converge2_fields": f2,
         "eie_log": seeded_log,
+        "graph_after_c1": after_c1,
         "graph_after": synced,
         "converge1_completed": c1_ok,
         "plasticos_noop": {
@@ -1715,11 +1743,13 @@ def c_feedback(p: str) -> list[Result]:
         reason=(
             "partial: accepted and consumed observed through Gate (consumed once; the next pass re-derives "
             "region from the provider). Retained has no observable evidence: in-memory only (F-A1-06, "
-            "EIE-W). The inference came from the ceg-gl rig because CEG egress cannot sign (F-A1-04)"
+            "EIE-W). The inference came from the ceg-gl rig: CEG has no Gate-routable inference trigger "
+            "(F-A1-02, CEG-W)"
         )
         if acc_ok and consumed
         else "accepted/consumed not both observed (see observed)",
     )
+    resynced = after_c1 == [['"West"']]
     p30 = Result(
         "P30",
         "A8",
@@ -1735,12 +1765,20 @@ def c_feedback(p: str) -> list[Result]:
                 if c1_ok and consumed
                 else "NOT observed (converge c1 did not complete with region=West)"
             )
-            + ", but the resync cannot leave EIE under ed25519 (F-A1-04); plasticos justified no-op "
+            + "; resync to CEG "
+            + (
+                "observed (Station.region = West right after that pass)"
+                if resynced
+                else "NOT observed"
+            )
+            + "; plasticos justified no-op "
             + (
                 ("observed (region undeclared, absent from fields)" if noop else "NOT observed")
                 if pc_ok
                 else "evidence missing (plasticos converge did not complete)"
             )
+            + ". BLOCKED, not PASS: the inference is the driver's ceg-gl rig, because CEG has no "
+            "Gate-routable inference trigger (F-A1-02, CEG-W), so the integrated CEG origin is unproven"
         ),
     )
     p22 = Result(
@@ -1755,7 +1793,7 @@ def c_feedback(p: str) -> list[Result]:
             "trigger": "none Gate-routable",
         },
         reason="CEG inference only via operator admin (not a Gate action, not advertised) from the caller "
-        "entity, not a graph read (F-A1-02, CEG-W); CEG egress cannot sign under ed25519 (F-A1-04)",
+        "entity, not a graph read (F-A1-02, CEG-W)",
     )
     return [p27, p30, p22]
 

@@ -324,3 +324,15 @@ def test_mixed_alg_case_needs_the_window_and_restores_the_worker(
     assert calls[0]["extra_env"] == {"GL_MIXED_CEG": "1"}
     assert res.id == "MIX-ALG-01"
     assert res.verdict == expected
+
+
+def test_graph_leg_synced_binds_the_sync_to_this_entity() -> None:
+    import json
+
+    def rec(**kw: object) -> str:
+        return json.dumps({"event": "side_effects_graph_leg_resolved", **kw})
+
+    log = ["not json", rec(entity_id="other", synced=True), rec(entity_id="gl-1", synced=False)]
+    assert rail.graph_leg_synced(log, "gl-1") is False
+    assert rail.graph_leg_synced([*log, rec(entity_id="gl-1", synced=True)], "gl-1") is True
+    assert rail.graph_leg_synced([json.dumps(["list"])], "gl-1") is False
