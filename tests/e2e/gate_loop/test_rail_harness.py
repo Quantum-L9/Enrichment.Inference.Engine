@@ -576,3 +576,45 @@ def test_cypher_classifies_only_the_sh_timeout_as_a_probe_timeout(mp: pytest.Mon
     with pytest.raises(rail.ProbeError) as err:
         rail.cypher("plasticos", "RETURN 1")
     assert not isinstance(err.value, rail.ProbeTimeoutError)
+
+
+def test_graph_result_completion_is_stamped_with_the_answering_worker() -> None:
+    ingress = [{"event": "gate.ingress", "source_node": "graph", "request_id": "r1"}]
+    events = [
+        *ingress,
+        {"event": "gate.completed", "source_node": "enrichment-engine", "request_id": "r1"},
+        {"event": "gate.completed", "source_node": "enrichment-engine", "request_id": "other"},
+        {"event": "gate.completed", "source_node": "graph", "request_id": "r1"},
+    ]
+    got = rail.graph_result_completions(events, ingress)
+    assert got == [events[1]]
+
+
+def test_p22_requires_every_part_of_the_cited_finding_and_the_no_change_witness() -> None:
+    ok = {
+        "changed_converge_completed": True,
+        "input_synced": True,
+        "graph_results": 1,
+        "graph_results_completed": 1,
+        "obligation_accepted": True,
+        "revisions_cited": True,
+        "eie_target_cites_ceg": True,
+        "resync_through_gate": True,
+        "resync_results": 0,
+        "revisions_unchanged": True,
+    }
+    assert all(rail.p22_requirements(**ok).values())
+    for key, bad in (
+        ("graph_results", 2),
+        ("graph_results", 0),
+        ("resync_results", 1),
+        ("resync_through_gate", False),
+        ("eie_target_cites_ceg", False),
+        ("revisions_unchanged", False),
+    ):
+        assert not all(rail.p22_requirements(**{**ok, key: bad}).values()), key
+
+
+def test_feedback_no_longer_claims_p22_and_graph_trigger_owns_it() -> None:
+    assert "P22" not in rail.CASE_IDS["feedback"]
+    assert rail.CASE_IDS["graph_trigger"] == ("P22",)
