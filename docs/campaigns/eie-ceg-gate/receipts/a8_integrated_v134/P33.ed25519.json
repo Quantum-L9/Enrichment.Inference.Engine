@@ -1,0 +1,174 @@
+{
+ "id": "P33",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "valid polymer capability in the declared direction matches; hard gates before rank",
+ "verdict": "PASS",
+ "reason": "",
+ "observed": {
+  "seed_ack": {
+   "status": "success",
+   "entity_type": "facilities",
+   "synced_count": 3
+  },
+  "per_vector_match": {
+   "PM-POS-01": true,
+   "PM-NEG-01-WRONG-POLYMER": true,
+   "PM-NEG-02-WRONG-DIRECTION": true,
+   "PM-NEG-03-NO-ACTIVE-SUPPLY": true
+  },
+  "match": {
+   "PM-POS-01": {
+    "fixture_ids": [
+     "tp-fac-001",
+     "tp-fac-002"
+    ],
+    "off_fixture_candidates": [],
+    "expect_fixture_ids": [
+     "tp-fac-001",
+     "tp-fac-002"
+    ],
+    "status": "success",
+    "error": null,
+    "first": [
+     {
+      "candidate": {
+       "tier": "standard",
+       "min_density": 0.94,
+       "name": "TEST_ONLY Facility A",
+       "max_density": 0.97,
+       "facility_id": "tp-fac-001",
+       "_tenant": "plasticos",
+       "contamination_tolerance": 5.0,
+       "capacity_tons_month": 500.0
+      },
+      "score": 0.14500000000000002,
+      "dimension_scores": {
+       "credit_score": 0.0,
+       "price_alignment": 0.0,
+       "community_match": 0.5,
+       "geo_proximity": 0.0,
+       "contamination_tolerance_score": 0.95,
+       "rate_score": 0.0,
+       "recency": 0.0
+      },
+      "absent_sources": [
+       "geo_proximity",
+       "credit_score",
+       "community_match",
+       "rate_score",
+       "price_alignment",
+       "recency"
+      ],
+      "confidence_flag": "low_dimensional_agreement",
+      "confidence_detail": {
+       "dimensional_agreement": 0.3022
+      },
+      "eligible": true,
+      "rank": 1,
+      "score_scale": "0_to_1",
+      "failed_gates": [],
+      "feature_contributions": [
+       {
+        "feature_id": "contamination_tolerance_score",
+        "contribution": 0.95,
+        "evidence_refs": []
+       }
+      ],
+      "missing_evidence": [
+       "geo_proximity",
+       "credit_score",
+       "community_match",
+       "rate_score",
+       "price_alignment",
+       "recency"
+      ],
+      "capacity_evidence": {
+       "capacity_tons_month": 500.0,
+       "volume_tons": null,
+       "shortfall_tons": null
+      }
+     }
+    ]
+   },
+   "PM-NEG-01-WRONG-POLYMER": {
+    "fixture_ids": [],
+    "off_fixture_candidates": [],
+    "expect_fixture_ids": [],
+    "status": "success",
+    "error": null,
+    "first": []
+   },
+   "PM-NEG-02-WRONG-DIRECTION": {
+    "fixture_ids": [],
+    "off_fixture_candidates": [
+     "gl-p19-4fba33"
+    ],
+    "expect_fixture_ids": [],
+    "status": "success",
+    "error": null,
+    "first": [
+     {
+      "candidate": {
+       "name": "dup",
+       "facility_id": "gl-p19-4fba33",
+       "_tenant": "plasticos"
+      },
+      "score": 0.05,
+      "dimension_scores": {
+       "credit_score": 0.0,
+       "price_alignment": 0.0,
+       "community_match": 0.5,
+       "geo_proximity": 0.0,
+       "contamination_tolerance_score": 0.0,
+       "rate_score": 0.0,
+       "recency": 0.0
+      },
+      "absent_sources": [
+       "geo_proximity",
+       "credit_score",
+       "contamination_tolerance_score",
+       "community_match",
+       "rate_score",
+       "price_alignment",
+       "recency"
+      ],
+      "confidence_flag": "monoculture",
+      "confidence_detail": {
+       "dominant_dimension": "community_match",
+       "contribution": 1.0
+      },
+      "eligible": true,
+      "rank": 1,
+      "score_scale": "0_to_1",
+      "failed_gates": [],
+      "feature_contributions": [],
+      "missing_evidence": [
+       "geo_proximity",
+       "credit_score",
+       "contamination_tolerance_score",
+       "community_match",
+       "rate_score",
+       "price_alignment",
+       "recency"
+      ],
+      "capacity_evidence": {
+       "capacity_tons_month": null,
+       "volume_tons": null,
+       "shortfall_tons": null
+      }
+     }
+    ]
+   },
+   "PM-NEG-03-NO-ACTIVE-SUPPLY": {
+    "fixture_ids": [],
+    "off_fixture_candidates": [],
+    "expect_fixture_ids": [],
+    "status": "success",
+    "error": null,
+    "first": []
+   }
+  }
+ },
+ "timestamp": "2026-11-24T15:59:44.641214+00:00"
+}

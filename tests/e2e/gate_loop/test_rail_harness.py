@@ -7,6 +7,8 @@ and main() reports the abort (non-zero exit).
 
 from __future__ import annotations
 
+import itertools
+import json
 import sys
 from pathlib import Path
 
@@ -22,6 +24,180 @@ pytestmark = pytest.mark.unit
 def mp(monkeypatch):  # type: ignore[no-untyped-def]
     """pytest's monkeypatch under a short name."""
     return monkeypatch
+
+
+def test_graph_result_completion_is_stamped_with_the_answering_worker() -> None:
+    ingress = [{"event": "gate.ingress", "source_node": "graph", "request_id": "r1"}]
+    events = [
+        *ingress,
+        {"event": "gate.completed", "source_node": "enrichment-engine", "request_id": "r1"},
+        {"event": "gate.completed", "source_node": "enrichment-engine", "request_id": "other"},
+        {"event": "gate.completed", "source_node": "graph", "request_id": "r1"},
+    ]
+    got = rail.graph_result_completions(events, ingress)
+    assert got == [events[1]]
+
+
+def test_p22_requires_every_part_of_the_cited_finding_and_the_no_change_witness() -> None:
+    ok = {
+        "changed_converge_completed": True,
+        "input_synced": True,
+        "first_leg_resolved": True,
+        "graph_results": 1,
+        "graph_results_completed": 1,
+        "obligation_accepted": True,
+        "revisions_cited": True,
+        "eie_target_cites_ceg": True,
+        "resync_through_gate": True,
+        "resync_results": 0,
+        "revisions_unchanged": True,
+    }
+    assert all(rail.p22_requirements(**ok).values())
+    for key, bad in (
+        ("graph_results", 2),
+        ("graph_results", 0),
+        ("resync_results", 1),
+        ("resync_through_gate", False),
+        ("eie_target_cites_ceg", False),
+        ("revisions_unchanged", False),
+        ("first_leg_resolved", False),
+    ):
+        assert not all(rail.p22_requirements(**{**ok, key: bad}).values()), key
+
+
+def test_eie_target_citation_needs_a_retained_exact_finding_under_cegs_key() -> None:
+    good = {
+        "state": "retained",
+        "rule": "infer_geography_from_postal_code",
+        "field": "region",
+        "value": '{"value": "West"}',
+        "producer_key": "k1",
+    }
+    assert rail.eie_target_cites([good], "k1", "k1")
+    assert not rail.eie_target_cites([{**good, "state": "consumed"}], "k1", "k1")
+    assert not rail.eie_target_cites([{**good, "value": '{"value": "NorthWest"}'}], "k1", "k1")
+    assert not rail.eie_target_cites([{**good, "producer_key": "other"}], "k1", "k1")
+    assert not rail.eie_target_cites([good], "", None)
+
+
+def test_resync_witness_waits_for_completion_and_never_reads_absence_early(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    clock = iter([0.0, 0.0, 10.0, 95.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(
+        rail,
+        "gate_events",
+        lambda since, action: [
+            {"event": "gate.ingress", "source_node": "enrichment-engine", "request_id": "r1"}
+        ],
+    )
+    mp.setattr(rail, "logs", lambda *a, **k: [])
+    syncs, evaluated = rail._wait_resync_evaluated("t0", 90.0)
+    assert rail.sync_completions(syncs) == []
+    assert evaluated == []
+
+
+def test_mixed_alg_pass_explains_its_expected_502() -> None:
+    events = [
+        {
+            "event": "gate.failure",
+            "error_type": "GateDispatchSecurityError",
+            "error_message": "worker response failed transport validation: x",
+        }
+    ]
+    assert rail.mixed_alg_outcome(502, events) == "accepted"
+    assert "502 is expected" in rail.MIX_ALG_ACCEPTED_REASON
+    assert "401/403" in rail.MIX_ALG_ACCEPTED_REASON
+
+
+def test_resync_witness_ignores_an_earlier_sync_completing_in_its_window(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    """c1's sync and evaluation sharing c2's first second must not end the wait."""
+    clock = iter([0.0, 0.0, 10.0, 95.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(
+        rail,
+        "gate_events",
+        lambda since, action: [
+            {"event": "gate.ingress", "source_node": "enrichment-engine", "request_id": "c1"},
+            {"event": "gate.completed", "source_node": "graph", "request_id": "c1"},
+        ],
+    )
+    mp.setattr(rail, "logs", lambda *a, **k: ["graph inference after sync tenant=synthneutral"])
+    syncs, _ = rail._wait_resync_evaluated("t0", 90.0, frozenset({"c1"}))
+    assert rail.sync_completions(syncs, frozenset({"c1"})) == []
+    assert rail.sync_completions(syncs) != []
+
+
+def test_init_schema_timeout_is_a_probe_timeout(mp: pytest.MonkeyPatch) -> None:
+    def slow(*a: object, **k: object) -> object:
+        raise rail.subprocess.TimeoutExpired(cmd="docker", timeout=120)
+
+    mp.setattr(rail.subprocess, "run", slow)
+    with pytest.raises(rail.ProbeTimeoutError):
+        rail.ceg_init_schema("synthneutral")
+
+
+def test_resync_witness_needs_this_entitys_graph_leg_not_other_traffic(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    """An unrelated sync completing and being evaluated in the window does not end the wait."""
+    clock = itertools.count(0.0, 10.0)
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(
+        rail,
+        "gate_events",
+        lambda since, action: [
+            {"event": "gate.ingress", "source_node": "enrichment-engine", "request_id": "other"},
+            {"event": "gate.completed", "source_node": "graph", "request_id": "other"},
+        ],
+    )
+    other_leg = json.dumps(
+        {"event": "side_effects_graph_leg_resolved", "entity_id": "sn-other", "synced": True}
+    )
+
+    def fake_logs(container: str, *a: object, **k: object) -> list[str]:
+        return [other_leg] if container == "l9e2e-eie" else ["graph inference after sync"]
+
+    mp.setattr(rail, "logs", fake_logs)
+    calls: list[int] = []
+    real = rail.graph_leg_outcomes
+
+    def counted(log: list[str], eid: str) -> list[bool]:
+        calls.append(1)
+        return real(log, eid)
+
+    mp.setattr(rail, "graph_leg_outcomes", counted)
+    rail._wait_resync_evaluated("t0", 90.0, frozenset(), "sn-tr-1")
+    # Polled until the budget ran out: the other entity's leg never satisfied the wait.
+    assert len(calls) > 1
+
+
+def test_first_leg_wait_sees_only_this_entitys_synced_record(mp: pytest.MonkeyPatch) -> None:
+    """c2's window opens only after c1's own leg record; another entity's or a late one does not count."""
+    clock = itertools.count(0.0, 10.0)
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail.time, "sleep", lambda s: None)
+
+    def leg(eid: str, synced: bool) -> str:
+        return json.dumps(
+            {"event": "side_effects_graph_leg_resolved", "entity_id": eid, "synced": synced}
+        )
+
+    mp.setattr(rail, "logs", lambda *a, **k: [leg("sn-other", True), leg("sn-tr-1", False)])
+    assert rail.wait_leg_resolved("t0", "sn-tr-1", 60.0) is False
+    mp.setattr(rail, "logs", lambda *a, **k: [leg("sn-tr-1", True)])
+    assert rail.wait_leg_resolved("t0", "sn-tr-1", 60.0) is True
+
+
+def test_feedback_no_longer_claims_p22_and_graph_trigger_owns_it() -> None:
+    assert "P22" not in rail.CASE_IDS["feedback"]
+    assert rail.CASE_IDS["graph_trigger"] == ("P22",)
 
 
 def test_stack_unusable_stops_later_cases(tmp_path: Path, mp: pytest.MonkeyPatch) -> None:
