@@ -1,0 +1,57 @@
+{
+ "id": "MIX-ALG-01",
+ "slice": "A7",
+ "profile": "ed25519",
+ "assertion": "an hmac-sha256 worker verifies Gate's ed25519 dispatch (per-key algorithm, not the node's)",
+ "verdict": "PASS",
+ "reason": "",
+ "observed": {
+  "signing_in_window": {
+   "l9e2e-gate": "ed25519",
+   "l9e2e-eie": "ed25519",
+   "l9e2e-ceg": "hmac-sha256"
+  },
+  "call": {
+   "http_status": 502,
+   "body": {
+    "detail": {
+     "code": "worker_response_untrusted",
+     "message": "worker response failed transport validation: TransportAuthenticationError: no verifying key available for transport signature verification",
+     "node": "graph"
+    }
+   },
+   "request_packet_id": "66d91362-eeb2-4014-8787-e96227193736"
+  },
+  "gate_events_for_request": [
+   {
+    "event": "gate.ingress",
+    "action": "match",
+    "request_id": "a35d5454318b4808a2189e094d7cd46e",
+    "packet_id": "66d91362-eeb2-4014-8787-e96227193736",
+    "root_id": "66d91362-eeb2-4014-8787-e96227193736",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.failure",
+    "action": "match",
+    "request_id": "a35d5454318b4808a2189e094d7cd46e",
+    "packet_id": "66d91362-eeb2-4014-8787-e96227193736",
+    "root_id": "66d91362-eeb2-4014-8787-e96227193736",
+    "error_type": "GateDispatchSecurityError",
+    "error_message": "worker response failed transport validation: TransportAuthenticationError: no verifying key available for transport signature verification"
+   }
+  ],
+  "outcome": "accepted",
+  "recovery": {
+   "ready": true,
+   "waited_s": 0.0
+  },
+  "sdk_code_digest": {
+   "l9e2e-gate": "1.3.4 51 08b787178555e68532ea3f71500eb1e56c2ff03672febd2230a9e4f4add6f95e",
+   "l9e2e-eie": "1.3.4 51 08b787178555e68532ea3f71500eb1e56c2ff03672febd2230a9e4f4add6f95e",
+   "l9e2e-ceg": "1.3.4 51 08b787178555e68532ea3f71500eb1e56c2ff03672febd2230a9e4f4add6f95e"
+  }
+ },
+ "timestamp": "2026-11-24T16:06:18.114378+00:00"
+}

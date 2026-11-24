@@ -234,7 +234,7 @@ No new field, action, payload key or caller policy is needed to freeze sections 
 | F-A1-02 | CEG inference is reachable only through operator `admin` / `emit_inference_feedback`, which Gate never routes. It infers from the caller-supplied `entity`, not from a graph read. The plasticos design pack authorizes no rule. | CEG-W (A3/A6) | CEG `handlers.py:2499-2571`; pack has no `plugins` | P22, P23, P24, P30 |
 | F-A1-03 | CEG accepts CEG-owned properties on `sync` from any authorized caller. | CEG-W | vector PX-NEG-05 | P04 (disposed: EIE never sends them) |
 | F-A1-04 | SDK ed25519 env layout differs between `GateClient` and the worker runtime. | SDK owner | SDK `bc1c74c` `gate/config.py` vs `runtime/config.py:200-204` | P07, P08, P12 |
-| F-A1-05 | A registration is not bound to the node key; the admin-token comparison is not constant-time. | Gate owner | `admin_registration_service.py:64-68` | P10, P11 |
+| F-A1-05 | A registration is not bound to the node key; the admin-token comparison is not constant-time. | Gate owner | `admin_registration_service.py:64-68` | P10, P11 — **DEFERRED** by the operator (2026-11-24); not counted against A8 |
 | F-A1-06 | `_graph_pending` and the return-channel queue are in memory and lost on restart. Nothing drains them at shutdown. | EIE-W (A2/A4) | `side_effect_coordinator.py:176-244`; `graph_return_channel.py:99-167` | P14, P15, P16, P21, P25 |
 | F-A1-07 | `graph-inference-result` intake does no dedup, so a redelivered packet enqueues duplicates. | EIE-W (A5) | `graph_return_channel.py:55-96` | P23, P28 |
 | F-A1-08 | The `infer_geography_from_postal_code` output field `region` is not declared on the EIE plasticos cartridge, and `zip_code` is evidence-only in EIE and absent from CEG's Facility. A plasticos inference therefore cannot become a changed EIE fact unless the cartridge declares it, which is a spec change. | CTO (spec freeze) | EIE cartridge `subjects`; CEG pack ontology | P22, P27, P30 |
@@ -278,6 +278,7 @@ These verdicts are main-baseline only. The CTO re-runs the same rail at the inte
 |---|---|---|
 | F-A1-01 | Node GRAPH_ACKNOWLEDGED means: right tenant and `entity_type`, `synced_count == len(batch)`, and `rejected_count` absent or 0. `created + replayed == requested` applies to relationship endpoints only. | `rail.py` `node_acked()`, asserted in P17 and P19 |
 | F-A1-04, F-A1-05, F-A1-11 | BLOCKED_WITH_EXACT_OWNER: Gate_SDK, Constellation.Gate | each witnessed with a receipt (`A7_TRUST_POLICY_MATRIX.md` §6) |
+| F-A1-05 (2026-11-24) | DEFERRED by the operator (owner Constellation.Gate) | witness kept (`receipts/a8_integrated_v134/F-A1-05.ed25519.json`); the defenses held: owner collision 400, misrouted packet refused 403/502; not counted against the A8 verdict |
 | F-A1-08 | No spec change. The changed-fact witness runs on `synthneutral`, whose TEST_ONLY pack r3 and cartridge declare `postal_code` and `region` and authorize `infer_geography_from_postal_code`. Plasticos is the witness for the justified no-op. | `rail.py` `c_feedback`: P27, P30, P22 |
 | F-A1-10 | Fixed in this lane: `tests/e2e/compose.converge.yml`, one line. | — |
 | F-A1-12 | CTO-BLOCKER (EIE-W): the deterministic provider is coupled to dev_mode. | — |
