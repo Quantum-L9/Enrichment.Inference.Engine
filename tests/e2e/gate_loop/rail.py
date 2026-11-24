@@ -1420,12 +1420,13 @@ def c_gate_rail_policy(p: str) -> list[Result]:
         raise ProbeError("no Gate image id in the release set; the settings probe cannot run")
     probe = "\n".join(
         [
+            "import sys",
             "from constellation_gate.config.settings import get_settings",
             "try:",
             "    get_settings()",
-            "    print('SETTINGS_OK')",
+            "    sys.stdout.write('SETTINGS_OK\\n')",
             "except Exception as exc:",
-            "    print('SETTINGS_REFUSED', type(exc).__name__, str(exc)[:400])",
+            "    sys.stdout.write(' '.join(['SETTINGS_REFUSED', type(exc).__name__, str(exc)[:400]]) + '\\n')",
         ]
     )
     keys = json.dumps(
@@ -1674,6 +1675,23 @@ CASE_IDS: dict[str, tuple[str, ...]] = {
 
 
 SDK_DIGEST_LINE = re.compile(r"\S+ \d+ [0-9a-f]{64}")
+# The release the integrated rerun is judged at: Gate_SDK v1.3.3 (tag v1.3.3 = v1 = e5159c66), as
+# "<version> <file count> <code digest>" computed by sdk_digests() over src/constellation_node_sdk at
+# that tag. GL_EXPECT_SDK names another release explicitly; it cannot be empty.
+EXPECTED_SDK = "1.3.3 51 e43e18de547a9b18c2c31007f264afa1948930936dfe4bad62610fa460affb0b"
+
+
+def sdk_pin(digests: dict, expected: str) -> dict:
+    """Whether every process runs exactly the expected SDK code. Unavailable or different is a mismatch."""
+    if not SDK_DIGEST_LINE.fullmatch(expected):
+        msg = f"expected SDK line is not '<version> <files> <sha256>': {expected!r}"
+        raise ValueError(msg)
+    mismatched = {c: v for c, v in digests.items() if v != expected}
+    return {
+        "expected": expected,
+        "match": bool(digests) and not mismatched,
+        "mismatched": mismatched,
+    }
 
 
 def sdk_digests() -> dict:
@@ -1683,13 +1701,13 @@ def sdk_digests() -> dict:
     """
     probe = "\n".join(
         [
-            "import hashlib, importlib.metadata as m, pathlib, constellation_node_sdk as s",
+            "import hashlib, importlib.metadata as m, pathlib, sys, constellation_node_sdk as s",
             "root = pathlib.Path(s.__file__).parent",
             "fs = sorted(root.rglob('*.py'))",
             "h = hashlib.sha256()",
             "for f in fs:",
             "    h.update((str(f.relative_to(root)) + ':' + hashlib.sha256(f.read_bytes()).hexdigest() + '\\n').encode())",
-            "print(m.version('constellation-node-sdk'), len(fs), h.hexdigest())",
+            "sys.stdout.write(f\"{m.version('constellation-node-sdk')} {len(fs)} {h.hexdigest()}\\n\")",
         ]
     )
     out = {}
@@ -1784,7 +1802,8 @@ def run_cases(names: list[str], profile: str, ev: Path) -> tuple[list[Result], s
                 ]
         for r in res:
             results.append(r)
-            print(f"{r.id:5} {r.verdict:14} {r.reason[:100]}", flush=True)
+            sys.stdout.write(f"{r.id:5} {r.verdict:14} {r.reason[:100]}\n")
+            sys.stdout.flush()
             write_json(ev / f"{r.id}.json", asdict(r))
     return results, aborted
 
@@ -1806,14 +1825,25 @@ def main() -> int:
         up = rail("up")
         if up.returncode != 0:
             write_json(ev / "boot.json", {"rc": up.returncode, "tail": up.stdout[-800:]})
-            print(json.dumps({"evidence": str(ev), "boot": "FAILED"}))
+            sys.stdout.write(json.dumps({"evidence": str(ev), "boot": "FAILED"}) + "\n")
             return 4
     OBSERVED_PROFILE.update(running_signing())
     write_json(ev / "ready.json", wait_ready())
     rs = release_set(a.profile)
+    rs["sdk_pin"] = sdk_pin(rs["sdk_code_digest"], os.environ.get("GL_EXPECT_SDK", EXPECTED_SDK))
     RELEASE_SET.update(rs)
     write_json(ev / "release_set.json", rs)
-    results, aborted = run_cases(a.cases.split(","), a.profile, ev)
+    aborted: str | None
+    if not rs["sdk_pin"]["match"]:
+        # Verdicts at another SDK are not evidence for this rerun: no case runs.
+        aborted = f"SDK pin mismatch: {rs['sdk_pin']['mismatched']}"
+        results = [
+            not_run(cid, "A8", a.profile, "harness", aborted)
+            for n in a.cases.split(",")
+            for cid in CASE_IDS.get(n, (n,))
+        ]
+    else:
+        results, aborted = run_cases(a.cases.split(","), a.profile, ev)
     leaks = [f.name for f in ev.glob("*.json") for s in secrets_() if s in f.read_text()]
     summary = {
         "stamp": run_stamp,
@@ -1825,8 +1855,9 @@ def main() -> int:
         "results": [{"id": r.id, "verdict": r.verdict, "reason": r.reason} for r in results],
     }
     write_json(ev / "summary.json", summary)
-    print(
+    sys.stdout.write(
         json.dumps({"evidence": str(ev), "leak_check": summary["leak_check"], "aborted": aborted})
+        + "\n"
     )
     if leaks:
         return 3

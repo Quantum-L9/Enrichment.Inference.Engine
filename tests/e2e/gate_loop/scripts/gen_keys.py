@@ -5,10 +5,10 @@ Never deployment material, never committed: the env file is written OUTSIDE
 the repository with mode 0600, and only key ids and public-key fingerprints
 are ever recorded as evidence.
 
-Gate's own PUBLIC key is in Gate's verifying map on purpose (deviation D-2):
-Gate at b451b68 resolves its own key id to its private signing key
-(config/settings.py resolve_verifying_key), which only works for HMAC; under
-ed25519 its dispatch packet then fails its own outbound validation (F-A7-01).
+Gate's verifying map holds only the identities that call Gate: Gate resolves
+its own key id from its private key (Constellation.Gate 2384923, D-4), so the
+former deviation that put Gate's own public key there is gone. GL_KEYSET marks
+this layout; rail.sh regenerates an env file written by an older layout.
 
 Identities: gate-gl (Gate), eie-gl (enrichment-engine worker), ceg-gl (graph
 worker), odoo-gl (consumer), op-gl (operator consumer), rogue-gl (a well-formed
@@ -28,7 +28,8 @@ import tempfile
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 IDS = ("gate-gl", "eie-gl", "ceg-gl", "odoo-gl", "op-gl", "rogue-gl")
-TRUSTED_BY_GATE = ("gate-gl", "eie-gl", "ceg-gl", "odoo-gl", "op-gl")
+TRUSTED_BY_GATE = ("eie-gl", "ceg-gl", "odoo-gl", "op-gl")
+KEYSET = "2"
 
 
 def main(out: str) -> None:
@@ -47,10 +48,9 @@ def main(out: str) -> None:
     neo4j_secret = secrets.token_urlsafe(18).replace("-", "x").replace("_", "y")
     pg_secret = secrets.token_urlsafe(18).replace("-", "x").replace("_", "y")
     env = {
+        "GL_KEYSET": KEYSET,
         **{f"GL_HMAC_{k.split('-')[0].upper()}": hm[k] for k in IDS},
-        "GL_HMAC_GATE_VERIFYING_KEYS_JSON": json.dumps(
-            {k: hm[k] for k in TRUSTED_BY_GATE if k != "gate-gl"}
-        ),
+        "GL_HMAC_GATE_VERIFYING_KEYS_JSON": json.dumps({k: hm[k] for k in TRUSTED_BY_GATE}),
         "GL_HMAC_WORKER_VERIFYING_KEYS_JSON": json.dumps({"gate-gl": hm["gate-gl"]}),
         "GL_HMAC_ALL_JSON": json.dumps(hm),
         **{f"GL_PRIV_{k.split('-')[0].upper()}": priv[k] for k in IDS},
@@ -82,7 +82,7 @@ def main(out: str) -> None:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
-    print(
+    sys.stdout.write(
         json.dumps(
             {
                 "env_file": out,
@@ -92,6 +92,7 @@ def main(out: str) -> None:
                 "secrets_printed": False,
             }
         )
+        + "\n"
     )
 
 

@@ -101,3 +101,19 @@ def test_sdk_digest_requires_exit_zero_and_a_sha256(mp: pytest.MonkeyPatch) -> N
     assert got["l9e2e-gate"] == good
     assert got["l9e2e-eie"] == "UNAVAILABLE rc=1"
     assert got["l9e2e-ceg"] == "UNAVAILABLE rc=0"
+
+
+def test_sdk_pin_requires_every_process_at_the_expected_release() -> None:
+    exp = rail.EXPECTED_SDK
+    other = "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929"
+    same = dict.fromkeys(("l9e2e-gate", "l9e2e-eie", "l9e2e-ceg"), exp)
+    assert rail.sdk_pin(same, exp)["match"] is True
+    one_old = {**same, "l9e2e-ceg": other}
+    pin = rail.sdk_pin(one_old, exp)
+    assert pin["match"] is False
+    assert pin["mismatched"] == {"l9e2e-ceg": other}
+    unavailable = {**same, "l9e2e-eie": "UNAVAILABLE rc=1"}
+    assert rail.sdk_pin(unavailable, exp)["match"] is False
+    assert rail.sdk_pin({}, exp)["match"] is False
+    with pytest.raises(ValueError, match="expected SDK line"):
+        rail.sdk_pin(same, "")
