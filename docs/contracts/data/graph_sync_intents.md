@@ -44,7 +44,7 @@ leaves none.
 | `attempts` / `max_attempts` | INTEGER | Claims so far; the ceiling (default 8). |
 | `next_attempt_at` | TIMESTAMPTZ | Earliest next claim (backoff). |
 | `lease_owner` / `lease_expires_at` | VARCHAR(128) / TIMESTAMPTZ NULL | Fencing token of the current claim (`<owner>#<token>`, new on every claim) and its lease. |
-| `last_error` / `last_ack` | TEXT / JSONB NULL | Last failure reason; CEG's acknowledgment when acknowledged. |
+| `last_error` / `last_ack` | TEXT / JSONB NULL | Last failure reason; CEG's acknowledgment when acknowledged. An acknowledged or refused row whose transport retried inside its claim carries `retried_in_claim` here (rule 5). |
 | `created_at`, `updated_at`, `resolved_at` | TIMESTAMPTZ | Lifecycle timestamps; `resolved_at` set on a terminal state. |
 
 Constraints: `uq_graph_sync_intents_tenant_key` UNIQUE (`tenant_id`, `effect_key`).
@@ -101,16 +101,18 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
    `superseded`. A row is also not claimed while an older row of its subject is
    **uncertain** and was resolved less than the **max-apply window**
    (`GRAPH_MAX_APPLY_SECONDS`, 300 s) ago. Uncertain means sent and not settled
-   by a single attempt that was acknowledged or definitively refused: a row
-   that was retried (`attempts > 1`), that ended `retry_exhausted:*`, or that
-   was `superseded` after being sent. Its outcome is unknown, or one of its
+   by a single request that was acknowledged or definitively refused: a row
+   claimed more than once (`attempts > 1`), one whose transport retried inside
+   its claim (`last_error` carries `retried_in_claim`; `PacketRouter.route`
+   makes up to two requests per claim), one that ended `retry_exhausted:*`, or
+   one `superseded` after being sent. Its outcome is unknown, or one of its
    earlier requests may still be applied: a Gate timeout or 5xx means the graph
    "may or may not hold the row" (*Outcome classification*). The window bounds
    how long after its last attempt CEG may still apply such a request -- the
    Gate dispatch plus the worker's handling of one request -- and must be at
    least that bound. A newer version is sent only after it, so a late write of
    the uncertain version lands **before** the newer version, and the newer
-   version is the last write. A single-attempt acknowledgment or definitive
+   version is the last write. A single-request acknowledgment or definitive
    refusal (Gate 4xx, CEG `all_rejected` / `rows_rejected`) holds nothing: no
    request of it can land later. The newer version carries every field its
    converge selected, unsuppressed for any field an uncertain version carried
