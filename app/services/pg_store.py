@@ -835,6 +835,12 @@ GRAPH_INTENT_TERMINAL_STATES = frozenset(
     {GRAPH_INTENT_ACKNOWLEDGED, GRAPH_INTENT_FAILED_TERMINAL, GRAPH_INTENT_SUPERSEDED}
 )
 GRAPH_INTENT_DEFAULT_MAX_ATTEMPTS = 8
+# Max-apply window: how long after its last attempt a request whose outcome EIE
+# never learned may still be applied by CEG. It bounds the Gate dispatch plus
+# the worker's handling of one request, so it must be at least that bound
+# (graph_sync_intents.md *Ordering*). A newer version of the subject is not
+# sent until the window of every uncertain older version has passed.
+GRAPH_MAX_APPLY_SECONDS = 300.0
 
 
 class GraphSyncIntent(Base):
@@ -1185,6 +1191,7 @@ async def claim_graph_intents(
     effect_key: str | None = None,
     now: datetime | None = None,
     held_origins: frozenset[str] = frozenset(),
+    max_apply_seconds: float = GRAPH_MAX_APPLY_SECONDS,
 ) -> list[GraphIntentRecord]:
     """Atomically lease due intents to `owner` (cross-process safe).
 
@@ -1211,6 +1218,13 @@ async def claim_graph_intents(
 
     `held_origins` are left untouched -- neither claimed nor resolved -- while
     their workflow is switched off (e.g. converge graph sync disabled).
+
+    At most one version of a subject is in flight. A version is also held while
+    an older one is *uncertain* and resolved less than `max_apply_seconds` ago:
+    a request of it may still be applied late (graph_sync_intents.md
+    *Ordering*). Uncertain means sent and not settled by a single attempt that
+    was acknowledged or definitively refused -- a retried version, or one that
+    ended `retry_exhausted`, may have a request CEG has not applied yet.
     """
     if (tenant_id is None) != (effect_key is None):
         msg = "claim one operation with both tenant_id and effect_key, or neither"
@@ -1233,6 +1247,18 @@ async def claim_graph_intents(
             older_or_newer.tenant_id == subject.tenant_id,
             older_or_newer.entity_id == subject.entity_id,
             older_or_newer.endpoint.is_not_distinct_from(subject.endpoint),
+        )
+
+    apply_horizon = at - timedelta(seconds=max_apply_seconds)
+
+    def uncertain(older: Any) -> Any:
+        return and_(
+            older.attempts > 0,
+            or_(
+                older.attempts > 1,
+                older.state.not_in((GRAPH_INTENT_ACKNOWLEDGED, GRAPH_INTENT_FAILED_TERMINAL)),
+                older.last_error.like("retry_exhausted%"),
+            ),
         )
 
     def newer_sent(subject: Any) -> Any:
@@ -1289,6 +1315,13 @@ async def claim_graph_intents(
                 same_subject(row),
                 older_or_newer.seq < row.seq,
                 older_or_newer.state.in_((GRAPH_INTENT_PENDING, GRAPH_INTENT_DISPATCHING)),
+            ),
+            # An older version whose request may still land: wait out its window.
+            ~exists().where(
+                same_subject(row),
+                older_or_newer.seq < row.seq,
+                uncertain(older_or_newer),
+                older_or_newer.resolved_at > apply_horizon,
             ),
             # Repeated here, not only in `supersede`: under Read Committed an
             # older row committed after `supersede` ran is visible to this claim.
