@@ -324,3 +324,255 @@ def test_mixed_alg_case_needs_the_window_and_restores_the_worker(
     assert calls[0]["extra_env"] == {"GL_MIXED_CEG": "1"}
     assert res.id == "MIX-ALG-01"
     assert res.verdict == expected
+
+
+def test_graph_leg_synced_binds_the_sync_to_this_entity() -> None:
+    import json
+
+    def rec(**kw: object) -> str:
+        return json.dumps({"event": "side_effects_graph_leg_resolved", **kw})
+
+    log = ["not json", rec(entity_id="other", synced=True), rec(entity_id="gl-1", synced=False)]
+    assert rail.graph_leg_synced(log, "gl-1") is False
+    assert rail.graph_leg_synced([*log, rec(entity_id="gl-1", synced=True)], "gl-1") is True
+    assert rail.graph_leg_synced([json.dumps(["list"])], "gl-1") is False
+
+
+def test_logs_keeps_every_matching_line_when_unlimited(mp: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    lines = "\n".join(f"line {i} side_effects" for i in range(60))
+    mp.setattr(
+        rail,
+        "sh",
+        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout=lines, stderr=""),
+    )
+    assert len(rail.logs("l9e2e-eie", "t0", ("side_effects",))) == 40
+    full = rail.logs("l9e2e-eie", "t0", ("side_effects",), limit=None)
+    assert len(full) == 60 and full[0] == "line 0 side_effects"
+
+
+def test_graph_return_targets_parses_psql_rows(mp: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def fake_psql(query: str) -> list[str]:
+        seen.append(query)
+        return ["retained|||2026-11-24 15:00:00+00", "consumed|converge:op-1|seeded|2026-11-24"]
+
+    mp.setattr(rail, "psql", fake_psql)
+    rows = rail.graph_return_targets("sn-fb-1")
+    assert "entity_id='sn-fb-1'" in seen[0] and "tenant_id='synthneutral'" in seen[0]
+    assert rows[0]["state"] == "retained" and rows[0]["consumed_by"] == ""
+    assert rows[1] == {
+        "state": "consumed",
+        "consumed_by": "converge:op-1",
+        "outcome": "seeded",
+        "created_at": "2026-11-24",
+    }
+
+
+def test_typed_sync_reason_is_the_operator_contract_wording() -> None:
+    assert rail.TYPED_SYNC_BLOCKED == (
+        "BLOCKED pending an operator contract decision (the sync row carries only admitted fields, "
+        "by design since #351)"
+    )
+
+
+def test_graph_leg_outcomes_are_per_entity() -> None:
+    import json
+
+    def rec(**kw: object) -> str:
+        return json.dumps({"event": "side_effects_graph_leg_resolved", **kw})
+
+    log = [rec(entity_id="other", synced=False), rec(entity_id="gl-1", synced=True)]
+    assert rail.graph_leg_outcomes(log, "gl-1") == [True]
+    assert rail.graph_leg_outcomes(log, "other") == [False]
+    assert rail.graph_leg_outcomes(log, "absent") == []
+
+
+def test_recovery_poll_ignores_a_row_read_after_the_deadline(mp: pytest.MonkeyPatch) -> None:
+    clock = iter([0.0, 0.0, 130.0, 130.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    calls: list[int] = []
+
+    def late_row(db: str, fid: str, timeout: float = 120) -> dict:
+        calls.append(timeout)
+        return {"rows": [[f'"{fid}"']], "facility_count": 1}
+
+    mp.setattr(rail, "facility", late_row)
+    g = rail.poll_recovered_facility("gl-down-1", budget_s=120)
+    assert calls == [120]
+    assert g["facility_count"] is None
+
+
+def test_recovery_poll_accepts_a_row_within_the_deadline(mp: pytest.MonkeyPatch) -> None:
+    clock = iter([0.0, 5.0, 20.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail, "facility", lambda db, fid, timeout=120: {"rows": [], "facility_count": 1})
+    assert rail.poll_recovered_facility("gl-down-1", budget_s=120)["facility_count"] == 1
+
+
+def _rig_converge_sync(mp: pytest.MonkeyPatch, *, polymers_prop: str, state: str) -> None:
+    """Drive c_converge_sync with no Docker: a row reached CEG through Gate, no typed edge."""
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(rail, "stamp", lambda: "2026-11-24T00:00:00Z")
+    mp.setattr(
+        rail,
+        "drive",
+        lambda scenario, args=None: {
+            "ok": True,
+            "gate_signature_valid": True,
+            "response": {"signing_key_id": "gate-gl", "generation": 2, "causation_id": "c-1"},
+            "payload": {"state": state},
+        },
+    )
+    mp.setattr(rail, "psql", lambda q: ["1"])
+    # One Facility row, no PROCESSES edge; column 7 is the Facility's processed_polymers property.
+    row = ['"fid"', "x", "x", "NULL", "NULL", "NULL", "NULL", polymers_prop]
+    mp.setattr(rail, "facility", lambda db, fid, timeout=120: {"rows": [row], "facility_count": 1})
+
+    def station(db: str, q: str, timeout: int = 120) -> list[list[str]]:
+        sid = q.split("station_id:'")[1].split("'")[0]
+        return [[f'"{sid}"', "NULL"]]
+
+    mp.setattr(rail, "cypher", station)
+    mp.setattr(
+        rail,
+        "gate_events",
+        lambda since, action: [
+            {"event": "gate.ingress", "source_node": "enrichment-engine", "request_id": "r1"},
+            {
+                "event": "gate.completed",
+                "source_node": "graph",
+                "request_id": "r1",
+                "generation": 2,
+            },
+        ],
+    )
+    mp.setattr(rail, "logs", lambda *a, **k: [])
+    mp.setattr(rail, "graph_leg_synced", lambda log, eid: True)
+    mp.setattr(rail, "graph_leg_outcomes", lambda log, eid: [True])
+    mp.setattr(rail, "verdict", lambda ok, p, signed_claim: "PASS" if ok else "FAIL")
+
+
+def _by_id(results: list[rail.Result]) -> dict[str, rail.Result]:
+    return {r.id: r for r in results}
+
+
+def test_p18_missing_edge_alone_is_blocked_on_the_operator_contract(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+    p18 = _by_id(rail.c_converge_sync("ed25519"))["P18"]
+    assert p18.verdict == "BLOCKED"
+    assert p18.reason == f"{rail.TYPED_SYNC_BLOCKED}; {rail.GATE_BINDING_LIMIT}"
+
+
+def test_p18_stringified_property_stays_fail_without_an_edge(mp: pytest.MonkeyPatch) -> None:
+    _rig_converge_sync(mp, polymers_prop='"{\\"HDPE\\": \\"in\\"}"', state="completed")
+    p18 = _by_id(rail.c_converge_sync("ed25519"))["P18"]
+    assert p18.verdict == "FAIL"
+    assert rail.TYPED_SYNC_BLOCKED not in p18.reason
+
+
+def test_p05_missing_edge_alone_is_blocked_on_the_operator_contract(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+    p05 = _by_id(rail.c_converge_sync("ed25519", tenant="synthneutral"))["P05"]
+    assert p05.verdict == "BLOCKED"
+    assert p05.reason == f"{rail.TYPED_SYNC_BLOCKED}; {rail.GATE_BINDING_LIMIT}"
+
+
+def test_p05_incomplete_converge_stays_fail_without_an_edge(mp: pytest.MonkeyPatch) -> None:
+    _rig_converge_sync(mp, polymers_prop="NULL", state="failed")
+    p05 = _by_id(rail.c_converge_sync("ed25519", tenant="synthneutral"))["P05"]
+    assert p05.verdict == "FAIL"
+    assert rail.GATE_BINDING_LIMIT in p05.reason
+
+
+def test_p07_reason_records_the_gate_entity_binding_limit(mp: pytest.MonkeyPatch) -> None:
+    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+    p07 = _by_id(rail.c_converge_sync("ed25519"))["P07"]
+    assert p07.verdict == "PASS"
+    assert rail.GATE_BINDING_LIMIT in p07.reason
+
+
+def test_typed_sync_blocked_requires_every_other_requirement() -> None:
+    base = {"stored": True, "sync_via_gate": True, "typed_edges": False}
+    assert rail.typed_sync_blocked(**base, other_requirements_met=True)
+    assert not rail.typed_sync_blocked(**base, other_requirements_met=False)
+    assert not rail.typed_sync_blocked(
+        **{**base, "sync_via_gate": False}, other_requirements_met=True
+    )
+    assert not rail.typed_sync_blocked(**{**base, "stored": False}, other_requirements_met=True)
+    assert not rail.typed_sync_blocked(**{**base, "typed_edges": True}, other_requirements_met=True)
+
+
+def test_recovery_poll_gives_the_probe_the_fractional_remaining_budget(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    clock = iter([0.0, 118.1, 119.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    calls: list[float] = []
+
+    def row(db: str, fid: str, timeout: float = 120) -> dict:
+        calls.append(timeout)
+        return {"rows": [], "facility_count": 1}
+
+    mp.setattr(rail, "facility", row)
+    assert rail.poll_recovered_facility("gl-down-1", budget_s=120)["facility_count"] == 1
+    assert calls == [pytest.approx(1.9)]
+
+
+def test_recovery_poll_never_gives_a_probe_more_than_a_sub_second_budget(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    clock = iter([0.0, 119.6, 120.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    calls: list[float] = []
+
+    def timed_out(db: str, fid: str, timeout: float = 120) -> dict:
+        calls.append(timeout)
+        raise rail.ProbeTimeoutError("cypher on plasticos failed (rc 124)")
+
+    mp.setattr(rail, "facility", timed_out)
+    g = rail.poll_recovered_facility("gl-down-1", budget_s=120)
+    assert calls == [pytest.approx(0.4)]
+    assert g["facility_count"] is None
+
+
+def test_recovery_poll_raises_a_non_timeout_error_at_the_deadline(mp: pytest.MonkeyPatch) -> None:
+    clock = iter([0.0, 119.6, 120.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+
+    def broken(db: str, fid: str, timeout: float = 120) -> dict:
+        raise rail.ProbeError("cypher on plasticos failed (rc 1): auth failure")
+
+    mp.setattr(rail, "facility", broken)
+    with pytest.raises(rail.ProbeError, match="auth failure"):
+        rail.poll_recovered_facility("gl-down-1", budget_s=120)
+
+
+def test_cypher_classifies_only_the_sh_timeout_as_a_probe_timeout(mp: pytest.MonkeyPatch) -> None:
+    mp.setattr(rail, "env", lambda: {"GL_NEO4J_SECRET": "x"})
+    mp.setattr(
+        rail,
+        "sh",
+        lambda cmd, timeout=600, extra_env=None: rail.subprocess.CompletedProcess(
+            cmd[:1], 124, "", "docker: timed out after 0.4s"
+        ),
+    )
+    with pytest.raises(rail.ProbeTimeoutError):
+        rail.cypher("plasticos", "RETURN 1", timeout=0.4)
+    mp.setattr(
+        rail,
+        "sh",
+        lambda cmd, timeout=600, extra_env=None: rail.subprocess.CompletedProcess(
+            cmd[:1], 1, "", "auth failure"
+        ),
+    )
+    with pytest.raises(rail.ProbeError) as err:
+        rail.cypher("plasticos", "RETURN 1")
+    assert not isinstance(err.value, rail.ProbeTimeoutError)

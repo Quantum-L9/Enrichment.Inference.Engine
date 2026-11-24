@@ -60,6 +60,10 @@ class ProbeError(RuntimeError):
     """A probe did not complete. The case must record NOT_RUN, never a result."""
 
 
+class ProbeTimeoutError(ProbeError):
+    """A probe ran out of its time budget (sh's own timeout), as opposed to failing."""
+
+
 class StackUnusableError(ProbeError):
     """A case could not put the stack back (a container or registration it changed is not restored).
 
@@ -92,8 +96,12 @@ def redact(text: str) -> str:
     return text
 
 
+SH_TIMEOUT_RC = 124
+SH_TIMEOUT_MARK = "timed out after"
+
+
 def sh(
-    cmd: list[str], *, timeout: int = 600, extra_env: dict | None = None
+    cmd: list[str], *, timeout: float = 600, extra_env: dict | None = None
 ) -> subprocess.CompletedProcess:
     """Run a command. A timeout returns rc 124 and a message that names no argument."""
     e = {**os.environ, **(extra_env or {})}
@@ -101,7 +109,7 @@ def sh(
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=e)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
-            cmd[:1], 124, "", f"{cmd[0]}: timed out after {timeout}s"
+            cmd[:1], SH_TIMEOUT_RC, "", f"{cmd[0]}: {SH_TIMEOUT_MARK} {timeout:g}s"
         )
 
 
@@ -121,7 +129,7 @@ def drive(scenario: str, args: dict | None = None) -> dict:
         return {"driver_error": redact(r.stderr or r.stdout)[-600:]}
 
 
-def cypher(db: str, query: str) -> list[list[str]]:
+def cypher(db: str, query: str, timeout: float = 120) -> list[list[str]]:
     """Rows of a Cypher query (header dropped). Raises ProbeError when the query does not complete."""
     pw = env()["GL_NEO4J_SECRET"]
     r = sh(
@@ -140,12 +148,13 @@ def cypher(db: str, query: str) -> list[list[str]]:
             "plain",
             query,
         ],
-        timeout=120,
+        timeout=timeout,
     )
     if r.returncode != 0:
-        raise ProbeError(
-            f"cypher on {db} failed (rc {r.returncode}): {redact(r.stderr.strip())[-300:]}"
-        )
+        msg = f"cypher on {db} failed (rc {r.returncode}): {redact(r.stderr.strip())[-300:]}"
+        if r.returncode == SH_TIMEOUT_RC and SH_TIMEOUT_MARK in r.stderr:
+            raise ProbeTimeoutError(msg)
+        raise ProbeError(msg)
     lines = [ln for ln in r.stdout.strip().splitlines() if ln.strip()]
     return [ln.split(", ") for ln in lines[1:]]
 
@@ -160,7 +169,10 @@ def psql(query: str) -> list[str]:
     return r.stdout.strip().splitlines()
 
 
-def logs(container: str, since: str = "2m", grep: tuple[str, ...] = ()) -> list[str]:
+def logs(
+    container: str, since: str = "2m", grep: tuple[str, ...] = (), limit: int | None = 40
+) -> list[str]:
+    """Container log lines since ``since``, optionally filtered; the last ``limit`` (None: all)."""
     r = sh(["docker", "logs", container, "--since", since], timeout=60)
     if r.returncode != 0:
         raise ProbeError(
@@ -170,13 +182,15 @@ def logs(container: str, since: str = "2m", grep: tuple[str, ...] = ()) -> list[
     lines = [ln for ln in lines if "otel" not in ln and "opentelemetry" not in ln]
     if grep:
         lines = [ln for ln in lines if any(g in ln for g in grep)]
-    return [redact(ln) for ln in lines[-40:]]
+    if limit is not None:
+        lines = lines[-limit:]
+    return [redact(ln) for ln in lines]
 
 
 def gate_events(since: str, action: str) -> list[dict]:
     """Gate's structured ingress/completion events for one action since a docker-logs timestamp."""
     out = []
-    for ln in logs("l9e2e-gate", since, (f'"action": "{action}"',)):
+    for ln in logs("l9e2e-gate", since, (f'"action": "{action}"',), limit=None):
         try:
             ev = json.loads(ln)
         except ValueError:
@@ -445,7 +459,7 @@ def ceg_refused(r: dict, error: str) -> bool:
     )
 
 
-def facility(db: str, fid: str) -> dict:
+def facility(db: str, fid: str, timeout: float = 120) -> dict:
     """Facility read-back. valueType() is a Neo4j 5 built-in (no APOC). Raises ProbeError on query failure."""
     rows = cypher(
         db,
@@ -453,6 +467,7 @@ def facility(db: str, fid: str) -> dict:
         "OPTIONAL MATCH (f)-[r:PROCESSES]->(p:PolymerFamily) "
         "RETURN f.facility_id, f.name, f.contamination_tolerance, p.code, r.line_id, r.direction, "
         "r.form, valueType(f.processed_polymers)",
+        timeout=timeout,
     )
     return {"rows": rows, "facility_count": len({r[0] for r in rows if r and r[0] != "NULL"})}
 
@@ -676,6 +691,75 @@ def c_negatives(p: str) -> list[Result]:
     return [r11, r13]
 
 
+TYPED_SYNC_BLOCKED = (
+    "BLOCKED pending an operator contract decision (the sync row carries only admitted fields, "
+    "by design since #351)"
+)
+
+# Gate's packet log context (observability/logging.py:37-47) carries no entity field, so the rail
+# cannot bind a Gate sync event to one entity. It binds each case by EIE's own graph-leg record
+# for the run's unique entity id plus the CEG row, and by request_id between Gate's ingress and
+# completion; Gate's events prove that a sync from EIE completed in the window, not which entity.
+GATE_BINDING_LIMIT = (
+    "Gate's sync events carry no entity field (observability/logging.py:37-47); per-entity binding "
+    "is EIE's graph-leg record plus the CEG row, not Gate's events"
+)
+
+
+def typed_sync_blocked(
+    *, stored: bool, sync_via_gate: bool, typed_edges: bool, other_requirements_met: bool
+) -> bool:
+    """True only when the missing typed edge is the sole failure of a typed-sync case.
+
+    BLOCKED pending the operator contract applies when the row reached CEG through Gate and
+    every other requirement of the case holds. Any other failure stays FAIL (rule 95).
+    """
+    return stored and sync_via_gate and other_requirements_met and not typed_edges
+
+
+def graph_return_targets(entity_id: str) -> list[dict]:
+    """EIE's durable graph-return targets for one synthneutral entity (retained -> consuming -> consumed)."""
+    rows = psql(
+        "select state, coalesce(consumed_by, ''), coalesce(outcome, ''), created_at "
+        "from graph_return_targets "
+        f"where tenant_id='synthneutral' and entity_id='{entity_id}' order by created_at"
+    )
+    out = []
+    for row in rows:
+        state, consumed_by, outcome, created_at = (row.split("|") + ["", "", "", ""])[:4]
+        out.append(
+            {
+                "state": state,
+                "consumed_by": consumed_by,
+                "outcome": outcome,
+                "created_at": created_at,
+            }
+        )
+    return out
+
+
+def graph_leg_outcomes(eie_log: list[str], entity_id: str) -> list[bool]:
+    """The synced flag of every side_effects_graph_leg_resolved record EIE logged for this entity."""
+    out = []
+    for line in eie_log:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if (
+            isinstance(rec, dict)
+            and rec.get("event") == "side_effects_graph_leg_resolved"
+            and rec.get("entity_id") == entity_id
+        ):
+            out.append(rec.get("synced") is True)
+    return out
+
+
+def graph_leg_synced(eie_log: list[str], entity_id: str) -> bool:
+    """EIE recorded its graph leg for this entity as synced (side_effects_graph_leg_resolved)."""
+    return True in graph_leg_outcomes(eie_log, entity_id)
+
+
 def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
     """P07 / P18 / P05: consumer converge -> EIE durable -> EIE's own egress sync via Gate -> CEG -> Neo4j."""
     eid = f"gl-{tenant[:4]}-{uuid.uuid4().hex[:6]}"
@@ -708,26 +792,32 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
             not_run(i, "A8", p, "converge -> sync read-back", str(exc), entity_id=eid) for i in ids
         ]
     sync_events = gate_events(since, "sync")
-    conv_root = (r.get("response") or {}).get("root_id")
-    # Bound to this converge: EIE's sync must derive from the converge packet (same root_id),
-    # so a sync from another case or an earlier run cannot satisfy P07/P05.
+    # Verdict evidence from the case start, untruncated: a probe delay or later traffic must not
+    # push this entity's graph-leg record out of the window. Only the recorded excerpt is capped.
+    eie_all = logs(
+        "l9e2e-eie",
+        since,
+        ("graph_sync", "packet_route_error", "graph_leg", "side_effects"),
+        limit=None,
+    )
+    eie_log = eie_all[-40:]
+    # Bound to this converge by its entity, not by lineage: EIE starts every Gate egress as a new
+    # root packet (app/engines/packet_router.py route(): "The SDK builds the root packet"), so the
+    # sync never shares the converge's root_id. The binding is EIE's own graph-leg record for this
+    # run's unique entity id, plus Gate's sync from EIE completed by the graph worker in this window.
+    leg_synced = graph_leg_synced(eie_all, eid)
     ingress = [
         e
         for e in sync_events
-        if e["event"] == "gate.ingress"
-        and e["source_node"] == "enrichment-engine"
-        and conv_root is not None
-        and e["root_id"] == conv_root
+        if e["event"] == "gate.ingress" and e["source_node"] == "enrichment-engine"
     ]
     completed = [
         e
         for e in sync_events
         if e["event"] == "gate.completed"
+        and e["source_node"] == "graph"
         and any(e["request_id"] == i["request_id"] for i in ingress)
     ]
-    eie_log = logs(
-        "l9e2e-eie", "1m", ("graph_sync", "packet_route_error", "graph_leg", "side_effects")
-    )
     resp = r.get("response") or {}
     converge_lineage = (
         resp.get("signing_key_id") == "gate-gl"
@@ -736,11 +826,16 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         and resp.get("causation_id") is not None
     )
     sync_via_gate = (
-        bool(ingress)
+        leg_synced
+        and bool(ingress)
         and bool(completed)
         and all((c.get("generation") or 0) >= 2 for c in completed)
     )
-    egress_blocked = any("signature required but not present" in ln for ln in eie_log)
+    # The signing error carries no entity id, so it only counts for this case when EIE's own
+    # graph-leg record for this entity resolved without syncing.
+    egress_blocked = False in graph_leg_outcomes(eie_all, eid) and any(
+        "signature required but not present" in ln for ln in eie_all
+    )
     state = (r.get("payload") or {}).get("state")
     obs = {
         "entity_id": eid,
@@ -750,6 +845,7 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
         "eie_persisted_rows": persisted,
         "graph": g,
         "gate_sync_events": sync_events,
+        "eie_graph_leg_synced": leg_synced,
         "eie_log": eie_log,
     }
     out: list[Result] = []
@@ -764,7 +860,11 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
                 "enrichment-engine, completed, child generation >= 2) and its row read back from Neo4j",
                 verdict(ok07, p, signed_claim=True),
                 observed=obs,
-                reason="" if ok07 else "sync not observed through Gate, or row not read back",
+                reason=(
+                    GATE_BINDING_LIMIT
+                    if ok07
+                    else f"sync not observed through Gate, or row not read back; {GATE_BINDING_LIMIT}"
+                ),
             )
         )
         out.append(
@@ -790,9 +890,27 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
                 "with no PlasticOS literal",
                 verdict(ok05, p, signed_claim=False),
                 observed=obs,
-                reason="" if stored else "no row reached CEG",
+                reason=GATE_BINDING_LIMIT
+                if stored
+                else f"no row reached CEG; {GATE_BINDING_LIMIT}",
             )
         )
+    # The node arrived through Gate but no typed child edge did: EIE's sync row carries only the
+    # admitted (enriched) fields by design since #351, which leaves the edge contract to an operator.
+    typed_ids = ("P18",) if tenant == "plasticos" else ("P05",)
+    other_ok = not_stringified if tenant == "plasticos" else state == "completed"
+    if typed_sync_blocked(
+        stored=stored,
+        sync_via_gate=sync_via_gate,
+        typed_edges=typed_edges,
+        other_requirements_met=other_ok,
+    ):
+        for res in out:
+            if res.id in typed_ids:
+                res.verdict = "BLOCKED"
+                # The operator-contract wording first, then the limit of the Gate evidence that
+                # sync_via_gate rests on, which this reason must not drop.
+                res.reason = f"{TYPED_SYNC_BLOCKED}; {GATE_BINDING_LIMIT}"
     if not stored and egress_blocked:
         for res in out:
             res.verdict = "BLOCKED"
@@ -812,6 +930,7 @@ def c_ceg_down(p: str) -> list[Result]:
     """P14: EIE completes while CEG is down; durable result; the pending graph intent survives an EIE restart."""
     a = "EIE completes while CEG is down; durable result; pending graph intent recovered after EIE restart"
     eid = f"gl-down-{uuid.uuid4().hex[:6]}"
+    case_since = stamp()
     stop = sh(["docker", "stop", "l9e2e-ceg"], timeout=120)
     running = sh(
         ["docker", "inspect", "l9e2e-ceg", "--format", "{{.State.Running}}"], timeout=30
@@ -836,10 +955,7 @@ def c_ceg_down(p: str) -> list[Result]:
         eie_log = logs(
             "l9e2e-eie", "1m", ("graph_sync", "packet_route_error", "graph_leg", "side_effects")
         )
-        outbox = psql(
-            "select table_name from information_schema.tables where table_schema='public' "
-            "and (table_name ilike '%pending%' or table_name ilike '%outbox%')"
-        )
+        intent_down = graph_sync_intents(eid)
         started_before = _started_at("l9e2e-eie")
         restart = sh(["docker", "restart", "l9e2e-eie"], timeout=180)
         started_after = _started_at("l9e2e-eie")
@@ -862,13 +978,24 @@ def c_ceg_down(p: str) -> list[Result]:
             raise StackUnusableError(
                 f"CEG did not come back after the outage case (start rc {start.returncode}, {ready})"
             )
-    time.sleep(15)
+    # EIE's recovery pass runs 30 s after startup and then every 30 s, and an in-flight intent is
+    # held by its 60 s lease, so recovery is polled for up to 120 s rather than read once.
     try:
-        g = facility("plasticos", eid)
+        g = poll_recovered_facility(eid, budget_s=120)
+        intent_after = graph_sync_intents(eid)
     except ProbeError as exc:
         return [not_run("P14", "A8", p, a, str(exc), entity_id=eid)]
+    # The recovery record carries only an attempted count (side_effect_coordinator.py), not the entity:
+    # it is evidence that a recovery pass ran in this case's window; the graph row binds the entity.
+    recovered_log = logs("l9e2e-eie", case_since, ("side_effects_graph_recovered",), limit=None)
     st = (r.get("payload") or {}).get("state")
-    ok = st == "completed" and persisted == ["1"] and absent_before and g["facility_count"] == 1
+    ok = (
+        st == "completed"
+        and persisted == ["1"]
+        and absent_before
+        and bool(intent_down)
+        and g["facility_count"] == 1
+    )
     return [
         Result(
             "P14",
@@ -886,15 +1013,54 @@ def c_ceg_down(p: str) -> list[Result]:
                 "ready_after": ready,
                 "eie_restart": {"started_before": started_before, "started_after": started_after},
                 "graph_after_recovery": g,
-                "durable_intent_tables": outbox,
+                "graph_sync_intents_while_down": intent_down,
+                "graph_sync_intents_after_recovery": intent_after,
+                "eie_side_effects_graph_recovered": recovered_log,
             },
-            reason="" if ok else _p14_reason(st, persisted, absent_before, g, outbox),
+            reason="" if ok else _p14_reason(st, persisted, absent_before, g, intent_down),
         )
     ]
 
 
+def poll_recovered_facility(entity_id: str, budget_s: float) -> dict:
+    """Poll the graph for the entity until it appears or the budget ends.
+
+    Every probe gets at most the remaining budget, the wait between probes never outlasts it, and a
+    row read after the deadline does not count, so the reported window is the observed one. A
+    probe that times out at the deadline ends the poll; any other failure, or an early timeout, raises.
+    """
+    deadline = time.monotonic() + budget_s
+    g: dict = {"facility_count": None, "within_s": budget_s}
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            # The exact remaining budget, fractional: truncating it would time the probe out
+            # before the deadline, and a floor would let it run past one.
+            got = facility("plasticos", entity_id, timeout=remaining)
+        except ProbeTimeoutError:
+            # Only running out of the budget ends the poll; any other probe failure, at the
+            # deadline or not, raises so the case records NOT_RUN rather than a verdict.
+            if time.monotonic() >= deadline:
+                break
+            raise
+        if time.monotonic() > deadline:
+            break
+        g = {**got, "within_s": budget_s}
+        if g["facility_count"] == 1:
+            break
+        time.sleep(min(10.0, max(0.0, deadline - time.monotonic())))
+    return g
+
+
+def graph_sync_intents(entity_id: str) -> list[str]:
+    """EIE's durable graph-sync intents for one entity, as 'state|attempts|lease_expires_at' rows."""
+    return psql(
+        "select state, attempts, lease_expires_at from graph_sync_intents "
+        f"where entity_id='{entity_id}'"
+    )
+
+
 def _p14_reason(
-    state: str | None, persisted: list[str], absent: bool, graph: dict, outbox: list[str]
+    state: str | None, persisted: list[str], absent: bool, graph: dict, intents: list[str]
 ) -> str:
     """The P14 failure reason, from what was observed rather than a fixed string."""
     parts = []
@@ -904,14 +1070,12 @@ def _p14_reason(
         parts.append(f"EIE durable result rows {persisted}, not exactly one")
     if not absent:
         parts.append("the row was already in the graph while CEG was down (outage not effective)")
+    if not intents:
+        parts.append("no graph_sync_intents row for the entity while CEG was down")
     if graph.get("facility_count") != 1:
         parts.append(
-            f"graph rows after CEG recovery and an EIE restart: {graph.get('facility_count')}, not 1"
-        )
-        parts.append(
-            "durable pending-intent table: "
-            + (", ".join(outbox) if outbox else "none")
-            + " (F-A1-06, EIE-W)"
+            f"graph rows within 120 s of CEG recovery and an EIE restart: "
+            f"{graph.get('facility_count')}, not 1"
         )
     return "; ".join(parts)
 
@@ -1624,9 +1788,10 @@ def c_gate_rail_policy(p: str) -> list[Result]:
 def c_feedback(p: str) -> list[Result]:
     """F-A1-08 disposition: synthneutral changed-fact witness (P27, P22/P30 parts) and the plasticos justified no-op.
 
-    The inference packet is sent with the ceg-gl key held by the driver (rig). CEG's own egress cannot sign
-    under ed25519 at SDK bc1c74c (F-A1-04), and CEG's inference is reachable only through operator admin
-    (F-A1-02). The rig output is exactly what infer_geography_from_postal_code returns for zip 94105.
+    The inference packet is sent with the ceg-gl key held by the driver (rig): CEG's inference is reachable
+    only through operator admin, not a Gate action (F-A1-02). The rig output is exactly what
+    infer_geography_from_postal_code returns for zip 94105. P30's resync is read from the graph right after
+    the converge that consumed the fact, before the next pass re-derives it.
     """
     eid = f"sn-fb-{uuid.uuid4().hex[:6]}"
     out = {
@@ -1649,13 +1814,23 @@ def c_feedback(p: str) -> list[Result]:
         },
     )
     sch = {"region": "string", "band": "string"}
+    targets_intake = graph_return_targets(eid)
     c1 = drive(
         "execute", converge_payload(eid, "synthneutral", extra={"postal_code": "94105"}, schema=sch)
     )
     seeded_log = logs("l9e2e-eie", "1m", ("graph", eid))
+    targets_after_c1 = graph_return_targets(eid)
+    time.sleep(8)
+    try:
+        after_c1 = cypher(
+            "synthneutral", f"MATCH (s:Station {{station_id:'{eid}'}}) RETURN s.region"
+        )
+    except ProbeError as exc:
+        after_c1 = [["PROBE_ERROR", str(exc)]]
     c2 = drive(
         "execute", converge_payload(eid, "synthneutral", extra={"postal_code": "94105"}, schema=sch)
     )
+    targets_after_c2 = graph_return_targets(eid)
     f1, f2 = (
         (c1.get("payload") or {}).get("fields") or {},
         (c2.get("payload") or {}).get("fields") or {},
@@ -1695,6 +1870,12 @@ def c_feedback(p: str) -> list[Result]:
         "converge1_fields": f1,
         "converge2_fields": f2,
         "eie_log": seeded_log,
+        "graph_return_targets": {
+            "after_intake": targets_intake,
+            "after_converge1": targets_after_c1,
+            "after_converge2": targets_after_c2,
+        },
+        "graph_after_c1": after_c1,
         "graph_after": synced,
         "converge1_completed": c1_ok,
         "plasticos_noop": {
@@ -1705,21 +1886,41 @@ def c_feedback(p: str) -> list[Result]:
             "observed": noop,
         },
     }
+    retained = any(t["state"] == "retained" for t in targets_intake)
+    consumed_rows = [
+        t
+        for t in targets_after_c1 + targets_after_c2
+        if t["state"] == "consumed"
+        and t["consumed_by"].startswith("converge:")
+        and t["outcome"] == "seeded"
+    ]
+    ok27 = acc_ok and consumed and retained and bool(consumed_rows)
+    missing27 = [
+        k
+        for k, v in {
+            "accepted (targets_queued 1)": acc_ok,
+            "consumed (converge region=West)": consumed,
+            "retained row after intake": retained,
+            "consumed row (consumed_by converge:<op>, outcome seeded)": bool(consumed_rows),
+        }.items()
+        if not v
+    ]
     p27 = Result(
         "P27",
         "A8",
         p,
         "accepted then consumed on a later pass, with distinct accepted/retained/consumed evidence",
-        "BLOCKED" if acc_ok and consumed else "FAIL",
+        verdict(ok27, p, signed_claim=False),
         observed=obs,
         reason=(
-            "partial: accepted and consumed observed through Gate (consumed once; the next pass re-derives "
-            "region from the provider). Retained has no observable evidence: in-memory only (F-A1-06, "
-            "EIE-W). The inference came from the ceg-gl rig because CEG egress cannot sign (F-A1-04)"
+            "accepted through Gate; retained in graph_return_targets after intake; consumed by the next "
+            "converge (consumed_by converge:<op>, outcome seeded). The inference is the driver's ceg-gl "
+            "rig: CEG has no Gate-routable inference trigger (F-A1-02, CEG-W)"
         )
-        if acc_ok and consumed
-        else "accepted/consumed not both observed (see observed)",
+        if ok27
+        else "not observed: " + "; ".join(missing27),
     )
+    resynced = after_c1 == [['"West"']]
     p30 = Result(
         "P30",
         "A8",
@@ -1735,12 +1936,20 @@ def c_feedback(p: str) -> list[Result]:
                 if c1_ok and consumed
                 else "NOT observed (converge c1 did not complete with region=West)"
             )
-            + ", but the resync cannot leave EIE under ed25519 (F-A1-04); plasticos justified no-op "
+            + "; resync to CEG "
+            + (
+                "observed (Station.region = West right after that pass)"
+                if resynced
+                else "NOT observed"
+            )
+            + "; plasticos justified no-op "
             + (
                 ("observed (region undeclared, absent from fields)" if noop else "NOT observed")
                 if pc_ok
                 else "evidence missing (plasticos converge did not complete)"
             )
+            + ". BLOCKED, not PASS: the inference is the driver's ceg-gl rig, because CEG has no "
+            "Gate-routable inference trigger (F-A1-02, CEG-W), so the integrated CEG origin is unproven"
         ),
     )
     p22 = Result(
@@ -1755,7 +1964,7 @@ def c_feedback(p: str) -> list[Result]:
             "trigger": "none Gate-routable",
         },
         reason="CEG inference only via operator admin (not a Gate action, not advertised) from the caller "
-        "entity, not a graph read (F-A1-02, CEG-W); CEG egress cannot sign under ed25519 (F-A1-04)",
+        "entity, not a graph read (F-A1-02, CEG-W)",
     )
     return [p27, p30, p22]
 
