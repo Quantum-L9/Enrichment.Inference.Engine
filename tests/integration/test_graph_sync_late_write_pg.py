@@ -254,3 +254,68 @@ async def test_an_ack_after_an_in_claim_retry_holds_the_newer_version(db: None) 
     later = datetime.now(UTC) + timedelta(seconds=5)
     assert await _claim(later) == []  # B's first request may still land
     assert await _claim(later + timedelta(seconds=WINDOW)) == ["a"]
+
+
+# ── Rule 6: a stale version is never sent after a newer one ─────────────────
+
+
+def _recording_router(sent: list[int | None], *acks: Any) -> MagicMock:
+    """Records each send's sync_version; answers from ``acks`` (None: unacknowledged)."""
+    queue = list(acks)
+
+    async def notify(**kwargs: Any) -> Any:
+        sent.append(kwargs.get("sync_version"))
+        ack = queue.pop(0) if queue else ACK
+        kind = GraphSyncOutcomeKind.ACKNOWLEDGED if ack else GraphSyncOutcomeKind.RETRYABLE
+        kwargs["on_outcome"](GraphSyncOutcome(kind, "test", ack))
+        return ack
+
+    router = MagicMock()
+    router.notify_graph_sync = AsyncMock(side_effect=notify)
+    router.graph_sync_pin = MagicMock(
+        return_value=GraphSyncPin(entity_type=ENDPOINT, contract_digest="c" * 64)
+    )
+    return router
+
+
+async def _recover(router: MagicMock) -> int:
+    with patch("app.engines.packet_router.get_router", return_value=router):
+        return await SideEffectCoordinator().recover_graph_intents(SETTINGS)
+
+
+async def _all_due() -> None:
+    async with pg_store.get_session() as session:
+        await session.execute(
+            text("UPDATE graph_sync_intents SET next_attempt_at = '2000-01-01T00:00:00Z'")
+        )
+
+
+async def test_versions_are_sent_in_increasing_order_with_the_intent_seq(db: None) -> None:
+    for key, value in (("v1", "B1"), ("v2", "B2"), ("v3", "B3")):
+        await _commit(key, value)
+    seqs = [(await pg_store.get_graph_intent(TENANT, k)).seq for k in ("v1", "v2", "v3")]  # type: ignore[union-attr]
+    sent: list[int | None] = []
+    router = _recording_router(sent)
+    while await _recover(router):
+        pass
+    assert sent == seqs and seqs == sorted(seqs)
+
+
+async def test_an_older_version_is_never_sent_once_a_newer_one_was_sent(db: None) -> None:
+    await _commit("v1", "B1")
+    await _commit("v2", "B2")
+    v1 = await pg_store.get_graph_intent(TENANT, "v1")
+    v2 = await pg_store.get_graph_intent(TENANT, "v2")
+    assert v1 is not None and v2 is not None and v1.seq < v2.seq
+    async with pg_store.get_session() as session:  # v2 was sent; its ack was lost
+        await session.execute(
+            text("UPDATE graph_sync_intents SET attempts = 1 WHERE effect_key = 'v2'")
+        )
+    sent: list[int | None] = []
+    router = _recording_router(sent, None, ACK)
+    await _recover(router)  # v1 is superseded, never sent; v2 resent, unacknowledged
+    await _all_due()
+    await _recover(router)  # v2 again, same version
+    assert sent == [v2.seq, v2.seq]
+    older = await pg_store.get_graph_intent(TENANT, "v1")
+    assert older is not None and older.state == "superseded" and older.attempts == 0

@@ -32,7 +32,7 @@ DOC = REPO / "docs" / "contracts" / "data" / "graph_sync_intents.md"
 def _rule5() -> str:
     doc = DOC.read_text(encoding="utf-8")
     start = doc.index("5. **Version order and the max-apply window.**")
-    return doc[start : doc.index("6. **Bounded retries.**", start)]
+    return doc[start : doc.index("6. **Monotonic version.**", start)]
 
 
 def test_the_documented_window_is_the_store_window() -> None:
@@ -63,3 +63,11 @@ def test_g4_never_suppresses_against_an_uncertain_send() -> None:
     assert pg_store.settled_graph_fields([sent_unacknowledged, acknowledged]) == {}
     doc = " ".join(DOC.read_text(encoding="utf-8").split())
     assert "rule 5 sends that resend only after the uncertain intent's max-apply window" in doc
+
+
+def test_rule_6_names_the_declared_version_and_its_guarantee() -> None:
+    doc = " ".join(DOC.read_text(encoding="utf-8").split())
+    assert "6. **Monotonic version.**" in doc
+    assert "Rule 6 alone guarantees that the last applied write of a subject is its newest" in doc
+    assert packet_router.SYNC_VERSION_PROPERTY == "sync_version"
+    assert "row property `sync_version`" in doc

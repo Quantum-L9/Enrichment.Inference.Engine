@@ -437,6 +437,24 @@ def _retry_allowed(exc: BaseException, *, has_idempotency_key: bool) -> bool:
     return False
 
 
+SYNC_VERSION_PROPERTY = "sync_version"
+
+
+def _with_sync_version(
+    fields: dict[str, Any], version: int | None, contract: GraphSyncContract
+) -> dict[str, Any]:
+    """``fields`` with the transport version set when the endpoint declares it (rule 6).
+
+    A value of that name in ``fields`` is never sent as data: it is replaced by
+    the durable version, or dropped when there is none or none is declared.
+    """
+    row = {k: v for k, v in fields.items() if k != SYNC_VERSION_PROPERTY}
+    declared = contract.row_schema is not None and SYNC_VERSION_PROPERTY in contract.row_schema
+    if declared and version is not None:
+        row[SYNC_VERSION_PROPERTY] = version
+    return row
+
+
 def project_graph_sync_row(
     *,
     entity_id: str,
@@ -1107,6 +1125,7 @@ class PacketRouter:
         expected_contract_digest: str | None = None,
         on_outcome: Callable[[GraphSyncOutcome], None] | None = None,
         operation_key: str | None = None,
+        sync_version: int | None = None,
     ) -> dict[str, Any] | None:
         """
         Sync enriched entity fields into the graph through Gate (action `sync`,
@@ -1141,6 +1160,10 @@ class PacketRouter:
         ``contract_changed`` rather than addressed to a contract the pinned
         fields were never checked against. ``operation_key`` binds the Gate
         idempotency key to the durable operation (:func:`_sync_idempotency_key`).
+        ``sync_version`` is the durable version (the intent's ``seq``): sent as
+        the row property ``sync_version`` when the endpoint declares it, which
+        replaces any value of that name in ``fields``; otherwise not sent
+        (graph_sync_intents.md rule 6).
         """
 
         retried: list[bool] = []
@@ -1185,6 +1208,7 @@ class PacketRouter:
                 "the pinned fields were admitted against the earlier contract and are not sent",
             )
             return settle(GraphSyncOutcomeKind.REFUSED, "contract_changed")
+        fields = _with_sync_version(fields, sync_version, contract)
         projection = project_graph_sync_row(entity_id=entity_id, fields=fields, contract=contract)
         if projection.dropped:
             logger.info(

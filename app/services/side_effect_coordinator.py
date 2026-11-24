@@ -456,6 +456,7 @@ class SideEffectCoordinator:
             node_label=node_label,
             contract_digest=contract_digest,
             report=report,
+            sync_version=getattr(record, "seq", None) if record is not None else None,
         )
         disposition, error = self._classify_graph_outcome(
             key, entity_id, ack, outcome, raised, report
@@ -503,6 +504,7 @@ class SideEffectCoordinator:
         node_label: str | None,
         contract_digest: str | None,
         report: SideEffectReport,
+        sync_version: int | None = None,
     ) -> tuple[Any, Any | None, bool]:
         """Send one sync; returns (ack, classified outcome or None, raised)."""
         from app.engines.packet_router import get_router
@@ -518,6 +520,7 @@ class SideEffectCoordinator:
                 expected_contract_digest=contract_digest,
                 on_outcome=outcomes.append,
                 operation_key=key,
+                sync_version=sync_version,
             )
         except Exception as exc:  # noqa: BLE001
             report.errors.append(f"graph_sync:{exc}")
