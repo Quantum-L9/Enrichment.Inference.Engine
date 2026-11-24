@@ -10,6 +10,10 @@ its own key id from its private key (Constellation.Gate 2384923, D-4), so the
 former deviation that put Gate's own public key there is gone. GL_KEYSET marks
 this layout; rail.sh regenerates an env file written by an older layout.
 
+Every verifying key is declared with its algorithm (L9_VERIFYING_KEY_ALGORITHMS_JSON,
+Gate_SDK 1.3.4): a raw 32-byte key is either an ed25519 public key or an HMAC
+secret, and 1.3.4 refuses such an undeclared key when signatures are required.
+
 Identities: gate-gl (Gate), eie-gl (enrichment-engine worker), ceg-gl (graph
 worker), odoo-gl (consumer), op-gl (operator consumer), rogue-gl (a well-formed
 key Gate does NOT trust).
@@ -29,7 +33,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 IDS = ("gate-gl", "eie-gl", "ceg-gl", "odoo-gl", "op-gl", "rogue-gl")
 TRUSTED_BY_GATE = ("eie-gl", "ceg-gl", "odoo-gl", "op-gl")
-KEYSET = "2"
+KEYSET = "3"
 
 
 def main(out: str) -> None:
@@ -56,6 +60,14 @@ def main(out: str) -> None:
         **{f"GL_PRIV_{k.split('-')[0].upper()}": priv[k] for k in IDS},
         "GL_GATE_VERIFYING_KEYS_JSON": json.dumps(gate_verifying),
         "GL_WORKER_VERIFYING_KEYS_JSON": json.dumps(worker_verifying),
+        "GL_GATE_VERIFYING_KEY_ALGORITHMS_JSON": json.dumps(
+            dict.fromkeys(gate_verifying, "ed25519")
+        ),
+        "GL_WORKER_VERIFYING_KEY_ALGORITHMS_JSON": json.dumps({"gate-gl": "ed25519"}),
+        "GL_HMAC_GATE_VERIFYING_KEY_ALGORITHMS_JSON": json.dumps(
+            dict.fromkeys(TRUSTED_BY_GATE, "hmac-sha256")
+        ),
+        "GL_HMAC_WORKER_VERIFYING_KEY_ALGORITHMS_JSON": json.dumps({"gate-gl": "hmac-sha256"}),
         "GL_ALL_PUBLIC_KEYS_JSON": json.dumps(pub),
         "GL_ADMIN_TOKEN": secrets.token_urlsafe(24),
         "GL_NEO4J_SECRET": neo4j_secret,

@@ -9,6 +9,7 @@ services:
       L9_SIGNING_ALGORITHM: hmac-sha256
       L9_SIGNING_KEY: ${GL_HMAC_GATE:?}
       L9_VERIFYING_KEYS_JSON: ${GL_HMAC_GATE_VERIFYING_KEYS_JSON:?}
+      L9_VERIFYING_KEY_ALGORITHMS_JSON: ${GL_HMAC_GATE_VERIFYING_KEY_ALGORITHMS_JSON:?}
       L9_KEY_ALLOWED_ACTIONS_JSON: >-
         {"odoo-gl": {"node": "odoo", "kind": "consumer", "tenants": ["plasticos", "synthneutral"],
                      "actions": ["converge", "enrich", "match", "outcomes", "resolve", "score",
@@ -25,9 +26,11 @@ services:
       L9_SIGNING_KEY: ${GL_HMAC_EIE:?}
       L9_SIGNING_PRIVATE_KEY: ""
       L9_VERIFYING_KEYS_JSON: ${GL_HMAC_WORKER_VERIFYING_KEYS_JSON:?}
+      L9_VERIFYING_KEY_ALGORITHMS_JSON: ${GL_HMAC_WORKER_VERIFYING_KEY_ALGORITHMS_JSON:?}
   graph:
     environment:
       L9_SIGNING_ALGORITHM: hmac-sha256
       L9_SIGNING_KEY: ${GL_HMAC_CEG:?}
       L9_SIGNING_PRIVATE_KEY: ""
       L9_VERIFYING_KEYS_JSON: ${GL_HMAC_WORKER_VERIFYING_KEYS_JSON:?}
+      L9_VERIFYING_KEY_ALGORITHMS_JSON: ${GL_HMAC_WORKER_VERIFYING_KEY_ALGORITHMS_JSON:?}

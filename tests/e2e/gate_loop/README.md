@@ -29,11 +29,15 @@ Each deviation is a configuration choice; none patches Gate, the SDK or any node
 
 The rerun is judged at one Gate_SDK release: `rail.py` compares every process's SDK code digest
 with `EXPECTED_SDK` and runs no case on a mismatch (`GL_EXPECT_SDK` names another release
-explicitly). `scripts/rail.sh` regenerates a `run.env` written by the older key layout.
+explicitly); it is pinned to 1.3.4. `scripts/rail.sh` regenerates a `run.env` written by an older
+key layout. Every verifying key is declared with its algorithm (`L9_VERIFYING_KEY_ALGORITHMS_JSON`
+for Gate and both workers, `verifying_key_algorithms` in the driver): the rail's keys are raw
+32-byte values, which Gate_SDK 1.3.4 refuses undeclared when signatures are required.
 
 MIX-ALG-01 proves the worker side only: an hmac-sha256 worker must verify Gate's ed25519 dispatch.
 PASS means Gate's failure for the request is its own response check; the worker's HTTP 401/403
-(Gate_SDK 1.3.3 binds every verifying key to the node's algorithm) is FAIL. Gate verifying an
+(the D-1 regression seen in Gate_SDK 1.3.3: every verifying key bound to the node's own
+algorithm; repaired in 1.3.4) is FAIL. Gate verifying an
 hmac answer is outside Gate's contract: its settings bind every verifying key to one algorithm.
 
 ## Run

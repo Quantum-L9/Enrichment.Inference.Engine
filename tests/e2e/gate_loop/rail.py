@@ -1332,7 +1332,8 @@ def mixed_alg_outcome(http_status: object, events: list[dict]) -> str:
     accepted: the worker verified Gate's ed25519 dispatch and answered; Gate then refused the answer at
     its own response check (Gate binds every verifying key to one algorithm, so an hmac worker answer
     is outside its contract). refused: the worker rejected Gate's dispatch (HTTP 401/403), which is
-    the Gate_SDK 1.3.3 D-1 regression (every verifying key bound to the node's own algorithm).
+    the Gate_SDK D-1 regression seen in 1.3.3 (every verifying key bound to the node's own algorithm;
+    repaired in 1.3.4, 8e8bf37).
     """
     if http_status != 502:
         return "unproven"
@@ -1400,8 +1401,8 @@ def c_mixed_alg(p: str) -> list[Result]:
             reason=(
                 ""
                 if outcome == "accepted"
-                else "the hmac worker refused Gate's ed25519 dispatch (owner Gate_SDK: 1.3.3 binds every "
-                "verifying key to the node's own algorithm, D-1 regression)"
+                else "the hmac worker refused Gate's ed25519 dispatch (owner Gate_SDK: a peer key bound to "
+                "the node's own algorithm, the D-1 regression seen in 1.3.3)"
             ),
         )
     ]
@@ -1798,10 +1799,10 @@ CASE_IDS: dict[str, tuple[str, ...]] = {
 
 
 SDK_DIGEST_LINE = re.compile(r"\S+ \d+ [0-9a-f]{64}")
-# The release the integrated rerun is judged at: Gate_SDK v1.3.3 (tag v1.3.3 = v1 = e5159c66), as
+# The release the integrated rerun is judged at: Gate_SDK v1.3.4 (tag v1.3.4 = v1 = 5c1cfc20), as
 # "<version> <file count> <code digest>" computed by sdk_digests() over src/constellation_node_sdk at
 # that tag. GL_EXPECT_SDK names another release explicitly; it cannot be empty.
-EXPECTED_SDK = "1.3.3 51 e43e18de547a9b18c2c31007f264afa1948930936dfe4bad62610fa460affb0b"
+EXPECTED_SDK = "1.3.4 51 08b787178555e68532ea3f71500eb1e56c2ff03672febd2230a9e4f4add6f95e"
 
 
 def sdk_pin(digests: dict, expected: str) -> dict:
