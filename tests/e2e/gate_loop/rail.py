@@ -1253,9 +1253,25 @@ def c_rogue_signer(p: str) -> list[Result]:
             raise StackUnusableError(
                 f"trusted graph worker not restored after the rogue-signer case (rc {back.returncode}, {rec})"
             )
+    # The recreation resolves the graph service from its tag. Later cases may run only on the image
+    # (and so the SDK) the run verified at startup; anything else stops the run.
     digests = sdk_digests()
+    pinned = (RELEASE_SET.get("sdk_pin") or {}).get("expected")
+    graph_image = sh(["docker", "inspect", "l9e2e-ceg", "--format", "{{.Image}}"], timeout=30)
+    verified_image = ((RELEASE_SET.get("images") or {}).get("l9e2e-ceg") or {}).get("image_id")
+    if (
+        graph_image.returncode != 0
+        or graph_image.stdout.strip() != verified_image
+        or digests.get("l9e2e-ceg") != pinned
+    ):
+        raise StackUnusableError(
+            "restored graph worker is not the verified image/SDK "
+            f"(image {graph_image.stdout.strip()[:19]} vs {str(verified_image)[:19]}, "
+            f"sdk {digests.get('l9e2e-ceg')})"
+        )
     valid = [v for v in digests.values() if not v.startswith("UNAVAILABLE")]
-    same = len(valid) == 3 and len({v.split()[-1] for v in valid}) == 1
+    # Identical across processes AND equal to the release the run is judged at.
+    same = len(valid) == 3 and set(valid) == {pinned}
     # Refusal tied to this request: Gate's own gate.failure for its packet id, naming the response check.
     untrusted = m.get("http_status") == 502 and any(
         e["event"] == "gate.failure"
@@ -1842,6 +1858,8 @@ def main() -> int:
             for n in a.cases.split(",")
             for cid in CASE_IDS.get(n, (n,))
         ]
+        for r in results:
+            write_json(ev / f"{r.id}.json", asdict(r))
     else:
         results, aborted = run_cases(a.cases.split(","), a.profile, ev)
     leaks = [f.name for f in ev.glob("*.json") for s in secrets_() if s in f.read_text()]

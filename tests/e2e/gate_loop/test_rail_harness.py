@@ -117,3 +117,80 @@ def test_sdk_pin_requires_every_process_at_the_expected_release() -> None:
     assert rail.sdk_pin({}, exp)["match"] is False
     with pytest.raises(ValueError, match="expected SDK line"):
         rail.sdk_pin(same, "")
+
+
+def test_sdk_pin_mismatch_runs_no_case_and_writes_each_result(
+    tmp_path: Path, mp: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    other = "1.3.2 50 ecd911d5ab28d6d7b246e6b93ab48a2ad0fb2293f1f53c26a900bb42a995f929"
+    ran: list[str] = []
+
+    def must_not_run(p: str) -> list[rail.Result]:
+        ran.append("case")
+        return [rail.Result("T1", "A8", p, "case", "PASS")]
+
+    mp.setattr(rail, "CASES", {"one": must_not_run, "two": must_not_run})
+    mp.setattr(rail, "CASE_IDS", {"one": ("T1",), "two": ("T2", "T3")})
+    mp.setattr(rail, "STATE", tmp_path)
+    mp.setattr(rail, "running_signing", lambda: {})
+    mp.setattr(rail, "wait_ready", lambda: {"ready": True})
+    mp.setattr(rail, "secrets_", lambda: [])
+    mp.setattr(
+        rail,
+        "release_set",
+        lambda p: {
+            "sdk_code_digest": dict.fromkeys(("l9e2e-gate", "l9e2e-eie", "l9e2e-ceg"), other)
+        },
+    )
+    mp.delenv("GL_EXPECT_SDK", raising=False)
+    mp.setattr(sys, "argv", ["rail.py", "run", "--no-boot", "--cases", "one,two"])
+
+    assert rail.main() == 5
+    assert ran == []
+    (ev,) = (tmp_path / "evidence").iterdir()
+    for cid in ("T1", "T2", "T3"):
+        res = json.loads((ev / f"{cid}.json").read_text())
+        assert res["verdict"] == "NOT_RUN"
+        assert res["reason"].startswith("SDK pin mismatch")
+    summary = json.loads((ev / "summary.json").read_text())
+    assert summary["aborted"].startswith("SDK pin mismatch")
+
+
+@pytest.mark.parametrize("restored", ["sha256:verified", "sha256:rebuilt"])
+def test_rogue_signer_continues_only_on_the_verified_graph_image(
+    mp: pytest.MonkeyPatch, restored: str
+) -> None:
+    import subprocess
+
+    image = restored + "\n"
+
+    exp = rail.EXPECTED_SDK
+    mp.setattr(
+        rail,
+        "RELEASE_SET",
+        {"sdk_pin": {"expected": exp}, "images": {"l9e2e-ceg": {"image_id": "sha256:verified"}}},
+    )
+    mp.setattr(
+        rail, "rail", lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="", stderr="")
+    )
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(rail, "stamp", lambda: "t0")
+    mp.setattr(rail, "drive", lambda *a, **k: {"http_status": 502, "request_packet_id": "pk"})
+    mp.setattr(rail, "gate_events_for", lambda since, pid: [])
+    mp.setattr(rail, "wait_ready", lambda: {"ready": True})
+    mp.setattr(
+        rail, "sdk_digests", lambda: dict.fromkeys(("l9e2e-gate", "l9e2e-eie", "l9e2e-ceg"), exp)
+    )
+    mp.setattr(
+        rail,
+        "sh",
+        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout=image, stderr=""),
+    )
+    if restored == "sha256:verified":
+        (res,) = rail.c_rogue_signer("ed25519")
+        assert res.id == "P12"
+    else:
+        with pytest.raises(rail.StackUnusableError, match="not the verified image"):
+            rail.c_rogue_signer("ed25519")
