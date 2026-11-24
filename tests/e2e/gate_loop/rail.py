@@ -1490,6 +1490,16 @@ def c_rogue_signer(p: str) -> list[Result]:
     ]
 
 
+# The 502 a MIX-ALG-01 PASS records is expected, and its cause is what the case proves.
+MIX_ALG_ACCEPTED_REASON = (
+    "the hmac-sha256 worker verified Gate's ed25519 dispatch and answered: Gate's failure is its own "
+    "response check (GateDispatchSecurityError, worker response failed transport validation), which "
+    "is reachable only after the worker accepted the dispatch. The 502 is expected: Gate binds every "
+    "verifying key to one algorithm, so an hmac worker answer is outside Gate's contract. A worker "
+    "refusal would be HTTP 401/403 (FAIL)"
+)
+
+
 def mixed_alg_outcome(http_status: object, events: list[dict]) -> str:
     """Classify one Gate->worker call made while the worker signs hmac-sha256 and Gate ed25519.
 
@@ -1563,7 +1573,7 @@ def c_mixed_alg(p: str) -> list[Result]:
             verdict(outcome == "accepted", p, signed_claim=True),
             observed=obs,
             reason=(
-                ""
+                MIX_ALG_ACCEPTED_REASON
                 if outcome == "accepted"
                 else "the hmac worker refused Gate's ed25519 dispatch (owner Gate_SDK: a peer key bound to "
                 "the node's own algorithm, the D-1 regression seen in 1.3.3)"
