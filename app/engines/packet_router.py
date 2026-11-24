@@ -274,6 +274,8 @@ class GraphSyncOutcome:
     kind: GraphSyncOutcomeKind
     reason: str
     ack: dict[str, Any] | None = None
+    retried: bool = False
+    """True when the transport retried within this attempt: an earlier request may still land."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,6 +435,24 @@ def _retry_allowed(exc: BaseException, *, has_idempotency_key: bool) -> bool:
     if isinstance(exc, GateHTTPError):
         return exc.is_server_error and has_idempotency_key
     return False
+
+
+SYNC_VERSION_PROPERTY = "sync_version"
+
+
+def _with_sync_version(
+    fields: dict[str, Any], version: int | None, contract: GraphSyncContract
+) -> dict[str, Any]:
+    """``fields`` with the transport version set when the endpoint declares it (rule 6).
+
+    A value of that name in ``fields`` is never sent as data: it is replaced by
+    the durable version, or dropped when there is none or none is declared.
+    """
+    row = {k: v for k, v in fields.items() if k != SYNC_VERSION_PROPERTY}
+    declared = contract.row_schema is not None and SYNC_VERSION_PROPERTY in contract.row_schema
+    if declared and version is not None:
+        row[SYNC_VERSION_PROPERTY] = version
+    return row
 
 
 def project_graph_sync_row(
@@ -976,6 +996,7 @@ class PacketRouter:
         correlation_id: str | None = None,
         *,
         idempotency_key: str | None = None,
+        on_retry: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """
         Dispatch one logical operation through Gate.
@@ -983,6 +1004,8 @@ class PacketRouter:
         The SDK builds the root packet (destination Gate, EIE identity, one
         deadline, signing); this layer owns only the domain payload, the
         logical-operation identity, and the bounded retry policy above.
+        ``on_retry`` is called before each retry: the earlier request's outcome
+        is unknown and it may still be applied (graph_sync_intents.md rule 5).
         """
         last_exc: Exception | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -1044,6 +1067,8 @@ class PacketRouter:
                 )
                 if not retry:
                     break
+                if on_retry is not None:
+                    on_retry()
                 await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
 
         raise NodeUnreachableError(
@@ -1100,6 +1125,7 @@ class PacketRouter:
         expected_contract_digest: str | None = None,
         on_outcome: Callable[[GraphSyncOutcome], None] | None = None,
         operation_key: str | None = None,
+        sync_version: int | None = None,
     ) -> dict[str, Any] | None:
         """
         Sync enriched entity fields into the graph through Gate (action `sync`,
@@ -1134,13 +1160,21 @@ class PacketRouter:
         ``contract_changed`` rather than addressed to a contract the pinned
         fields were never checked against. ``operation_key`` binds the Gate
         idempotency key to the durable operation (:func:`_sync_idempotency_key`).
+        ``sync_version`` is the durable version (the intent's ``seq``): sent as
+        the row property ``sync_version`` when the endpoint declares it, which
+        replaces any value of that name in ``fields``; otherwise not sent
+        (graph_sync_intents.md rule 6).
         """
+
+        retried: list[bool] = []
 
         def settle(
             kind: GraphSyncOutcomeKind, reason: str, ack: dict[str, Any] | None = None
         ) -> dict[str, Any] | None:
             if on_outcome is not None:
-                on_outcome(GraphSyncOutcome(kind=kind, reason=reason, ack=ack))
+                on_outcome(
+                    GraphSyncOutcome(kind=kind, reason=reason, ack=ack, retried=bool(retried))
+                )
             return ack if kind is GraphSyncOutcomeKind.ACKNOWLEDGED else None
 
         if domain and domain != tenant_id:
@@ -1174,6 +1208,7 @@ class PacketRouter:
                 "the pinned fields were admitted against the earlier contract and are not sent",
             )
             return settle(GraphSyncOutcomeKind.REFUSED, "contract_changed")
+        fields = _with_sync_version(fields, sync_version, contract)
         projection = project_graph_sync_row(entity_id=entity_id, fields=fields, contract=contract)
         if projection.dropped:
             logger.info(
@@ -1213,6 +1248,7 @@ class PacketRouter:
                 {"entity_type": contract.entity_type, "batch": batch},
                 correlation_id,
                 idempotency_key=_sync_idempotency_key(tenant_id, entity_id, row, operation_key),
+                on_retry=lambda: retried.append(True),
             )
         except NodeUnreachableError as exc:
             logger.warning("graph_sync_failed", entity_id=entity_id, error=str(exc))
