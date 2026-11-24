@@ -1224,6 +1224,27 @@ def c_gate_restart(p: str) -> list[Result]:
     return [Result("P09", "A7", p, a, verdict(ok, p, signed_claim=False), observed=obs)]
 
 
+def _verify_restored_graph() -> dict:
+    """Stop the run unless l9e2e-ceg runs the startup-verified image and the pinned SDK; return digests."""
+    digests = sdk_digests()
+    pinned = (RELEASE_SET.get("sdk_pin") or {}).get("expected")
+    graph_image = sh(["docker", "inspect", "l9e2e-ceg", "--format", "{{.Image}}"], timeout=30)
+    verified_image = ((RELEASE_SET.get("images") or {}).get("l9e2e-ceg") or {}).get("image_id")
+    if (
+        not pinned
+        or not verified_image
+        or graph_image.returncode != 0
+        or graph_image.stdout.strip() != verified_image
+        or digests.get("l9e2e-ceg") != pinned
+    ):
+        raise StackUnusableError(
+            "restored graph worker is not the verified image/SDK "
+            f"(image {graph_image.stdout.strip()[:19]} vs {str(verified_image)[:19]}, "
+            f"sdk {digests.get('l9e2e-ceg')})"
+        )
+    return digests
+
+
 def c_rogue_signer(p: str) -> list[Result]:
     """P12: a worker response signed by a key Gate does not trust is refused; SDK code digest identical."""
     a = "SDK lock mismatch blocked AND untrusted response signer refused"
@@ -1253,22 +1274,10 @@ def c_rogue_signer(p: str) -> list[Result]:
             raise StackUnusableError(
                 f"trusted graph worker not restored after the rogue-signer case (rc {back.returncode}, {rec})"
             )
-    # The recreation resolves the graph service from its tag. Later cases may run only on the image
-    # (and so the SDK) the run verified at startup; anything else stops the run.
-    digests = sdk_digests()
+        # Runs on every exit, including a setup or probe error: later cases may run only on the image
+        # (and so the SDK) verified at startup, and the recreation resolves the service from its tag.
+        digests = _verify_restored_graph()
     pinned = (RELEASE_SET.get("sdk_pin") or {}).get("expected")
-    graph_image = sh(["docker", "inspect", "l9e2e-ceg", "--format", "{{.Image}}"], timeout=30)
-    verified_image = ((RELEASE_SET.get("images") or {}).get("l9e2e-ceg") or {}).get("image_id")
-    if (
-        graph_image.returncode != 0
-        or graph_image.stdout.strip() != verified_image
-        or digests.get("l9e2e-ceg") != pinned
-    ):
-        raise StackUnusableError(
-            "restored graph worker is not the verified image/SDK "
-            f"(image {graph_image.stdout.strip()[:19]} vs {str(verified_image)[:19]}, "
-            f"sdk {digests.get('l9e2e-ceg')})"
-        )
     valid = [v for v in digests.values() if not v.startswith("UNAVAILABLE")]
     # Identical across processes AND equal to the release the run is judged at.
     same = len(valid) == 3 and set(valid) == {pinned}

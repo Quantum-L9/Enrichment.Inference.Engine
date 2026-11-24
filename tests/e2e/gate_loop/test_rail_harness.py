@@ -158,9 +158,10 @@ def test_sdk_pin_mismatch_runs_no_case_and_writes_each_result(
     assert summary["aborted"].startswith("SDK pin mismatch")
 
 
+@pytest.mark.parametrize("probe_fails", [False, True])
 @pytest.mark.parametrize("restored", ["sha256:verified", "sha256:rebuilt"])
 def test_rogue_signer_continues_only_on_the_verified_graph_image(
-    mp: pytest.MonkeyPatch, restored: str
+    mp: pytest.MonkeyPatch, restored: str, probe_fails: bool
 ) -> None:
     import subprocess
 
@@ -177,7 +178,13 @@ def test_rogue_signer_continues_only_on_the_verified_graph_image(
     )
     mp.setattr(rail.time, "sleep", lambda s: None)
     mp.setattr(rail, "stamp", lambda: "t0")
-    mp.setattr(rail, "drive", lambda *a, **k: {"http_status": 502, "request_packet_id": "pk"})
+
+    def drive(*a: object, **k: object) -> dict:
+        if probe_fails:
+            raise rail.ProbeError("driver exited 1")
+        return {"http_status": 502, "request_packet_id": "pk"}
+
+    mp.setattr(rail, "drive", drive)
     mp.setattr(rail, "gate_events_for", lambda since, pid: [])
     mp.setattr(rail, "wait_ready", lambda: {"ready": True})
     mp.setattr(
@@ -188,9 +195,15 @@ def test_rogue_signer_continues_only_on_the_verified_graph_image(
         "sh",
         lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout=image, stderr=""),
     )
-    if restored == "sha256:verified":
+    if restored == "sha256:verified" and probe_fails:
+        # Verified restore: the probe's own error propagates (NOT_RUN), later cases may continue.
+        with pytest.raises(rail.ProbeError) as err:
+            rail.c_rogue_signer("ed25519")
+        assert not isinstance(err.value, rail.StackUnusableError)
+    elif restored == "sha256:verified":
         (res,) = rail.c_rogue_signer("ed25519")
         assert res.id == "P12"
     else:
+        # A rebuilt restore stops the run whether or not the probe failed.
         with pytest.raises(rail.StackUnusableError, match="not the verified image"):
             rail.c_rogue_signer("ed25519")
