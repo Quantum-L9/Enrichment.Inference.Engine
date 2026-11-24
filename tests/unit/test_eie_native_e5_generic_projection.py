@@ -30,6 +30,7 @@ import pytest
 import yaml
 from constellation_node_sdk.transport import create_transport_packet
 
+from app.engines import sync_field_set
 from app.engines.domain_yaml_reader import DomainYamlReader
 from app.engines.handlers import admitted_fields
 from app.engines.packet_router import (
@@ -333,6 +334,19 @@ def test_s12_converge_path_omits_null_so_the_graph_is_not_cleared(case: Case) ->
     fields = admitted_fields(result)
     assert fields == {}
     assert _project(case, fields).row == {case.id_property: "E-1"}
+    # G5 under the 2026-11-24 ruling: a null or missing OBSERVED value never
+    # clears either, even where the endpoint declares provenance (full mode).
+    row_schema = {
+        case.scalar_field: {"name": case.scalar_field, "type": "string"},
+        f"{case.scalar_field}_provenance": {"name": "p", "type": "enum"},
+    }
+    selection = sync_field_set.select(
+        admitted=fields,
+        observed={case.scalar_field: None},
+        graph_origin=(),
+        row_schema=row_schema,
+    )
+    assert selection.values == {} and selection.provenance == {}
 
 
 def test_s12_direct_projection_still_sends_null_as_a_clear_for_other_callers(

@@ -130,7 +130,11 @@ async def test_v2_an_enriched_childsync_collection_is_admitted_and_pinned_typed(
     assert (result["state"], result["failure_reason"]) == ("completed", None)
     evidence = result["field_evidence"][FIELD]
     assert evidence["admitted"] is True and evidence["state"] != "observed"
-    assert sink["graph_fields"][FIELD] == result["fields"][FIELD]
+    # Full mode (the cartridge declares item `provenance`): the synced items are
+    # the response's items, each labelled `enriched` (operator ruling 2026-11-24).
+    assert sink["graph_fields"][FIELD] == [
+        {**item, "provenance": "enriched"} for item in result["fields"][FIELD]
+    ]
     _assert_typed_child_row(root, sink["graph_fields"])
 
 
@@ -147,5 +151,9 @@ async def test_v1_a_typed_schema_target_is_enriched_and_pinned_typed(root: Path)
     result, sink = await _converge(root, payload)
 
     assert (result["state"], result["failure_reason"]) == ("completed", None)
-    assert sink["graph_fields"][FIELD] == result["fields"][FIELD]
+    # Full mode (the cartridge declares item `provenance`): the synced items are
+    # the response's items, each labelled `enriched` (operator ruling 2026-11-24).
+    assert sink["graph_fields"][FIELD] == [
+        {**item, "provenance": "enriched"} for item in result["fields"][FIELD]
+    ]
     _assert_typed_child_row(root, sink["graph_fields"])

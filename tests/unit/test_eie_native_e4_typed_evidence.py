@@ -34,6 +34,7 @@ import structlog
 import yaml
 from constellation_node_sdk.transport import create_transport_packet
 
+from app.engines import sync_field_set
 from app.engines.converge_contract import restrict_fields_to_schema
 from app.engines.converge_request_v2 import (
     REQUEST_CONTRACT_V2,
@@ -43,7 +44,7 @@ from app.engines.converge_request_v2 import (
 )
 from app.engines.convergence.observation_evidence import observation_evidence
 from app.engines.domain_yaml_reader import DomainYamlReader
-from app.engines.handlers import admitted_fields
+from app.engines.handlers import admitted_fields, observed_values
 from app.engines.packet_router import (
     PacketRouter,
     graph_sync_acknowledged,
@@ -439,11 +440,47 @@ def test_t12_conflicting_list_of_map_observations_keep_the_conflict_policy() -> 
     ]
 
 
+def _members_schema(*, item_provenance: bool) -> dict[str, Any]:
+    """A row schema whose childsync `members` does or does not declare item provenance."""
+    props: list[dict[str, Any]] = [{"name": "code", "type": "string", "required": True}]
+    if item_provenance:
+        props.append({"name": "provenance", "type": "enum", "values": ["observed", "enriched"]})
+    return {
+        "members": {
+            "name": "members",
+            "type": "list",
+            "items": {"type": "map", "properties": props},
+        }
+    }
+
+
 def test_t13_observation_only_field_is_evidence_and_never_projected() -> None:
     evidence = observation_evidence([_obs([{"code": "A1"}], "o:1")], IDENTITY)
     assert evidence["members"]["state"] == "observed"
     assert evidence["members"]["admitted"] is False
     assert admitted_fields({"field_evidence": evidence, "fields": {}}) == {}
+    # Operator ruling 2026-11-24 (F11 superseded): an observation still never
+    # enters the response, but it reaches the graph labelled `observed` -- and
+    # only where the endpoint declares its provenance (full mode).
+    result = {"field_evidence": evidence, "fields": {}}
+    observed, conflicting = observed_values(None, result)
+    full = sync_field_set.select(
+        admitted=admitted_fields(result),
+        observed=observed,
+        graph_origin=(),
+        conflicting=conflicting,
+        row_schema=_members_schema(item_provenance=True),
+    )
+    assert full.values == {"members": [{"code": "A1"}]}
+    assert full.provenance == {"members": "observed"}
+    legacy = sync_field_set.select(
+        admitted=admitted_fields(result),
+        observed=observed,
+        graph_origin=(),
+        conflicting=conflicting,
+        row_schema=_members_schema(item_provenance=False),
+    )
+    assert legacy.values == {} and legacy.provenance == {}
 
 
 # ── T14 [F11] unknown or unadmitted evidence is not a graph fact ─────────────
@@ -459,6 +496,24 @@ def test_t14_only_admitted_evidence_reaches_the_graph_fields() -> None:
         },
     }
     assert admitted_fields(result) == {"members": [{"code": "A1"}]}
+    # Under the 2026-11-24 ruling unknown and unadmitted evidence is still no
+    # graph fact: it is neither admitted nor observed, so even a full-mode field
+    # that declares its provenance sends nothing for it.
+    observed, conflicting = observed_values(None, result)
+    assert "weight" not in observed and "label" not in observed
+    full = sync_field_set.select(
+        admitted=admitted_fields(result),
+        observed=observed,
+        graph_origin=(),
+        conflicting=conflicting,
+        row_schema={
+            **_members_schema(item_provenance=True),
+            "weight": {"name": "weight", "type": "float"},
+            "weight_provenance": {"name": "weight_provenance", "type": "enum"},
+        },
+    )
+    assert full.values == {"members": [{"code": "A1"}]}
+    assert full.provenance == {"members": "enriched"}
 
 
 # ── T15 [F21] an evidence-only field stays in evidence, off the row ──────────

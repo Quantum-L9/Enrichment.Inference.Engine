@@ -80,7 +80,11 @@ def test_a_declared_childsync_list_of_maps_is_synthesized_as_maps() -> None:
     assert isinstance(value, list) and len(value) == 1
     (item,) = value
     assert list(item) == keys
-    assert all(_marked(item[k]) for k in keys)
+    for prop in declared["items"]["properties"]:
+        if prop["type"] == "string":
+            assert _marked(item[prop["name"]])  # every string leaf keeps the det: marker
+        elif prop["type"] == "enum":
+            assert item[prop["name"]] in prop["values"]  # type-correct, like int/float/bool
 
 
 def test_the_synthesized_collection_projects_onto_a_typed_childsync_row() -> None:

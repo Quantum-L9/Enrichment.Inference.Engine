@@ -108,6 +108,12 @@ def _synthesize(entity_key: str, field: str, declared_type: Any) -> Any:
         return round((int(digest[:8], 16) % 10_000) / 100, 2)
     if kind in {"bool", "boolean"}:
         return int(digest[:2], 16) % 2 == 0
+    if kind == "enum":
+        # Type-correct like int/float/bool: one of the declared values, so it is
+        # unmarked at the field level and named in `synthetic_fields` instead.
+        values = declaration.get("values") if declaration is not None else None
+        if isinstance(values, list) and values:
+            return values[int(digest[:8], 16) % len(values)]
     if kind in {"list", "array"}:
         items = declaration.get("items") if declaration is not None else None
         if isinstance(items, Mapping):
