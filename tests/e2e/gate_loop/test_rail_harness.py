@@ -61,6 +61,40 @@ def test_p22_requires_every_part_of_the_cited_finding_and_the_no_change_witness(
         assert not all(rail.p22_requirements(**{**ok, key: bad}).values()), key
 
 
+def test_eie_target_citation_needs_a_retained_exact_finding_under_cegs_key() -> None:
+    good = {
+        "state": "retained",
+        "rule": "infer_geography_from_postal_code",
+        "field": "region",
+        "value": '{"value": "West"}',
+        "producer_key": "k1",
+    }
+    assert rail.eie_target_cites([good], "k1", "k1")
+    assert not rail.eie_target_cites([{**good, "state": "consumed"}], "k1", "k1")
+    assert not rail.eie_target_cites([{**good, "value": '{"value": "NorthWest"}'}], "k1", "k1")
+    assert not rail.eie_target_cites([{**good, "producer_key": "other"}], "k1", "k1")
+    assert not rail.eie_target_cites([good], "", None)
+
+
+def test_resync_witness_waits_for_completion_and_never_reads_absence_early(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    clock = iter([0.0, 0.0, 10.0, 95.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(
+        rail,
+        "gate_events",
+        lambda since, action: [
+            {"event": "gate.ingress", "source_node": "enrichment-engine", "request_id": "r1"}
+        ],
+    )
+    mp.setattr(rail, "logs", lambda *a, **k: [])
+    syncs, evaluated = rail._wait_resync_evaluated("t0", 90.0)
+    assert rail.sync_completions(syncs) == []
+    assert evaluated == []
+
+
 def test_feedback_no_longer_claims_p22_and_graph_trigger_owns_it() -> None:
     assert "P22" not in rail.CASE_IDS["feedback"]
     assert rail.CASE_IDS["graph_trigger"] == ("P22",)
