@@ -611,3 +611,13 @@ def test_p27_requires_the_consuming_converge_to_have_completed() -> None:
     failed = rail.p27_requirements(**{**ok, "converge1_completed": False})
     assert not all(failed.values())
     assert [k for k, v in failed.items() if not v] == ["converge completed"]
+
+
+def test_p27_counts_only_a_target_the_first_converge_consumed() -> None:
+    consumed = {"state": "consumed", "consumed_by": "converge:op-1", "outcome": "seeded"}
+    retained = {"state": "retained", "consumed_by": "", "outcome": ""}
+    assert rail.c1_consumed_rows([consumed]) == [consumed]
+    # c1 left it retained; whatever the second converge did is not c1's evidence.
+    assert rail.c1_consumed_rows([retained]) == []
+    assert rail.c1_consumed_rows([{**consumed, "outcome": "superseded"}]) == []
+    assert rail.c1_consumed_rows([{**consumed, "consumed_by": "sweep:1"}]) == []

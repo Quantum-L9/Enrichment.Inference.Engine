@@ -1791,6 +1791,21 @@ def c_gate_rail_policy(p: str) -> list[Result]:
     ]
 
 
+def c1_consumed_rows(targets_after_c1: list[dict]) -> list[dict]:
+    """Targets the first converge consumed (consumed_by converge:<op>, outcome seeded).
+
+    Only the state read right after c1 counts: a target the second converge consumed is not
+    evidence that c1, whose answer P27 judges, consumed it.
+    """
+    return [
+        t
+        for t in targets_after_c1
+        if t["state"] == "consumed"
+        and t["consumed_by"].startswith("converge:")
+        and t["outcome"] == "seeded"
+    ]
+
+
 def p27_requirements(
     *, accepted: bool, converge1_completed: bool, consumed: bool, retained: bool, consumed_row: bool
 ) -> dict[str, bool]:
@@ -1910,13 +1925,7 @@ def c_feedback(p: str) -> list[Result]:
         },
     }
     retained = any(t["state"] == "retained" for t in targets_intake)
-    consumed_rows = [
-        t
-        for t in targets_after_c1 + targets_after_c2
-        if t["state"] == "consumed"
-        and t["consumed_by"].startswith("converge:")
-        and t["outcome"] == "seeded"
-    ]
+    consumed_rows = c1_consumed_rows(targets_after_c1)
     req27 = p27_requirements(
         accepted=acc_ok,
         converge1_completed=c1_ok,
