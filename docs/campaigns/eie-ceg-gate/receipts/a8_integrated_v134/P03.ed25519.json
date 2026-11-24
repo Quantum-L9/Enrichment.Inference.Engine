@@ -1,0 +1,22 @@
+{
+ "id": "P03",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "no direct peer path: workers cannot resolve each other; the driver reaches Gate and only Gate",
+ "verdict": "PASS",
+ "reason": "topology witness only; source-level absence of raw peer HTTP is EIE-W/CEG-W's P03 share",
+ "observed": {
+  "driver": {
+   "enrichment-engine": "unresolvable: [Errno -2] Name or service not known",
+   "graph": "unresolvable: [Errno -2] Name or service not known",
+   "neo4j": "unresolvable: [Errno -2] Name or service not known",
+   "eie-postgres": "unresolvable: [Errno -2] Name or service not known",
+   "gate": "172.18.0.2"
+  },
+  "getent_rc": {
+   "eie->graph": 2,
+   "ceg->eie": 2
+  }
+ },
+ "timestamp": "2026-11-24T15:58:52.143219+00:00"
+}

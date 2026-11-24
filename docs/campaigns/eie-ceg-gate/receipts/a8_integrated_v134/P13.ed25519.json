@@ -1,0 +1,71 @@
+{
+ "id": "P13",
+ "slice": "A7",
+ "profile": "ed25519",
+ "assertion": "a replayed packet id adds no effect; an expired deadline is refused",
+ "verdict": "PASS",
+ "reason": "Gate answered the replayed packet id from its cache (gate.cached, the same response packet and payload) after a single gate.completed: no second execution",
+ "observed": {
+  "http_status": {
+   "baseline_valid": 200,
+   "unknown_action": 403,
+   "wrong_tenant": 403,
+   "unsigned": 400,
+   "unknown_key_rogue": 400,
+   "corrupted_signature": 400,
+   "key_claims_other_node": 403,
+   "consumer_claims_registered_node_name": 403,
+   "hmac_downgrade_with_public_key": 400,
+   "hmac_downgrade_with_random_secret": 400,
+   "replay_first": 200,
+   "replay_second_same_packet_id": 200,
+   "expired_deadline": 400
+  },
+  "checks": {
+   "first execution succeeded with a query_id": true,
+   "same packet id: replay refused, or an identical answer with a single Gate dispatch": true,
+   "expired deadline refused": true
+  },
+  "replay_outcome": "cache_hit",
+  "replay_packet_id": "1368b9d8-9db0-4832-995e-a6a194043fe1",
+  "replay_gate_events": [
+   {
+    "event": "gate.ingress",
+    "action": "match",
+    "request_id": "13d9fbb962d04b9cab74f4909d57e6d3",
+    "packet_id": "1368b9d8-9db0-4832-995e-a6a194043fe1",
+    "root_id": "1368b9d8-9db0-4832-995e-a6a194043fe1",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.completed",
+    "action": "match",
+    "request_id": "13d9fbb962d04b9cab74f4909d57e6d3",
+    "packet_id": "2b26c26d-efd4-433a-b8a9-24df6860ccd9",
+    "root_id": "1368b9d8-9db0-4832-995e-a6a194043fe1",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.ingress",
+    "action": "match",
+    "request_id": "f4ce1f22f7ac4cbca84404ad2833d811",
+    "packet_id": "1368b9d8-9db0-4832-995e-a6a194043fe1",
+    "root_id": "1368b9d8-9db0-4832-995e-a6a194043fe1",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.cached",
+    "action": "match",
+    "request_id": "f4ce1f22f7ac4cbca84404ad2833d811",
+    "packet_id": "2b26c26d-efd4-433a-b8a9-24df6860ccd9",
+    "root_id": "1368b9d8-9db0-4832-995e-a6a194043fe1",
+    "error_type": null,
+    "error_message": null
+   }
+  ]
+ },
+ "timestamp": "2026-11-24T15:59:02.886559+00:00"
+}

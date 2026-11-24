@@ -38,13 +38,13 @@ leaves none.
 | `contract_digest` | VARCHAR(64) NULL | SHA-256 of the endpoint contract (entity type, id property, target node, typed row schema) the fields were admitted against. NULL when no contract resolved at commit; such a row is refused at dispatch (`refused:unpinned`), never sent. |
 | `cartridge_revision` | VARCHAR(128) NULL | Reserved for the effective spec revision; not populated by A2. |
 | `origin` | VARCHAR(32) | Workflow the obligation belongs to: `enrich` or `converge`. Recovery holds `converge` rows while `CONVERGE_GRAPH_SYNC_ENABLED` is off. |
-| `fields` | JSONB | Exactly the admitted typed fields the leg sends (a `list<map>` stays a list of maps). |
+| `fields` | JSONB | Exactly the typed fields the leg sends (see *Field set and provenance*): in full mode each with its provenance property, in legacy mode the admitted values unlabelled; a `list<map>` stays a list of maps. |
 | `enrichment_result_id` | UUID NULL | The `enrichment_results` row this obligation follows. |
 | `state` | VARCHAR(32) | See *States*. |
 | `attempts` / `max_attempts` | INTEGER | Claims so far; the ceiling (default 8). |
 | `next_attempt_at` | TIMESTAMPTZ | Earliest next claim (backoff). |
 | `lease_owner` / `lease_expires_at` | VARCHAR(128) / TIMESTAMPTZ NULL | Fencing token of the current claim (`<owner>#<token>`, new on every claim) and its lease. |
-| `last_error` / `last_ack` | TEXT / JSONB NULL | Last failure reason; CEG's acknowledgment when acknowledged. |
+| `last_error` / `last_ack` | TEXT / JSONB NULL | Last failure reason; CEG's acknowledgment when acknowledged. An acknowledged or refused row whose transport retried inside its claim carries `retried_in_claim` here (rule 5). |
 | `created_at`, `updated_at`, `resolved_at` | TIMESTAMPTZ | Lifecycle timestamps; `resolved_at` set on a terminal state. |
 
 Constraints: `uq_graph_sync_intents_tenant_key` UNIQUE (`tenant_id`, `effect_key`).
@@ -93,18 +93,63 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
    Each claim is its own transaction holding a per-subject advisory lock
    (`pg_advisory_xact_lock`) until it commits, so two claims of one subject
    are serialised and the later one sees the earlier one's lease.
-5. **Version order.** A subject is the graph row written: tenant, entity and
-   resolved endpoint. A row is not claimed while an older row of its subject is
-   `pending` or `dispatching`, nor once a newer row was **sent** (claimed at
-   least once, in any state since); such an older `pending` row is
-   `superseded`.
-6. **Bounded retries.** Retryable outcomes back off 2 s doubling to 300 s; at
+5. **Version order and the max-apply window.** A subject is the graph row
+   written: tenant, entity and resolved endpoint. **At most one version of a
+   subject is in flight.** A row is not claimed while an older row of its
+   subject is `pending` or `dispatching`, nor once a newer row was **sent**
+   (claimed at least once, in any state since); such an older `pending` row is
+   `superseded`. A row is also not claimed while an older row of its subject is
+   **uncertain** and was resolved less than the **max-apply window**
+   (`GRAPH_MAX_APPLY_SECONDS`, 300 s) ago. Uncertain means sent and not settled
+   by a single request that was acknowledged or definitively refused: a row
+   claimed more than once (`attempts > 1`), one whose transport retried inside
+   its claim (`last_error` carries `retried_in_claim`; `PacketRouter.route`
+   makes up to two requests per claim), one that ended `retry_exhausted:*`, or
+   one `superseded` after being sent. Its outcome is unknown, or one of its
+   earlier requests may still be applied: a Gate timeout or 5xx means the graph
+   "may or may not hold the row" (*Outcome classification*). The window bounds
+   how long after its last attempt CEG may still apply such a request -- the
+   Gate dispatch plus the worker's handling of one request -- and must be at
+   least that bound. A newer version is sent only after it, so a late write of
+   the uncertain version lands **before** the newer version, and the newer
+   version is the last write. A single-request acknowledgment or definitive
+   refusal (Gate 4xx, CEG `all_rejected` / `rows_rejected`) holds nothing: no
+   request of it can land later. The newer version carries every field its
+   converge selected, unsuppressed for any field an uncertain version carried
+   (G4), so the correction is the field's full current value, not a delta.
+   Version order and the window govern which row EIE sends and when; they rely
+   on the declared window bounding CEG's application of a request, which EIE
+   cannot verify. Rule 5 is therefore a latency optimisation where rule 6
+   applies, and the sole ordering mechanism for an endpoint that does not
+   declare `sync_version`. It holds for every subject, whether or not any field
+   declares provenance.
+6. **Monotonic version.** An endpoint that declares the row property
+   `sync_version` (`integer`) receives on every row the intent's `seq`: a
+   per-subject strictly increasing integer, since a subject's versions are
+   ordered by `seq` (rule 5). Every request of one version -- a transport retry,
+   a re-claim, a replay -- carries the same number, and it is part of the row
+   the idempotency key binds (rule 2). EIE never sends a lower `sync_version`
+   for a subject after a higher one was sent: an older row is never claimed once
+   a newer one was sent (rule 5). CEG applies a row only when its `sync_version`
+   is greater than or equal to the one it stores for the subject: equal is an
+   idempotent replay and changes no value; lower is stale -- refused, logged,
+   and acknowledged as stale, which is neither an error nor retryable: EIE
+   settles a stale acknowledgment of its row `acknowledged`. **Rule 6
+   alone guarantees that the last applied write of a subject is its newest
+   version, whatever the timing**; rule 5 only keeps a newer version from
+   being overwritten and then corrected later. `sync_version` is transport
+   metadata: never a value field, never selected, shaped, echo-guarded or
+   pinned in `fields`, and a value a converge produced under that name is
+   replaced. A process with no durable store (rule 8) has no `seq` and sends no
+   `sync_version`. An endpoint that does not declare it keeps today's behaviour:
+   rule 5 only (legacy).
+7. **Bounded retries.** Retryable outcomes back off 2 s doubling to 300 s; at
    `max_attempts` the row is `failed_terminal` with `retry_exhausted:*`.
-7. **Ownership before sending.** A store that cannot confirm a claim sends
+8. **Ownership before sending.** A store that cannot confirm a claim sends
    nothing for the key; recovery sends it. Only a process with no durable store
    configured sends unclaimed. A CEG answer the row did not record (lease lost,
    store error) leaves the key pending.
-8. **Verified replay.** An idempotent replay attaches its intent to the stored
+9. **Verified replay.** An idempotent replay attaches its intent to the stored
    result only when it carries the same entity and committed fields and every
    graph field it pins equals the stored result's value for that field (a
    shaped or absent graph field cannot be verified). A replay of an operation
@@ -112,9 +157,50 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
    carrying anything else raises `GraphIntentReplayMismatchError`: it is a
    failed persistence for that call (refused when durability is required),
    never a duplicate and never `completed`.
-9. **Recovery.** `SideEffectCoordinator.recover_graph_intents` claims due rows
+10. **Recovery.** `SideEffectCoordinator.recover_graph_intents` claims due rows
    and replays them; startup registration runs it every 30 s in-process, so a
    restarted idle node recovers without traffic.
+
+## Field set and provenance
+
+Operator ruling 2026-11-24 (revision of the #351 rule "observed / request values
+never reach the graph"): **a converge graph sync carries both admitted
+(enriched) values and consumer-observed values** for every field the effective
+spec declares on the resolved sync endpoint's row contract, childsync
+`list<map>` fields included. Before this ruling `fields` held admitted values
+only. Response admission is unchanged: an observed value is still never
+admitted into a response's `fields` (`docs/contracts/converge/response.v2.md`
+§3). This section governs only what the graph leg sends.
+
+Each declared row field `F` syncs in one of two modes, decided by whether the
+endpoint declares `F`'s provenance property (`F_provenance`, or the item
+`provenance` of a childsync `list<map>`). CEG packs are published by
+operators independently of EIE releases, so an endpoint that has not declared
+provenance keeps today's behaviour exactly:
+
+| Mode | When | What syncs for `F` |
+|---|---|---|
+| **Legacy** | `F`'s provenance property is not declared | Only the admitted (enriched) value, exactly as before this ruling (`handlers.admitted_fields`), with no provenance property. Unlabelled means enriched by contract. G2–G4 do not apply; G5 holds as before. |
+| **Full** | `F`'s provenance property is declared | The observed or the enriched value, each with its provenance property, under G1–G6 below. |
+
+An observed value **never** syncs to a field whose provenance property is not
+declared. The guardrails of full mode are applied per declared row field `F`,
+in this order:
+
+| Guardrail | Rule |
+|---|---|
+| **G1 Provenance** | Every field sent in full mode carries its provenance, `observed` or `enriched`, as a **declared spec property**, by the convention of `docs/contracts/EIE_NATIVE_DOMAIN_SPEC.md` *Sync provenance*: a row field `F` is accompanied by its companion property `F_provenance`; every item of a childsync `list<map>` carries the item property `provenance`. An observed value is never labelled `enriched`, and never sent unlabelled. |
+| **G2 Precedence within one converge** | Candidates first exclude any value that originated from a CEG `graph-inference-result` (evidence source type `graph`; see G4). Of the rest, an admitted value (`inferred` or `external_claim`, `admitted: true`) is sent as `enriched` and wins over an observed value of the same field. Otherwise the consumer's observed value for `F` (the request entity, or a v2 observation) is sent as `observed` -- including when the only admitted value was graph-origin and so excluded. A conflicting set of observations sends nothing for `F`. |
+| **G3 Precedence over time** | Enforced by CEG, not EIE: in the graph a later `observed` value replaces an `enriched` one, and an `enriched` value never overwrites an `observed` one. An enriched value CEG displaces is not lost: it remains EIE evidence (`enrichment_results`, `field_evidence`). |
+| **G4 Echo guard** | `F` is not sent only when both hold: (1) the subject's (tenant, entity, endpoint) most recent intent carrying `F` is `acknowledged` with the same value and provenance, and (2) every intent of the subject carrying `F` that was ever sent (claimed at least once) ended `acknowledged`. An acknowledgment is not proof of the graph state while any sent intent's outcome is unknown: an intent that was sent and ended `failed_terminal` or `superseded` may still be applied by CEG later (Gate: after a transport failure the graph "may or may not hold the row"), even after a newer acknowledgment, so `F` is then always resent to reconcile, and rule 5 sends that resend only after the uncertain intent's max-apply window, so it is the last write. `F` is always sent while an intent carrying `F` is `pending` or `dispatching`. A value that originated from a CEG `graph-inference-result` (evidence source type `graph`) is never sent (excluded before G2). A field set left empty sends no row and records no intent. |
+| **G5 No clears** | A `null` or missing observed value is never sent, so it never deletes a graph property; the same holds for admitted values. |
+| **G6 Domain-agnostic** | The field set is keyed only on the endpoint's declared row properties and its `childsync` entries. No field name, node label or cartridge is known to the code that builds it. |
+
+Rule 9 (*Verified replay*) is unchanged: a replay is verified against the
+stored result's committed `fields`. The stored result holds admitted values
+only, so a pinned observed field or provenance property is absent from it and
+cannot be verified: such a replay is a `GraphIntentReplayMismatchError` and
+attaches no intent (fails closed).
 
 ## Outcome classification (`PacketRouter.notify_graph_sync(on_outcome=…)`)
 

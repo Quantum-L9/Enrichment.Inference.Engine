@@ -81,6 +81,10 @@ services:
       TENANT_ALLOWLIST: plasticos,synthneutral
       # Opt-in for the feedback seam under test; default False in settings.py.
       GRAPH_INFERENCE_FEEDBACK_ENABLED: ${GL_CEG_FEEDBACK:-true}
+      # A3 graph-read trigger (CEG #540, docs/FEATURE_GATES.md section 13); default False in settings.py.
+      # Takes effect only for a tenant whose pack authorizes plugins.inference_rules: the TEST_ONLY
+      # synthneutral and plasticos packs authorize infer_geography_from_postal_code (P22).
+      GRAPH_INFERENCE_TRIGGER_ENABLED: ${GL_CEG_TRIGGER:-true}
       FEEDBACK_ENABLED: ${GL_CEG_OUTCOME_FEEDBACK:-false}
     volumes:
       - ${GL_CEG_PACKS:?}:/gl/ceg_packs:ro

@@ -101,13 +101,9 @@ def _synthesize(entity_key: str, field: str, declared_type: Any) -> Any:
     declaration = declared_type if isinstance(declared_type, Mapping) else None
     raw = declaration.get("type") if declaration is not None else declared_type
     kind = str(raw or "string").strip().casefold()
-
-    if kind in {"int", "integer"}:
-        return int(digest[:8], 16) % 1000
-    if kind in {"float", "number", "decimal"}:
-        return round((int(digest[:8], 16) % 10_000) / 100, 2)
-    if kind in {"bool", "boolean"}:
-        return int(digest[:2], 16) % 2 == 0
+    scalar = _synthesize_scalar(kind, digest, declaration)
+    if scalar is not None:
+        return scalar
     if kind in {"list", "array"}:
         items = declaration.get("items") if declaration is not None else None
         if isinstance(items, Mapping):
@@ -116,6 +112,23 @@ def _synthesize(entity_key: str, field: str, declared_type: Any) -> Any:
     if kind == "map" and declaration is not None:
         return _synthesize_map(entity_key, field, declaration.get("properties"))
     return f"{DETERMINISTIC_VALUE_PREFIX}{field}:{digest[:12]}"
+
+
+def _synthesize_scalar(kind: str, digest: str, declaration: Mapping[str, Any] | None) -> Any:
+    """A typed non-string scalar (int, float, bool, declared enum value), else None."""
+    if kind in {"int", "integer"}:
+        return int(digest[:8], 16) % 1000
+    if kind in {"float", "number", "decimal"}:
+        return round((int(digest[:8], 16) % 10_000) / 100, 2)
+    if kind in {"bool", "boolean"}:
+        return int(digest[:2], 16) % 2 == 0
+    if kind == "enum":
+        # Type-correct like int/float/bool: one of the declared values, so it is
+        # unmarked at the field level and named in `synthetic_fields` instead.
+        values = declaration.get("values") if declaration is not None else None
+        if isinstance(values, list) and values:
+            return values[int(digest[:8], 16) % len(values)]
+    return None
 
 
 def _synthesize_map(entity_key: str, field: str, properties: Any) -> dict[str, Any]:

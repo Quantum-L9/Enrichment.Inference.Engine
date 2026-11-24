@@ -16,6 +16,9 @@ ontology:
     - {name: title, type: string, required: true}
     - {name: max_load, type: float}
     - {name: band, type: string}
+    # Sync provenance (EIE_NATIVE_DOMAIN_SPEC.md): `band` and `handled_kinds` sync
+    # in full mode (observed and enriched, labelled); every other field is legacy.
+    - {name: band_provenance, type: enum, values: [observed, enriched]}
     - {name: postal_code, type: string}
     - {name: region, type: string}
     - name: handled_kinds
@@ -26,6 +29,7 @@ ontology:
         - {name: code, type: string, required: true}
         - {name: slot_id, type: string}
         - {name: direction, type: string}
+        - {name: provenance, type: enum, values: [observed, enriched]}
     - {name: note, type: string, evidenceonly: true}
     enrichment_hints:
       objective_template: "Enrich synthetic station profile"

@@ -25,6 +25,7 @@ Each deviation is a configuration choice; none patches Gate, the SDK or any node
 | ~~D-2~~ | Retired for the integrated rerun: Gate's verifying map holds only its callers. Gate resolves its own ed25519 key id to its public key since Constellation.Gate 2384923. | F-A7-01 (repaired, D-4) |
 | ~~D-3~~ | Retired for the integrated rerun: the driver's `GateClient` lists only Gate's key. Gate_SDK 1.3.3 derives the client's own public key. | F-A7-02 (repaired, SDK D-2) |
 | Rig | The driver holds the worker keys only to build key-misassignment negatives (P10), and to push CEG-side fixtures through Gate where EIE's own egress is blocked at main (P17, P19, P33, P34). Every such case says so in its evidence. | — |
+| Operator step | P22 first runs CEG's own `admin init_schema` for synthneutral, inside the CEG container (`scripts/ceg_init_schema.py` calls `engine.handlers.handle_admin`). Admin is operator-only and not advertised to Gate, so this is a deployment step, not a Gate call; no constraint is restated in the rail. CEG's boot never runs `init_schema`, so without this step the trigger writes nothing (`obligation_constraint_missing`). | CEG-W (init_schema not run at boot) |
 | Rig | MIX-ALG-01 recreates the graph worker signing hmac-sha256 (`GL_MIXED_CEG=1`: its own `GL_HMAC_CEG` secret, key id `ceg-hm-gl`) while Gate signs ed25519, then restores the trusted worker. | Gate_SDK 1.3.3 D-1 regression |
 
 The rerun is judged at one Gate_SDK release: `rail.py` compares every process's SDK code digest
@@ -33,6 +34,14 @@ explicitly); it is pinned to 1.3.4. `scripts/rail.sh` regenerates a `run.env` wr
 key layout. Every verifying key is declared with its algorithm (`L9_VERIFYING_KEY_ALGORITHMS_JSON`
 for Gate and both workers, `verifying_key_algorithms` in the driver): the rail's keys are raw
 32-byte values, which Gate_SDK 1.3.4 refuses undeclared when signatures are required.
+
+P22 runs CEG's graph-read inference trigger (CEG #540, `GRAPH_INFERENCE_TRIGGER_ENABLED`, on in the
+overlay). The CEG TEST_ONLY synthneutral pack authorizes `infer_geography_from_postal_code` under
+`plugins.inference_rules`; EIE's cartridge `inference_rules` is EIE's own rule list and stays empty.
+The converge schema names `postal_code`, which the deterministic provider echoes, so EIE's own sync
+carries the rule input. PASS needs exactly one `graph-inference-result` from `graph` through Gate,
+CEG's obligation `accepted` with both revisions, EIE's target keyed by CEG's `accepted_key`, and an
+identical resync that sends none.
 
 MIX-ALG-01 proves the worker side only: an hmac-sha256 worker must verify Gate's ed25519 dispatch.
 PASS means Gate's failure for the request is its own response check; the worker's HTTP 401/403
