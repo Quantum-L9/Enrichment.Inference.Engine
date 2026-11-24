@@ -1,0 +1,100 @@
+{
+ "id": "P27",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "accepted then consumed on a later pass, with distinct accepted/retained/consumed evidence",
+ "verdict": "PASS",
+ "reason": "accepted through Gate; retained in graph_return_targets after intake; consumed by the next converge (consumed_by converge:<op>, outcome seeded). The inference is the driver's ceg-gl rig: CEG has no Gate-routable inference trigger (F-A1-02, CEG-W)",
+ "observed": {
+  "entity_id": "sn-fb-018c2b",
+  "accepted": {
+   "status": "accepted",
+   "targets_queued": 1,
+   "packet_id": "2fd1d84a-234d-4acd-bbe0-e30dd806e4fa",
+   "tenant": "synthneutral"
+  },
+  "converge1_fields": {
+   "region": "West",
+   "band": "det:band:d366b879798d"
+  },
+  "converge2_fields": {
+   "region": "det:region:7d262ab1c056",
+   "band": "det:band:d366b879798d"
+  },
+  "eie_log": [
+   "{\"reason\": \"inbound packet destination_node 'graph' does not match local node 'enrichment-engine'\", \"event\": \"gate_only_ingress_rejected\", \"level\": \"warning\", \"timestamp\": \"2026-11-24T19:23:40.318667Z\"}",
+   "{\"tenant_id\": \"synthneutral\", \"retained\": 1, \"duplicates\": 0, \"unchanged\": 0, \"rejected\": 0, \"event\": \"graph_return_targets_recorded\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:45.396607Z\"}",
+   "{\"asctime\": \"2026-11-24 19:23:45,396\", \"levelname\": \"INFO\", \"name\": \"app.services.graph_return_channel\", \"message\": \"GraphReturnChannel: retained 1 targets for tenant=synthneutral (packet=2fd1d84a-234d-4acd-bbe0-e30dd806e4fa, duplicates=0, unchanged=0)\"}",
+   "{\"domain\": \"synthneutral\", \"edges\": 0, \"topo_depth\": 0, \"multi_hop\": [], \"event\": \"derivation_graph.built\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.049941Z\"}",
+   "{\"tenant_id\": \"synthneutral\", \"entity_id\": \"sn-fb-018c2b\", \"owner\": \"converge#9aee8f69e8aa42ce\", \"count\": 1, \"event\": \"graph_return_targets_claimed\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.065833Z\"}",
+   "{\"pass_number\": 1, \"fields\": [\"region\"], \"received\": 1, \"event\": \"graph_targets_applied\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.066059Z\"}",
+   "{\"entity_key\": \"sn-fb-018c2b\", \"field_count\": 2, \"synthetic_fields\": [\"band\"], \"event\": \"deterministic_enrichment_served\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.067124Z\"}",
+   "{\"owner\": \"converge#9aee8f69e8aa42ce\", \"settled\": 1, \"expected\": 1, \"event\": \"graph_return_targets_settled\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.072909Z\"}",
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.088823Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.088927Z\"}",
+   "{\"tenant_id\": \"synthneutral\", \"effect_key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-018c2b:c786427b:enrich\", \"entity_id\": \"sn-fb-018c2b\", \"endpoint\": \"stations\", \"event\": \"graph_intent_recorded\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.099084Z\"}",
+   "{\"id\": \"54a65412-409d-4739-b0a1-b986b4d38b28\", \"entity_id\": \"sn-fb-018c2b\", \"fields_count\": 2, \"confidence\": 0.95, \"event\": \"enrichment_result_saved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.109335Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-018c2b:c786427b:enrich\", \"entity_id\": \"sn-fb-018c2b\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.109456Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-018c2b:c786427b:enrich\", \"entity_id\": \"sn-fb-018c2b\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.109614Z\"}",
+   "{\"tenant\": \"synthneutral\", \"entity_id\": \"sn-fb-018c2b\", \"fields\": [\"band\", \"region\"], \"pass_count\": 1, \"state\": \"completed\", \"remaining_s\": 24.94, \"event\": \"handlers.converge_ok\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.109708Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:sn-fb-018c2b:c786427b:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.109828Z\"}",
+   "{\"owner\": \"9cffb5e5155c:1:c78d73f0#2c07bbe11b6a4843\", \"count\": 1, \"event\": \"graph_intents_claimed\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.268204Z\"}",
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.268749Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:23:47.268819Z\"}"
+  ],
+  "graph_return_targets": {
+   "after_intake": [
+    {
+     "state": "retained",
+     "consumed_by": "",
+     "outcome": "",
+     "created_at": "2026-11-24 19:23:45.381175+00"
+    }
+   ],
+   "after_converge1": [
+    {
+     "state": "consumed",
+     "consumed_by": "converge:gl:converge:synthneutral:sn-fb-018c2b:c786427b",
+     "outcome": "seeded",
+     "created_at": "2026-11-24 19:23:45.381175+00"
+    }
+   ],
+   "after_converge2": [
+    {
+     "state": "consumed",
+     "consumed_by": "converge:gl:converge:synthneutral:sn-fb-018c2b:c786427b",
+     "outcome": "seeded",
+     "created_at": "2026-11-24 19:23:45.381175+00"
+    }
+   ]
+  },
+  "graph_after_c1": [
+   [
+    "\"West\""
+   ]
+  ],
+  "graph_after": [
+   [
+    "\"det:region:7d262ab1c056\""
+   ]
+  ],
+  "converge1_completed": true,
+  "plasticos_noop": {
+   "converge_completed": true,
+   "entity_id": "gl-fbp-b57e35",
+   "accepted": {
+    "status": "accepted",
+    "targets_queued": 1,
+    "packet_id": "e9ecebe4-be64-4abd-9771-5d3f54db56f5",
+    "tenant": "plasticos"
+   },
+   "fields": {
+    "name": "TEST_ONLY gl-fbp-b57e35",
+    "tier": "det:tier:fbe4c4b0a1a3",
+    "capacity_tons_month": 4.11
+   },
+   "observed": true
+  }
+ },
+ "timestamp": "2026-11-24T19:24:04.520850+00:00"
+}

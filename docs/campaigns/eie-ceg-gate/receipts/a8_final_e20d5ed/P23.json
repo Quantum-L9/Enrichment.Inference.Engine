@@ -1,0 +1,23 @@
+{
+ "id": "P23",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "an unchanged echo of an inference result enqueues nothing new",
+ "verdict": "PASS",
+ "reason": "",
+ "observed": {
+  "first": {
+   "status": "accepted",
+   "targets_queued": 1,
+   "packet_id": "0bcd4b66-b050-462c-84eb-b609a1d7a366",
+   "tenant": "plasticos"
+  },
+  "second": {
+   "status": "accepted",
+   "targets_queued": 0,
+   "packet_id": "df190004-0076-4e95-b1d8-194f80e70acc",
+   "tenant": "plasticos"
+  }
+ },
+ "timestamp": "2026-11-24T19:17:13.580260+00:00"
+}

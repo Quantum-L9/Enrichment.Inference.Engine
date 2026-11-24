@@ -547,13 +547,6 @@ def test_graph_return_targets_parses_psql_rows(mp: pytest.MonkeyPatch) -> None:
     }
 
 
-def test_typed_sync_reason_is_the_operator_contract_wording() -> None:
-    assert rail.TYPED_SYNC_BLOCKED == (
-        "BLOCKED pending an operator contract decision (the sync row carries only admitted fields, "
-        "by design since #351)"
-    )
-
-
 def test_graph_leg_outcomes_are_per_entity() -> None:
     import json
 
@@ -589,8 +582,22 @@ def test_recovery_poll_accepts_a_row_within_the_deadline(mp: pytest.MonkeyPatch)
     assert rail.poll_recovered_facility("gl-down-1", budget_s=120)["facility_count"] == 1
 
 
-def _rig_converge_sync(mp: pytest.MonkeyPatch, *, polymers_prop: str, state: str) -> None:
-    """Drive c_converge_sync with no Docker: a row reached CEG through Gate, no typed edge."""
+PLASTICOS_CHILD = {"code": "HDPE", "line_id": "l1", "direction": "in", "form": "Regrind"}
+SYNTH_CHILD = {"code": "K1", "slot_id": "s1", "direction": "in"}
+
+
+def _rig_converge_sync(
+    mp: pytest.MonkeyPatch,
+    *,
+    polymers_prop: str = "NULL",
+    state: str = "completed",
+    enriched: object = None,
+    edges: list[dict] | None = None,
+) -> None:
+    """Drive c_converge_sync with no Docker: a row reached CEG through Gate.
+
+    ``enriched`` is the child list in the converge answer; ``edges`` what child_edges reads back.
+    """
     mp.setattr(rail.time, "sleep", lambda s: None)
     mp.setattr(rail, "stamp", lambda: "2026-11-24T00:00:00Z")
     mp.setattr(
@@ -600,10 +607,14 @@ def _rig_converge_sync(mp: pytest.MonkeyPatch, *, polymers_prop: str, state: str
             "ok": True,
             "gate_signature_valid": True,
             "response": {"signing_key_id": "gate-gl", "generation": 2, "causation_id": "c-1"},
-            "payload": {"state": state},
+            "payload": {
+                "state": state,
+                "fields": {"processed_polymers": enriched, "handled_kinds": enriched},
+            },
         },
     )
     mp.setattr(rail, "psql", lambda q: ["1"])
+    mp.setattr(rail, "child_edges", lambda tenant, eid: list(edges or []))
     # One Facility row, no PROCESSES edge; column 7 is the Facility's processed_polymers property.
     row = ['"fid"', "x", "x", "NULL", "NULL", "NULL", "NULL", polymers_prop]
     mp.setattr(rail, "facility", lambda db, fid, timeout=120: {"rows": [row], "facility_count": 1})
@@ -636,54 +647,81 @@ def _by_id(results: list[rail.Result]) -> dict[str, rail.Result]:
     return {r.id: r for r in results}
 
 
-def test_p18_missing_edge_alone_is_blocked_on_the_operator_contract(
-    mp: pytest.MonkeyPatch,
-) -> None:
-    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+def test_p18_passes_when_every_enriched_child_is_a_typed_edge(mp: pytest.MonkeyPatch) -> None:
+    edge = {"tenant": "plasticos", **PLASTICOS_CHILD}
+    _rig_converge_sync(mp, enriched=[PLASTICOS_CHILD], edges=[edge])
     p18 = _by_id(rail.c_converge_sync("ed25519"))["P18"]
-    assert p18.verdict == "BLOCKED"
-    assert p18.reason == f"{rail.TYPED_SYNC_BLOCKED}; {rail.GATE_BINDING_LIMIT}"
+    assert p18.verdict == "PASS"
+    assert p18.reason == rail.GATE_BINDING_LIMIT
 
 
-def test_p18_stringified_property_stays_fail_without_an_edge(mp: pytest.MonkeyPatch) -> None:
-    _rig_converge_sync(mp, polymers_prop='"{\\"HDPE\\": \\"in\\"}"', state="completed")
+def test_p18_fails_when_an_enriched_child_has_no_typed_edge(mp: pytest.MonkeyPatch) -> None:
+    _rig_converge_sync(mp, enriched=[PLASTICOS_CHILD], edges=[])
     p18 = _by_id(rail.c_converge_sync("ed25519"))["P18"]
     assert p18.verdict == "FAIL"
-    assert rail.TYPED_SYNC_BLOCKED not in p18.reason
+    assert "no typed edge" in p18.reason
 
 
-def test_p05_missing_edge_alone_is_blocked_on_the_operator_contract(
+def test_p18_fails_when_the_edge_loses_line_identity_or_form(mp: pytest.MonkeyPatch) -> None:
+    edge = {"tenant": "plasticos", **PLASTICOS_CHILD, "form": None}
+    _rig_converge_sync(mp, enriched=[PLASTICOS_CHILD], edges=[edge])
+    assert _by_id(rail.c_converge_sync("ed25519"))["P18"].verdict == "FAIL"
+
+
+def test_p18_fails_on_a_stringified_child_list(mp: pytest.MonkeyPatch) -> None:
+    edge = {"tenant": "plasticos", **PLASTICOS_CHILD}
+    _rig_converge_sync(mp, polymers_prop='"STRING"', enriched=[PLASTICOS_CHILD], edges=[edge])
+    p18 = _by_id(rail.c_converge_sync("ed25519"))["P18"]
+    assert p18.verdict == "FAIL"
+    assert "stringified" in p18.reason
+
+
+def test_p18_fails_when_the_provider_supplied_no_child_list(mp: pytest.MonkeyPatch) -> None:
+    _rig_converge_sync(mp, enriched=None, edges=[])
+    p18 = _by_id(rail.c_converge_sync("ed25519"))["P18"]
+    assert p18.verdict == "FAIL"
+    assert "no enriched processed_polymers list" in p18.reason
+
+
+def test_p05_passes_with_typed_handles_edges_and_fails_under_another_tenant(
     mp: pytest.MonkeyPatch,
 ) -> None:
-    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
-    p05 = _by_id(rail.c_converge_sync("ed25519", tenant="synthneutral"))["P05"]
-    assert p05.verdict == "BLOCKED"
-    assert p05.reason == f"{rail.TYPED_SYNC_BLOCKED}; {rail.GATE_BINDING_LIMIT}"
-
-
-def test_p05_incomplete_converge_stays_fail_without_an_edge(mp: pytest.MonkeyPatch) -> None:
-    _rig_converge_sync(mp, polymers_prop="NULL", state="failed")
+    _rig_converge_sync(
+        mp, enriched=[SYNTH_CHILD], edges=[{"tenant": "synthneutral", **SYNTH_CHILD}]
+    )
+    assert _by_id(rail.c_converge_sync("ed25519", tenant="synthneutral"))["P05"].verdict == "PASS"
+    _rig_converge_sync(mp, enriched=[SYNTH_CHILD], edges=[{"tenant": "plasticos", **SYNTH_CHILD}])
     p05 = _by_id(rail.c_converge_sync("ed25519", tenant="synthneutral"))["P05"]
     assert p05.verdict == "FAIL"
-    assert rail.GATE_BINDING_LIMIT in p05.reason
+    assert "another tenant" in p05.reason
+
+
+def test_p05_incomplete_converge_fails(mp: pytest.MonkeyPatch) -> None:
+    edge = {"tenant": "synthneutral", **SYNTH_CHILD}
+    _rig_converge_sync(mp, state="failed", enriched=[SYNTH_CHILD], edges=[edge])
+    p05 = _by_id(rail.c_converge_sync("ed25519", tenant="synthneutral"))["P05"]
+    assert p05.verdict == "FAIL"
+    assert "converge state 'failed'" in p05.reason
 
 
 def test_p07_reason_records_the_gate_entity_binding_limit(mp: pytest.MonkeyPatch) -> None:
-    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+    _rig_converge_sync(mp)
     p07 = _by_id(rail.c_converge_sync("ed25519"))["P07"]
     assert p07.verdict == "PASS"
     assert rail.GATE_BINDING_LIMIT in p07.reason
 
 
-def test_typed_sync_blocked_requires_every_other_requirement() -> None:
-    base = {"stored": True, "sync_via_gate": True, "typed_edges": False}
-    assert rail.typed_sync_blocked(**base, other_requirements_met=True)
-    assert not rail.typed_sync_blocked(**base, other_requirements_met=False)
-    assert not rail.typed_sync_blocked(
-        **{**base, "sync_via_gate": False}, other_requirements_met=True
-    )
-    assert not rail.typed_sync_blocked(**{**base, "stored": False}, other_requirements_met=True)
-    assert not rail.typed_sync_blocked(**{**base, "typed_edges": True}, other_requirements_met=True)
+def test_enriched_request_omits_the_child_list_and_names_it_in_the_schema() -> None:
+    for tenant in ("plasticos", "synthneutral"):
+        body = rail.converge_payload("e1", tenant, enrich_children=True)["payload"]
+        child = rail.CHILD_FIELD[tenant]
+        assert child not in body["entity"]
+        decl = body["schema"][child]
+        assert decl["type"] == "list" and decl["items"]["type"] == "map"
+        names = {p["name"] for p in decl["items"]["properties"]}
+        assert set(rail.CHILD_KEYS[tenant]) <= names
+        plain = rail.converge_payload("e1", tenant)["payload"]
+        assert child in plain["entity"] and child not in plain["schema"]
 
 
 def test_recovery_poll_gives_the_probe_the_fractional_remaining_budget(
@@ -758,7 +796,7 @@ def test_uncorrelated_egress_signing_error_never_turns_a_failure_into_blocked(
     mp: pytest.MonkeyPatch,
 ) -> None:
     """Another entity's signing error in the window must not relabel this entity's FAIL."""
-    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+    _rig_converge_sync(mp)
     mp.setattr(rail, "facility", lambda db, fid, timeout=120: {"rows": [], "facility_count": 0})
     mp.setattr(rail, "graph_leg_outcomes", lambda log, eid: [False])
     mp.setattr(

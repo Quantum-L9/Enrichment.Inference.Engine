@@ -1,0 +1,125 @@
+{
+ "id": "P18",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "enriched processed_polymers (requested by schema, supplied by the provider) reach CEG through Gate as typed PROCESSES edges with line identity, direction and form, under the same tenant; Facility carries no processed_polymers property",
+ "verdict": "PASS",
+ "reason": "Gate's sync events carry no entity field (observability/logging.py:37-47); per-entity binding is EIE's graph-leg record plus the CEG row, not Gate's events",
+ "observed": {
+  "entity_id": "gl-plas-8ac02a",
+  "converge": {
+   "ok": true,
+   "elapsed_s": 0.227,
+   "error": null,
+   "gate_signature_valid": true
+  },
+  "response": {
+   "packet_id": "2bbc950d-ef0f-4561-b29b-5442020b286b",
+   "packet_type": "response",
+   "action": "converge",
+   "source_node": "enrichment-engine",
+   "destination_node": "gate",
+   "reply_to": "enrichment-engine",
+   "tenant": "plasticos",
+   "root_id": "51738061-0706-4bf5-9686-a10c40080f35",
+   "parent_id": "d2f31d1b-300f-479e-a10a-9aafdcabd60e",
+   "generation": 2,
+   "causation_id": "d2f31d1b-300f-479e-a10a-9aafdcabd60e",
+   "idempotency_key": "gl:converge:plasticos:gl-plas-8ac02a:91b868a4",
+   "signing_key_id": "gate-gl",
+   "signature_algorithm": "ed25519",
+   "hop_trace": [
+    {
+     "node": "enrichment-engine",
+     "direction": "response",
+     "status": "completed",
+     "target_node": null,
+     "signed": false
+    }
+   ],
+   "provenance": {
+    "origin_kind": "gate",
+    "requested_action": "converge",
+    "resolved_by_gate": true,
+    "route_kind": "external_ingress",
+    "original_source_node": "odoo"
+   }
+  },
+  "state": "completed",
+  "eie_persisted_rows": [
+   "1"
+  ],
+  "graph": {
+   "rows": [
+    [
+     "\"gl-plas-8ac02a\"",
+     "\"TEST_ONLY gl-plas-8ac02a\"",
+     "NULL",
+     "\"det:processed_polymers[0].code:35a634e61258\"",
+     "\"det:processed_polymers[0].line_id:97328a78c245\"",
+     "\"det:processed_polymers[0].direction:4ca3d682091e\"",
+     "\"det:processed_polymers[0].form:5ab8992cf344\"",
+     "\"NULL\""
+    ]
+   ],
+   "facility_count": 1
+  },
+  "enriched_children": [
+   {
+    "code": "det:processed_polymers[0].code:35a634e61258",
+    "line_id": "det:processed_polymers[0].line_id:97328a78c245",
+    "direction": "det:processed_polymers[0].direction:4ca3d682091e",
+    "form": "det:processed_polymers[0].form:5ab8992cf344"
+   }
+  ],
+  "child_edges": [
+   {
+    "tenant": "plasticos",
+    "code": "det:processed_polymers[0].code:35a634e61258",
+    "line_id": "det:processed_polymers[0].line_id:97328a78c245",
+    "direction": "det:processed_polymers[0].direction:4ca3d682091e",
+    "form": "det:processed_polymers[0].form:5ab8992cf344"
+   }
+  ],
+  "gate_sync_events": [
+   {
+    "event": "gate.ingress",
+    "action": "sync",
+    "source_node": "enrichment-engine",
+    "origin_kind": "node",
+    "generation": 0,
+    "hop_count": 0,
+    "request_id": "78f96361e36b4c87ac01bfb5bad7be43",
+    "root_id": "6a596bf9-c240-41d5-99eb-4095e1a7f0d1",
+    "packet_id": "6a596bf9-c240-41d5-99eb-4095e1a7f0d1",
+    "error_type": null,
+    "error_message": null
+   },
+   {
+    "event": "gate.completed",
+    "action": "sync",
+    "source_node": "graph",
+    "origin_kind": "gate",
+    "generation": 2,
+    "hop_count": 1,
+    "request_id": "78f96361e36b4c87ac01bfb5bad7be43",
+    "root_id": "6a596bf9-c240-41d5-99eb-4095e1a7f0d1",
+    "packet_id": "3e6c6352-cef8-45ac-9bfa-1f9aa46357c7",
+    "error_type": null,
+    "error_message": null
+   }
+  ],
+  "eie_graph_leg_synced": true,
+  "eie_log": [
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:23.956477Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:23.956586Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-8ac02a:91b868a4:enrich\", \"entity_id\": \"gl-plas-8ac02a\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:23.985030Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-8ac02a:91b868a4:enrich\", \"entity_id\": \"gl-plas-8ac02a\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:23.985139Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-8ac02a:91b868a4:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:23.985296Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:24.052891Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:24.053032Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-8ac02a:91b868a4:enrich\", \"entity_id\": \"gl-plas-8ac02a\", \"synced\": true, \"terminal\": false, \"event\": \"side_effects_graph_leg_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:24.177530Z\"}"
+  ]
+ },
+ "timestamp": "2026-11-24T19:16:37.912830+00:00"
+}

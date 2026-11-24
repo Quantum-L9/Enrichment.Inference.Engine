@@ -1,0 +1,160 @@
+{
+ "id": "P22",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "material graph change with an authorized rule: CEG uses graph-read evidence and sends one cited finding; an identical resync sends nothing",
+ "verdict": "FAIL",
+ "reason": "not observed: obligation revisions unchanged by the identical resync",
+ "observed": {
+  "entity_id": "sn-tr-841592",
+  "operator_step": {
+   "ceg_admin_init_schema": {
+    "answer": {
+     "status": "schema_initialized",
+     "constraints_created": 6,
+     "subaction": "init_schema"
+    },
+    "constraints_present": [
+     "ceg_inference_obligation_key",
+     "constraint_1d973f4d",
+     "constraint_3f4f93cf",
+     "constraint_9d0e9aa",
+     "constraint_c1acde9e",
+     "constraint_ca1e682a"
+    ],
+    "ceg_warnings": [
+     "Constraint failed for Station.title: {code: Neo.DatabaseError.Schema.ConstraintCreationFailed} {message: Unable to create Constraint( type='NODE PROPERTY EXISTENCE', schema=(:Station {title}) ):"
+    ]
+   }
+  },
+  "changed_fact": {
+   "converge": {
+    "ok": true,
+    "elapsed_s": 0.137,
+    "error": null
+   },
+   "state": "completed",
+   "station": [
+    [
+     "\"94105\"",
+     "NULL"
+    ]
+   ],
+   "gate_graph_inference_results": [
+    {
+     "event": "gate.ingress",
+     "action": "graph-inference-result",
+     "source_node": "graph",
+     "origin_kind": "node",
+     "generation": 0,
+     "hop_count": 0,
+     "request_id": "268dad2db02343d38704d1be0e304648",
+     "root_id": "53eae3aa-0a00-48fe-acbc-9bed434c6396",
+     "packet_id": "53eae3aa-0a00-48fe-acbc-9bed434c6396",
+     "error_type": null,
+     "error_message": null
+    },
+    {
+     "event": "gate.completed",
+     "action": "graph-inference-result",
+     "source_node": "enrichment-engine",
+     "origin_kind": "gate",
+     "generation": 2,
+     "hop_count": 1,
+     "request_id": "268dad2db02343d38704d1be0e304648",
+     "root_id": "53eae3aa-0a00-48fe-acbc-9bed434c6396",
+     "packet_id": "cf728597-dca8-4041-b218-3a86f8111cd2",
+     "error_type": null,
+     "error_message": null
+    }
+   ],
+   "obligation": {
+    "status": "accepted",
+    "decision": "emit",
+    "evidence_revision": "568fad04cc3fe09f135c47aa07c8f7326426926282954db8cf06b29ada428130",
+    "rule_revision": "58c8b567554838e044c6fe4ee7d9b2752ea21259628fb9e4a39d522dce4aef6c",
+    "attempts": "1",
+    "accepted_key": "ceg:graph-inference:synthneutral:Station:sn-tr-841592:290826db2adecd0e46995450",
+    "wire_key": "ceg:graph-inference:synthneutral:Station:sn-tr-841592:290826db2adecd0e46995450",
+    "accepted_findings_digest": "cc2fc7e259c7d97c12043c1b1fe08b0d52a532771736f55a256553ee6dd49dc4"
+   },
+   "eie_return_targets": [
+    {
+     "field": "region",
+     "rule": "infer_geography_from_postal_code",
+     "value": "{\"value\": \"West\"}",
+     "producer_key": "ceg:graph-inference:synthneutral:Station:sn-tr-841592:290826db2adecd0e46995450",
+     "origin_packet_id": "86922488-72df-44d4-8781-95c4ed2ac111",
+     "state": "retained"
+    }
+   ],
+   "ceg_log": [
+    "{\"asctime\": \"2026-11-24 19:24:11,615\", \"levelname\": \"INFO\", \"name\": \"engine.handlers\", \"message\": \"graph inference after sync tenant=synthneutral: {'emit': 1}\"}"
+   ]
+  },
+  "no_change_witness": {
+   "converge": {
+    "ok": true,
+    "elapsed_s": 0.105,
+    "error": null
+   },
+   "state": "completed",
+   "gate_sync_events": [
+    {
+     "event": "gate.ingress",
+     "action": "sync",
+     "source_node": "enrichment-engine",
+     "origin_kind": "node",
+     "generation": 0,
+     "hop_count": 0,
+     "request_id": "db764a5944e7452ebba3f437b2742bbe",
+     "root_id": "c41ca786-2804-4982-9c11-0996fc308bec",
+     "packet_id": "c41ca786-2804-4982-9c11-0996fc308bec",
+     "error_type": null,
+     "error_message": null
+    },
+    {
+     "event": "gate.completed",
+     "action": "sync",
+     "source_node": "graph",
+     "origin_kind": "gate",
+     "generation": 2,
+     "hop_count": 1,
+     "request_id": "db764a5944e7452ebba3f437b2742bbe",
+     "root_id": "c41ca786-2804-4982-9c11-0996fc308bec",
+     "packet_id": "fe3030ab-0d35-4702-8fe5-880439cb160f",
+     "error_type": null,
+     "error_message": null
+    }
+   ],
+   "gate_graph_inference_results": [],
+   "obligation": {
+    "status": "accepted",
+    "decision": "same_findings",
+    "evidence_revision": "c880ad61aa41cbbe52c0ed42f5a4c7c4ff2e3e5dd4c175043e8fc66f432c39e5",
+    "rule_revision": "58c8b567554838e044c6fe4ee7d9b2752ea21259628fb9e4a39d522dce4aef6c",
+    "attempts": "1",
+    "accepted_key": "ceg:graph-inference:synthneutral:Station:sn-tr-841592:290826db2adecd0e46995450",
+    "wire_key": "ceg:graph-inference:synthneutral:Station:sn-tr-841592:290826db2adecd0e46995450",
+    "accepted_findings_digest": "cc2fc7e259c7d97c12043c1b1fe08b0d52a532771736f55a256553ee6dd49dc4"
+   },
+   "ceg_log": [
+    "{\"asctime\": \"2026-11-24 19:24:18,532\", \"levelname\": \"INFO\", \"name\": \"engine.handlers\", \"message\": \"graph inference after sync tenant=synthneutral: {'same_findings': 1}\"}"
+   ]
+  },
+  "requirements": {
+   "changed-fact converge completed": true,
+   "rule input (postal_code) synced to the Station": true,
+   "first converge's graph leg resolved before the resync window": true,
+   "exactly one graph-inference-result from graph through Gate": true,
+   "that result completed at Gate": true,
+   "CEG obligation accepted (EIE intake ack)": true,
+   "evidence_revision and rule_revision cited": true,
+   "EIE target cites CEG's rule and graph provenance": true,
+   "identical resync reached CEG through Gate": true,
+   "identical resync sent no graph-inference-result": true,
+   "obligation revisions unchanged by the identical resync": false
+  }
+ },
+ "timestamp": "2026-11-24T19:24:36.270676+00:00"
+}
