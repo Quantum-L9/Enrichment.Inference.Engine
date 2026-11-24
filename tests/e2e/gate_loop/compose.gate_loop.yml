@@ -85,10 +85,6 @@ services:
       # Takes effect only for a tenant whose pack authorizes plugins.inference_rules: the TEST_ONLY
       # synthneutral and plasticos packs authorize infer_geography_from_postal_code (P22).
       GRAPH_INFERENCE_TRIGGER_ENABLED: ${GL_CEG_TRIGGER:-true}
-      # #351 revision (CEG FEATURE_GATES.md section 39): provenance precedence and the
-      # sync_version stale-write guard. Ships off in CEG; on here, where every tenant is a
-      # TEST_ONLY pack (plasticos, synthneutral).
-      SYNC_PROVENANCE_PRECEDENCE_ENABLED: ${GL_CEG_PROVENANCE:-true}
       FEEDBACK_ENABLED: ${GL_CEG_OUTCOME_FEEDBACK:-false}
     volumes:
       - ${GL_CEG_PACKS:?}:/gl/ceg_packs:ro

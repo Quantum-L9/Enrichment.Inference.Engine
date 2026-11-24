@@ -26,8 +26,6 @@ Each deviation is a configuration choice; none patches Gate, the SDK or any node
 | ~~D-3~~ | Retired for the integrated rerun: the driver's `GateClient` lists only Gate's key. Gate_SDK 1.3.3 derives the client's own public key. | F-A7-02 (repaired, SDK D-2) |
 | Rig | The driver holds the worker keys only to build key-misassignment negatives (P10), and to push CEG-side fixtures through Gate where EIE's own egress is blocked at main (P17, P19, P33, P34). Every such case says so in its evidence. | — |
 | Operator step | P22 first runs CEG's own `admin init_schema` for synthneutral, inside the CEG container (`scripts/ceg_init_schema.py` calls `engine.handlers.handle_admin`). Admin is operator-only and not advertised to Gate, so this is a deployment step, not a Gate call; no constraint is restated in the rail. CEG's boot never runs `init_schema`, so without this step the trigger writes nothing (`obligation_constraint_missing`). | CEG-W (init_schema not run at boot) |
-| Rig | `P05-stale-late` and `P05-stale-same-batch` send synthneutral `stations` rows with the eie-gl key held by the driver, through Gate: EIE never sends a lower `sync_version` after a higher one (`docs/contracts/data/graph_sync_intents.md` rule 5), so only a rig can present one. Every rig sync row carries `sync_version` (`rail.versioned`). | — |
-| Flag | CEG runs `SYNC_PROVENANCE_PRECEDENCE_ENABLED=true` (`GL_CEG_PROVENANCE`). It ships off; every tenant on this rail is a TEST_ONLY pack. With it on, CEG refuses a row of a versioned endpoint that carries no `sync_version`, so an EIE whose cartridge does not declare `sync_version` cannot sync to it. | — |
 | Rig | MIX-ALG-01 recreates the graph worker signing hmac-sha256 (`GL_MIXED_CEG=1`: its own `GL_HMAC_CEG` secret, key id `ceg-hm-gl`) while Gate signs ed25519, then restores the trusted worker. | Gate_SDK 1.3.3 D-1 regression |
 
 The rerun is judged at one Gate_SDK release: `rail.py` compares every process's SDK code digest
@@ -72,21 +70,3 @@ Each run writes `$GL_STATE_DIR/evidence/<UTC>-<profile>/` (default `/root/l9e2e/
 - `summary.json`, including a key leak check.
 
 The baseline at main is copied to `docs/campaigns/eie-ceg-gate/receipts/a8_baseline_main/`.
-
-## Value provenance (#351 revision, operator ruling 2026-11-24)
-
-Scenario `provenance` drives one synthneutral Station through five consumer converges and reads, after
-each, EIE's `graph_sync_intents.fields` (what EIE sent) and Neo4j (what CEG kept). The cartridge
-declares `band_provenance` and the `handled_kinds` item `provenance`, so those two fields sync in full
-mode (EIE `docs/contracts/data/graph_sync_intents.md` *Field set and provenance*); CEG applies
-precedence (CEG `docs/FEATURE_GATES.md` section 39).
-
-| Step | Request | Case |
-|---|---|---|
-| s1 | omits `band` and `handled_kinds`; the schema names both, so the provider supplies them | `P05-enriched` |
-| s2 | carries `band` and one `handled_kinds` item with s1's edge identity and another direction; the schema names only the legacy `max_load` | `P05-observed`, `P05-precedence-observed` |
-| s2b | s2 again, identically | `P05-echo-guard` |
-| s3 | s1 again: EIE must send the enriched values, and CEG must keep the observed ones | `P05-precedence-enriched` |
-| s4 | `band: null`, no `handled_kinds` | `P05-null-no-clear` |
-
-Scenario `sync_version` covers the stale-write guard (EIE rule 6, CEG #560) with the rig row above.
