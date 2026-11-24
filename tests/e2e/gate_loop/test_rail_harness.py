@@ -411,3 +411,100 @@ def test_recovery_poll_accepts_a_row_within_the_deadline(mp: pytest.MonkeyPatch)
     mp.setattr(rail.time, "monotonic", lambda: next(clock))
     mp.setattr(rail, "facility", lambda db, fid, timeout=120: {"rows": [], "facility_count": 1})
     assert rail.poll_recovered_facility("gl-down-1", budget_s=120)["facility_count"] == 1
+
+
+def _rig_converge_sync(mp: pytest.MonkeyPatch, *, polymers_prop: str, state: str) -> None:
+    """Drive c_converge_sync with no Docker: a row reached CEG through Gate, no typed edge."""
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    mp.setattr(rail, "stamp", lambda: "2026-11-24T00:00:00Z")
+    mp.setattr(
+        rail,
+        "drive",
+        lambda scenario, args=None: {
+            "ok": True,
+            "gate_signature_valid": True,
+            "response": {"signing_key_id": "gate-gl", "generation": 2, "causation_id": "c-1"},
+            "payload": {"state": state},
+        },
+    )
+    mp.setattr(rail, "psql", lambda q: ["1"])
+    # One Facility row, no PROCESSES edge; column 7 is the Facility's processed_polymers property.
+    row = ['"fid"', "x", "x", "NULL", "NULL", "NULL", "NULL", polymers_prop]
+    mp.setattr(rail, "facility", lambda db, fid, timeout=120: {"rows": [row], "facility_count": 1})
+
+    def station(db: str, q: str, timeout: int = 120) -> list[list[str]]:
+        sid = q.split("station_id:'")[1].split("'")[0]
+        return [[f'"{sid}"', "NULL"]]
+
+    mp.setattr(rail, "cypher", station)
+    mp.setattr(
+        rail,
+        "gate_events",
+        lambda since, action: [
+            {"event": "gate.ingress", "source_node": "enrichment-engine", "request_id": "r1"},
+            {
+                "event": "gate.completed",
+                "source_node": "graph",
+                "request_id": "r1",
+                "generation": 2,
+            },
+        ],
+    )
+    mp.setattr(rail, "logs", lambda *a, **k: [])
+    mp.setattr(rail, "graph_leg_synced", lambda log, eid: True)
+    mp.setattr(rail, "graph_leg_outcomes", lambda log, eid: [True])
+    mp.setattr(rail, "verdict", lambda ok, p, signed_claim: "PASS" if ok else "FAIL")
+
+
+def _by_id(results: list[rail.Result]) -> dict[str, rail.Result]:
+    return {r.id: r for r in results}
+
+
+def test_p18_missing_edge_alone_is_blocked_on_the_operator_contract(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+    p18 = _by_id(rail.c_converge_sync("ed25519"))["P18"]
+    assert p18.verdict == "BLOCKED"
+    assert p18.reason == rail.TYPED_SYNC_BLOCKED
+
+
+def test_p18_stringified_property_stays_fail_without_an_edge(mp: pytest.MonkeyPatch) -> None:
+    _rig_converge_sync(mp, polymers_prop='"{\\"HDPE\\": \\"in\\"}"', state="completed")
+    p18 = _by_id(rail.c_converge_sync("ed25519"))["P18"]
+    assert p18.verdict == "FAIL"
+    assert p18.reason != rail.TYPED_SYNC_BLOCKED
+
+
+def test_p05_missing_edge_alone_is_blocked_on_the_operator_contract(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+    p05 = _by_id(rail.c_converge_sync("ed25519", tenant="synthneutral"))["P05"]
+    assert p05.verdict == "BLOCKED"
+    assert p05.reason == rail.TYPED_SYNC_BLOCKED
+
+
+def test_p05_incomplete_converge_stays_fail_without_an_edge(mp: pytest.MonkeyPatch) -> None:
+    _rig_converge_sync(mp, polymers_prop="NULL", state="failed")
+    p05 = _by_id(rail.c_converge_sync("ed25519", tenant="synthneutral"))["P05"]
+    assert p05.verdict == "FAIL"
+    assert rail.GATE_BINDING_LIMIT in p05.reason
+
+
+def test_p07_reason_records_the_gate_entity_binding_limit(mp: pytest.MonkeyPatch) -> None:
+    _rig_converge_sync(mp, polymers_prop="NULL", state="completed")
+    p07 = _by_id(rail.c_converge_sync("ed25519"))["P07"]
+    assert p07.verdict == "PASS"
+    assert rail.GATE_BINDING_LIMIT in p07.reason
+
+
+def test_typed_sync_blocked_requires_every_other_requirement() -> None:
+    base = {"stored": True, "sync_via_gate": True, "typed_edges": False}
+    assert rail.typed_sync_blocked(**base, other_requirements_met=True)
+    assert not rail.typed_sync_blocked(**base, other_requirements_met=False)
+    assert not rail.typed_sync_blocked(
+        **{**base, "sync_via_gate": False}, other_requirements_met=True
+    )
+    assert not rail.typed_sync_blocked(**{**base, "stored": False}, other_requirements_met=True)
+    assert not rail.typed_sync_blocked(**{**base, "typed_edges": True}, other_requirements_met=True)

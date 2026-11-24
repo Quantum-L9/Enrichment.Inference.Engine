@@ -687,6 +687,26 @@ TYPED_SYNC_BLOCKED = (
     "by design since #351)"
 )
 
+# Gate's packet log context (observability/logging.py:37-47) carries no entity field, so the rail
+# cannot bind a Gate sync event to one entity. It binds each case by EIE's own graph-leg record
+# for the run's unique entity id plus the CEG row, and by request_id between Gate's ingress and
+# completion; Gate's events prove that a sync from EIE completed in the window, not which entity.
+GATE_BINDING_LIMIT = (
+    "Gate's sync events carry no entity field (observability/logging.py:37-47); per-entity binding "
+    "is EIE's graph-leg record plus the CEG row, not Gate's events"
+)
+
+
+def typed_sync_blocked(
+    *, stored: bool, sync_via_gate: bool, typed_edges: bool, other_requirements_met: bool
+) -> bool:
+    """True only when the missing typed edge is the sole failure of a typed-sync case.
+
+    BLOCKED pending the operator contract applies when the row reached CEG through Gate and
+    every other requirement of the case holds. Any other failure stays FAIL (rule 95).
+    """
+    return stored and sync_via_gate and other_requirements_met and not typed_edges
+
 
 def graph_return_targets(entity_id: str) -> list[dict]:
     """EIE's durable graph-return targets for one synthneutral entity (retained -> consuming -> consumed)."""
@@ -831,7 +851,11 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
                 "enrichment-engine, completed, child generation >= 2) and its row read back from Neo4j",
                 verdict(ok07, p, signed_claim=True),
                 observed=obs,
-                reason="" if ok07 else "sync not observed through Gate, or row not read back",
+                reason=(
+                    GATE_BINDING_LIMIT
+                    if ok07
+                    else f"sync not observed through Gate, or row not read back; {GATE_BINDING_LIMIT}"
+                ),
             )
         )
         out.append(
@@ -857,13 +881,21 @@ def c_converge_sync(p: str, tenant: str = "plasticos") -> list[Result]:
                 "with no PlasticOS literal",
                 verdict(ok05, p, signed_claim=False),
                 observed=obs,
-                reason="" if stored else "no row reached CEG",
+                reason=GATE_BINDING_LIMIT
+                if stored
+                else f"no row reached CEG; {GATE_BINDING_LIMIT}",
             )
         )
     # The node arrived through Gate but no typed child edge did: EIE's sync row carries only the
     # admitted (enriched) fields by design since #351, which leaves the edge contract to an operator.
     typed_ids = ("P18",) if tenant == "plasticos" else ("P05",)
-    if stored and sync_via_gate and not typed_edges:
+    other_ok = not_stringified if tenant == "plasticos" else state == "completed"
+    if typed_sync_blocked(
+        stored=stored,
+        sync_via_gate=sync_via_gate,
+        typed_edges=typed_edges,
+        other_requirements_met=other_ok,
+    ):
         for res in out:
             if res.id in typed_ids:
                 res.verdict = "BLOCKED"
