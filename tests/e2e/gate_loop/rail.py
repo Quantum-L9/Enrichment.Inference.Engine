@@ -121,7 +121,7 @@ def drive(scenario: str, args: dict | None = None) -> dict:
         return {"driver_error": redact(r.stderr or r.stdout)[-600:]}
 
 
-def cypher(db: str, query: str) -> list[list[str]]:
+def cypher(db: str, query: str, timeout: int = 120) -> list[list[str]]:
     """Rows of a Cypher query (header dropped). Raises ProbeError when the query does not complete."""
     pw = env()["GL_NEO4J_SECRET"]
     r = sh(
@@ -140,7 +140,7 @@ def cypher(db: str, query: str) -> list[list[str]]:
             "plain",
             query,
         ],
-        timeout=120,
+        timeout=timeout,
     )
     if r.returncode != 0:
         raise ProbeError(
@@ -450,7 +450,7 @@ def ceg_refused(r: dict, error: str) -> bool:
     )
 
 
-def facility(db: str, fid: str) -> dict:
+def facility(db: str, fid: str, timeout: int = 120) -> dict:
     """Facility read-back. valueType() is a Neo4j 5 built-in (no APOC). Raises ProbeError on query failure."""
     rows = cypher(
         db,
@@ -458,6 +458,7 @@ def facility(db: str, fid: str) -> dict:
         "OPTIONAL MATCH (f)-[r:PROCESSES]->(p:PolymerFamily) "
         "RETURN f.facility_id, f.name, f.contamination_tolerance, p.code, r.line_id, r.direction, "
         "r.form, valueType(f.processed_polymers)",
+        timeout=timeout,
     )
     return {"rows": rows, "facility_count": len({r[0] for r in rows if r and r[0] != "NULL"})}
 
@@ -937,13 +938,7 @@ def c_ceg_down(p: str) -> list[Result]:
     # EIE's recovery pass runs 30 s after startup and then every 30 s, and an in-flight intent is
     # held by its 60 s lease, so recovery is polled for up to 120 s rather than read once.
     try:
-        g: dict = {"facility_count": None}
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            g = facility("plasticos", eid)
-            if g["facility_count"] == 1:
-                break
-            time.sleep(10)
+        g = poll_recovered_facility(eid, budget_s=120)
         intent_after = graph_sync_intents(eid)
     except ProbeError as exc:
         return [not_run("P14", "A8", p, a, str(exc), entity_id=eid)]
@@ -982,6 +977,31 @@ def c_ceg_down(p: str) -> list[Result]:
             reason="" if ok else _p14_reason(st, persisted, absent_before, g, intent_down),
         )
     ]
+
+
+def poll_recovered_facility(entity_id: str, budget_s: float) -> dict:
+    """Poll the graph for the entity until it appears or the budget ends.
+
+    Every probe gets at most the remaining budget, the wait between probes never outlasts it, and a
+    row read after the deadline does not count, so the reported window is the observed one. A
+    probe that fails only because the budget ran out ends the poll; any earlier failure raises.
+    """
+    deadline = time.monotonic() + budget_s
+    g: dict = {"facility_count": None, "within_s": budget_s}
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            got = facility("plasticos", entity_id, timeout=max(1, int(remaining)))
+        except ProbeError:
+            if time.monotonic() >= deadline:
+                break
+            raise
+        if time.monotonic() > deadline:
+            break
+        g = {**got, "within_s": budget_s}
+        if g["facility_count"] == 1:
+            break
+        time.sleep(min(10.0, max(0.0, deadline - time.monotonic())))
+    return g
 
 
 def graph_sync_intents(entity_id: str) -> list[str]:

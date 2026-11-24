@@ -388,3 +388,26 @@ def test_graph_leg_outcomes_are_per_entity() -> None:
     assert rail.graph_leg_outcomes(log, "gl-1") == [True]
     assert rail.graph_leg_outcomes(log, "other") == [False]
     assert rail.graph_leg_outcomes(log, "absent") == []
+
+
+def test_recovery_poll_ignores_a_row_read_after_the_deadline(mp: pytest.MonkeyPatch) -> None:
+    clock = iter([0.0, 0.0, 130.0, 130.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail.time, "sleep", lambda s: None)
+    calls: list[int] = []
+
+    def late_row(db: str, fid: str, timeout: int = 120) -> dict:
+        calls.append(timeout)
+        return {"rows": [[f'"{fid}"']], "facility_count": 1}
+
+    mp.setattr(rail, "facility", late_row)
+    g = rail.poll_recovered_facility("gl-down-1", budget_s=120)
+    assert calls == [120]
+    assert g["facility_count"] is None
+
+
+def test_recovery_poll_accepts_a_row_within_the_deadline(mp: pytest.MonkeyPatch) -> None:
+    clock = iter([0.0, 5.0, 20.0])
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail, "facility", lambda db, fid, timeout=120: {"rows": [], "facility_count": 1})
+    assert rail.poll_recovered_facility("gl-down-1", budget_s=120)["facility_count"] == 1
