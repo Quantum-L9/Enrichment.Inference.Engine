@@ -177,3 +177,19 @@ def test_observed_values_take_v2_observations_and_drop_conflicts() -> None:
     observed, conflicting = observed_values({"band": "B1", "region": "R", "note": None}, result)
     assert observed == {"band": "B7"}
     assert conflicting == {"region"}
+
+
+def test_a_malformed_observation_is_dropped_and_never_refuses_the_row() -> None:
+    selection = _select(admitted={"band": "B2"}, observed={"handled_kinds": "K1,K2"})
+    assert selection.values == {"band": "B2"} and selection.rejected == ("handled_kinds",)
+    fields = fs.label(selection.values, selection.provenance, _contract().row_schema)
+    row = project_graph_sync_row(entity_id="st-1", fields=fields, contract=_contract())
+    assert row.defects == () and row.row is not None
+    assert row.row["band"] == "B2" and "handled_kinds" not in row.row
+
+
+def test_a_malformed_item_is_rejected_and_a_valid_observation_still_syncs() -> None:
+    bad_items = [{"slot_id": "s-1"}]  # `code` is required
+    assert _select(admitted={}, observed={"handled_kinds": bad_items}).values == {}
+    good = _select(admitted={}, observed={"handled_kinds": KINDS})
+    assert good.values == {"handled_kinds": KINDS} and good.rejected == ()
