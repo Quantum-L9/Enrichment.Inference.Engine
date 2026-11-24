@@ -42,6 +42,7 @@ def test_p22_requires_every_part_of_the_cited_finding_and_the_no_change_witness(
     ok = {
         "changed_converge_completed": True,
         "input_synced": True,
+        "first_leg_resolved": True,
         "graph_results": 1,
         "graph_results_completed": 1,
         "obligation_accepted": True,
@@ -59,6 +60,7 @@ def test_p22_requires_every_part_of_the_cited_finding_and_the_no_change_witness(
         ("resync_through_gate", False),
         ("eie_target_cites_ceg", False),
         ("revisions_unchanged", False),
+        ("first_leg_resolved", False),
     ):
         assert not all(rail.p22_requirements(**{**ok, key: bad}).values()), key
 
@@ -174,6 +176,23 @@ def test_resync_witness_needs_this_entitys_graph_leg_not_other_traffic(
     rail._wait_resync_evaluated("t0", 90.0, frozenset(), "sn-tr-1")
     # Polled until the budget ran out: the other entity's leg never satisfied the wait.
     assert len(calls) > 1
+
+
+def test_first_leg_wait_sees_only_this_entitys_synced_record(mp: pytest.MonkeyPatch) -> None:
+    """c2's window opens only after c1's own leg record; another entity's or a late one does not count."""
+    clock = itertools.count(0.0, 10.0)
+    mp.setattr(rail.time, "monotonic", lambda: next(clock))
+    mp.setattr(rail.time, "sleep", lambda s: None)
+
+    def leg(eid: str, synced: bool) -> str:
+        return json.dumps(
+            {"event": "side_effects_graph_leg_resolved", "entity_id": eid, "synced": synced}
+        )
+
+    mp.setattr(rail, "logs", lambda *a, **k: [leg("sn-other", True), leg("sn-tr-1", False)])
+    assert rail.wait_leg_resolved("t0", "sn-tr-1", 60.0) is False
+    mp.setattr(rail, "logs", lambda *a, **k: [leg("sn-tr-1", True)])
+    assert rail.wait_leg_resolved("t0", "sn-tr-1", 60.0) is True
 
 
 def test_feedback_no_longer_claims_p22_and_graph_trigger_owns_it() -> None:

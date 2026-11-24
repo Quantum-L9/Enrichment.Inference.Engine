@@ -2044,6 +2044,7 @@ def p22_requirements(
     *,
     changed_converge_completed: bool,
     input_synced: bool,
+    first_leg_resolved: bool,
     graph_results: int,
     graph_results_completed: int,
     obligation_accepted: bool,
@@ -2057,6 +2058,7 @@ def p22_requirements(
     return {
         "changed-fact converge completed": changed_converge_completed,
         "rule input (postal_code) synced to the Station": input_synced,
+        "first converge's graph leg resolved before the resync window": first_leg_resolved,
         "exactly one graph-inference-result from graph through Gate": graph_results == 1,
         "that result completed at Gate": graph_results_completed == 1,
         "CEG obligation accepted (EIE intake ack)": obligation_accepted,
@@ -2125,6 +2127,19 @@ def eie_target_cites(targets: list[dict], accepted_key: str, wire_key: str | Non
         ):
             return True
     return False
+
+
+def wait_leg_resolved(since: str, entity_id: str, budget_s: float) -> bool:
+    """Poll until EIE logged this entity's graph leg as resolved and synced, within the budget."""
+    deadline = time.monotonic() + budget_s
+    while True:
+        lines = logs("l9e2e-eie", since, ("side_effects_graph_leg_resolved",), limit=None)
+        if True in graph_leg_outcomes(lines, entity_id):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(3.0, remaining))
 
 
 def _wait_resync_evaluated(
@@ -2196,6 +2211,9 @@ def c_graph_trigger(p: str) -> list[Result]:
 
         # Isolate the resync's window: c1 has settled (its obligation decided), its sync request ids are
         # excluded, and a full second passes so second-precision `since2` starts after c1's events.
+        # c1's own graph leg must have resolved before c2's window opens: EIE runs the leg detached,
+        # and a late c1 record inside c2's window would satisfy c2's entity-bound wait.
+        c1_leg_done = wait_leg_resolved(since, eid, P22_WITNESS_S)
         c1_sync_ids = frozenset(
             e["request_id"] for e in gate_events(since, "sync") if e.get("request_id")
         )
@@ -2232,6 +2250,7 @@ def c_graph_trigger(p: str) -> list[Result]:
     req = p22_requirements(
         changed_converge_completed=_completed(c1),
         input_synced=bool(node) and node[0][0] == f'"{P22_POSTAL_CODE}"',
+        first_leg_resolved=c1_leg_done,
         graph_results=len(ingress),
         graph_results_completed=len(completed),
         obligation_accepted=ob1.get("status") == "accepted",
