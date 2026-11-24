@@ -65,7 +65,11 @@ defined here once and keyed only on declarations:
 - `observed`: the consumer supplied the value (the request entity or a v2
   observation). `enriched`: EIE admitted it (`inferred` or `external_claim`).
   An observed value is never labelled `enriched`.
-- A field whose provenance property is not declared is never synced. CEG
+- Provenance properties are metadata, not value fields: `F_provenance` and the
+  item `provenance` need no provenance of their own (there is no
+  `F_provenance_provenance`). Each is sent as an ordinary declared row or item
+  property alongside the value it labels, and only with it.
+- A value field whose provenance property is not declared is never synced. CEG
   declares the same properties with the identical shape, so the compatibility
   contract compares them like any other row property, and CEG applies the
   over-time precedence (G3) by reading them.

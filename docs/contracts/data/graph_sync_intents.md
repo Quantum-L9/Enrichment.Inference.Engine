@@ -135,12 +135,15 @@ order:
 | **G1 Provenance** | Every field sent carries its provenance, `observed` or `enriched`, as a **declared spec property**, by the convention of `docs/contracts/EIE_NATIVE_DOMAIN_SPEC.md` *Sync provenance*: a row field `F` is accompanied by its companion property `F_provenance`; every item of a childsync `list<map>` carries the item property `provenance`. A field whose provenance property the endpoint does not declare is not sent. An observed value is never labelled `enriched`. |
 | **G2 Precedence within one converge** | An admitted value (`inferred` or `external_claim`, `admitted: true`) is sent as `enriched` and wins over an observed value of the same field. Otherwise the consumer's observed value for `F` (the request entity, or a v2 observation) is sent as `observed`. A conflicting set of observations sends nothing for `F`. |
 | **G3 Precedence over time** | Enforced by CEG, not EIE: in the graph a later `observed` value replaces an `enriched` one, and an `enriched` value never overwrites an `observed` one. An enriched value CEG displaces is not lost: it remains EIE evidence (`enrichment_results`, `field_evidence`). |
-| **G4 Echo guard** | `F` is not sent when its value and provenance equal those of the entity's last **acknowledged** intent for the same subject (tenant, entity, endpoint). A value that originated from a CEG `graph-inference-result` (evidence source type `graph`) is never sent. A field set left empty sends no row and records no intent. |
+| **G4 Echo guard** | `F` is not sent when its value and provenance equal those the graph will hold for it once the subject's outstanding intents settle: the value of the subject's (tenant, entity, endpoint) most recent intent, by `seq`, that is `pending`, `dispatching` or `acknowledged` and carries `F`. An outstanding intent with a different value or provenance never suppresses a later one, so a later value is never lost behind a pending update. A value that originated from a CEG `graph-inference-result` (evidence source type `graph`) is never sent. A field set left empty sends no row and records no intent. |
 | **G5 No clears** | A `null` or missing observed value is never sent, so it never deletes a graph property; the same holds for admitted values. |
 | **G6 Domain-agnostic** | The field set is keyed only on the endpoint's declared row properties and its `childsync` entries. No field name, node label or cartridge is known to the code that builds it. |
 
-Rule 8 (*Verified replay*) applies to the whole pinned field set: an observed
-field is verified against the replay request's own value for that field.
+Rule 8 (*Verified replay*) is unchanged: a replay is verified against the
+stored result's committed `fields`. The stored result holds admitted values
+only, so a pinned observed field or provenance property is absent from it and
+cannot be verified: such a replay is a `GraphIntentReplayMismatchError` and
+attaches no intent (fails closed).
 
 ## Outcome classification (`PacketRouter.notify_graph_sync(on_outcome=…)`)
 
