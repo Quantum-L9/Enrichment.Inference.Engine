@@ -515,6 +515,17 @@ def converge_payload(
     }
 
 
+def versioned(row: dict, version: int = 1) -> dict:
+    """A rig sync row with its sync_version (EIE graph_sync_intents.md rule 6).
+
+    The TEST_ONLY packs declare sync_version on every node sync target, and with
+    sync_provenance_precedence_enabled CEG refuses a row of such an endpoint without one
+    (CEG FEATURE_GATES.md section 39). A fresh subject starts at 1; resending the same row at the
+    same version is an idempotent replay, which is what P19's duplicate send needs.
+    """
+    return {**row, "sync_version": version}
+
+
 def node_acked(r: dict, tenant: str, entity_type: str, n: int) -> bool:
     """GRAPH_ACKNOWLEDGED for a node endpoint (CTO disposition of F-A1-01).
 
@@ -1178,8 +1189,8 @@ def c_sync_rejects(p: str) -> list[Result]:
             "payload": {
                 "entity_type": "facilities",
                 "batch": [
-                    {"facility_id": bad_ids[0], "name": "ok row"},
-                    {"facility_id": bad_ids[1], "name": "bad row", "min_density": "0.9"},
+                    versioned({"facility_id": bad_ids[0], "name": "ok row"}),
+                    versioned({"facility_id": bad_ids[1], "name": "bad row", "min_density": "0.9"}),
                 ],
             },
         },
@@ -1194,13 +1205,15 @@ def c_sync_rejects(p: str) -> list[Result]:
         },
     )
     fid = f"gl-p19-{run}"
-    row = {
-        "facility_id": fid,
-        "name": "dup",
-        "processed_polymers": [
-            {"code": "PP", "line_id": f"{fid}-l1", "direction": "in", "form": "Pellet"}
-        ],
-    }
+    row = versioned(
+        {
+            "facility_id": fid,
+            "name": "dup",
+            "processed_polymers": [
+                {"code": "PP", "line_id": f"{fid}-l1", "direction": "in", "form": "Pellet"}
+            ],
+        }
+    )
     acks = [
         drive(
             "execute",
@@ -1285,7 +1298,7 @@ def c_match(p: str) -> list[Result]:
     also match; they are recorded under off_fixture_candidates and never asserted on.
     """
     vec = json.loads((HERE / "vectors/sync_rows.json").read_text())
-    rows = [v["row"] for v in vec["vectors"] if v["id"].startswith("PX-POS")]
+    rows = [versioned(v["row"]) for v in vec["vectors"] if v["id"].startswith("PX-POS")]
     # The fixture set is exactly what this case seeds; any other returned id (rows written by
     # other cases, e.g. converge_plasticos's tp-fac-010) is recorded, never asserted on.
     seeded = {r["facility_id"] for r in rows}
@@ -2419,6 +2432,421 @@ def c_graph_trigger(p: str) -> list[Result]:
     ]
 
 
+# --- Value provenance (#351 revision, operator ruling 2026-11-24) --------------------------------
+# Contracts: EIE docs/contracts/data/graph_sync_intents.md *Field set and provenance* (G1-G6) and
+# rule 6; EIE docs/contracts/EIE_NATIVE_DOMAIN_SPEC.md *Sync provenance*; CEG docs/FEATURE_GATES.md
+# section 39 (sync_provenance_precedence_enabled, on for this rail's test tenants only). The
+# synthneutral cartridge declares band_provenance and the handled_kinds item provenance, so those
+# two fields sync in full mode; every other field is legacy.
+PROV_TENANT = "synthneutral"
+PROV_FIELD = "band"
+PROV_COMPANION = "band_provenance"
+PROV_CHILD = "handled_kinds"
+PROV_OBSERVED_BAND = "gl-observed-band"
+PROV_OBSERVED_DIRECTION = "gl-observed-direction"
+# A legacy field the provider echoes from the request. It keeps a row on the wire for the observed
+# steps without naming a full-mode field in the schema (a schema-named field becomes admitted).
+PROV_LEGACY_SCHEMA = {"max_load": "float"}
+PROV_SETTLE_S = 60.0
+# A converge with an empty field set records no intent (G4): after this long with no new intent,
+# the step is taken to have recorded none.
+PROV_QUIET_S = 10.0
+INTENT_TERMINAL = frozenset({"acknowledged", "failed_terminal", "superseded"})
+PROV_CASES = (
+    "P05-enriched",
+    "P05-observed",
+    "P05-precedence-observed",
+    "P05-precedence-enriched",
+    "P05-echo-guard",
+    "P05-null-no-clear",
+)
+STALE_CASES = ("P05-stale-late", "P05-stale-same-batch")
+
+
+def _cell(value: str) -> object:
+    """One cypher-shell cell as a Python value: NULL is None, JSON when it parses, else the text."""
+    if value == "NULL":
+        return None
+    try:
+        return json.loads(value)
+    except ValueError:
+        return value
+
+
+def sync_intents(tenant: str, entity_id: str) -> list[dict]:
+    """EIE's graph-sync intents for one entity in seq order, with the exact fields each carries."""
+    rows = psql(
+        "select seq, state, coalesce(fields::text, '{}') from graph_sync_intents "
+        f"where tenant_id='{tenant}' and entity_id='{entity_id}' order by seq"
+    )
+    out = []
+    for row in rows:
+        seq, state, fields = (row.split("|", 2) + ["", "", "{}"])[:3]
+        try:
+            parsed = json.loads(fields)
+        except ValueError:
+            parsed = {"_unparsed": fields}
+        out.append({"seq": int(seq), "state": state, "fields": parsed})
+    return out
+
+
+def wait_intents_settled(
+    tenant: str,
+    entity_id: str,
+    after_seq: int,
+    budget_s: float,
+    quiet_s: float = PROV_QUIET_S,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> list[dict]:
+    """The intents newer than after_seq once all are terminal, or none after quiet_s without one.
+
+    On budget exhaustion the last read is returned as it stands, so a non-terminal state stays
+    visible to the verdict rather than being waited out.
+    """
+    deadline = clock() + budget_s
+    quiet_since: float | None = None
+    newer: list[dict] = []
+    while clock() < deadline:
+        newer = [i for i in sync_intents(tenant, entity_id) if i["seq"] > after_seq]
+        if newer and all(i["state"] in INTENT_TERMINAL for i in newer):
+            return newer
+        if newer:
+            quiet_since = None
+        else:
+            quiet_since = clock() if quiet_since is None else quiet_since
+            if clock() - quiet_since >= quiet_s:
+                return newer
+        sleep(1.0)
+    return newer
+
+
+def station_values(entity_id: str) -> dict:
+    """The governed Station properties and HANDLES edges CEG stored for one entity."""
+    rows = cypher(
+        PROV_TENANT,
+        f"MATCH (s:Station {{station_id:'{entity_id}'}}) "
+        "RETURN s.band, s.band_provenance, s.sync_version, s._tenant",
+    )
+    keys = ("band", "band_provenance", "sync_version", "tenant")
+    node = dict(zip(keys, map(_cell, rows[0]), strict=False)) if rows else {}
+    erows = cypher(
+        PROV_TENANT,
+        f"MATCH (:Station {{station_id:'{entity_id}'}})-[r:HANDLES]->(c:Kind) "
+        "RETURN c.code, r.slot_id, r.direction, r.provenance ORDER BY r.slot_id",
+    )
+    ekeys = ("code", "slot_id", "direction", "provenance")
+    return {"node": node, "edges": [dict(zip(ekeys, map(_cell, r), strict=False)) for r in erows]}
+
+
+def prov_converge(
+    entity_id: str, *, enriched: bool, extra: dict | None = None, drop: tuple[str, ...] = ()
+) -> dict:
+    """One synthneutral converge for the provenance cases.
+
+    enriched=True: the request omits band and handled_kinds and the schema names both (the child
+    list by its own declaration), so the deterministic provider supplies them and EIE admits them.
+    enriched=False: the request carries the consumer's values and the schema names only a legacy
+    field, so band and handled_kinds can reach the graph only as observed values.
+    """
+    if enriched:
+        body = converge_payload(
+            entity_id,
+            PROV_TENANT,
+            schema={"title": "string", PROV_FIELD: "string"},
+            enrich_children=True,
+        )
+    else:
+        body = converge_payload(entity_id, PROV_TENANT, extra=extra, schema=PROV_LEGACY_SCHEMA)
+    ent = body["payload"]["entity"]
+    for key in (*drop, *((PROV_FIELD,) if enriched else ())):
+        ent.pop(key, None)
+    return drive("execute", body)
+
+
+def _last_intent(step: dict) -> dict:
+    intents = step.get("intents") or []
+    return intents[-1] if intents else {}
+
+
+def _labelled(intent: dict, provenance: str) -> bool:
+    """The intent sends band and every handled_kinds item, each labelled with this provenance (G1)."""
+    f = intent.get("fields") or {}
+    items = f.get(PROV_CHILD)
+    return (
+        f.get(PROV_FIELD) is not None
+        and f.get(PROV_COMPANION) == provenance
+        and isinstance(items, list)
+        and bool(items)
+        and all(isinstance(i, dict) and i.get("provenance") == provenance for i in items)
+    )
+
+
+def _carries_full_mode(intent: dict) -> list[str]:
+    f = intent.get("fields") or {}
+    return [k for k in (PROV_FIELD, PROV_COMPANION, PROV_CHILD) if k in f]
+
+
+def _edge(edges: list[dict], slot_id: object) -> dict:
+    if slot_id is None:
+        return {}
+    return next((e for e in edges if e.get("slot_id") == slot_id), {})
+
+
+def first_enriched_item(s1: dict) -> dict:
+    """The first handled_kinds item EIE sent in s1; s2 reuses its identity (code, slot_id)."""
+    items = (_last_intent(s1).get("fields") or {}).get(PROV_CHILD) or []
+    return items[0] if items and isinstance(items[0], dict) else {}
+
+
+def prov_requirements(steps: dict) -> dict[str, dict[str, bool]]:
+    """The per-case requirements of the provenance scenario, from the recorded steps (pure)."""
+    s1, s2, s2b, s3, s4 = (steps.get(k) or {} for k in ("s1", "s2", "s2b", "s3", "s4"))
+    i1, i2, i3 = _last_intent(s1), _last_intent(s2), _last_intent(s3)
+    g1, g2, g3, g4 = (s.get("graph") or {} for s in (s1, s2, s3, s4))
+    slot = first_enriched_item(s1).get("slot_id")
+    e1, e2, e3, e4 = (_edge(g.get("edges") or [], slot) for g in (g1, g2, g3, g4))
+    n1, n2, n3, n4 = (g.get("node") or {} for g in (g1, g2, g3, g4))
+    f1, f2, f3 = (i.get("fields") or {} for i in (i1, i2, i3))
+    sent1 = [i for i in f1.get(PROV_CHILD) or [] if isinstance(i, dict)]
+    band_observed = n2.get("band") == PROV_OBSERVED_BAND and n2.get("band_provenance") == "observed"
+    edge_observed = (
+        e2.get("direction") == PROV_OBSERVED_DIRECTION and e2.get("provenance") == "observed"
+    )
+    return {
+        "P05-enriched": {
+            "converge completed": s1.get("completed") is True,
+            "EIE sent band and handled_kinds labelled enriched": _labelled(i1, "enriched"),
+            "intent acknowledged by CEG": i1.get("state") == "acknowledged",
+            "graph band is the sent value, provenance enriched": f1.get(PROV_FIELD) is not None
+            and n1.get("band") == f1.get(PROV_FIELD)
+            and n1.get("band_provenance") == "enriched",
+            "every sent item is a typed HANDLES edge with provenance enriched": bool(sent1)
+            and all(
+                _edge(g1.get("edges") or [], i.get("slot_id")).get("provenance") == "enriched"
+                for i in sent1
+            ),
+            "node under the same tenant": n1.get("tenant") == PROV_TENANT,
+        },
+        "P05-observed": {
+            "converge completed": s2.get("completed") is True,
+            "EIE sent band and handled_kinds labelled observed": _labelled(i2, "observed"),
+            "the observed band is the request's": f2.get(PROV_FIELD) == PROV_OBSERVED_BAND,
+            "intent acknowledged by CEG": i2.get("state") == "acknowledged",
+            "graph band observed": band_observed,
+            "graph edge observed": edge_observed,
+        },
+        "P05-precedence-observed": {
+            "an enriched value was stored first": n1.get("band_provenance") == "enriched"
+            and e1.get("provenance") == "enriched",
+            "the later observed value replaced it (band)": band_observed,
+            "the later observed value replaced it (edge)": edge_observed,
+        },
+        "P05-precedence-enriched": {
+            "converge completed": s3.get("completed") is True,
+            "EIE sent the enriched values again, labelled enriched": _labelled(i3, "enriched"),
+            "the enriched band differs from the stored observed one": f3.get(PROV_FIELD)
+            not in (None, PROV_OBSERVED_BAND),
+            "intent acknowledged by CEG": i3.get("state") == "acknowledged",
+            "graph keeps the observed band": n3.get("band") == PROV_OBSERVED_BAND
+            and n3.get("band_provenance") == "observed",
+            "graph keeps the observed edge": e3.get("direction") == PROV_OBSERVED_DIRECTION
+            and e3.get("provenance") == "observed",
+        },
+        "P05-echo-guard": {
+            "the first observed sync was acknowledged": i2.get("state") == "acknowledged",
+            "identical resync converge completed": s2b.get("completed") is True,
+            "the resync sent no band, band_provenance or handled_kinds": not any(
+                _carries_full_mode(i) for i in s2b.get("intents") or []
+            ),
+            "graph unchanged": bool(g2) and (s2b.get("graph") or {}) == g2,
+        },
+        "P05-null-no-clear": {
+            "converge completed": s4.get("completed") is True,
+            "no intent sends band for a null observation": not any(
+                {PROV_FIELD, PROV_COMPANION} & set(i.get("fields") or {})
+                for i in s4.get("intents") or []
+            ),
+            "graph keeps band and its provenance": n4.get("band") is not None
+            and n4.get("band") == n3.get("band")
+            and n4.get("band_provenance") == n3.get("band_provenance"),
+            "graph keeps the edge": bool(e4) and e4 == e3,
+        },
+    }
+
+
+def c_provenance(p: str) -> list[Result]:
+    """#351 revision: observed and enriched values reach the graph with declared provenance.
+
+    One synthneutral Station, driven only by consumer converges (odoo-gl -> Gate -> EIE -> Gate ->
+    CEG), in order: s1 enriched; s2 observed (same edge identity as s1's first item, another
+    direction); s2b s2 again, identically (echo guard); s3 s1 again (an enriched value must not
+    overwrite an observed one); s4 a null observation (no clear). Each step waits for its intents to
+    settle, then reads EIE's intent rows (what was sent) and Neo4j (what CEG kept).
+    """
+    eid = f"gl-prov-{uuid.uuid4().hex[:6]}"
+    steps: dict[str, dict] = {}
+    seq = 0
+
+    def step(name: str, r: dict) -> dict:
+        nonlocal seq
+        newer = wait_intents_settled(PROV_TENANT, eid, seq, PROV_SETTLE_S)
+        seq = max([seq, *(i["seq"] for i in newer)])
+        steps[name] = {
+            "completed": r.get("ok") is True
+            and (r.get("payload") or {}).get("state") == "completed",
+            "converge": {k: r.get(k) for k in ("ok", "elapsed_s", "error", "gate_signature_valid")},
+            "intents": newer,
+            "graph": station_values(eid),
+        }
+        return steps[name]
+
+    try:
+        first = first_enriched_item(step("s1", prov_converge(eid, enriched=True)))
+        observed = {
+            PROV_FIELD: PROV_OBSERVED_BAND,
+            PROV_CHILD: [
+                {
+                    "code": first.get("code"),
+                    "slot_id": first.get("slot_id"),
+                    "direction": PROV_OBSERVED_DIRECTION,
+                }
+            ],
+        }
+        step("s2", prov_converge(eid, enriched=False, extra=observed))
+        step("s2b", prov_converge(eid, enriched=False, extra=observed))
+        step("s3", prov_converge(eid, enriched=True))
+        step("s4", prov_converge(eid, enriched=False, extra={PROV_FIELD: None}, drop=(PROV_CHILD,)))
+    except ProbeError as exc:
+        return [
+            not_run(cid, "A8", p, "provenance read-back", str(exc), entity_id=eid, steps=steps)
+            for cid in PROV_CASES
+        ]
+    reqs = prov_requirements(steps)
+    assertions = {
+        "P05-enriched": "enriched path: the request omits band and handled_kinds, the provider "
+        "supplies them, and CEG stores them labelled enriched (band_provenance; HANDLES edge "
+        "provenance)",
+        "P05-observed": "observed path: consumer values reach CEG labelled observed, as the node "
+        "property and as typed HANDLES edges",
+        "P05-precedence-observed": "precedence over time: a later observed value replaces an "
+        "enriched one",
+        "P05-precedence-enriched": "precedence over time: an enriched value never overwrites an "
+        "observed one",
+        "P05-echo-guard": "echo guard: an identical resync sends no full-mode field again",
+        "P05-null-no-clear": "a null observation is never sent and never clears a stored value",
+    }
+    out = []
+    for cid in PROV_CASES:
+        req = reqs[cid]
+        ok = all(req.values())
+        out.append(
+            Result(
+                cid,
+                "A8",
+                p,
+                assertions[cid],
+                verdict(ok, p, signed_claim=False),
+                observed={"entity_id": eid, "steps": steps, "requirements": req},
+                reason=GATE_BINDING_LIMIT
+                if ok
+                else "not observed: " + "; ".join(k for k, v in req.items() if not v),
+            )
+        )
+    return out
+
+
+def station_row(station_id: str, version: int, band: str) -> dict:
+    return {
+        "station_id": station_id,
+        "title": f"TEST_ONLY {station_id}",
+        PROV_FIELD: band,
+        PROV_COMPANION: "observed",
+        "sync_version": version,
+    }
+
+
+def stale_requirements(ack: dict, node: dict, n: int) -> dict[str, bool]:
+    """A stale row is refused whole and counted as stale (not an error); the newer write stays."""
+    pl, resp = ack.get("payload") or {}, ack.get("response") or {}
+    return {
+        "CEG answered success": resp.get("source_node") == "graph"
+        and pl.get("status") == "success",
+        "stale_count is 1": pl.get("stale_count") == 1,
+        "synced_count excludes the stale row": pl.get("synced_count") == n - 1,
+        "graph keeps v2's value": node.get("band") == "v2",
+        "graph keeps sync_version 2": node.get("sync_version") == 2,
+    }
+
+
+def c_sync_version(p: str) -> list[Result]:
+    """Stale-write guard (EIE rule 6, CEG #560): a lower sync_version never overwrites a higher one.
+
+    Rig: EIE never sends a lower version after a higher one (rule 5), so these rows are sent with the
+    eie-gl key held by the driver, through Gate, as P17 does. Two subjects: a late v1 after v2 in a
+    separate packet, and v2 then v1 in one batch (CEG compares per row).
+    """
+    run = uuid.uuid4().hex[:6]
+    late, batch = f"gl-sv-late-{run}", f"gl-sv-batch-{run}"
+
+    def sync(rows: list[dict], key: str) -> dict:
+        return drive(
+            "execute",
+            {
+                "action": "sync",
+                "tenant": PROV_TENANT,
+                "key_id": "eie-gl",
+                "idempotency_key": key,
+                "payload": {"entity_type": "stations", "batch": rows},
+            },
+        )
+
+    first = sync([station_row(late, 2, "v2")], f"{late}-v2")
+    stale = sync([station_row(late, 1, "v1")], f"{late}-v1")
+    mixed = sync([station_row(batch, 2, "v2"), station_row(batch, 1, "v1")], f"{batch}-v2v1")
+    try:
+        late_node = station_values(late)["node"]
+        batch_node = station_values(batch)["node"]
+    except ProbeError as exc:
+        return [not_run(cid, "A8", p, "sync_version read-back", str(exc)) for cid in STALE_CASES]
+    req_late = {
+        "v2 applied first": node_acked(first, PROV_TENANT, "stations", 1),
+        **stale_requirements(stale, late_node, 1),
+    }
+    req_batch = stale_requirements(mixed, batch_node, 2)
+    obs = {
+        "rig": "driver eie-gl: EIE never sends a lower version (graph_sync_intents.md rule 5)",
+        "late": {
+            "entity_id": late,
+            "v2_ack": first.get("payload"),
+            "v1_ack": stale.get("payload"),
+            "graph": late_node,
+        },
+        "batch": {"entity_id": batch, "ack": mixed.get("payload"), "graph": batch_node},
+    }
+    out = []
+    for cid, req, what in (
+        (STALE_CASES[0], req_late, "a late v1 after v2 is refused as stale and v2 stays"),
+        (STALE_CASES[1], req_batch, "v2 then v1 in one batch: v1 is refused as stale"),
+    ):
+        ok = all(req.values())
+        out.append(
+            Result(
+                cid,
+                "A8",
+                p,
+                what,
+                verdict(ok, p, signed_claim=False),
+                observed={**obs, "requirements": req},
+                reason="sent with the eie-gl key held by the driver (rig); EIE never sends a lower "
+                "version"
+                if ok
+                else "not observed: " + "; ".join(k for k, v in req.items() if not v),
+            )
+        )
+    return out
+
+
 CASES: dict[str, Callable[[str], list[Result]]] = {
     "isolation": c_isolation,
     "policy": c_policy,
@@ -2436,6 +2864,8 @@ CASES: dict[str, Callable[[str], list[Result]]] = {
     "gate_rail_policy": c_gate_rail_policy,
     "feedback": c_feedback,
     "graph_trigger": c_graph_trigger,
+    "provenance": c_provenance,
+    "sync_version": c_sync_version,
 }
 
 # Ledger case ids each scenario produces; test_gate_loop.py derives its expectations from this map.
@@ -2455,6 +2885,8 @@ CASE_IDS: dict[str, tuple[str, ...]] = {
     "registration": ("F-A1-05", "P11-owner-collision"),
     "gate_rail_policy": ("F-A1-11",),
     "feedback": ("P27", "P30"),
+    "provenance": PROV_CASES,
+    "sync_version": STALE_CASES,
     "graph_trigger": ("P22",),
 }
 

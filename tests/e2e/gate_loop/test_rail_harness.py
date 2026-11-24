@@ -835,3 +835,223 @@ def test_p27_counts_only_a_target_the_first_converge_consumed() -> None:
     assert rail.c1_consumed_rows([retained]) == []
     assert rail.c1_consumed_rows([{**consumed, "outcome": "superseded"}]) == []
     assert rail.c1_consumed_rows([{**consumed, "consumed_by": "sweep:1"}]) == []
+
+
+# --- Value provenance (#351 revision) and the sync_version stale-write guard ---------------------
+
+SLOT = "s-1"
+
+
+def _items(provenance: str, direction: str = "in") -> list[dict]:
+    return [{"code": "K9", "slot_id": SLOT, "direction": direction, "provenance": provenance}]
+
+
+def _sent(band: object, provenance: str, direction: str = "in") -> dict:
+    return {
+        "seq": 1,
+        "state": "acknowledged",
+        "fields": {
+            "band": band,
+            "band_provenance": provenance,
+            "handled_kinds": _items(provenance, direction),
+        },
+    }
+
+
+def _graph(band: object, provenance: str, direction: str = "in", edge_prov: str | None = None):
+    return {
+        "node": {
+            "band": band,
+            "band_provenance": provenance,
+            "sync_version": None,
+            "tenant": "synthneutral",
+        },
+        "edges": [
+            {
+                "code": "K9",
+                "slot_id": SLOT,
+                "direction": direction,
+                "provenance": edge_prov or provenance,
+            }
+        ],
+    }
+
+
+def _good_steps() -> dict:
+    obs, dirn = rail.PROV_OBSERVED_BAND, rail.PROV_OBSERVED_DIRECTION
+    observed_graph = _graph(obs, "observed", dirn)
+    legacy = {"seq": 9, "state": "acknowledged", "fields": {"max_load": 40.0}}
+    return {
+        "s1": {
+            "completed": True,
+            "intents": [_sent("synthetic-band", "enriched")],
+            "graph": _graph("synthetic-band", "enriched"),
+        },
+        "s2": {
+            "completed": True,
+            "intents": [_sent(obs, "observed", dirn)],
+            "graph": observed_graph,
+        },
+        "s2b": {"completed": True, "intents": [legacy], "graph": observed_graph},
+        "s3": {
+            "completed": True,
+            "intents": [_sent("synthetic-band", "enriched")],
+            "graph": observed_graph,
+        },
+        "s4": {"completed": True, "intents": [legacy], "graph": observed_graph},
+    }
+
+
+def _failing(steps: dict) -> dict[str, list[str]]:
+    return {
+        cid: [k for k, v in req.items() if not v]
+        for cid, req in rail.prov_requirements(steps).items()
+        if not all(req.values())
+    }
+
+
+def test_provenance_cases_all_pass_on_the_contracted_steps() -> None:
+    assert _failing(_good_steps()) == {}
+    assert set(rail.prov_requirements(_good_steps())) == set(rail.PROV_CASES)
+
+
+def test_enriched_path_fails_when_eie_sends_the_child_list_unlabelled() -> None:
+    steps = _good_steps()
+    del steps["s1"]["intents"][0]["fields"]["handled_kinds"][0]["provenance"]
+    assert "EIE sent band and handled_kinds labelled enriched" in _failing(steps)["P05-enriched"]
+
+
+def test_enriched_path_fails_when_ceg_drops_the_edge_provenance() -> None:
+    steps = _good_steps()
+    steps["s1"]["graph"]["edges"][0]["provenance"] = None
+    failing = _failing(steps)
+    assert (
+        "every sent item is a typed HANDLES edge with provenance enriched"
+        in failing["P05-enriched"]
+    )
+    assert "an enriched value was stored first" in failing["P05-precedence-observed"]
+
+
+def test_observed_value_labelled_enriched_fails_the_observed_path() -> None:
+    steps = _good_steps()
+    steps["s2"]["intents"][0]["fields"]["band_provenance"] = "enriched"
+    assert "EIE sent band and handled_kinds labelled observed" in _failing(steps)["P05-observed"]
+
+
+def test_enriched_overwriting_observed_fails_precedence() -> None:
+    steps = _good_steps()
+    steps["s3"]["graph"] = _graph("synthetic-band", "enriched")
+    failing = _failing(steps)["P05-precedence-enriched"]
+    assert "graph keeps the observed band" in failing
+    assert "graph keeps the observed edge" in failing
+
+
+def test_precedence_enriched_needs_eie_to_have_actually_sent_the_enriched_value() -> None:
+    # A graph that kept the observed value only because nothing was sent proves no precedence.
+    steps = _good_steps()
+    steps["s3"]["intents"] = []
+    failing = _failing(steps)["P05-precedence-enriched"]
+    assert "EIE sent the enriched values again, labelled enriched" in failing
+    assert "intent acknowledged by CEG" in failing
+
+
+def test_echo_guard_fails_when_the_identical_resync_resends_a_full_mode_field() -> None:
+    steps = _good_steps()
+    steps["s2b"]["intents"].append(_sent(rail.PROV_OBSERVED_BAND, "observed"))
+    assert (
+        "the resync sent no band, band_provenance or handled_kinds"
+        in _failing(steps)["P05-echo-guard"]
+    )
+
+
+def test_echo_guard_passes_when_the_resync_records_no_intent_at_all() -> None:
+    steps = _good_steps()
+    steps["s2b"]["intents"] = []
+    assert "P05-echo-guard" not in _failing(steps)
+
+
+def test_null_observation_sent_or_clearing_fails() -> None:
+    steps = _good_steps()
+    steps["s4"]["intents"] = [{"seq": 5, "state": "acknowledged", "fields": {"band": None}}]
+    steps["s4"]["graph"] = _graph(None, "observed", rail.PROV_OBSERVED_DIRECTION)
+    failing = _failing(steps)["P05-null-no-clear"]
+    assert "no intent sends band for a null observation" in failing
+    assert "graph keeps band and its provenance" in failing
+
+
+def test_provenance_read_back_waits_for_terminal_intents(mp: pytest.MonkeyPatch) -> None:
+    reads = iter(
+        [
+            [{"seq": 3, "state": "dispatching", "fields": {}}],
+            [{"seq": 3, "state": "acknowledged", "fields": {}}],
+        ]
+    )
+    clock = itertools.count()
+    mp.setattr(rail, "sync_intents", lambda tenant, eid: next(reads))
+    out = rail.wait_intents_settled(
+        "synthneutral", "e", 2, 60, clock=lambda: float(next(clock)), sleep=lambda s: None
+    )
+    assert out == [{"seq": 3, "state": "acknowledged", "fields": {}}]
+
+
+def test_provenance_read_back_returns_none_after_a_quiet_interval(mp: pytest.MonkeyPatch) -> None:
+    mp.setattr(rail, "sync_intents", lambda tenant, eid: [{"seq": 2, "state": "acknowledged"}])
+    clock = itertools.count()
+    out = rail.wait_intents_settled(
+        "synthneutral",
+        "e",
+        2,
+        60,
+        quiet_s=3,
+        clock=lambda: float(next(clock)),
+        sleep=lambda s: None,
+    )
+    assert out == []
+
+
+def test_provenance_read_back_keeps_a_non_terminal_state_at_the_deadline(
+    mp: pytest.MonkeyPatch,
+) -> None:
+    pending = [{"seq": 4, "state": "pending", "fields": {}}]
+    mp.setattr(rail, "sync_intents", lambda tenant, eid: pending)
+    clock = itertools.count()
+    out = rail.wait_intents_settled(
+        "synthneutral", "e", 2, 5, clock=lambda: float(next(clock)), sleep=lambda s: None
+    )
+    assert out == pending
+
+
+def test_cypher_cells_parse_null_json_and_bare_text() -> None:
+    assert rail._cell("NULL") is None
+    assert rail._cell('"West"') == "West"
+    assert rail._cell("2") == 2
+    assert rail._cell("bare") == "bare"
+
+
+def _ack(stale: int, synced: int) -> dict:
+    return {
+        "response": {"source_node": "graph"},
+        "payload": {"status": "success", "stale_count": stale, "synced_count": synced},
+    }
+
+
+def test_stale_write_requirements() -> None:
+    kept = {"band": "v2", "sync_version": 2}
+    assert all(rail.stale_requirements(_ack(1, 0), kept, 1).values())
+    assert all(rail.stale_requirements(_ack(1, 1), kept, 2).values())
+    lost = rail.stale_requirements(_ack(0, 1), {"band": "v1", "sync_version": 1}, 1)
+    assert not lost["stale_count is 1"]
+    assert not lost["graph keeps v2's value"]
+    assert not lost["graph keeps sync_version 2"]
+
+
+def test_rig_rows_carry_a_sync_version_without_mutating_the_vector() -> None:
+    row = {"facility_id": "f"}
+    assert rail.versioned(row) == {"facility_id": "f", "sync_version": 1}
+    assert row == {"facility_id": "f"}
+
+
+def test_provenance_scenarios_are_registered_with_their_case_ids() -> None:
+    assert rail.CASE_IDS["provenance"] == rail.PROV_CASES
+    assert rail.CASE_IDS["sync_version"] == rail.STALE_CASES
+    assert {"provenance", "sync_version"} <= set(rail.CASES)
