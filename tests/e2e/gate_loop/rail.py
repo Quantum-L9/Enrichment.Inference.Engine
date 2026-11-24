@@ -1791,6 +1791,23 @@ def c_gate_rail_policy(p: str) -> list[Result]:
     ]
 
 
+def p27_requirements(
+    *, accepted: bool, converge1_completed: bool, consumed: bool, retained: bool, consumed_row: bool
+) -> dict[str, bool]:
+    """Every P27 requirement by name; P27 passes only when all hold.
+
+    The consume must come from a converge that completed: a region read from a failed or
+    partial converge answer is not a consume.
+    """
+    return {
+        "accepted (targets_queued 1)": accepted,
+        "converge completed": converge1_completed,
+        "consumed (converge region=West)": consumed,
+        "retained row after intake": retained,
+        "consumed row (consumed_by converge:<op>, outcome seeded)": consumed_row,
+    }
+
+
 def c_feedback(p: str) -> list[Result]:
     """F-A1-08 disposition: synthneutral changed-fact witness (P27, P22/P30 parts) and the plasticos justified no-op.
 
@@ -1900,17 +1917,15 @@ def c_feedback(p: str) -> list[Result]:
         and t["consumed_by"].startswith("converge:")
         and t["outcome"] == "seeded"
     ]
-    ok27 = acc_ok and consumed and retained and bool(consumed_rows)
-    missing27 = [
-        k
-        for k, v in {
-            "accepted (targets_queued 1)": acc_ok,
-            "consumed (converge region=West)": consumed,
-            "retained row after intake": retained,
-            "consumed row (consumed_by converge:<op>, outcome seeded)": bool(consumed_rows),
-        }.items()
-        if not v
-    ]
+    req27 = p27_requirements(
+        accepted=acc_ok,
+        converge1_completed=c1_ok,
+        consumed=consumed,
+        retained=retained,
+        consumed_row=bool(consumed_rows),
+    )
+    ok27 = all(req27.values())
+    missing27 = [k for k, v in req27.items() if not v]
     p27 = Result(
         "P27",
         "A8",

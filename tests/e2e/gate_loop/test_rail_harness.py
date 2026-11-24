@@ -597,3 +597,17 @@ def test_uncorrelated_egress_signing_error_never_turns_a_failure_into_blocked(
     for case in ("P07", "P18"):
         assert results[case].verdict == "FAIL"
         assert rail.EGRESS_SIGNING_UNCORRELATED in results[case].reason
+
+
+def test_p27_requires_the_consuming_converge_to_have_completed() -> None:
+    ok = {
+        "accepted": True,
+        "converge1_completed": True,
+        "consumed": True,
+        "retained": True,
+        "consumed_row": True,
+    }
+    assert all(rail.p27_requirements(**ok).values())
+    failed = rail.p27_requirements(**{**ok, "converge1_completed": False})
+    assert not all(failed.values())
+    assert [k for k, v in failed.items() if not v] == ["converge completed"]
