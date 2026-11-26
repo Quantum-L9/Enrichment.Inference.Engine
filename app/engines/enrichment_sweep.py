@@ -117,6 +117,26 @@ def actual_cost(response: Mapping[str, Any], settings: Any, estimate: Decimal) -
     return money(tokens * settings.token_rate_usd_per_1k / 1000)
 
 
+CONVERGE_STATES: frozenset[str] = frozenset({"completed", "degraded", "failed"})
+
+
+def outcome_counter(response: Mapping[str, Any]) -> str:
+    """The `stats` counter a stored converge reply adds to.
+
+    `enriched` only for the literal `completed`. The other two converge v2
+    states count as `converge_state_<state>`; a reply that names none of the
+    three (absent, null, wrong case, foreign word) is `converge_state_unrecognized`.
+    The prefix keeps these apart from the skip reason `converge_failed`, which
+    means the converge raised and was charged the full reservation.
+    """
+    state = response.get("state")
+    if state == "completed":
+        return "enriched"
+    if isinstance(state, str) and state in CONVERGE_STATES:
+        return f"converge_state_{state}"
+    return "converge_state_unrecognized"
+
+
 def utc_day(now: datetime) -> date:
     return now.astimezone(UTC).date()
 
@@ -443,7 +463,9 @@ class _Run:
     stats: dict[str, int] = field(
         default_factory=lambda: {"enriched": 0, "targets_dropped_undeclared": 0}
     )
-    enriched: list[str] = field(default_factory=list)
+    # Every candidate with a stored result row, whatever its converge state:
+    # with `skipped`, the set a crashed run treats as already handled.
+    stored: list[str] = field(default_factory=list)
     seq: int = 0
 
     def skip(self, entity_id: str, reason: str) -> None:
@@ -477,7 +499,7 @@ class SweepRunner:
             await self._run(record, run)
         except Exception as exc:  # the sweep must still end, and say why
             logger.exception("enrichment_sweep.failed", sweep_id=record.sweep_id, error=str(exc))
-            done = {s["entity_id"] for s in run.skipped} | set(run.enriched)
+            done = {s["entity_id"] for s in run.skipped} | set(run.stored)
             for candidate in record.candidates:
                 if candidate["entity_id"] not in done:
                     run.skip(candidate["entity_id"], "sweep_failed")
@@ -626,8 +648,12 @@ class SweepRunner:
         if response is None:
             run.skip(entity_id, "converge_failed")
         else:
-            run.stats["enriched"] += 1
-            run.enriched.append(entity_id)
+            # Section 3.4.5: the reply is stored unchanged whatever its state.
+            # Only a `completed` reply is an enrichment; `failed` and `degraded`
+            # (response.v2.md section 6) and anything else are counted apart.
+            run.stored.append(entity_id)
+            outcome = outcome_counter(response)
+            run.stats[outcome] = run.stats.get(outcome, 0) + 1
         return None
 
     async def _still_running(self, record: SweepRecord) -> str | None:
@@ -678,6 +704,7 @@ __all__ = [
     "converge_idempotency_key",
     "effective_budget",
     "money",
+    "outcome_counter",
     "parse_assessment",
     "rank",
     "reservation_estimate",

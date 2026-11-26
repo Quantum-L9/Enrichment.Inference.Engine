@@ -94,6 +94,13 @@ class EnrichmentLifecycle(LifecycleHook):
         settings = get_settings()
         setup_logging(settings.log_level)
 
+        # EIE-005: the contract pack is verified first, inside the lifespan the
+        # SDK actually runs; an invalid constitution or attestation stops startup
+        # before any resource exists and lifecycle_started stays false.
+        from .bootstrap.l9_contract_runtime import enforce_l9_contract_controls
+
+        enforce_l9_contract_controls(app)
+
         _kb = KBResolver(settings.kb_dir)
 
         try:

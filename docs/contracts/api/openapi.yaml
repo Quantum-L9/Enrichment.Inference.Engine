@@ -1358,6 +1358,14 @@ paths:
             application/json:
               schema:
                 type: object
+        "403":
+          description: |
+            Invalid API key, or a batch that names a tenant `domain` outside L9_ENVIRONMENT local/dev/test
+            (the X-API-Key binds no tenant).
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
       x-source-file: app/api/v1/converge.py
 
   /v1/converge/{run_id}:
@@ -1435,9 +1443,18 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "403":
+          description: |
+            Invalid API key, or a direct tenant run read outside L9_ENVIRONMENT
+            local/dev/test (the X-API-Key binds no tenant). Answered before the
+            run is looked up, so it does not reveal whether the run exists.
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
         "404":
           description: Run ID not found
-      x-source-file: app/api/v1/converge.py:861
+      x-source-file: app/api/v1/converge.py
 
   /v1/converge/{run_id}/approve:
     post:
@@ -1842,7 +1859,15 @@ paths:
                   proposal_id:
                     type: string
                     format: uuid
-      x-source-file: app/api/v1/discover.py:113
+        "403":
+          description: |
+            Invalid API key, or a direct tenant schema-proposal decision outside L9_ENVIRONMENT local/dev/test
+            (the X-API-Key binds no tenant).
+          content:
+            application/json:
+              schema:
+                $ref: "./schemas/error-responses.yaml#/components/schemas/ErrorResponse"
+      x-source-file: app/api/v1/discover.py
 
   # ── Fields ─────────────────────────────────────────────────
   /api/v1/fields/{entity_id}:

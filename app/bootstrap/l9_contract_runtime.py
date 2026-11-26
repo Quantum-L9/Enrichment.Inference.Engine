@@ -41,43 +41,54 @@ def _route_exists(app: FastAPI, path: str) -> bool:
 
 
 def install_l9_contract_controls(app: FastAPI) -> FastAPI:
-    """Register attestation router and wire constitution/attestation startup gates."""
+    """Mount the attestation route. Enforcement is ``enforce_l9_contract_controls``.
+
+    EIE-005: this used to register an ``@app.on_event("startup")`` handler. The
+    node app is built by the SDK with an explicit lifespan, and Starlette runs
+    no ``on_event`` handler when a lifespan is supplied, so the checks never
+    ran. ``EnrichmentLifecycle.startup`` (app/main.py), which the SDK lifespan
+    does call, now runs ``enforce_l9_contract_controls`` first.
+    """
     if not _route_exists(app, "/v1/attestation"):
         app.include_router(attestation_router)
-
-    @app.on_event("startup")
-    def _l9_contract_startup_validation() -> None:
-        constitution_ok, constitution_errors = verify_constitution()
-        if not constitution_ok:
-            raise RuntimeError(
-                "constitution verification failed at startup: " + "; ".join(constitution_errors)
-            )
-
-        attestation_ok, attestation_errors = verify_attestation()
-        if not attestation_ok:
-            raise RuntimeError(
-                "runtime attestation verification failed at startup: "
-                + "; ".join(attestation_errors)
-            )
-
-        attestation = build_runtime_attestation()
-        app.state.l9_contract_control = {
-            "node_id": attestation["node_id"],
-            "node_version": attestation["node_version"],
-            "contract_version": attestation["contract_version"],
-            "contract_digest": attestation["contract_digest"],
-            "policy_mode": attestation["policy_mode"],
-            "degraded_modes": attestation["degraded_modes"],
-        }
-
     return app
+
+
+def enforce_l9_contract_controls(app: FastAPI) -> dict[str, Any]:
+    """Verify the constitution, then the attestation, and install their state.
+
+    Raises ``RuntimeError`` on the first failure, before anything else starts.
+    Called from ``EnrichmentLifecycle.startup`` ahead of every resource.
+    """
+    constitution_ok, constitution_errors = verify_constitution()
+    if not constitution_ok:
+        raise RuntimeError(
+            "constitution verification failed at startup: " + "; ".join(constitution_errors)
+        )
+
+    attestation_ok, attestation_errors = verify_attestation()
+    if not attestation_ok:
+        raise RuntimeError(
+            "runtime attestation verification failed at startup: " + "; ".join(attestation_errors)
+        )
+
+    attestation = build_runtime_attestation()
+    state = {
+        "node_id": attestation["node_id"],
+        "node_version": attestation["node_version"],
+        "contract_version": attestation["contract_version"],
+        "contract_digest": attestation["contract_digest"],
+        "policy_mode": attestation["policy_mode"],
+        "degraded_modes": attestation["degraded_modes"],
+    }
+    app.state.l9_contract_control = state
+    return state
 
 
 def get_l9_contract_runtime_state(app: FastAPI) -> dict[str, Any]:
     """Return the contract runtime state dict installed by ``install_l9_contract_controls``.
 
-    Raises ``RuntimeError`` if the controls have not been installed or the
-    startup hook has not yet fired.
+    Raises ``RuntimeError`` if ``enforce_l9_contract_controls`` has not run yet.
     """
     state = getattr(app.state, "l9_contract_control", None)
     if not isinstance(state, dict):

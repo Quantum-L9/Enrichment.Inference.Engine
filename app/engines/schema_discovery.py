@@ -74,7 +74,10 @@ class SchemaDiscoveryEngine:
         fill_rates = batch_stats or {}
         new_props = self._build_enriched_props(enriched_fields, confidence_map, fill_rates)
         new_props += self._build_inferred_props(inferred_fields, confidence_map, fill_rates)
-        proposed_gates = self._build_proposed_gates(new_props)
+        # INV-8 / ADR-010: CEG owns match gates and scoring; EIE proposes fields
+        # only, as convergence/schema_proposer.py already does. The keys stay on
+        # the proposal (always empty) so the discover response shape is unchanged.
+        proposed_gates: list[dict] = []
 
         stage = (
             "inferred" if any(p.discovered_by == "inference" for p in new_props) else "discovered"
@@ -137,24 +140,6 @@ class SchemaDiscoveryEngine:
                     )
                 )
         return props
-
-    def _build_proposed_gates(self, new_props: list[PropertySpec]) -> list[dict]:
-        """Propose gates for high-fill-rate numeric/boolean fields."""
-        gates: list[dict] = []
-        for prop in new_props:
-            if prop.fill_rate >= self.GATE_THRESHOLD and prop.field_type in (
-                "float",
-                "integer",
-                "boolean",
-            ):
-                gates.append(
-                    {
-                        "field": prop.name,
-                        "gate_type": "boolean" if prop.field_type == "boolean" else "range",
-                        "confidence": prop.discovery_confidence,
-                    }
-                )
-        return gates
 
     def _infer_type(self, value: Any) -> str:
         if isinstance(value, bool):
