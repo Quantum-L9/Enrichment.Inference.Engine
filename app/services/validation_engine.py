@@ -175,14 +175,16 @@ def _checked_scalar(value: Any, declared: str | Mapping[str, Any], path: str) ->
 
     ``declared`` is a type name (``"date"``) or a declaration carrying ``values``
     for an enum. A bare ``"enum"`` with no ``values`` admits any string, as
-    ``spec_types`` does; it never admits a non-string. Text is trimmed first,
-    as every other string member is, so ``"A, B"`` splits to ``A`` and ``B``.
+    ``spec_types`` does; it never admits a non-string. Text is trimmed first
+    unless it is a declared member as written, as every other string member is, so ``"A, B"`` splits to ``A`` and ``B``.
     """
-    if isinstance(value, str):
-        value = value.strip()
     decl = dict(declared) if isinstance(declared, Mapping) else {"type": declared}
     decl["type"] = str(decl.get("type", "")).lower()
     decl.pop("required", None)  # an absent value never reaches here
+    members = decl.get("values")
+    if isinstance(value, str) and not (isinstance(members, list) and value in members):
+        # A declared member is matched as written; only other text is trimmed.
+        value = value.strip()
     defects = value_defects(value, decl, path)
     if defects:
         raise ValueError(str(defects[0]))

@@ -59,23 +59,25 @@ def test_the_code_implements_the_provenance_convention_the_doc_defines() -> None
     assert sync_field_set.provenance_property("capacity") == "capacity_provenance"
 
 
-@pytest.mark.parametrize(
-    "pack", ["domains/plasticos/spec.yaml", "tests/fixtures/ceg/plasticos.spec.yaml"]
-)
-def test_status_matches_the_packs_in_this_repository(pack: str) -> None:
-    """A pack that declares no provenance property syncs in legacy mode; the status says so."""
+PACKS = ("domains/plasticos/spec.yaml", "tests/fixtures/ceg/plasticos.spec.yaml")
+
+
+def _declares_provenance(pack: str) -> bool:
     text = (REPO / pack).read_text(encoding="utf-8")
     yaml.safe_load(text)  # a real, parseable pack
-    declares_provenance = "_provenance" in text or re.search(r"name:\s*provenance\b", text)
-    status = _status_block()
-    claims_none = "declare no provenance property" in status
-    if declares_provenance:
-        assert not claims_none, (
-            f"{pack} now declares a provenance property, but the status still says the "
-            "in-repository packs declare none"
-        )
-    else:
-        assert claims_none, (
-            f"{pack} declares no provenance property, so it syncs in legacy mode; "
-            "the status must say that the in-repository packs are legacy today"
-        )
+    return "_provenance" in text or bool(re.search(r"name:\s*provenance\b", text))
+
+
+def test_status_matches_the_packs_in_this_repository() -> None:
+    """The status claims the in-repo packs declare no provenance exactly when none does.
+
+    One collective check: CEG may declare properties EIE does not produce (subset
+    semantics), so a CEG-only declaration must not make the two packs demand
+    opposite wording.
+    """
+    declaring = [pack for pack in PACKS if _declares_provenance(pack)]
+    claims_none = "declare no provenance property" in _status_block()
+    assert claims_none is (not declaring), (
+        f"status says the in-repo packs declare no provenance property: {claims_none}; "
+        f"packs that declare one: {declaring}"
+    )

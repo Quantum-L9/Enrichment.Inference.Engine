@@ -232,3 +232,10 @@ def test_checked_list_members_are_trimmed_before_their_check(
     """Unchecked string members were always trimmed; a checked member is too."""
     declared = {"xs": {"name": "xs", "type": "list", "items": items}}
     assert _admitted("xs", value, declared)["xs"] == expected
+
+
+def test_a_declared_enum_member_with_padding_is_matched_exactly_first() -> None:
+    """Trimming normalizes provider text; it must not reject a declared member as written."""
+    padded = {"name": "code", "type": "enum", "values": [" A", "B"]}
+    assert _admitted("code", " A", {"code": padded})["code"] == " A"
+    assert _admitted("code", " B ", {"code": padded})["code"] == "B"
