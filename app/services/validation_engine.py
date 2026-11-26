@@ -16,6 +16,7 @@ from typing import Any
 
 import structlog
 
+from app.engines.spec_types import value_defects
 from app.utils.safe_convert import normalize_confidence
 
 logger = structlog.get_logger("validation_engine")
@@ -41,6 +42,12 @@ TYPE_MAP: dict[str, type] = {
     "list": list,
     "array": list,
 }
+
+# Declared scalar types whose values are checked, not coerced: an enum against
+# its declared ``values``, a date / datetime / duration as ISO-8601 text. The
+# check is ``spec_types.value_defects`` -- the grammar the graph row enforces --
+# so a value admitted here is one the row would accept (EIE-D-003).
+CHECKED_SCALAR_TYPES = frozenset({"enum", "date", "datetime", "duration"})
 
 
 def validate_response(
@@ -112,6 +119,17 @@ def validate_response(
                         got_type=type(value).__name__,
                     )
                 continue
+            if field_type_str.lower() in CHECKED_SCALAR_TYPES:
+                try:
+                    normalized[field_name] = _checked_scalar(value, declared, field_name)
+                except ValueError:
+                    logger.debug(
+                        "field_coercion_skipped",
+                        field=field_name,
+                        expected=field_type_str,
+                        got_type=type(value).__name__,
+                    )
+                continue
             expected = TYPE_MAP.get(field_type_str.lower())
             if expected is None:
                 # Unknown type — accept as-is
@@ -150,6 +168,22 @@ def _declared_type(
         return declared, None
     items = declared.get("items")
     return str(declared.get("type", "")), items if isinstance(items, Mapping) else None
+
+
+def _checked_scalar(value: Any, declared: str | Mapping[str, Any], path: str) -> Any:
+    """``value`` unchanged when it conforms to a checked scalar declaration, else ValueError.
+
+    ``declared`` is a type name (``"date"``) or a declaration carrying ``values``
+    for an enum. A bare ``"enum"`` with no ``values`` admits any string, as
+    ``spec_types`` does; it never admits a non-string.
+    """
+    decl = dict(declared) if isinstance(declared, Mapping) else {"type": declared}
+    decl["type"] = str(decl.get("type", "")).lower()
+    decl.pop("required", None)  # an absent value never reaches here
+    defects = value_defects(value, decl, path)
+    if defects:
+        raise ValueError(str(defects[0]))
+    return value
 
 
 def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) -> Any:
@@ -241,6 +275,8 @@ def _coerce_member(value: Any, items: Mapping[str, Any] | None) -> Any:
         if not isinstance(value, Mapping):
             raise TypeError("declared map item is not a mapping")
         return _coerce_map(value, items)
+    if items is not None and item_type in CHECKED_SCALAR_TYPES:
+        return _checked_scalar(value, items, "item")
     expected = TYPE_MAP.get(item_type, str)
     if expected is list:
         raise TypeError("a list of lists is not declarable")
@@ -274,6 +310,8 @@ def _coerce_property(value: Any, prop: Mapping[str, Any]) -> Any:
         if not isinstance(value, Mapping):
             raise TypeError(f"declared map property {prop.get('name')} is not a mapping")
         return _coerce_map(value, prop)
+    if type_name in CHECKED_SCALAR_TYPES:
+        return _checked_scalar(value, prop, str(prop.get("name")))
     expected = TYPE_MAP.get(type_name)
     if expected is None:
         return value

@@ -472,11 +472,13 @@ def test_each_added_field_is_a_target_and_an_observation(candidate_store: Path, 
     assert resolved is not None
     assert resolved.config.source_sha256 == CANDIDATE_SHA
     assert resolved.subject == {"type": "facility", "role": "supplier"}
-    # A list/map target carries its typed declaration (F04); a scalar its type name.
+    # A list/map target carries its typed declaration (F04), and so does an enum,
+    # whose allowed values a bare "enum" would lose (EIE-D-003); any other
+    # scalar keeps its type name.
     declared = _props(CANDIDATE)[name]
     expected: object = declaration["type"]
-    if declared["type"] in ("list", "map"):
-        keys = ("type", "items", "properties", "required")
+    if declared["type"] in ("list", "map", "enum"):
+        keys = ("type", "items", "properties", "values", "required")
         expected = {k: declared[k] for k in keys if k in declared}
     assert resolved.body["schema"] == {name: expected}
     assert [o["field"] for o in resolved.observations] == [name]
