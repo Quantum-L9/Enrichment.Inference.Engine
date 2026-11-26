@@ -1442,8 +1442,6 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/Forbidden"
-        "403":
           description: |
             Invalid API key, or a direct tenant run read outside L9_ENVIRONMENT
             local/dev/test (the X-API-Key binds no tenant). Answered before the
