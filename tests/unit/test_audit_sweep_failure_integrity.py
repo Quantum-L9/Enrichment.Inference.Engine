@@ -192,6 +192,12 @@ async def test_mixed_outcomes_count_exactly_the_completed_replies() -> None:
         "rec-0003": ["result"],
     }, "only a raised converge is skipped"
     assert page["stats"]["converge_state_failed"] == 1
+    stored = {row["entity_id"]: row["response"] for row in page["results"]}
+    assert stored == {
+        "rec-0000": {**replies[0], "entity_ref": "rec-0000"},
+        "rec-0001": {**replies[1], "entity_ref": "rec-0001"},
+        "rec-0003": {**replies[3], "entity_ref": "rec-0003"},
+    }, "every returned reply is stored unchanged"
     assert ledger.spent_usd == _cost(100) + _cost(50) + FULL_RESERVATION + _cost(200)
     assert ledger.reserved_usd == 0
 
@@ -207,11 +213,8 @@ async def test_runner_crash_after_a_noncompleted_reply_keeps_one_disposition(
     disposition after its result row was already stored.
     """
     store = MemoryStore()
-    wire(
-        store,
-        Graph(),
-        ScriptedConverge({"state": "failed", "fields": {}, "proposals": [], "tokens_used": 10}),
-    )
+    failed = {"state": "failed", "fields": {}, "proposals": [], "tokens_used": 10}
+    wire(store, Graph(), ScriptedConverge(failed))
     original = SweepRunner._declared_targets
     calls = {"n": 0}
 
@@ -232,7 +235,8 @@ async def test_runner_crash_after_a_noncompleted_reply_keeps_one_disposition(
         "rec-0001": ["skip:sweep_failed"],
         "rec-0002": ["skip:sweep_failed"],
     }
-    assert page["results"][0]["response"]["state"] == "failed"
+    assert [row["response"] for row in page["results"]] == [{**failed, "entity_ref": "rec-0000"}]
+    assert page["stats"]["converge_state_failed"] == 1
     assert page["stats"]["enriched"] == 0
     assert store.ledgers[(TENANT, NOW.date())].reserved_usd == 0
 
