@@ -62,10 +62,40 @@ def test_the_code_implements_the_provenance_convention_the_doc_defines() -> None
 PACKS = ("domains/plasticos/spec.yaml", "tests/fixtures/ceg/plasticos.spec.yaml")
 
 
+def _declared_names(node: object) -> list[str]:
+    """Every declared property name in a parsed pack: a mapping with `name` and `type`."""
+    names: list[str] = []
+    if isinstance(node, dict):
+        if isinstance(node.get("name"), str) and "type" in node:
+            names.append(node["name"])
+        for child in node.values():
+            names.extend(_declared_names(child))
+    elif isinstance(node, list):
+        for child in node:
+            names.extend(_declared_names(child))
+    return names
+
+
 def _declares_provenance(pack: str) -> bool:
-    text = (REPO / pack).read_text(encoding="utf-8")
-    yaml.safe_load(text)  # a real, parseable pack
-    return "_provenance" in text or bool(re.search(r"name:\s*provenance\b", text))
+    """A row `F_provenance` or an item `provenance` declaration; comments and text ignored."""
+    parsed = yaml.safe_load((REPO / pack).read_text(encoding="utf-8"))
+    return any(
+        name.endswith(sync_field_set.ROW_PROVENANCE_SUFFIX)
+        or name == sync_field_set.ITEM_PROVENANCE
+        for name in _declared_names(parsed)
+    )
+
+
+def test_detection_reads_declarations_not_text() -> None:
+    """The detector the status check relies on sees declarations and nothing else."""
+    declared = {"properties": [{"name": "capacity_provenance", "type": "enum"}]}
+    item = {"items": {"properties": [{"name": "provenance", "type": "enum"}]}}
+    mentioned = {
+        "properties": [{"name": "capacity", "type": "float", "description": "_provenance"}]
+    }
+    assert any(n.endswith("_provenance") for n in _declared_names(declared))
+    assert "provenance" in _declared_names(item)
+    assert not any("provenance" in n for n in _declared_names(mentioned))
 
 
 def test_status_matches_the_packs_in_this_repository() -> None:
