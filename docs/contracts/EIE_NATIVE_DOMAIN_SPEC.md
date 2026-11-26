@@ -94,11 +94,14 @@ defined here once and keyed only on declarations:
 - **Prerequisite on CEG.** CEG must declare `F_provenance` and the item
   `provenance` with the identical `enum` shape `[observed, enriched]` on the
   target node before EIE sends them; the compatibility contract then compares
-  them like any other row property. The pinned CEG revision
+  them like any other row property. This gates full mode per field, not the
+  implementation: a field stays legacy until its CEG target node declares the
+  companion property, and the pinned CEG revision
   (`tests/contracts/ceg_revision.py`, snapshot
-  `tests/fixtures/ceg/plasticos.spec.yaml`) must be moved to a revision that
-  declares them before the implementation merges. CEG applies the over-time
-  precedence (G3) by reading them, once they are declared.
+  `tests/fixtures/ceg/plasticos.spec.yaml`) moves to a revision that declares
+  it in the same change that publishes a pack enabling full mode for that
+  field. CEG applies the over-time precedence (G3) by reading them, once they
+  are declared.
 - **`sync_version`** (`integer`, declared on the target node) is the
   per-subject monotonic version of
   `docs/contracts/data/graph_sync_intents.md` rule 6, which CEG compares to

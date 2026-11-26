@@ -211,3 +211,24 @@ def test_admission_and_the_row_grammar_reach_the_same_verdict(
     conforms = not value_defects(value, decl, decl["name"])
     admitted = decl["name"] in _admitted(decl["name"], value, {decl["name"]: decl})
     assert admitted is conforms, f"admission={admitted}, row grammar conforms={conforms}"
+
+
+# ── Whitespace normalization is kept for checked list members ───────────────
+
+
+@pytest.mark.parametrize(
+    ("items", "value", "expected"),
+    [
+        ({"type": "enum", "values": ["A", "B"]}, "A, B", ["A", "B"]),
+        ({"type": "enum", "values": ["A", "B"]}, [" A", "B "], ["A", "B"]),
+        ({"type": "date"}, "2026-11-26, 2026-11-27", ["2026-11-26", "2026-11-27"]),
+        ({"type": "date"}, [" 2026-11-26 "], ["2026-11-26"]),
+    ],
+    ids=["enum-csv", "enum-padded", "date-csv", "date-padded"],
+)
+def test_checked_list_members_are_trimmed_before_their_check(
+    items: dict[str, Any], value: Any, expected: list[str]
+) -> None:
+    """Unchecked string members were always trimmed; a checked member is too."""
+    declared = {"xs": {"name": "xs", "type": "list", "items": items}}
+    assert _admitted("xs", value, declared)["xs"] == expected

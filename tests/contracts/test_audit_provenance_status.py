@@ -68,8 +68,14 @@ def test_status_matches_the_packs_in_this_repository(pack: str) -> None:
     yaml.safe_load(text)  # a real, parseable pack
     declares_provenance = "_provenance" in text or re.search(r"name:\s*provenance\b", text)
     status = _status_block()
-    if not declares_provenance:
-        assert "declare no provenance property" in status, (
+    claims_none = "declare no provenance property" in status
+    if declares_provenance:
+        assert not claims_none, (
+            f"{pack} now declares a provenance property, but the status still says the "
+            "in-repository packs declare none"
+        )
+    else:
+        assert claims_none, (
             f"{pack} declares no provenance property, so it syncs in legacy mode; "
             "the status must say that the in-repository packs are legacy today"
         )
