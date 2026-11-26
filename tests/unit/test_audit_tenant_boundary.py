@@ -226,6 +226,36 @@ async def test_batch_converge_naming_an_unloaded_tenant_is_refused_before_any_ru
     loop.assert_not_awaited()
 
 
+@pytest.mark.parametrize("environment", SIGNED_ENVIRONMENTS)
+async def test_domainless_batch_converge_is_refused_before_any_run(
+    monkeypatch: pytest.MonkeyPatch, environment: str
+) -> None:
+    """A batch answers only run ids, and GET /v1/converge/{run_id} is refused here.
+
+    So a signed environment must not start batch runs at all: the caller would
+    pay for convergence whose outcome no route can return to it.
+    """
+    _set_environment(monkeypatch, environment)
+    store = _install_io_tripwires(monkeypatch)
+    profile = SimpleNamespace(profile_name="fixture", batch_size=5, max_passes=1)
+    monkeypatch.setattr(converge, "_profile_registry", SimpleNamespace(get=lambda _n: profile))
+    loop = AsyncMock(side_effect=AssertionError("a convergence run started"))
+    monkeypatch.setattr(
+        "app.engines.convergence_controller.run_convergence_loop", loop, raising=True
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=_routes()), base_url="http://test") as c:
+        reply = await c.post(
+            "/v1/converge/batch",
+            json={"profile_name": "fixture", "entities": [{"id": "e-49"}]},
+            headers={"X-API-Key": "k"},
+        )
+
+    assert reply.status_code == 403, reply.text
+    store.save.assert_not_awaited()
+    loop.assert_not_awaited()
+
+
 # ── The posture itself fails closed ───────────────────────────────────────
 
 

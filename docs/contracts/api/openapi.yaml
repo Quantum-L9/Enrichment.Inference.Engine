@@ -1360,7 +1360,7 @@ paths:
                 type: object
         "403":
           description: |
-            Invalid API key, or a batch that names a tenant `domain` outside L9_ENVIRONMENT local/dev/test
+            Invalid API key, or any batch outside L9_ENVIRONMENT local/dev/test
             (the X-API-Key binds no tenant).
           content:
             application/json:

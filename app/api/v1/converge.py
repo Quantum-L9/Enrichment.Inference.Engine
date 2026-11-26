@@ -767,12 +767,14 @@ async def converge_batch(
     from ...engines.convergence.convergence_config import ConvergenceConfig
     from ...engines.convergence_controller import run_convergence_loop
 
-    # EIE-008: the same posture and tenant grammar as POST /v1/converge, for any
-    # named `domain`, before a profile, a run or a spec is touched. It used to
-    # apply only when this node had already loaded the domain's spec, so an
-    # unloaded tenant id ran (and persisted) paid convergence under that tenant.
+    # EIE-008: the direct-tenant posture, before a profile, a run or a spec is
+    # touched. It used to apply only when this node had already loaded the named
+    # domain's spec, so an unloaded tenant id ran (and persisted) paid
+    # convergence under that tenant. It applies to a domainless batch too: the
+    # response is only run ids, and GET /v1/converge/{run_id} is refused in the
+    # same environments, so a signed node would run work no route returns.
+    require_direct_domain_access()
     if body.domain:
-        require_direct_domain_access()
         try:
             validate_tenant_id(body.domain)
         except ValueError as exc:
@@ -798,7 +800,6 @@ async def converge_batch(
     discovery_digest: str | None = None
     context: dict[str, Any] = {"hints": {}, "rules": []}
     if body.domain in _domain_specs or body.node_label is not None:
-        require_direct_domain_access()  # a node_label with no domain still reads a spec
         _, discovery_digest = _discovery_snapshot(body.domain, body.node_label, context=context)
     entities = body.entities
     if not entities:
