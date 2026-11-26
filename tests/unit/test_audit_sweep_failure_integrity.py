@@ -26,9 +26,9 @@ What is asserted, and why:
 * Spend is the reply's own `tokens_used` when usable, the full reservation
   otherwise (contract section 4), and no reservation is left in flight.
 
-Whether a non-completed reply is kept as a result row (contract section 3.4.5:
-"the converge v2 response body is stored as the result, unchanged") or turned
-into a skip entry is an owner decision; these tests hold under either choice.
+* A returned reply is stored as a result row, unchanged, whatever its state
+  (contract section 3.4 step 5; owner decision 2026-11-26: not dropped, not
+  turned into a skip). Only a raised converge is a skip.
 """
 
 from __future__ import annotations
@@ -130,9 +130,10 @@ async def test_noncompleted_converge_reply_is_not_counted_enriched(state: str) -
 
     assert len(converge.bodies) == 1
     assert page["stats"]["enriched"] == 0, page["stats"]
-    _assert_one_disposition_each(page, 1)
-    for row in page["results"]:
-        assert row["response"]["state"] == state, "a stored reply is stored unchanged"
+    seen = _assert_one_disposition_each(page, 1)
+    assert seen == {"rec-0000": ["result"]}, "a returned reply is a result, never a skip"
+    assert [row["response"] for row in page["results"]] == [{**reply, "entity_ref": "rec-0000"}]
+    assert page["stats"][f"converge_state_{state}"] == 1
     assert ledger.spent_usd == _cost(250), "tokens_used is usable: charge the actual spend"
     assert ledger.reserved_usd == 0
 
@@ -159,7 +160,10 @@ async def test_reply_outside_the_three_converge_states_is_not_counted_enriched(
     ledger = store.ledgers[(TENANT, NOW.date())]
 
     assert page["stats"]["enriched"] == 0, page["stats"]
-    _assert_one_disposition_each(page, 1)
+    seen = _assert_one_disposition_each(page, 1)
+    assert seen == {"rec-0000": ["result"]}, "a returned reply is a result, never a skip"
+    assert [row["response"] for row in page["results"]] == [{**reply, "entity_ref": "rec-0000"}]
+    assert page["stats"]["converge_state_unrecognized"] == 1
     assert ledger.spent_usd == _cost(100)
     assert ledger.reserved_usd == 0
 
@@ -181,7 +185,13 @@ async def test_mixed_outcomes_count_exactly_the_completed_replies() -> None:
 
     assert page["stats"]["enriched"] == 2, page["stats"]
     seen = _assert_one_disposition_each(page, 4)
-    assert seen["rec-0002"] == ["skip:converge_failed"], "a raised converge is skipped"
+    assert seen == {
+        "rec-0000": ["result"],
+        "rec-0001": ["result"],
+        "rec-0002": ["skip:converge_failed"],
+        "rec-0003": ["result"],
+    }, "only a raised converge is skipped"
+    assert page["stats"]["converge_state_failed"] == 1
     assert ledger.spent_usd == _cost(100) + _cost(50) + FULL_RESERVATION + _cost(200)
     assert ledger.reserved_usd == 0
 
@@ -191,7 +201,7 @@ async def test_runner_crash_after_a_noncompleted_reply_keeps_one_disposition(
 ) -> None:
     """The regression a naive EIE-003 fix introduces.
 
-    `SweepRunner.run` marks every candidate not in `skipped | enriched` as
+    `SweepRunner.run` marks every candidate not already handled as
     `sweep_failed` when the run crashes. A non-completed reply that is removed
     from `enriched` must still count as handled, or it gets a second
     disposition after its result row was already stored.
@@ -217,8 +227,12 @@ async def test_runner_crash_after_a_noncompleted_reply_keeps_one_disposition(
     page = await fetch_all(result["sweep_id"])
 
     seen = _assert_one_disposition_each(page, 3)
-    assert seen["rec-0001"] == ["skip:sweep_failed"]
-    assert seen["rec-0002"] == ["skip:sweep_failed"]
+    assert seen == {
+        "rec-0000": ["result"],
+        "rec-0001": ["skip:sweep_failed"],
+        "rec-0002": ["skip:sweep_failed"],
+    }
+    assert page["results"][0]["response"]["state"] == "failed"
     assert page["stats"]["enriched"] == 0
     assert store.ledgers[(TENANT, NOW.date())].reserved_usd == 0
 
