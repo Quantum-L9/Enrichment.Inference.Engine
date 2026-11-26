@@ -189,7 +189,7 @@ async def test_live_discover_response_carries_no_ceg_gates(
         return EnrichResponse(state="completed", confidence=0.96, fields={"unseen_field": 7})
 
     monkeypatch.setattr(handlers, "enrich_entity", enriched)
-    monkeypatch.setattr(handlers, "get_settings", lambda: object())
+    monkeypatch.setattr(handlers, "get_settings", object)
     response = await handlers.handle_discover(
         "acme",
         {
