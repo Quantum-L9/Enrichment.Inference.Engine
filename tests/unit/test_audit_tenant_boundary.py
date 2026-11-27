@@ -32,7 +32,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.api.v1 import converge, discover
@@ -278,11 +278,71 @@ def test_posture_refuses_every_environment_outside_the_allowlist(
 # ── Census over the mounted application ───────────────────────────────────
 
 
-def _key_authenticated_operations() -> list[tuple[str, str]]:
-    """(method, path) of every operation the real app documents as X-API-Key secured."""
+# Every documented operation that is served WITHOUT the X-API-Key, and why.
+# The census below fails on any other unkeyed operation, so a route that loses
+# its key dependency cannot drop out of the key-authenticated census unnoticed
+# (WU-05). Adding here is a reviewed decision.
+PUBLIC_OPERATIONS: dict[tuple[str, str], str] = {
+    ("get", "/v1/health"): "SDK liveness probe",
+    ("get", "/v1/ready"): "SDK readiness probe",
+    ("get", "/metrics"): "SDK Prometheus scrape",
+    ("post", "/v1/execute"): "SDK Gate ingress: Gate-signed packets, enforced by gate_ingress",
+    ("post", "/v1/relay"): "SDK relay: Gate-signed packets",
+    ("get", "/v1/attestation"): "public runtime attestation digest, no tenant data",
+    ("get", "/api/v1/health"): "liveness probe",
+    ("get", "/api/v1/ready"): "readiness probe",
+}
+
+
+def _all_operations(app: FastAPI | None = None) -> list[tuple[str, str]]:
+    return sorted(
+        (method, path)
+        for path, operations in (app or _node_app()).openapi()["paths"].items()
+        for method in operations
+    )
+
+
+def _unrecorded_unkeyed(app: FastAPI | None = None) -> list[tuple[str, str]]:
+    keyed = set(_key_authenticated_operations(app))
+    return [op for op in _all_operations(app) if op not in keyed and op not in PUBLIC_OPERATIONS]
+
+
+def test_every_unkeyed_operation_is_a_recorded_public_operation() -> None:
+    """WU-05: the key census cannot shrink silently.
+
+    Derived from every documented operation, not from the ones that already
+    declare the key, so an operation that loses its key dependency fails here.
+    """
+    keyed = set(_key_authenticated_operations())
+    unkeyed = [op for op in _all_operations() if op not in keyed]
+    unexpected = _unrecorded_unkeyed()
+    assert not unexpected, f"served without X-API-Key and not recorded as public: {unexpected}"
+    stale = [op for op in PUBLIC_OPERATIONS if op not in unkeyed]
+    assert not stale, f"recorded as public but no longer an unkeyed operation: {stale}"
+
+
+def test_a_route_that_loses_its_key_dependency_fails_the_census() -> None:
+    """Negative witness: a tenant route mounted without the key is reported."""
+    app = _routes()  # discover + converge, key overridden only for requests
+    leak = APIRouter()
+
+    @leak.get("/v1/converge/{run_id}/leak")
+    async def leaked(run_id: str) -> dict[str, str]:
+        return {"run_id": run_id}
+
+    app.include_router(leak)
+    assert _unrecorded_unkeyed(app) == [("get", "/v1/converge/{run_id}/leak")]
+
+
+def _node_app() -> FastAPI:
     from app.main import app as node_app
 
-    schema = node_app.openapi()
+    return node_app
+
+
+def _key_authenticated_operations(app: FastAPI | None = None) -> list[tuple[str, str]]:
+    """(method, path) of every operation the app documents as X-API-Key secured."""
+    schema = (app or _node_app()).openapi()
     schemes = {
         name
         for name, spec in schema.get("components", {}).get("securitySchemes", {}).items()
