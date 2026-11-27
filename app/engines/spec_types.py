@@ -291,12 +291,18 @@ def _scalar_ok(type_name: str, value: object, decl: Mapping[str, Any]) -> str | 
 
 
 def _is_iso_duration(text: str) -> bool:
-    """An ISO-8601 duration: ``[-]P[nY][nM][nW][nD][T[nH][nM][n[.n]S]]``, one component at least."""
-    body = text.removeprefix("-")
-    if not body.startswith("P"):
+    """An ISO-8601 duration: ``P[nY][nM][nW][nD][T[nH][nM][n[.n]S]]``, one component at least.
+
+    The CEG row contract's grammar (engine/sync/row_contract.py `_ISO_DURATION`)
+    refuses a negative duration and a ``T`` with no time component, so this
+    does too (EIE-PR-U04): a value admitted here must not be refused at sync.
+    """
+    if not text.startswith("P"):
         return False
-    date_part, _, time_part = body[1:].partition("T")
+    date_part, designator, time_part = text[1:].partition("T")
     if not date_part and not time_part:  # "P" and "PT" carry no component
+        return False
+    if designator and not time_part:  # "P3DT": a time designator with no time
         return False
     return _duration_units(date_part, "YMWD") and _duration_units(time_part, "HMS")
 
