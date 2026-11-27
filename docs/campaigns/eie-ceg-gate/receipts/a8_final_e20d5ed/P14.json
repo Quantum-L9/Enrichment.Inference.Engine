@@ -1,0 +1,81 @@
+{
+ "id": "P14",
+ "slice": "A8",
+ "profile": "ed25519",
+ "assertion": "EIE completes while CEG is down; durable result; pending graph intent recovered after EIE restart",
+ "verdict": "PASS",
+ "reason": "",
+ "observed": {
+  "entity_id": "gl-down-9d5d2b",
+  "state": "completed",
+  "elapsed_s": 0.142,
+  "persisted": [
+   "1"
+  ],
+  "absent_while_down": true,
+  "eie_log_down": [
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:23.956477Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:23.956586Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-8ac02a:91b868a4:enrich\", \"entity_id\": \"gl-plas-8ac02a\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:23.985030Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-8ac02a:91b868a4:enrich\", \"entity_id\": \"gl-plas-8ac02a\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:23.985139Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-8ac02a:91b868a4:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:23.985296Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:24.052891Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:24.053032Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-plas-8ac02a:91b868a4:enrich\", \"entity_id\": \"gl-plas-8ac02a\", \"synced\": true, \"terminal\": false, \"event\": \"side_effects_graph_leg_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:24.177530Z\"}",
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.133908Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.134029Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-3831a5:d682e0e1:enrich\", \"entity_id\": \"gl-synt-3831a5\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.144839Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-3831a5:d682e0e1:enrich\", \"entity_id\": \"gl-synt-3831a5\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.144945Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-3831a5:d682e0e1:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.145144Z\"}",
+   "{\"domain\": \"synthneutral\", \"version\": \"0.1.0\", \"source_sha256\": null, \"approval_ref\": null, \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.170925Z\"}",
+   "{\"domain\": \"synthneutral\", \"entity_type\": \"stations\", \"id_property\": \"station_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.170997Z\"}",
+   "{\"key\": \"idem:synthneutral:gl:converge:synthneutral:gl-synt-3831a5:d682e0e1:enrich\", \"entity_id\": \"gl-synt-3831a5\", \"synced\": true, \"terminal\": false, \"event\": \"side_effects_graph_leg_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:16:39.544229Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:17:15.233015Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:17:15.233129Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-down-9d5d2b:232b1fd8:enrich\", \"entity_id\": \"gl-down-9d5d2b\", \"event\": \"side_effect_graph_sync_deferred\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:17:15.243073Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-down-9d5d2b:232b1fd8:enrich\", \"entity_id\": \"gl-down-9d5d2b\", \"persisted\": true, \"score_invalidated\": false, \"event_emitted\": true, \"graph_retry\": false, \"graph_deferred\": true, \"event\": \"side_effects_graph_pending\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:17:15.243151Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-down-9d5d2b:232b1fd8:enrich\", \"event\": \"side_effects_graph_leg_scheduled\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:17:15.243293Z\"}",
+   "{\"domain\": \"plasticos\", \"version\": \"0.6.2\", \"source_sha256\": \"dd09cc9ec8fea4a8766b0f3650cfab83a0b0a894d0e499f9f75405f21ae48cfe\", \"approval_ref\": \"Quantum-L9/Enrichment.Inference.Engine#364 CTO DIRECTIVE: name CEG-owned Facility.entity_ref on the live cartridge only\", \"event\": \"graph_sync_effective_revision\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:17:15.424804Z\"}",
+   "{\"domain\": \"plasticos\", \"entity_type\": \"facilities\", \"id_property\": \"facility_id\", \"source\": \"domain_spec\", \"event\": \"graph_sync_contract_resolved\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:17:15.424922Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 1, \"error\": \"GateHTTPError\", \"detail\": \"Gate execute returned HTTP 502\", \"will_retry\": true, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-24T19:17:15.452878Z\"}",
+   "{\"target\": \"graph\", \"action\": \"sync\", \"attempt\": 2, \"error\": \"GateHTTPError\", \"detail\": \"Gate execute returned HTTP 503\", \"will_retry\": false, \"event\": \"packet_route_error\", \"level\": \"warning\", \"timestamp\": \"2026-11-24T19:17:16.484057Z\"}",
+   "{\"entity_id\": \"gl-down-9d5d2b\", \"error\": \"Gate-routed 'sync' for graph failed: GateHTTPError\", \"event\": \"graph_sync_failed\", \"level\": \"warning\", \"timestamp\": \"2026-11-24T19:17:16.484152Z\"}",
+   "{\"entity_id\": \"gl-down-9d5d2b\", \"key\": \"idem:plasticos:gl:converge:plasticos:gl-down-9d5d2b:232b1fd8:enrich\", \"ack\": \"none\", \"event\": \"side_effect_graph_sync_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-24T19:17:16.484229Z\"}",
+   "{\"key\": \"idem:plasticos:gl:converge:plasticos:gl-down-9d5d2b:232b1fd8:enrich\", \"entity_id\": \"gl-down-9d5d2b\", \"deferred\": false, \"errors\": [\"graph_sync:unacknowledged:none\"], \"event\": \"side_effects_graph_leg_unacknowledged\", \"level\": \"warning\", \"timestamp\": \"2026-11-24T19:17:16.489819Z\"}"
+  ],
+  "ready_after": {
+   "ready": true,
+   "waited_s": 10.0
+  },
+  "eie_restart": {
+   "started_before": "2026-11-24T19:15:26.190958701Z",
+   "started_after": "2026-11-24T19:17:25.028064339Z"
+  },
+  "graph_after_recovery": {
+   "rows": [
+    [
+     "\"gl-down-9d5d2b\"",
+     "\"TEST_ONLY gl-down-9d5d2b\"",
+     "NULL",
+     "NULL",
+     "NULL",
+     "NULL",
+     "NULL",
+     "\"NULL\""
+    ]
+   ],
+   "facility_count": 1,
+   "within_s": 120
+  },
+  "graph_sync_intents_while_down": [
+   "pending|1|"
+  ],
+  "graph_sync_intents_after_recovery": [
+   "acknowledged|2|"
+  ],
+  "eie_side_effects_graph_recovered": [
+   "{\"attempted\": 1, \"event\": \"side_effects_graph_recovered\", \"level\": \"info\", \"timestamp\": \"2026-11-24T19:18:02.549695Z\"}"
+  ]
+ },
+ "timestamp": "2026-11-24T19:18:14.675692+00:00"
+}

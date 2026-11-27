@@ -2,27 +2,32 @@
 # Enrichment.Inference.Engine — repository Make implementation
 # ============================================================
 #
-# REPOSITORY-OWNED. The root Makefile is the Core-owned make-v1 facade
-# (Quantum-L9/l9-ci-core tools/l9_repo/facades/make-v1.mk), reproduced
+# REPOSITORY-OWNED. The root Makefile is the Core-owned make-v2 facade
+# (Quantum-L9/l9-ci-core tools/l9_repo/facades/make-v2.mk), reproduced
 # byte-for-byte and validated byte-for-byte by Core's repository verification
 # (.l9/repo-workflow.json, Repository Execution V2). Never edit the Makefile:
-# it owns help/setup/validate/check/test and includes this file. Do not
-# redefine any of those five targets here.
+# it owns help/setup/validate/check/test-fast/test and includes this file. Do
+# not redefine any of those six targets here.
 #
 #   make setup     repo-setup     .venv + the full uv.lock profile (+ pre-commit hook)
 #   make validate  repo-validate  contract manifest, payload contract compiler,
 #                                 Gate_SDK channel (offline), audit engine --strict
 #   make check     repo-check     ruff check, ruff format --check, strict mypy (type-check)
-#   make test      repo-test      on GitHub Actions: the bounded PR-fast selection
-#                                 (payload schema, identity, scoring, Gate contracts).
-#                                 Locally: the full pytest suite with the coverage
-#                                 floor (C-15). The full catalog, databases, peers,
-#                                 and e2e are `make test-deep`, not this leaf.
+#   make test-fast repo-test-fast the bounded pull-request selection: a literal
+#                                 list of test folders and files (no shell
+#                                 expansion), so Core's PR test-expense judge
+#                                 can read it.
+#   make test      repo-test      the full pytest suite with the coverage floor
+#                                 (C-15), locally and on scheduled/dispatched
+#                                 runs. The full catalog, databases, peers, and
+#                                 e2e are `make test-deep`, not this leaf.
 #
-# Core runs setup -> validate -> check -> test in that order on a plain runner
-# (Python 3.12, no Docker, no services, no secrets). The PR-fast selection must
-# pass there. `make test-deep` refuses a missing database, Redis, Neo4j, or
-# pinned peer instead of skipping it.
+# Facade make-v2 (.l9/repo-workflow.json). Core runs setup -> validate -> check
+# -> test-fast on every pull request, on a plain runner (Python 3.12, no Docker,
+# no services, no secrets); the PR-fast selection must pass there. `make test`
+# is the whole suite and never runs on a pull request. `make test-deep`
+# refuses a missing database, Redis, Neo4j, or pinned peer instead of skipping
+# it.
 #
 # The facade runs every recipe under bash -eu -o pipefail: reference an
 # environment variable as $${NAME:-}, never a bare $$NAME.
@@ -30,7 +35,7 @@
 # The pre-V2 `make test` (quick, stop at the first failure) is `make test-quick`.
 # Every other target below is unchanged.
 
-.PHONY: repo-setup repo-validate repo-check repo-test test-deep test-quick
+.PHONY: repo-setup repo-validate repo-check repo-test-fast repo-test test-deep test-quick
 .PHONY: dev dev-build dev-down dev-clean test-unit test-integration test-compliance test-ci test-contracts test-all test-watch lint lint-fix type-check audit audit-strict audit-json verify agent-check agent-fix agent-full build prod prod-build prod-down prod-logs deploy clean push pr pr-base-guard pr-check pr-guards pr-evaluate pr-merge pr-merge-dry pr-ship pr-rerun
 
 IMAGE_NAME ?= enrichment-api
@@ -46,7 +51,7 @@ COVERAGE_MIN ?= 71
 # comment), so this report passes --cov-fail-under=0 to keep that scope.
 # Sonar's own new-code gate judges the changed lines this report covers.
 PR_FAST_COVERAGE_XML ?=
-PR_FAST_COVERAGE_ARGS = $(if $(PR_FAST_COVERAGE_XML),--cov=app --cov-report=xml:$(PR_FAST_COVERAGE_XML) --cov-fail-under=0)
+PR_FAST_COVERAGE_ARGS = $(if $(PR_FAST_COVERAGE_XML),--cov=app --cov-report=xml:$(PR_FAST_COVERAGE_XML) --cov-fail-under=73)
 
 PYTHON := $(shell if [ -x "$(CURDIR)/.venv/bin/python" ]; then printf '%s' "$(CURDIR)/.venv/bin/python"; else command -v python3; fi)
 PYTEST := $(PYTHON) -m pytest
@@ -101,46 +106,55 @@ repo-check:  ## Non-mutating static gate: ruff check, no print() in service code
 	@echo "── Type check ──"
 	$(MAKE) --no-print-directory type-check
 
-# GitHub Actions (org-ci `make test`, and the consumer jobs that call it) runs
-# the bounded selection. A local `make test` keeps the full catalog and the
-# C-15 floor. Both commands stay in this recipe so `make -n test` still shows
-# the floor. An empty or all-skipped PR selection fails.
-repo-test:  ## PR-fast contracts on GitHub Actions; local full catalog with the C-15 floor
-	@if [ -n "$${GITHUB_ACTIONS:-}" ]; then \
-	  deselects=(); while IFS= read -r line; do deselects+=("$${line}"); done < <($(PYTHON) tools/pytest_quarantine_deselects.py); \
-	  echo "PR-fast: $${#deselects[@]} quarantine deselections; bounded selection"; \
-	  report="$${TMPDIR:-/tmp}/eie-pr-fast-junit.xml"; \
-	  rm -f "$${report}"; \
-	  set +e; \
-	  TESTING=true PYTHONPATH="$${PYTHONPATH:-}:." $(PYTEST) \
-	    tests/unit/test_payload_contract_compiler.py \
-	    tests/contracts/tier2/test_typed_payload_contract_alignment.py \
-	    tests/contracts/tier2/test_node_constitution_contract.py \
-	    tests/contracts/tier2/test_runtime_attestation_contract.py \
-	    tests/contracts/test_enrich_request_identity.py \
-	    tests/contracts/test_crm_identity_failure_contract.py \
-	    tests/unit/test_score_api_compare_explain.py \
-	    tests/unit/test_gate_ingress.py \
-	    tests/unit/test_gate_client_env_isolation.py \
-	    tests/services/test_gate_registration.py \
-	    tests/architecture/test_no_bespoke_gate_transport.py \
-	    "$${deselects[@]}" \
-	    -p no:xdist \
-	    --timeout=120 \
-	    --tb=short -q \
-	    $(PR_FAST_COVERAGE_ARGS) \
-	    --junitxml="$${report}"; \
-	  status=$$?; \
-	  set -e; \
-	  if [ "$${status}" -ne 0 ]; then exit "$${status}"; fi; \
-	  JUNIT_REPORT="$${report}" $(PYTHON) -c 'import os,sys,xml.etree.ElementTree as ET; root=ET.parse(os.environ["JUNIT_REPORT"]).getroot(); suites=list(root.iter("testsuite")) or [root]; tests=sum(int(s.get("tests") or 0) for s in suites); skipped=sum(int(s.get("skipped") or 0) for s in suites); failures=sum(int(s.get("failures") or 0) for s in suites); errors=sum(int(s.get("errors") or 0) for s in suites); passed=tests-skipped-failures-errors; print("PR-fast: tests=%s passed=%s skipped=%s" % (tests, passed, skipped)); sys.exit(0 if passed >= 1 else "PR-fast selection produced no passing test")'; \
-	else \
-	  deselects=(); while IFS= read -r line; do deselects+=("$${line}"); done < <($(PYTHON) tools/pytest_quarantine_deselects.py); \
-	  echo "Deselecting $${#deselects[@]} quarantined tests from the baseline ledger"; \
-	  TESTING=true PYTHONPATH="$${PYTHONPATH:-}:." $(PYTEST) tests/ -n auto "$${deselects[@]}" \
-	    --cov=app --cov-report=term-missing --cov-fail-under=$(COVERAGE_MIN) \
-	    --timeout=300 --tb=short -q; \
-	fi
+# The pull-request selection (make-v2 `test-fast`). Every path is a literal, so
+# Core's PR test-expense judge reads a bounded selection; a `$` expansion in
+# the path list is judged UNKNOWN_SCRIPT. tests/unit and tests/contracts
+# (tier2 included) hold every lane's own tests and the previous fixed PR-fast
+# files, so a lane adding tests there edits nothing here. Paths outside them:
+#   # base PR-fast contract selection
+#     tests/services/test_gate_registration.py
+#     tests/architecture/test_no_bespoke_gate_transport.py
+#   # lane: eie-ceg-gate/eie-w
+#     tests/test_pr21_packet_router.py
+# tests/integration needs Neo4j, Redis, Postgres and pinned peers: it is not
+# PR-safe and runs with the full suite (repo-test, test-deep), not here.
+# Quarantine deselections must be literal too: the
+# ledger is empty today, and a non-empty ledger fails here until its entries
+# are written below as `--deselect <nodeid>`, never hidden behind an expansion.
+# An empty or all-skipped selection fails.
+repo-test-fast:  ## Bounded PR selection: tests/unit, tests/contracts and two named files
+	@quarantined="$$($(PYTHON) tools/pytest_quarantine_deselects.py)"; \
+	if [ -n "$${quarantined}" ]; then \
+	  echo "PR-fast: the quarantine ledger is not empty; list each entry in repo-test-fast as a literal --deselect" >&2; \
+	  exit 1; \
+	fi; \
+	report="$${TMPDIR:-/tmp}/eie-pr-fast-junit.xml"; \
+	rm -f "$${report}"; \
+	set +e; \
+	TESTING=true PYTHONPATH="$${PYTHONPATH:-}:." PYTEST_ADDOPTS="$(PR_FAST_COVERAGE_ARGS)" $(PYTEST) \
+	  tests/unit \
+	  tests/contracts \
+	  tests/services/test_gate_registration.py \
+	  tests/architecture/test_no_bespoke_gate_transport.py \
+	  tests/test_pr21_packet_router.py \
+	  -p no:xdist \
+	  --timeout=120 \
+	  --tb=short -q \
+	  --junitxml="$${report}"; \
+	status=$$?; \
+	set -e; \
+	if [ "$${status}" -ne 0 ]; then exit "$${status}"; fi; \
+	JUNIT_REPORT="$${report}" $(PYTHON) -c 'import os,sys,xml.etree.ElementTree as ET; root=ET.parse(os.environ["JUNIT_REPORT"]).getroot(); suites=list(root.iter("testsuite")) or [root]; tests=sum(int(s.get("tests") or 0) for s in suites); skipped=sum(int(s.get("skipped") or 0) for s in suites); failures=sum(int(s.get("failures") or 0) for s in suites); errors=sum(int(s.get("errors") or 0) for s in suites); passed=tests-skipped-failures-errors; print("PR-fast: tests=%s passed=%s skipped=%s" % (tests, passed, skipped)); sys.exit(0 if passed >= 1 else "PR-fast selection produced no passing test")'
+
+# The whole suite with the C-15 floor (make-v2 `test`), locally and on
+# scheduled or dispatched runs. It never runs on a pull request: pull requests
+# run `test-fast`. The full catalog, databases, peers, and e2e are test-deep.
+repo-test:  ## Full catalog with the C-15 coverage floor
+	@deselects=(); while IFS= read -r line; do deselects+=("$${line}"); done < <($(PYTHON) tools/pytest_quarantine_deselects.py); \
+	echo "Deselecting $${#deselects[@]} quarantined tests from the baseline ledger"; \
+	TESTING=true PYTHONPATH="$${PYTHONPATH:-}:." $(PYTEST) tests/ -n auto "$${deselects[@]}" \
+	  --cov=app --cov-report=term-missing --cov-fail-under=$(COVERAGE_MIN) \
+	  --timeout=300 --tb=short -q
 
 # One deep plan. Missing Redis, Neo4j, or a pinned CEG/Gate peer is NOT_RUN,
 # which fails this leaf. The catalog ignores tests/integration so that

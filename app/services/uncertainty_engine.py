@@ -17,12 +17,13 @@ Audit fixes:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 
 def compute_uncertainty(
     entity: dict[str, Any],
-    target_schema: dict[str, str] | None = None,
+    target_schema: Mapping[str, str | Mapping[str, Any]] | None = None,
     last_confidence: float = 0.5,
     max_variations: int = 5,
 ) -> int:

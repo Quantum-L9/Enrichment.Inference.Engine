@@ -48,6 +48,58 @@ Optional `sync.endpoints` is a nonempty list of mappings with unique local `/v1/
 
 Nonempty `gates`, `ranking`, `ranking_rules`, `matching`, `matchentities`, `match_entities`, or `scoring_dimensions` are refused at the root, node, and rule ownership surfaces. EIE `gates: []` and `scoring: {dimensions: []}` remain compatible with PlasticOS. No nonempty scoring dimensions or alternative scoring policy is admitted.
 
+## Sync provenance
+
+Convention of `eie-ceg-sync/v2` for the provenance of a synced value (operator
+ruling 2026-11-24; the field-set rules are
+`docs/contracts/data/graph_sync_intents.md` *Field set and provenance*). It is
+defined here once and keyed only on declarations:
+
+> **Status:** target contract. These sending rules take effect with the
+> implementation that follows this contract (campaign PR-2). Until then every
+> graph-sync row carries admitted values only and no provenance property,
+> which is the legacy mode below.
+
+
+- A row field `F` of an endpoint's row contract carries its provenance in the
+  companion row property **`F_provenance`**: a declared scalar `enum` with
+  `values: [observed, enriched]`, declared on the same target node and not
+  `evidenceonly`.
+- Each item of a childsync `list<map>` field carries its provenance in the item
+  property **`provenance`**: the same `enum`, declared among that field's item
+  properties.
+- `observed`: the consumer supplied the value (the request entity or a v2
+  observation). `enriched`: EIE admitted it (`inferred` or `external_claim`).
+  An observed value is never labelled `enriched`.
+- Provenance properties are metadata, not value fields: `F_provenance` and the
+  item `provenance` need no provenance of their own (there is no
+  `F_provenance_provenance`). Each is sent as an ordinary declared row or item
+  property alongside the value it labels, and only with it.
+- Whether a value field's provenance property is declared selects its sync
+  mode (CEG packs are published independently of EIE releases):
+
+  | Mode | Provenance property | Syncs |
+  |---|---|---|
+  | Legacy | not declared | admitted (enriched) values only, exactly as before, unlabelled (unlabelled means enriched) |
+  | Full | declared | observed and enriched values, each labelled |
+
+  An observed value never syncs to a field whose provenance property is not
+  declared.
+- **Prerequisite on CEG.** CEG must declare `F_provenance` and the item
+  `provenance` with the identical `enum` shape `[observed, enriched]` on the
+  target node before EIE sends them; the compatibility contract then compares
+  them like any other row property. The pinned CEG revision
+  (`tests/contracts/ceg_revision.py`, snapshot
+  `tests/fixtures/ceg/plasticos.spec.yaml`) must be moved to a revision that
+  declares them before the implementation merges. CEG applies the over-time
+  precedence (G3) by reading them, once they are declared.
+- **`sync_version`** (`integer`, declared on the target node) is the
+  per-subject monotonic version of
+  `docs/contracts/data/graph_sync_intents.md` rule 6, which CEG compares to
+  refuse a stale write. It is transport metadata, not a value field, and is
+  independent of provenance: an endpoint may declare either, both or neither.
+  Undeclared means rule 5 ordering only (legacy).
+
 ## Published filesystem layout
 
 ```text

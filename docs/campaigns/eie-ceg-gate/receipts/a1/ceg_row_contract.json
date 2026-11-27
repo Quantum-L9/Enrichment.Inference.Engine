@@ -1,0 +1,120 @@
+[
+ {
+  "id": "PX-POS-01",
+  "refuse_undeclared": false,
+  "defects": []
+ },
+ {
+  "id": "PX-POS-01",
+  "refuse_undeclared": true,
+  "defects": []
+ },
+ {
+  "id": "PX-POS-02-UNKNOWN-TOLERANCE",
+  "refuse_undeclared": false,
+  "defects": []
+ },
+ {
+  "id": "PX-POS-02-UNKNOWN-TOLERANCE",
+  "refuse_undeclared": true,
+  "defects": []
+ },
+ {
+  "id": "PX-POS-03-KNOWN-UNACCEPTABLE",
+  "refuse_undeclared": false,
+  "defects": []
+ },
+ {
+  "id": "PX-POS-03-KNOWN-UNACCEPTABLE",
+  "refuse_undeclared": true,
+  "defects": []
+ },
+ {
+  "id": "PX-NEG-01-STRINGIFIED-MAP",
+  "refuse_undeclared": false,
+  "defects": [
+   "row 0 processed_polymers: expected list<map>, got string"
+  ]
+ },
+ {
+  "id": "PX-NEG-01-STRINGIFIED-MAP",
+  "refuse_undeclared": true,
+  "defects": [
+   "row 0 processed_polymers: expected list<map>, got string"
+  ]
+ },
+ {
+  "id": "PX-NEG-02-WRONG-TYPE",
+  "refuse_undeclared": false,
+  "defects": [
+   "row 0 min_density: expected float, got string"
+  ]
+ },
+ {
+  "id": "PX-NEG-02-WRONG-TYPE",
+  "refuse_undeclared": true,
+  "defects": [
+   "row 0 min_density: expected float, got string"
+  ]
+ },
+ {
+  "id": "PX-NEG-03-MISSING-CHILD-CODE",
+  "refuse_undeclared": false,
+  "defects": [
+   "row 0 processed_polymers[0].code: expected string (required), got missing"
+  ]
+ },
+ {
+  "id": "PX-NEG-03-MISSING-CHILD-CODE",
+  "refuse_undeclared": true,
+  "defects": [
+   "row 0 processed_polymers[0].code: expected string (required), got missing"
+  ]
+ },
+ {
+  "id": "PX-NEG-04-UNDECLARED-FIELD",
+  "refuse_undeclared": false,
+  "defects": []
+ },
+ {
+  "id": "PX-NEG-04-UNDECLARED-FIELD",
+  "refuse_undeclared": true,
+  "defects": [
+   "row 0 bogus_field: expected no such declared property, got int"
+  ]
+ },
+ {
+  "id": "PX-NEG-05-CEG-OWNED-FIELD",
+  "refuse_undeclared": false,
+  "defects": []
+ },
+ {
+  "id": "PX-NEG-05-CEG-OWNED-FIELD",
+  "refuse_undeclared": true,
+  "defects": []
+ },
+ {
+  "id": "SN-POS-01",
+  "refuse_undeclared": false,
+  "defects": []
+ },
+ {
+  "id": "SN-POS-01",
+  "refuse_undeclared": true,
+  "defects": []
+ },
+ {
+  "id": "SN-NEG-01-WRONG-TYPE",
+  "refuse_undeclared": false,
+  "defects": [
+   "row 0 max_load: expected float, got string"
+  ]
+ },
+ {
+  "id": "SN-NEG-01-WRONG-TYPE",
+  "refuse_undeclared": true,
+  "defects": [
+   "row 0 max_load: expected float, got string"
+  ]
+ }
+]

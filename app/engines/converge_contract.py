@@ -31,7 +31,7 @@ FAILED_STATE = "failed"
 
 
 def restrict_fields_to_schema(
-    result: dict[str, Any], schema: Mapping[str, str] | None
+    result: dict[str, Any], schema: Mapping[str, object] | None
 ) -> list[str]:
     """Drop every `fields` entry the request `schema` did not name.
 

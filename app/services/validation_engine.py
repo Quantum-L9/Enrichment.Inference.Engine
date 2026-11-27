@@ -10,6 +10,7 @@ Audit fixes applied:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -95,6 +96,22 @@ def validate_response(
                 continue
 
             field_type_str, items = _declared_type(declared)
+            if field_type_str.lower() == "map":
+                # A declared map is a mapping restricted to its declared
+                # properties, with required ones present -- never accepted as-is.
+                try:
+                    if not isinstance(value, Mapping):
+                        raise TypeError("declared map is not a mapping")
+                    decl = declared if isinstance(declared, Mapping) else None
+                    normalized[field_name] = _coerce_map(value, decl)
+                except (ValueError, TypeError):
+                    logger.debug(
+                        "field_coercion_skipped",
+                        field=field_name,
+                        expected=field_type_str,
+                        got_type=type(value).__name__,
+                    )
+                continue
             expected = TYPE_MAP.get(field_type_str.lower())
             if expected is None:
                 # Unknown type — accept as-is
@@ -117,8 +134,8 @@ def validate_response(
             if isinstance(v, str):
                 normalized[k] = v.strip()[:4096]
             elif isinstance(v, list):
-                # Dedup preserving order
-                normalized[k] = list(dict.fromkeys(str(i).strip()[:256] for i in v[:50] if i))
+                # Dedup preserving order; a mapping member stays a mapping (F05)
+                normalized[k] = _dedup([_free_member(i) for i in v[:50] if i])
             else:
                 normalized[k] = v
 
@@ -150,22 +167,71 @@ def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) 
         return bool(value)
 
     if expected is list:
-        return _dedup([_coerce_member(v, items) for v in _list_members(value)])
+        members = _list_members(value, declared_items=items is not None)
+        return _dedup([_coerce_member(v, items) for v in members])
 
     if expected in (int, float):
-        return expected(value)
+        return _number(value, expected)
 
     # str
     return str(value).strip()[:4096]
 
 
-def _list_members(value: Any) -> list[Any]:
-    """The members a list field carries: CSV text split, empties dropped."""
+def _number(value: Any, expected: type) -> int | float:
+    """A finite number of the declared kind; never a bool, NaN, ±Inf or a truncation.
+
+    ``float(True)`` is ``1.0`` and ``int(3.7)`` is ``3``: each would admit a value
+    the provider never stated. Such values raise, so the field is skipped. An
+    integer too large for a float stays a valid ``int``; as a ``float`` it is
+    refused rather than raising ``OverflowError`` out of validation.
+    """
+    if isinstance(value, bool):
+        raise TypeError("a boolean is not a number")
+    if expected is int:
+        if isinstance(value, float) and not value.is_integer():
+            raise ValueError("a fractional or non-finite number is not an integer")
+        return int(value)
+    try:
+        number = float(value)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ValueError("not a representable number") from exc
+    if not math.isfinite(number):
+        raise ValueError("not a finite number")
+    return number
+
+
+def _free_member(value: Any) -> Any:
+    """One member of a schema-free list: a mapping stays a bounded mapping, else trimmed text."""
+    if isinstance(value, Mapping):
+        items = [(key, member) for key, member in value.items() if isinstance(key, str)][:50]
+        return {
+            key: member.strip()[:256] if isinstance(member, str) else member
+            for key, member in items
+        }
+    return str(value).strip()[:256]
+
+
+def _list_members(value: Any, *, declared_items: bool = False) -> list[Any]:
+    """The members a list field carries: CSV text split, empties dropped.
+
+    With ``declared_items`` only absent members are dropped: ``None`` and blank
+    text carry no value. Every other member reaches its declared item type, so
+    ``0`` and ``0.0`` are kept, a boolean in a numeric list is refused, and an
+    empty mapping reaches required-property validation. An untyped list keeps
+    the falsy filter.
+    """
     if isinstance(value, str):
         return [s for s in value.split(",") if s.strip()]
     if isinstance(value, (list, tuple)):
+        if declared_items:
+            return [v for v in value if not _is_absent(v)]
         return [v for v in value if v]
     return [value]
+
+
+def _is_absent(value: Any) -> bool:
+    """A list member that states no value: ``None`` or blank text."""
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _coerce_member(value: Any, items: Mapping[str, Any] | None) -> Any:
@@ -191,8 +257,13 @@ def _coerce_map(value: Mapping[str, Any], decl: Mapping[str, Any] | None) -> dic
     result: dict[str, Any] = {}
     for prop in properties:
         name = prop.get("name") if isinstance(prop, Mapping) else None
-        if isinstance(name, str) and value.get(name) is not None:
+        if not isinstance(name, str):
+            continue
+        if value.get(name) is not None:
             result[name] = _coerce_property(value[name], prop)
+        elif prop.get("required") is True:
+            # A member without a required property is incomplete, never a fact (F22).
+            raise TypeError(f"declared map property {name} is required")
     return result
 
 

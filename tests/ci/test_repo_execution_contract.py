@@ -1,13 +1,14 @@
-"""EIE declares Core's Repository Execution V2 contract (make-v1; issue #253).
+"""EIE declares Core's Repository Execution V2 contract (make-v2; issue #253, #403).
 
 "Analyze (central Core)" validates the contract, the byte-exact facade and the
-Repo.mk ABI, then runs `make setup -> validate -> check -> test`. These checks
+Repo.mk ABI, then runs `make setup -> validate -> check -> test-fast` on pull
+requests; `test` stays the whole suite. These checks
 are the offline, repository-side half of that contract: they fail before CI
 does when
 
 * `.l9/repo-workflow.json` drifts from the exact three-field declaration,
 * the root Makefile stops being the generated facade (it must only include
-  Repo.mk and route the four phases to `repo-*` leaves),
+  Repo.mk and route the five phases to `repo-*` leaves),
 * Repo.mk redefines a facade target, or loses a `.PHONY` leaf,
 * a leaf's recipe references a script that does not exist, or reads an
   environment variable without a default (the facade runs bash -eu).
@@ -32,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = ROOT / ".l9" / "repo-workflow.json"
 FACADE = ROOT / "Makefile"
 REPO_MK = ROOT / "Repo.mk"
-PHASES = ("setup", "validate", "check", "test")
+PHASES = ("setup", "validate", "check", "test-fast", "test")
 FACADE_TARGETS = ("help", *PHASES)
 SCRIPT = re.compile(r"(?<![\w/.-])((?:[\w-]+/)+[\w.-]+\.(?:py|sh))\b")
 
@@ -40,20 +41,20 @@ SCRIPT = re.compile(r"(?<![\w/.-])((?:[\w-]+/)+[\w.-]+\.(?:py|sh))\b")
 def test_contract_is_the_exact_v2_declaration() -> None:
     assert json.loads(CONTRACT.read_text(encoding="utf-8")) == {
         "schema": "l9.repo-execution/v2",
-        "facade": "make-v1",
+        "facade": "make-v2",
         "required_phases": list(PHASES),
     }
 
 
 def test_makefile_is_the_generated_facade() -> None:
     text = FACADE.read_text(encoding="utf-8")
-    assert text.startswith("# GENERATED repository execution facade: make-v1. DO NOT EDIT.")
+    assert text.startswith("# GENERATED repository execution facade: make-v2. DO NOT EDIT.")
     assert "\ninclude Repo.mk\n" in text
     for phase in PHASES:
         assert re.search(rf"^{phase}: repo-{phase} ## ", text, re.MULTILINE), phase
 
 
-def test_repo_mk_defines_the_four_leaves_and_no_facade_target() -> None:
+def test_repo_mk_defines_the_five_leaves_and_no_facade_target() -> None:
     text = REPO_MK.read_text(encoding="utf-8")
     phony = " ".join(re.findall(r"^\.PHONY:(.*)$", text, re.MULTILINE)).split()
     for phase in PHASES:

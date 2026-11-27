@@ -1,0 +1,298 @@
+{
+ "id": "P10",
+ "slice": "A7",
+ "profile": "ed25519",
+ "assertion": "worker score refused by the kind rule; worker health-assess only from enrichment-engine (operator consumer allowed by its policy); graph-inference-result only from graph; refusals before execution",
+ "verdict": "PASS",
+ "reason": "",
+ "observed": {
+  "checks": {
+   "eie worker score: kind rule": true,
+   "ceg worker score: kind rule": true,
+   "ceg worker health-assess: kind rule": true,
+   "eie worker health-assess: reaches graph": true,
+   "operator consumer health-assess: reaches graph (WORKER_ORIGINATED applies to workers only)": true,
+   "odoo consumer health-assess: refused by its policy": true,
+   "ceg worker graph-inference-result: reaches enrichment-engine": true,
+   "eie worker graph-inference-result: refused": true
+  },
+  "cells": [
+   {
+    "key_id": "odoo-gl",
+    "source_node": "odoo",
+    "action": "score",
+    "tenant": "plasticos",
+    "http_status": 200,
+    "body": null,
+    "reached_worker": true,
+    "response_packet_type": "failure",
+    "response_source": "graph"
+   },
+   {
+    "key_id": "odoo-gl",
+    "source_node": "odoo",
+    "action": "health-assess",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "key 'odoo-gl' is not permitted to invoke action 'health-assess'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   },
+   {
+    "key_id": "odoo-gl",
+    "source_node": "odoo",
+    "action": "graph-inference-result",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "key 'odoo-gl' is not permitted to invoke action 'graph-inference-result'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   },
+   {
+    "key_id": "odoo-gl",
+    "source_node": "odoo",
+    "action": "sync",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "key 'odoo-gl' is not permitted to invoke action 'sync'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   },
+   {
+    "key_id": "odoo-gl",
+    "source_node": "odoo",
+    "action": "match",
+    "tenant": "plasticos",
+    "http_status": 200,
+    "body": null,
+    "reached_worker": true,
+    "response_packet_type": "response",
+    "response_source": "graph"
+   },
+   {
+    "key_id": "op-gl",
+    "source_node": "operator",
+    "action": "score",
+    "tenant": "plasticos",
+    "http_status": 200,
+    "body": null,
+    "reached_worker": true,
+    "response_packet_type": "failure",
+    "response_source": "graph"
+   },
+   {
+    "key_id": "op-gl",
+    "source_node": "operator",
+    "action": "health-assess",
+    "tenant": "plasticos",
+    "http_status": 200,
+    "body": null,
+    "reached_worker": true,
+    "response_packet_type": "failure",
+    "response_source": "graph"
+   },
+   {
+    "key_id": "op-gl",
+    "source_node": "operator",
+    "action": "graph-inference-result",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "key 'op-gl' is not permitted to invoke action 'graph-inference-result'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   },
+   {
+    "key_id": "op-gl",
+    "source_node": "operator",
+    "action": "sync",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "key 'op-gl' is not permitted to invoke action 'sync'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   },
+   {
+    "key_id": "op-gl",
+    "source_node": "operator",
+    "action": "match",
+    "tenant": "plasticos",
+    "http_status": 200,
+    "body": null,
+    "reached_worker": true,
+    "response_packet_type": "response",
+    "response_source": "graph"
+   },
+   {
+    "key_id": "eie-gl",
+    "source_node": "enrichment-engine",
+    "action": "score",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "worker key 'eie-gl' may not invoke operator-only action 'score'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   },
+   {
+    "key_id": "eie-gl",
+    "source_node": "enrichment-engine",
+    "action": "health-assess",
+    "tenant": "plasticos",
+    "http_status": 200,
+    "body": null,
+    "reached_worker": true,
+    "response_packet_type": "failure",
+    "response_source": "graph"
+   },
+   {
+    "key_id": "eie-gl",
+    "source_node": "enrichment-engine",
+    "action": "graph-inference-result",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "key 'eie-gl' is not permitted to invoke action 'graph-inference-result'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   },
+   {
+    "key_id": "eie-gl",
+    "source_node": "enrichment-engine",
+    "action": "sync",
+    "tenant": "plasticos",
+    "http_status": 200,
+    "body": null,
+    "reached_worker": true,
+    "response_packet_type": "response",
+    "response_source": "graph"
+   },
+   {
+    "key_id": "eie-gl",
+    "source_node": "enrichment-engine",
+    "action": "match",
+    "tenant": "plasticos",
+    "http_status": 200,
+    "body": null,
+    "reached_worker": true,
+    "response_packet_type": "response",
+    "response_source": "graph"
+   },
+   {
+    "key_id": "ceg-gl",
+    "source_node": "graph",
+    "action": "score",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "worker key 'ceg-gl' may not invoke operator-only action 'score'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   },
+   {
+    "key_id": "ceg-gl",
+    "source_node": "graph",
+    "action": "health-assess",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "worker key 'ceg-gl' may not invoke operator-only action 'health-assess'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   },
+   {
+    "key_id": "ceg-gl",
+    "source_node": "graph",
+    "action": "graph-inference-result",
+    "tenant": "plasticos",
+    "http_status": 200,
+    "body": null,
+    "reached_worker": true,
+    "response_packet_type": "response",
+    "response_source": "enrichment-engine"
+   },
+   {
+    "key_id": "ceg-gl",
+    "source_node": "graph",
+    "action": "sync",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "key 'ceg-gl' is not permitted to invoke action 'sync'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   },
+   {
+    "key_id": "ceg-gl",
+    "source_node": "graph",
+    "action": "match",
+    "tenant": "plasticos",
+    "http_status": 403,
+    "body": {
+     "detail": {
+      "code": "action_not_permitted",
+      "message": "key 'ceg-gl' is not permitted to invoke action 'match'"
+     }
+    },
+    "reached_worker": false,
+    "response_packet_type": null,
+    "response_source": null
+   }
+  ]
+ },
+ "timestamp": "2026-11-24T19:16:18.037626+00:00"
+}

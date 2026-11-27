@@ -191,6 +191,9 @@ class EnrichmentLifecycle(LifecycleHook):
         global _kb, _idem, _gate_registered, _domain_registry_state
 
         await stop_reregistration_loop()
+        from .services.side_effect_coordinator import get_side_effect_coordinator
+
+        await get_side_effect_coordinator().stop_graph_recovery()
         _domain_registry_state = "not_attempted"
         if _idem:
             await _idem.close()

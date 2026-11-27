@@ -1,0 +1,33 @@
+# --- L9_META ---
+# l9_schema: 1
+# origin: engine-specific
+# engine: enrichment
+# layer: [config]
+# tags: [l9-bindings, consumer-convergence]
+# owner: platform
+# status: active
+# --- /L9_META ---
+# Consumer bindings for this repository.
+#
+# An edge is a claim: "we consume this producer, on this channel, and here is
+# where our pin lives." The convergence engine (l9-ci-core, tools/l9_bindings)
+# reads it, compares the pin with the channel head, and — when they differ —
+# runs the declared refresh in a branch and opens the pull request that moves
+# the pin. Nothing here is a workflow: the schedule that drives the engine
+# lives in the org, so adding a consumer never means copying a pipeline.
+schema: l9.bindings/v1
+consumer: Quantum-L9/Enrichment.Inference.Engine
+bindings:
+  - id: gate-sdk
+    description: >-
+      The Gate SDK is a library dependency resolved from the moving major
+      channel `v1`. uv records the version and the commit it resolved the tag
+      to, so the lock is compared by version.
+    producer: Quantum-L9/Gate_SDK
+    channel: v1
+    class: library
+    lock: uv.lock
+    package: constellation-node-sdk
+    refresh: "uv lock --upgrade-package {package}"
+    policy:
+      auto_merge: true

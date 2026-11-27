@@ -110,6 +110,7 @@ async def _persist_and_sync(
     operation_id: str | None = None,
     defer_graph_sync: bool = False,
     graph_fields: Mapping[str, Any] | None = None,
+    graph_origin: str = "enrich",
 ) -> SideEffectReport:
     """
     Delegate post-enrich side effects to the single SideEffectCoordinator (TASK-021).
@@ -166,6 +167,7 @@ async def _persist_and_sync(
         node_label=payload.get("node_label") or object_type,
         defer_graph_sync=defer_graph_sync,
         graph_fields=graph_fields,
+        graph_origin=graph_origin,
     )
 
 
@@ -200,6 +202,117 @@ def admitted_fields(result: Mapping[str, Any]) -> dict[str, Any]:
             name: value for name, value in (result.get("fields") or {}).items() if value is not None
         }
     return fields
+
+
+def observed_values(
+    request_entity: Mapping[str, Any] | None, result: Mapping[str, Any]
+) -> tuple[dict[str, Any], frozenset[str]]:
+    """The consumer's observed values and the fields whose observations conflict.
+
+    The request entity's non-null values, overridden by a v2 response's
+    ``observed`` evidence (request entity or observation). A field whose v2
+    evidence is ``conflicting`` is returned in the second element: no observed
+    value is sent for it (G2).
+    """
+    observed = {name: value for name, value in (request_entity or {}).items() if value is not None}
+    conflicting: set[str] = set()
+    evidence = result.get("field_evidence")
+    if isinstance(evidence, Mapping):
+        for name, entry in evidence.items():
+            if not isinstance(entry, Mapping):
+                continue
+            if entry.get("state") == "observed" and entry.get("value") is not None:
+                observed[name] = entry["value"]
+            elif entry.get("state") == "conflicting":
+                conflicting.add(name)
+                observed.pop(name, None)
+    return observed, frozenset(conflicting)
+
+
+def graph_origin_fields(result: Mapping[str, Any]) -> frozenset[str]:
+    """Fields whose final value was last written by a graph-inference-result seed.
+
+    Read from the per-pass ``inferences`` in pass order: a later enriched or
+    inferred write supersedes an earlier graph seed of the same field (G4).
+    """
+    last: dict[str, str] = {}
+    for entry in result.get("inferences") or []:
+        if not isinstance(entry, Mapping):
+            continue
+        for name in entry.get("graph_seeded") or []:
+            last[str(name)] = "graph"
+        for key in ("enriched", "inferred"):
+            for name in entry.get(key) or []:
+                last[str(name)] = "run"
+    return frozenset(name for name, source in last.items() if source == "graph")
+
+
+async def converge_graph_fields(
+    *,
+    tenant: str,
+    entity_id: str | None,
+    domain: str,
+    result: Mapping[str, Any],
+    request_entity: Mapping[str, Any] | None,
+    domain_spec: Mapping[str, Any] | None,
+    node_label: str | None,
+    shape: Callable[[str, dict[str, Any]], dict[str, Any]],
+) -> dict[str, Any]:
+    """The converge graph leg's field set (graph_sync_intents.md *Field set and provenance*).
+
+    Legacy fields (provenance undeclared) are ``admitted_fields(result)`` exactly
+    as before. Full-mode fields carry observed or enriched values, labelled. The
+    one single writer ``shape`` runs once over the selected values, before
+    labelling, so a childsync collection is one list per sync.
+    """
+    from app.engines import sync_field_set
+    from app.engines.packet_router import resolve_graph_sync_contract
+
+    contract = (
+        resolve_graph_sync_contract(dict(domain_spec), node_label=node_label)
+        if domain_spec
+        else None
+    )
+    row_schema = contract.row_schema if contract is not None else None
+    observed, conflicting = observed_values(request_entity, result)
+    selection = sync_field_set.select(
+        admitted=admitted_fields(result),
+        observed=observed,
+        graph_origin=graph_origin_fields(result),
+        conflicting=conflicting,
+        row_schema=row_schema,
+        id_property=contract.id_property if contract is not None else None,
+    )
+    if selection.rejected:
+        logger.warning(
+            "converge_graph_sync_observation_rejected",
+            tenant=tenant,
+            entity_id=entity_id,
+            fields=list(selection.rejected),
+            fix="the request entity's value does not match the endpoint's declared type; "
+            "it is not synced, the other fields are",
+        )
+    fields = sync_field_set.label(shape(domain, selection.values), selection.provenance, row_schema)
+    if selection.provenance and entity_id and contract is not None:
+        settled = await _settled_graph_fields(tenant, entity_id, contract.entity_type)
+        fields = sync_field_set.apply_echo_guard(fields, selection.provenance, settled)
+    return fields
+
+
+async def _settled_graph_fields(
+    tenant: str, entity_id: str, endpoint: str
+) -> dict[str, dict[str, Any]]:
+    """The echo guard's history; empty (suppress nothing) without a durable store."""
+    try:
+        from app.services import pg_store
+
+        if pg_store._engine is None:
+            return {}
+        return await pg_store.graph_sync_settled_fields(tenant, entity_id, endpoint)
+    # No history means resend, never drop: any failure suppresses nothing.
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("handlers.graph_echo_guard_unavailable", error=str(exc))
+        return {}
 
 
 def _operation_id(packet: Any) -> str | None:
@@ -426,7 +539,7 @@ async def _run_canonical_converge(
         or request.kb_context
         or request.object_type
     )
-    domain_hints, inference_rules, domain_spec = await _load_domain_converge_bundle(
+    domain_hints, inference_rules, domain_spec, node_label = await _load_domain_converge_bundle(
         domain_id=domain_id,
         node_label=payload.get("node_label"),
         config=cartridge,
@@ -459,6 +572,10 @@ async def _run_canonical_converge(
         domain_spec=domain_spec,
         tenant_id=tenant,
         entity_id=entity_id,
+        # F06: inference is bound to the node this request addresses -- the
+        # resolved node of a v2 request (its body carries it), else the v1
+        # body's `node_label`, else the spec's only node. None runs every rule.
+        node_label=node_label,
         **loop_kwargs,
     )
     result = response.model_dump()
@@ -507,11 +624,17 @@ async def _run_canonical_converge(
         if defer_graph:
             from app.engines.polymer_capability import shape_graph_fields
 
-            graph_fields = shape_graph_fields(
-                resolve_cartridge_id(
+            graph_fields = await converge_graph_fields(
+                tenant=tenant,
+                entity_id=entity_id,
+                domain=resolve_cartridge_id(
                     tenant, requested=domain_id, configured_default=settings.default_domain
                 ),
-                admitted_fields(result),
+                result=result,
+                request_entity=payload.get("entity"),
+                domain_spec=domain_spec,
+                node_label=node_label,
+                shape=shape_graph_fields,
             )
         try:
             report = await _persist_and_sync(
@@ -524,6 +647,7 @@ async def _run_canonical_converge(
                 operation_id=operation_id,
                 defer_graph_sync=defer_graph,
                 graph_fields=graph_fields,
+                graph_origin="converge",
             )
         except PersistenceRequiredError as exc:
             logger.error(
@@ -573,7 +697,7 @@ async def _load_domain_convergence_context(
     node_label: str | None,
 ) -> tuple[dict[str, Any], Any]:
     """Domain hints + inference rules; see `_load_domain_converge_bundle`."""
-    hints, rules, _spec = await _load_domain_converge_bundle(
+    hints, rules, _spec, _node = await _load_domain_converge_bundle(
         domain_id=domain_id, node_label=node_label
     )
     return hints, rules
@@ -584,11 +708,14 @@ async def _load_domain_converge_bundle(
     domain_id: str | None,
     node_label: str | None,
     config: DomainEnrichmentConfig | None = None,
-) -> tuple[dict[str, Any], Any, dict[str, Any] | None]:
-    """Load optional domain hints + inference rules + the full spec for converge.
+) -> tuple[dict[str, Any], Any, dict[str, Any] | None, str | None]:
+    """Load optional domain hints + inference rules + the full spec + the node for converge.
 
     The third element is the effective revision's raw spec, or None when no
-    domain resolved; all three come from one `DomainYamlReader.load`.
+    domain resolved; all three come from one `DomainYamlReader.load`. The
+    fourth is the node the request addresses (F06): `node_label` when given,
+    else the spec's only node; None when a multi-node spec names none or no
+    domain resolved. It is the same label the hints were read for.
 
     An unknown domain converges without inference. A loaded domain's rules come
     from `inference_rules_path`, else the spec's own `inference_rules`; they are
@@ -610,7 +737,7 @@ async def _load_domain_converge_bundle(
     domain_hints: dict[str, Any] = {}
     inference_rules: Any = []
     if not domain_id or not _domain_reader:
-        return domain_hints, inference_rules, None
+        return domain_hints, inference_rules, None, None
 
     # Resolve once: pointer publication between two reads must never pair old
     # enrichment hints with a different revision's rules.
@@ -627,8 +754,9 @@ async def _load_domain_converge_bundle(
             domain_id=domain_id,
             error=str(exc),
         )
-        return domain_hints, inference_rules, None
-    domain_hints = _node_hints(config, domain_id, node_label)
+        return domain_hints, inference_rules, None, None
+    node = node_label or default_node_label(config)
+    domain_hints = _node_hints(config, domain_id, node)
     logger.info(
         "handlers.converge_effective_revision",
         domain_id=domain_id,
@@ -642,7 +770,7 @@ async def _load_domain_converge_bundle(
     else:
         inference_rules = config.raw_spec.get("inference_rules") or []
 
-    return domain_hints, inference_rules, config.raw_spec or None
+    return domain_hints, inference_rules, config.raw_spec or None, node
 
 
 def _node_hints(

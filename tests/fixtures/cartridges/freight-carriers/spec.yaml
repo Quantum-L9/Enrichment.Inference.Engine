@@ -51,6 +51,7 @@ ontology:
 
 inference_rules:
 - rule_id: fleet-class-enterprise
+  node: Carrier
   conditions:
   - {field: power_units, operator: GTE, value: 500}
   outputs:
@@ -60,6 +61,7 @@ inference_rules:
   rule_or_model_version: freight-carriers-inference-0.1.0
 
 - rule_id: fleet-class-regional
+  node: Carrier
   conditions:
   - {field: power_units, operator: GTE, value: 50}
   - {field: power_units, operator: LT, value: 500}
@@ -70,6 +72,7 @@ inference_rules:
   rule_or_model_version: freight-carriers-inference-0.1.0
 
 - rule_id: haul-profile-long
+  node: Carrier
   conditions:
   - {field: avg_haul_miles, operator: GT, value: 450}
   outputs:
@@ -79,6 +82,7 @@ inference_rules:
   rule_or_model_version: freight-carriers-inference-0.1.0
 
 - rule_id: hazmat-qualified
+  node: Carrier
   conditions:
   - {field: hazmat_endorsed, operator: ISTRUE}
   - {field: safety_rating, operator: NOTIN, value: [conditional, unsatisfactory, unrated]}
@@ -90,6 +94,7 @@ inference_rules:
 
 # Second-level rule: fires only on a derived field, so the cascade is exercised.
 - rule_id: service-tier-preferred
+  node: Carrier
   conditions:
   - {field: fleet_class, operator: EQUALS, value: enterprise}
   - {field: on_time_pct, operator: GTE, value: 0.95}
