@@ -276,3 +276,70 @@ async def test_an_off_type_provider_value_from_any_enricher_never_reaches_state(
         node_label="Carrier",
     )
     assert "power_units" not in response.fields
+
+
+# ── A refused derivation takes its descendants with it (review: Codex P1) ──
+
+CASCADE_SPEC = {
+    "ontology": {
+        "nodes": [
+            {
+                "label": "Carrier",
+                "properties": [
+                    {"name": "power_units", "type": "int"},
+                    {"name": "fleet_class", "type": "enum", "values": ["enterprise", "regional"]},
+                    {"name": "tier", "type": "enum", "values": ["gold", "silver"]},
+                ],
+            }
+        ]
+    }
+}
+
+
+def _cascade_rules(fleet_class: str) -> list[dict[str, Any]]:
+    tier = {
+        "rule_id": "tier-from-class",
+        "node": "Carrier",
+        "conditions": [{"field": "fleet_class", "operator": "EQUALS", "value": fleet_class}],
+        "outputs": [{"field": "tier", "value_expr": "gold", "derivation_type": "classification"}],
+        "confidence": 0.9,
+        "priority": 10,
+        "rule_or_model_version": "t-0.1.0",
+    }
+    return [_rule(fleet_class), tier]
+
+
+async def _converge_cascade(fleet_class: str) -> EnrichResponse:
+    async def enricher(*_args: Any, **_kwargs: Any) -> EnrichResponse:
+        return EnrichResponse(
+            state="completed", fields={"power_units": 820}, confidence=0.93, tokens_used=1
+        )
+
+    request = EnrichRequest(entity={"id": "c-1"}, object_type="carrier", objective="probe")
+    return await convergence_controller.run_convergence_loop(
+        request=request,
+        settings=Settings(l9_environment="test"),
+        kb_resolver=None,
+        enricher=enricher,
+        inference_rules=_cascade_rules(fleet_class),
+        domain_spec=CASCADE_SPEC,
+        node_label="Carrier",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_valid_derivation_built_on_a_refused_one_is_refused_too() -> None:
+    """`galactic` is refused; `tier=gold` was derived from it, so it goes as well."""
+    response = await _converge_cascade("galactic")
+
+    assert "fleet_class" not in response.fields
+    assert "tier" not in response.fields
+    assert "galactic" not in str(response.model_dump())
+
+
+@pytest.mark.asyncio
+async def test_control_a_cascade_over_a_conforming_derivation_is_kept() -> None:
+    response = await _converge_cascade("enterprise")
+
+    assert response.fields.get("fleet_class") == "enterprise"
+    assert response.fields.get("tier") == "gold"

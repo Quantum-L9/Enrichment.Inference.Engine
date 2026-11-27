@@ -560,10 +560,9 @@ async def run_convergence_loop(
             confidence_map={k: v for k, v in state.confidence_map.items() if k in facts},
         )
         # A derivation that violates its field's declaration is not derived: it
-        # never reaches state, and one this loop held before is retracted.
-        derived = _typed_entries(
-            inference_result.derived_fields, declarations, origin="inference", pass_num=pass_num
-        )
+        # never reaches state, and one this loop held before is retracted. Nor
+        # is any derivation computed from it in the same run (its descendants).
+        derived = _typed_derivations(inference_result, bridge, declarations, pass_num=pass_num)
         pass_result.inferred_fields = derived
         pass_result.inference_fired = inference_result.rules_fired
         pass_result.inference_provenance = {
@@ -866,6 +865,39 @@ def _typed_entries(
             pass_number=pass_num,
             defect=defect,
         )
+    return kept
+
+
+def _typed_derivations(
+    result: Any,
+    bridge: InferenceBridge,
+    declarations: FieldDeclarations | None,
+    *,
+    pass_num: int,
+) -> dict[str, Any]:
+    """The run's derivations minus off-type ones and every derivation built on one.
+
+    Rules cascade within one run, so a refused value may already have fed a
+    later rule. Refusal therefore closes over the derivation inputs: a value
+    computed from a refused derivation is refused too, however valid it looks.
+    """
+    candidates = dict(result.derived_fields)
+    kept = _typed_entries(candidates, declarations, origin="inference", pass_num=pass_num)
+    refused = set(candidates) - set(kept)
+    while refused:
+        tainted = {name for name in kept if bridge.derivation_inputs(result, name) & refused}
+        if not tainted:
+            break
+        for name in sorted(tainted):
+            logger.warning(
+                "typed_state_entry_refused",
+                origin="inference",
+                field=name,
+                pass_number=pass_num,
+                defect="derived from a refused derivation",
+            )
+            del kept[name]
+        refused |= tainted
     return kept
 
 

@@ -389,6 +389,23 @@ class InferenceBridge:
             for r in self._rules
         ]
 
+    def derivation_inputs(self, result: InferenceResult, name: str) -> frozenset[str]:
+        """The fields `result`'s derivation of `name` was computed from.
+
+        A condition rule's output is a literal, so it depends on exactly the
+        conditions that held (its provenance `inputs`). A derivation-graph value
+        depends on the inputs of every edge declared for it. Used to refuse the
+        descendants of a refused derivation (EIE-PR-U01).
+        """
+        record = result.provenance.get(name)
+        if record is not None:
+            return frozenset(record.get("inputs") or ())
+        if self._graph is None:
+            return frozenset()
+        return frozenset(
+            field for edge in self._graph.edges if edge.target == name for field in edge.inputs
+        )
+
     @property
     def unlock_map(self) -> dict[str, float]:
         """Expose last-run unlock_map for search targeting.
