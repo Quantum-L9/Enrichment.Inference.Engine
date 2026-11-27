@@ -231,7 +231,14 @@ def test_dependency_review_still_runs_on_pull_requests() -> None:
     data = yaml.safe_load((WORKFLOWS / "supply-chain.yml").read_text(encoding="utf-8"))
     on = data.get("on", data.get(True))
     assert "pull_request" in on
+    # The removed pr-pipeline job reviewed pull requests to every target branch.
+    # Its replacement must too: a branches / paths filter on the trigger silently
+    # drops the review for PRs into any branch it does not name (EIE-PR-001).
+    trigger = on["pull_request"] or {}
+    narrowing = {"branches", "branches-ignore", "paths", "paths-ignore"} & set(trigger)
+    assert not narrowing, f"supply-chain.yml pull_request is narrowed by {sorted(narrowing)}"
     job = data["jobs"]["dependency-review"]
+    assert job.get("if") in (None, "github.event_name == 'pull_request'"), job.get("if")
     step = next(s for s in job["steps"] if "dependency-review-action" in (s.get("uses") or ""))
     assert step["with"]["fail-on-severity"] == "high"
     assert not step.get("continue-on-error")
