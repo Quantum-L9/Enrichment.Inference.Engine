@@ -751,7 +751,6 @@ async def converge_single(
 
 @router.post(
     "/converge/batch",
-    response_model=BatchConvergeResponse,
     responses={
         400: {"description": "The named `domain` is not a legal tenant id."},
         403: _DIRECT_DOMAIN_ACCESS_RESPONSE,
