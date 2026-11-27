@@ -172,8 +172,9 @@ class MemoryStore:
             record = self.sweeps.get(sweep_id)
             if record is None or record.state == COMPLETED:
                 continue
-            handled = {r.entity_id for r in self.results.get(sweep_id, [])}
-            skipped, stats = interrupted_progress(record, handled)
+            rows = self.results.get(sweep_id, [])
+            handled = {r.entity_id for r in rows}
+            skipped, stats = interrupted_progress(record, handled, [r.response for r in rows])
             self.sweeps[sweep_id] = replace(
                 record, skipped=tuple(skipped), stats=stats, state=COMPLETED, completed_at=now
             )

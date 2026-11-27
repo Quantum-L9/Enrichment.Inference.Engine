@@ -45,7 +45,14 @@ from typing import Any
 
 import structlog
 
-from ..services.sweep_store import RUNNING, SWEEP_FAILED, SweepRecord, SweepStore
+from ..services.sweep_store import (
+    CONVERGE_STATES,
+    RUNNING,
+    SWEEP_FAILED,
+    SweepRecord,
+    SweepStore,
+    outcome_counter,
+)
 from .converge_request_v2 import REQUEST_CONTRACT_V2
 from .domain_yaml_reader import DomainEnrichmentConfig, default_node_label
 from .spec_types import node_properties
@@ -115,26 +122,6 @@ def actual_cost(response: Mapping[str, Any], settings: Any, estimate: Decimal) -
     if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
         return estimate
     return money(tokens * settings.token_rate_usd_per_1k / 1000)
-
-
-CONVERGE_STATES: frozenset[str] = frozenset({"completed", "degraded", "failed"})
-
-
-def outcome_counter(response: Mapping[str, Any]) -> str:
-    """The `stats` counter a stored converge reply adds to.
-
-    `enriched` only for the literal `completed`. The other two converge v2
-    states count as `converge_state_<state>`; a reply that names none of the
-    three (absent, null, wrong case, foreign word) is `converge_state_unrecognized`.
-    The prefix keeps these apart from the skip reason `converge_failed`, which
-    means the converge raised and was charged the full reservation.
-    """
-    state = response.get("state")
-    if state == "completed":
-        return "enriched"
-    if isinstance(state, str) and state in CONVERGE_STATES:
-        return f"converge_state_{state}"
-    return "converge_state_unrecognized"
 
 
 def utc_day(now: datetime) -> date:
@@ -691,6 +678,7 @@ class SweepRunner:
 
 
 __all__ = [
+    "CONVERGE_STATES",
     "ASSESS_ACTION",
     "ASSESS_BATCH_LIMIT",
     "Readiness",

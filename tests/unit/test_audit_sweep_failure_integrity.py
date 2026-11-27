@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 from unittest.mock import patch
@@ -284,3 +285,37 @@ async def test_other_tenant_cannot_page_known_sweep_or_touch_its_results() -> No
 
     assert caught.value.code == "sweep_not_found"
     assert store.page_calls == before
+
+
+async def test_a_stale_close_recounts_outcomes_from_the_stored_result_rows() -> None:
+    """EIE-PR-002: rows committed after the last progress save are still counted.
+
+    The worker stored two replies and died before saving its counters. Closing
+    the stale sweep must count each stored reply by its own converge state.
+    """
+    from app.services.sweep_store import RUNNING, SweepResultRow, interrupted_progress
+
+    store = MemoryStore()
+    wire(store, Graph(), Converge())
+    result = await sweep(3, budget=10.0, key="stale-recount")
+    record = store.sweeps[result["sweep_id"]]
+    stale = replace(record, state=RUNNING, skipped=(), stats={}, completed_at=None)
+    rows = [
+        SweepResultRow(1, "rec-0000", {"state": "completed", "tokens_used": 1}),
+        SweepResultRow(2, "rec-0001", {"state": "degraded", "tokens_used": 1}),
+    ]
+
+    skipped, stats = interrupted_progress(
+        stale, {r.entity_id for r in rows}, [r.response for r in rows]
+    )
+
+    assert stats == {"enriched": 1, "converge_state_degraded": 1, "sweep_failed": 1}, stats
+    assert skipped == [{"entity_id": "rec-0002", "reason": "sweep_failed"}]
+
+
+def test_recovery_and_the_live_run_share_one_outcome_classifier() -> None:
+    """One owner: the runner and recovery cannot classify a reply differently."""
+    from app.engines import enrichment_sweep
+    from app.services import sweep_store
+
+    assert enrichment_sweep.outcome_counter is sweep_store.outcome_counter

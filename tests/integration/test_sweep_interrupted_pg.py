@@ -231,3 +231,31 @@ async def test_a_late_worker_neither_rewrites_nor_spends_after_its_sweep_closed(
     closed = await store.get_sweep(TENANT, stored.sweep_id)
     assert closed is not None and closed.state == COMPLETED
     assert [s["reason"] for s in closed.skipped] == ["sweep_failed"] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_result_committed_after_the_last_progress_save_is_counted_on_close(
+    store: PgSweepStore,
+) -> None:
+    """EIE-PR-002: counters come from the durable result rows, not the stale progress.
+
+    A worker commits result rows and dies before saving its counters. Closing
+    the stale sweep must count each stored reply by its own converge state
+    (only `completed` is `enriched`), exactly as the live runner would have.
+    """
+    record = _record("k-counts", n=3)
+    stored, created = await store.create_sweep(record)
+    assert created and stored.stats == {}
+    completed = {"state": "completed", "fields": {}, "tokens_used": 10, "entity_ref": "rec-0"}
+    failed = {"state": "failed", "fields": {}, "tokens_used": 5, "entity_ref": "rec-1"}
+    await store.add_result(record.sweep_id, 1, "rec-0", completed, Decimal("0.01"))
+    await store.add_result(record.sweep_id, 2, "rec-1", failed, Decimal("0.005"))
+
+    later = datetime.now(UTC) + STALE + timedelta(minutes=1)
+    assert await store.close_stale_sweeps(later, STALE) == [record.sweep_id]
+    closed = await store.get_sweep(TENANT, record.sweep_id)
+    assert closed is not None and closed.state == COMPLETED
+    assert closed.stats.get("enriched") == 1, closed.stats
+    assert closed.stats.get("converge_state_failed") == 1, closed.stats
+    assert closed.stats.get("sweep_failed") == 1, closed.stats
+    assert [s["entity_id"] for s in closed.skipped] == ["rec-2"]

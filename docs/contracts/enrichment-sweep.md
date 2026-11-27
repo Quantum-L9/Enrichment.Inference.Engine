@@ -147,7 +147,12 @@ Rejection reasons: `invalid_candidate`, `invalid_entity_id`, `invalid_entity`,
    and a reply naming none of the three converge states in
    `stats.converge_state_unrecognized`. Each is charged its own `tokens_used`
    (section 4). Every candidate ends with exactly one disposition: one result
-   row or one `skipped` entry.
+   row or one `skipped` entry. A sweep whose worker died is closed by
+   `close_stale_sweeps`; its outcome counters are then recomputed from its
+   stored result rows by the same classifier
+   (`app/services/sweep_store.outcome_counter`), because a worker can commit a
+   result and die before saving its counters. Skip-reason counters stay as
+   saved, and every candidate with neither a row nor a skip is `sweep_failed`.
 
 ## 4. Budget rule
 

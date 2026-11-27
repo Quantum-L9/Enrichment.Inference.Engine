@@ -23,7 +23,7 @@ cap that can be passed.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -129,17 +129,58 @@ class SweepStore(Protocol):
         """
 
 
+CONVERGE_STATES: frozenset[str] = frozenset({"completed", "degraded", "failed"})
+# Counters a stored converge reply adds to (see `outcome_counter`); every other
+# key of `stats` is a skip reason or `targets_dropped_undeclared`.
+OUTCOME_COUNTER_PREFIX = "converge_state_"
+ENRICHED = "enriched"
+
+
+def outcome_counter(response: Mapping[str, Any]) -> str:
+    """The `stats` counter a stored converge reply adds to.
+
+    `enriched` only for the literal `completed`. The other two converge v2
+    states count as `converge_state_<state>`; a reply that names none of the
+    three (absent, null, wrong case, foreign word) is `converge_state_unrecognized`.
+    The prefix keeps these apart from the skip reason `converge_failed`, which
+    means the converge raised and was charged the full reservation. The one
+    owner of this classification, used by the live run and by recovery alike.
+    """
+    state = response.get("state")
+    if state == "completed":
+        return ENRICHED
+    if isinstance(state, str) and state in CONVERGE_STATES:
+        return f"{OUTCOME_COUNTER_PREFIX}{state}"
+    return f"{OUTCOME_COUNTER_PREFIX}unrecognized"
+
+
 def interrupted_progress(
-    record: SweepRecord, handled: Collection[str]
+    record: SweepRecord,
+    handled: Collection[str],
+    responses: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """The final skips and counters of a sweep interrupted mid-run.
 
-    The candidates already skipped or enriched (`handled`) keep their outcome;
-    every other one is skipped `sweep_failed`, counted under that reason.
+    The candidates already skipped or holding a result row (`handled`) keep
+    their outcome; every other one is skipped `sweep_failed`, counted under
+    that reason. With the durable result rows' `responses`, the outcome
+    counters are recomputed from them: a worker can commit a result and die
+    before saving its counters, so the stored progress may lag the rows
+    (EIE-PR-002). Skip-reason counters are kept as saved.
     """
     done = {s["entity_id"] for s in record.skipped} | set(handled)
     skipped = list(record.skipped)
     stats = dict(record.stats)
+    if responses is not None:
+        stats = {
+            key: count
+            for key, count in stats.items()
+            if key != ENRICHED and not key.startswith(OUTCOME_COUNTER_PREFIX)
+        }
+        stats[ENRICHED] = 0
+        for response in responses:
+            counter = outcome_counter(response)
+            stats[counter] = stats.get(counter, 0) + 1
     for candidate in record.candidates:
         entity_id = candidate["entity_id"]
         if entity_id in done:
@@ -346,12 +387,18 @@ class PgSweepStore:
             )
             for row in rows:
                 record = _record(row)
-                handled = (
+                rows_stored = (
                     await session.execute(
-                        select(result.entity_id).where(result.sweep_id == record.sweep_id)
+                        select(result.entity_id, result.response).where(
+                            result.sweep_id == record.sweep_id
+                        )
                     )
-                ).scalars()
-                skipped, stats = interrupted_progress(record, set(handled))
+                ).all()
+                skipped, stats = interrupted_progress(
+                    record,
+                    {entity_id for entity_id, _ in rows_stored},
+                    [response for _, response in rows_stored],
+                )
                 done = await session.execute(
                     update(sweep)
                     .where(sweep.sweep_id == record.sweep_id, sweep.state == RUNNING)
@@ -364,6 +411,7 @@ class PgSweepStore:
 
 __all__ = [
     "COMPLETED",
+    "CONVERGE_STATES",
     "RUNNING",
     "SWEEP_FAILED",
     "LedgerState",
@@ -372,4 +420,5 @@ __all__ = [
     "SweepResultRow",
     "SweepStore",
     "interrupted_progress",
+    "outcome_counter",
 ]
