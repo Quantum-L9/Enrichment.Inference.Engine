@@ -239,3 +239,26 @@ def test_a_declared_enum_member_with_padding_is_matched_exactly_first() -> None:
     padded = {"name": "code", "type": "enum", "values": [" A", "B"]}
     assert _admitted("code", " A", {"code": padded})["code"] == " A"
     assert _admitted("code", " B ", {"code": padded})["code"] == "B"
+
+
+# ── EIE-PR-004: a declared enum member survives list normalization ──────────
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [([" "], [" "]), ([" ", "A"], [" ", "A"]), (["", "A"], ["A"]), ([None, "A"], ["A"])],
+    ids=["blank-member", "blank-and-A", "empty-is-absent", "null-is-absent"],
+)
+def test_a_blank_declared_enum_member_is_not_dropped_as_absent(
+    value: list[Any], expected: list[Any]
+) -> None:
+    """The shared grammar allows `values: [" ", "A"]`; admission must keep `" "`.
+
+    Absence filtering drops `None` and blank text before the enum check. A
+    value that is a declared member as written is a value, not an absence.
+    `""` is not declared here, so it is still absent.
+    """
+    declared = {
+        "xs": {"name": "xs", "type": "list", "items": {"type": "enum", "values": [" ", "A"]}}
+    }
+    assert _admitted("xs", value, declared)["xs"] == expected

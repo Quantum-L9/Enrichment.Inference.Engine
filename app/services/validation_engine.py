@@ -206,7 +206,9 @@ def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) 
         return bool(value)
 
     if expected is list:
-        members = _list_members(value, declared_items=items is not None)
+        members = _list_members(
+            value, declared_items=items is not None, declared_values=_enum_values(items)
+        )
         return _dedup([_coerce_member(v, items) for v in members])
 
     if expected in (int, float):
@@ -250,22 +252,45 @@ def _free_member(value: Any) -> Any:
     return str(value).strip()[:256]
 
 
-def _list_members(value: Any, *, declared_items: bool = False) -> list[Any]:
+def _enum_values(items: Mapping[str, Any] | None) -> frozenset[str]:
+    """The declared members of an enum item declaration; empty for any other."""
+    if not items or str(items.get("type", "")).lower() != "enum":
+        return frozenset()
+    values = items.get("values")
+    return (
+        frozenset(v for v in values if isinstance(v, str))
+        if isinstance(values, list)
+        else frozenset()
+    )
+
+
+def _list_members(
+    value: Any, *, declared_items: bool = False, declared_values: frozenset[str] = frozenset()
+) -> list[Any]:
     """The members a list field carries: CSV text split, empties dropped.
 
     With ``declared_items`` only absent members are dropped: ``None`` and blank
     text carry no value. Every other member reaches its declared item type, so
     ``0`` and ``0.0`` are kept, a boolean in a numeric list is refused, and an
     empty mapping reaches required-property validation. An untyped list keeps
-    the falsy filter.
+    the falsy filter. A member that is one of ``declared_values`` (the declared
+    enum members) as written is a value, never an absence, even when it is
+    blank text (EIE-PR-004).
     """
     if isinstance(value, str):
-        return [s for s in value.split(",") if s.strip()]
+        return [s for s in value.split(",") if s.strip() or s in declared_values]
     if isinstance(value, (list, tuple)):
         if declared_items:
-            return [v for v in value if not _is_absent(v)]
+            return [
+                v for v in value if _is_declared_member(v, declared_values) or not _is_absent(v)
+            ]
         return [v for v in value if v]
     return [value]
+
+
+def _is_declared_member(value: Any, declared_values: frozenset[str]) -> bool:
+    """A string member that is one of the declared enum values, exactly as written."""
+    return isinstance(value, str) and value in declared_values
 
 
 def _is_absent(value: Any) -> bool:
