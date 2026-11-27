@@ -503,7 +503,7 @@ async def test_intent_deleted_before_the_deferred_leg_is_not_sent_unclaimed(db: 
 
 
 async def test_a_leg_for_a_key_the_store_never_recorded_sends_nothing(db: None) -> None:
-    """No row was ever written for the key: claim and get both come back empty."""
+    """No row was ever written for the key: nothing is sent and the leg ends terminal."""
     from app.services.side_effect_coordinator import SideEffectReport
 
     coord = SideEffectCoordinator()
@@ -523,6 +523,6 @@ async def test_a_leg_for_a_key_the_store_never_recorded_sends_nothing(db: None) 
         )
 
     router.notify_graph_sync.assert_not_awaited()
-    assert report.graph_deferred and not report.graph_synced
+    assert report.graph_terminal and not report.graph_synced and not report.graph_deferred
     assert "graph_sync:no_durable_intent" in report.errors
     assert await _count("graph_sync_intents") == 0

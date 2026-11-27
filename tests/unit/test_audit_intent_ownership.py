@@ -70,15 +70,20 @@ async def test_configured_store_with_no_intent_row_sends_nothing() -> None:
     assert any("no_durable_intent" in e for e in report.errors), report.errors
 
 
-async def test_missing_intent_is_reported_pending_not_synced_or_terminal() -> None:
-    """Nothing was sent and CEG refused nothing: the key stays open for a later call."""
+async def test_missing_intent_is_terminal_never_synced_or_left_pending() -> None:
+    """Nothing was sent, and nothing can recover a key with no intent row.
+
+    Superseded expectation: this was "deferred, not terminal" (D-004). A
+    configured store with no row has no recovery path, so a deferred key could
+    never resolve (EIE-PR-003); the leg now ends terminal.
+    """
     world = _world()
     coord = SideEffectCoordinator(intents=world.intents)
 
     report = await _inline_leg(coord, _router(ACK))
 
-    assert report.graph_deferred
-    assert not report.graph_terminal
+    assert report.graph_terminal and not report.graph_synced
+    assert not report.graph_deferred
 
 
 async def test_an_intent_deleted_after_a_deferred_commit_is_not_sent_unclaimed() -> None:
@@ -97,7 +102,8 @@ async def test_an_intent_deleted_after_a_deferred_commit_is_not_sent_unclaimed()
         await coord.drain_graph_legs()
 
     router.notify_graph_sync.assert_not_awaited()
-    assert key not in coord._completed
+    # Terminal, not pending: nothing could ever resolve a key with no row.
+    assert key not in coord._graph_pending
 
 
 async def test_a_failed_optional_persist_does_not_send_the_graph_leg_unclaimed() -> None:
@@ -142,3 +148,30 @@ async def test_control_a_leased_intent_sends_its_pinned_fields_and_seq() -> None
     assert call.kwargs["fields"] == row.fields == {"capacity": 7.0}
     assert call.kwargs["sync_version"] == row.seq
     assert row.state == "acknowledged"
+
+
+async def test_a_failed_optional_persist_is_terminal_not_an_unrecoverable_pending_key() -> None:
+    """EIE-PR-003: no intent row means no recovery path, so the leg must end.
+
+    The optional persist failed, so no intent row exists. Recovery only claims
+    rows that exist, and a same-key retry skips persistence, so a pending key
+    could never be resolved. The leg ends terminal and the key is released,
+    still without any unclaimed send.
+    """
+    world = _world()
+    world.persist.side_effect = RuntimeError("db write failed")
+    coord = SideEffectCoordinator(intents=world.intents)
+    router = _router(ACK)
+
+    first = await _commit(coord, world, router, idempotency_key="op-1")
+
+    assert not first.persisted
+    assert first.graph_terminal and not first.graph_deferred, first
+    assert "graph_sync:no_durable_intent" in first.errors
+    assert first.key not in coord._graph_pending
+
+    world.persist.side_effect = None  # the database is back
+    second = await _commit(coord, world, router, idempotency_key="op-1")
+
+    router.notify_graph_sync.assert_not_awaited()
+    assert second.key not in coord._graph_pending
