@@ -826,26 +826,29 @@ def _field_declarations(
     """
     if not isinstance(spec, Mapping):
         return None
-    ontology = spec.get("ontology")
-    nodes = ontology.get("nodes") if isinstance(ontology, Mapping) else None
-    if isinstance(nodes, Mapping):  # legacy shape: nodes.{Label}.properties.{name}
-        groups = [
-            _legacy_declarations(body)
-            for label, body in nodes.items()
-            if node is None or str(label) == node
-        ]
-    elif node is not None:
-        groups = [node_properties(spec, node) or []]
-    else:
-        labels = [n.get("label") for n in nodes or [] if isinstance(n, Mapping)]
-        groups = [node_properties(spec, label) or [] for label in labels if isinstance(label, str)]
     found: dict[str, tuple[dict[str, Any], ...]] = {}
-    for props in groups:
+    for props in _declaration_groups(spec, node):
         for prop in props:
             name = prop["name"]
             if isinstance(name, str):
                 found[name] = (*found.get(name, ()), prop)
     return found or None
+
+
+def _declaration_groups(spec: Mapping[str, Any], node: str | None) -> list[list[dict[str, Any]]]:
+    """Each applicable node's property declarations: the bound node's, else every node's."""
+    ontology = spec.get("ontology")
+    nodes = ontology.get("nodes") if isinstance(ontology, Mapping) else None
+    if isinstance(nodes, Mapping):  # legacy shape: nodes.{Label}.properties.{name}
+        return [
+            _legacy_declarations(body)
+            for label, body in nodes.items()
+            if node is None or str(label) == node
+        ]
+    if node is not None:
+        return [node_properties(spec, node) or []]
+    labels = [n.get("label") for n in nodes or [] if isinstance(n, Mapping)]
+    return [node_properties(spec, label) or [] for label in labels if isinstance(label, str)]
 
 
 def _legacy_declarations(body: object) -> list[dict[str, Any]]:
