@@ -148,7 +148,12 @@ dispatching, lease expired, attempts spent ──────▶ failed_terminal
 8. **Ownership before sending.** A store that cannot confirm a claim sends
    nothing for the key; recovery sends it. Only a process with no durable store
    configured sends unclaimed. A CEG answer the row did not record (lease lost,
-   store error) leaves the key pending.
+   store error) leaves the key pending. A configured store with **no intent
+   row** for the key sends nothing and ends the leg terminal
+   (`graph_sync:no_durable_intent`): the row is written in the result's own
+   transaction, so its absence means the result never committed (an optional
+   persist failed) or the obligation was removed, and recovery, which claims
+   only existing rows, can never resolve it.
 9. **Verified replay.** An idempotent replay attaches its intent to the stored
    result only when it carries the same entity and committed fields and every
    graph field it pins equals the stored result's value for that field (a

@@ -55,10 +55,16 @@ ruling 2026-11-24; the field-set rules are
 `docs/contracts/data/graph_sync_intents.md` *Field set and provenance*). It is
 defined here once and keyed only on declarations:
 
-> **Status:** target contract. These sending rules take effect with the
-> implementation that follows this contract (campaign PR-2). Until then every
-> graph-sync row carries admitted values only and no provenance property,
-> which is the legacy mode below.
+> **Status:** implemented (campaign PR-2, #420 and #421) in
+> `app/engines/sync_field_set.py`, which selects and labels the field set, and
+> `app/engines/handlers.py` `converge_graph_fields`. Both modes below, legacy
+> and full, are live code; which one a field syncs in is chosen per field by the declarations of
+> the published pack, not by an EIE release. The packs in this repository
+> (`domains/plasticos/spec.yaml` and the pinned CEG snapshot
+> `tests/fixtures/ceg/plasticos.spec.yaml`) declare no provenance property, so
+> their rows sync in legacy mode: admitted values only, unlabelled. A deployed
+> pack's mode is read from that pack, not from this note
+> (`tests/contracts/test_audit_provenance_status.py`).
 
 
 - A row field `F` of an endpoint's row contract carries its provenance in the
@@ -88,11 +94,14 @@ defined here once and keyed only on declarations:
 - **Prerequisite on CEG.** CEG must declare `F_provenance` and the item
   `provenance` with the identical `enum` shape `[observed, enriched]` on the
   target node before EIE sends them; the compatibility contract then compares
-  them like any other row property. The pinned CEG revision
+  them like any other row property. This gates full mode per field, not the
+  implementation: a field stays legacy until its CEG target node declares the
+  companion property, and the pinned CEG revision
   (`tests/contracts/ceg_revision.py`, snapshot
-  `tests/fixtures/ceg/plasticos.spec.yaml`) must be moved to a revision that
-  declares them before the implementation merges. CEG applies the over-time
-  precedence (G3) by reading them, once they are declared.
+  `tests/fixtures/ceg/plasticos.spec.yaml`) moves to a revision that declares
+  it in the same change that publishes a pack enabling full mode for that
+  field. CEG applies the over-time precedence (G3) by reading them, once they
+  are declared.
 - **`sync_version`** (`integer`, declared on the target node) is the
   per-subject monotonic version of
   `docs/contracts/data/graph_sync_intents.md` rule 6, which CEG compares to

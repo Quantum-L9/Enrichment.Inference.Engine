@@ -212,10 +212,13 @@ def _targets(
 ) -> tuple[dict[str, str | dict[str, Any]], dict[str, float]]:
     """The `schema` and `field_thresholds` the targets resolve to.
 
-    A scalar target keeps the v1 type-name form (``"float"``). A ``list`` or
-    ``map`` target carries its typed declaration (``type`` / ``items`` /
+    A plain scalar target keeps the v1 type-name form (``"float"``). A ``list``
+    or ``map`` target carries its typed declaration (``type`` / ``items`` /
     ``properties`` / ``required``), so validation enforces declared members
-    instead of a bare ``"list"`` (F04).
+    instead of a bare ``"list"`` (F04). An ``enum`` target carries its
+    declaration too (``type`` / ``values`` / ``required``): the bare name
+    ``"enum"`` loses the allowed values, and validation could then admit any
+    value (EIE-D-003).
     """
     if not isinstance(value, list) or not value:
         raise ConvergeRequestRefusedError("invalid_request", "targets must be a nonempty list")
@@ -240,10 +243,10 @@ def _targets(
             _check_type(name, entry["type"], declaration)
         if "min_confidence" in entry:
             thresholds[name] = _confidence(name, entry["min_confidence"])
-        if declaration.get("type") in ("list", "map"):
+        if declaration.get("type") in ("list", "map", "enum"):
             schema[name] = {
                 key: declaration[key]
-                for key in ("type", "items", "properties", "required")
+                for key in ("type", "items", "properties", "values", "required")
                 if key in declaration
             }
         else:

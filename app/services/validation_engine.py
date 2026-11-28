@@ -16,6 +16,7 @@ from typing import Any
 
 import structlog
 
+from app.engines.spec_types import value_defects
 from app.utils.safe_convert import normalize_confidence
 
 logger = structlog.get_logger("validation_engine")
@@ -41,6 +42,12 @@ TYPE_MAP: dict[str, type] = {
     "list": list,
     "array": list,
 }
+
+# Declared scalar types whose values are checked, not coerced: an enum against
+# its declared ``values``, a date / datetime / duration as ISO-8601 text. The
+# check is ``spec_types.value_defects`` -- the grammar the graph row enforces --
+# so a value admitted here is one the row would accept (EIE-D-003).
+CHECKED_SCALAR_TYPES = frozenset({"enum", "date", "datetime", "duration"})
 
 
 def validate_response(
@@ -112,6 +119,17 @@ def validate_response(
                         got_type=type(value).__name__,
                     )
                 continue
+            if field_type_str.lower() in CHECKED_SCALAR_TYPES:
+                try:
+                    normalized[field_name] = _checked_scalar(value, declared, field_name)
+                except ValueError:
+                    logger.debug(
+                        "field_coercion_skipped",
+                        field=field_name,
+                        expected=field_type_str,
+                        got_type=type(value).__name__,
+                    )
+                continue
             expected = TYPE_MAP.get(field_type_str.lower())
             if expected is None:
                 # Unknown type — accept as-is
@@ -152,6 +170,27 @@ def _declared_type(
     return str(declared.get("type", "")), items if isinstance(items, Mapping) else None
 
 
+def _checked_scalar(value: Any, declared: str | Mapping[str, Any], path: str) -> Any:
+    """``value`` unchanged when it conforms to a checked scalar declaration, else ValueError.
+
+    ``declared`` is a type name (``"date"``) or a declaration carrying ``values``
+    for an enum. A bare ``"enum"`` with no ``values`` admits any string, as
+    ``spec_types`` does; it never admits a non-string. Text is trimmed first
+    unless it is a declared member as written, as every other string member is, so ``"A, B"`` splits to ``A`` and ``B``.
+    """
+    decl = dict(declared) if isinstance(declared, Mapping) else {"type": declared}
+    decl["type"] = str(decl.get("type", "")).lower()
+    decl.pop("required", None)  # an absent value never reaches here
+    members = decl.get("values")
+    if isinstance(value, str) and not (isinstance(members, list) and value in members):
+        # A declared member is matched as written; only other text is trimmed.
+        value = value.strip()
+    defects = value_defects(value, decl, path)
+    if defects:
+        raise ValueError(str(defects[0]))
+    return value
+
+
 def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) -> Any:
     """Coerce a value to the expected type.
 
@@ -167,7 +206,9 @@ def _coerce(value: Any, expected: type, items: Mapping[str, Any] | None = None) 
         return bool(value)
 
     if expected is list:
-        members = _list_members(value, declared_items=items is not None)
+        members = _list_members(
+            value, declared_items=items is not None, declared_values=_enum_values(items)
+        )
         return _dedup([_coerce_member(v, items) for v in members])
 
     if expected in (int, float):
@@ -211,22 +252,45 @@ def _free_member(value: Any) -> Any:
     return str(value).strip()[:256]
 
 
-def _list_members(value: Any, *, declared_items: bool = False) -> list[Any]:
+def _enum_values(items: Mapping[str, Any] | None) -> frozenset[str]:
+    """The declared members of an enum item declaration; empty for any other."""
+    if not items or str(items.get("type", "")).lower() != "enum":
+        return frozenset()
+    values = items.get("values")
+    return (
+        frozenset(v for v in values if isinstance(v, str))
+        if isinstance(values, list)
+        else frozenset()
+    )
+
+
+def _list_members(
+    value: Any, *, declared_items: bool = False, declared_values: frozenset[str] = frozenset()
+) -> list[Any]:
     """The members a list field carries: CSV text split, empties dropped.
 
     With ``declared_items`` only absent members are dropped: ``None`` and blank
     text carry no value. Every other member reaches its declared item type, so
     ``0`` and ``0.0`` are kept, a boolean in a numeric list is refused, and an
     empty mapping reaches required-property validation. An untyped list keeps
-    the falsy filter.
+    the falsy filter. A member that is one of ``declared_values`` (the declared
+    enum members) as written is a value, never an absence, even when it is
+    blank text (EIE-PR-004).
     """
     if isinstance(value, str):
-        return [s for s in value.split(",") if s.strip()]
+        return [s for s in value.split(",") if s.strip() or s in declared_values]
     if isinstance(value, (list, tuple)):
         if declared_items:
-            return [v for v in value if not _is_absent(v)]
+            return [
+                v for v in value if _is_declared_member(v, declared_values) or not _is_absent(v)
+            ]
         return [v for v in value if v]
     return [value]
+
+
+def _is_declared_member(value: Any, declared_values: frozenset[str]) -> bool:
+    """A string member that is one of the declared enum values, exactly as written."""
+    return isinstance(value, str) and value in declared_values
 
 
 def _is_absent(value: Any) -> bool:
@@ -241,6 +305,8 @@ def _coerce_member(value: Any, items: Mapping[str, Any] | None) -> Any:
         if not isinstance(value, Mapping):
             raise TypeError("declared map item is not a mapping")
         return _coerce_map(value, items)
+    if items is not None and item_type in CHECKED_SCALAR_TYPES:
+        return _checked_scalar(value, items, "item")
     expected = TYPE_MAP.get(item_type, str)
     if expected is list:
         raise TypeError("a list of lists is not declarable")
@@ -274,6 +340,8 @@ def _coerce_property(value: Any, prop: Mapping[str, Any]) -> Any:
         if not isinstance(value, Mapping):
             raise TypeError(f"declared map property {prop.get('name')} is not a mapping")
         return _coerce_map(value, prop)
+    if type_name in CHECKED_SCALAR_TYPES:
+        return _checked_scalar(value, prop, str(prop.get("name")))
     expected = TYPE_MAP.get(type_name)
     if expected is None:
         return value

@@ -413,10 +413,11 @@ class SideEffectCoordinator:
 
         `_lease_intent` decides whether this call may send: with its durable
         intent leased, the pinned input is sent and the attempt is settled on
-        that lease; with no durable layer, or no intent for the key, the leg is
-        sent unclaimed (a replay is a MERGE under the same key); anything else
-        -- an intent held elsewhere, behind an older version, already resolved,
-        or a store that cannot confirm ownership -- sends nothing.
+        that lease; only with no durable layer configured is the leg sent
+        unclaimed (a replay is a MERGE under the same key; rule 8); anything
+        else -- no intent for the key (terminal: nothing can recover it), an
+        intent held elsewhere, behind an older version, already resolved, or a
+        store that cannot confirm ownership -- sends nothing.
 
         `report.graph_synced` / `graph_terminal` record what CEG answered;
         `graph_unsettled` records that the durable intent did not take that
@@ -488,7 +489,19 @@ class SideEffectCoordinator:
             logger.warning("side_effects_graph_claim_unavailable", key=key, error=str(exc))
             return False, None
         if existing is None:
-            return True, None
+            # A configured store with no intent for the key cannot confirm who
+            # owns it, so nothing is sent (rule 8). It is not "no durable store":
+            # unclaimed sends would carry no pinned digest, no `seq` and settle
+            # nothing (EIE-D-004). Nor is it retryable: the intent is written in
+            # the result's own transaction, so no row means the result was never
+            # committed (an optional persist failed) or its obligation was
+            # removed. Recovery claims only rows that exist and a same-key retry
+            # skips persistence, so a pending key could never resolve. The leg
+            # ends terminal (EIE-PR-003).
+            report.graph_terminal = True
+            report.errors.append("graph_sync:no_durable_intent")
+            logger.warning("side_effects_graph_no_durable_intent", key=key)
+            return False, None
         self._report_unclaimable(existing, report)
         return False, None
 

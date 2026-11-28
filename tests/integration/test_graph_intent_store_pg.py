@@ -480,3 +480,49 @@ async def test_two_processes_completing_one_operation_commit_once(db: None) -> N
     assert await _count("enrichment_results") == 1
     assert await _count("graph_sync_intents") == 1
     assert emitter.emit_enrichment_completed.await_count == 1
+
+
+# ── EIE-D-004 on PostgreSQL: a configured store with no intent sends nothing ─
+
+
+async def test_intent_deleted_before_the_deferred_leg_is_not_sent_unclaimed(db: None) -> None:
+    """Rule 8 on the real store: the row is gone, so the leg has no owner and sends nothing."""
+    coord = SideEffectCoordinator()
+    report = await _commit(coord, _router(), _emitter())
+    assert report.persisted and report.graph_durable and report.graph_deferred
+    async with pg_store.get_session() as session:
+        await session.execute(text("DELETE FROM graph_sync_intents"))
+    assert await pg_store.get_graph_intent(TENANT, report.key) is None
+
+    router = _router(ACK)
+    with patch("app.engines.packet_router.get_router", return_value=router):
+        assert coord.schedule_graph_leg(report.key, settings=SETTINGS)
+        await coord.drain_graph_legs()
+
+    router.notify_graph_sync.assert_not_awaited()
+
+
+async def test_a_leg_for_a_key_the_store_never_recorded_sends_nothing(db: None) -> None:
+    """No row was ever written for the key: nothing is sent and the leg ends terminal."""
+    from app.services.side_effect_coordinator import SideEffectReport
+
+    coord = SideEffectCoordinator()
+    report = SideEffectReport(key="never-recorded")
+    router = _router(ACK)
+    with patch("app.engines.packet_router.get_router", return_value=router):
+        await coord._graph_leg(
+            key="never-recorded",
+            tenant=TENANT,
+            entity_id="d-1",
+            fields={"capacity": 2.5},
+            domain=TENANT,
+            node_label="Depot",
+            contract_digest="c" * 64,
+            settings=SETTINGS,
+            report=report,
+        )
+
+    router.notify_graph_sync.assert_not_awaited()
+    assert report.graph_terminal and not report.graph_synced and not report.graph_deferred
+    assert "graph_sync:no_durable_intent" in report.errors
+    assert await _count("graph_sync_intents") == 0
