@@ -141,7 +141,18 @@ Rejection reasons: `invalid_candidate`, `invalid_entity_id`, `invalid_entity`,
    the revision the targets were checked against, the candidate's node, the
    targets, the candidate's `entity` and `entity_id`, and the idempotency key
    `sweep-<sha256(sweep_id, entity_id)>`. The converge v2 response body is
-   stored as the result, unchanged.
+   stored as the result, unchanged, whatever its `state`. Only a reply whose
+   `state` is `completed` counts in `stats.enriched`; a `failed` or `degraded`
+   reply counts in `stats.converge_state_failed` / `stats.converge_state_degraded`,
+   and a reply naming none of the three converge states in
+   `stats.converge_state_unrecognized`. Each is charged its own `tokens_used`
+   (section 4). Every candidate ends with exactly one disposition: one result
+   row or one `skipped` entry. A sweep whose worker died is closed by
+   `close_stale_sweeps`; its outcome counters are then recomputed from its
+   stored result rows by the same classifier
+   (`app/services/sweep_store.outcome_counter`), because a worker can commit a
+   result and die before saving its counters. Skip-reason counters stay as
+   saved, and every candidate with neither a row nor a skip is `sweep_failed`.
 
 ## 4. Budget rule
 
@@ -206,7 +217,8 @@ stands in for it: there is no local readiness estimate.
 * `budget` is the tenant's ledger for the sweep's UTC day against this sweep's
   effective budget. `remaining_usd` also subtracts reservations in flight.
 * `stats` is additive to the lane's response shape: counters by skip reason
-  plus `enriched` and `targets_dropped_undeclared`.
+  plus `enriched`, `targets_dropped_undeclared` and the
+  `converge_state_<state>` counters of section 3.4 step 5.
 
 ### 6.3 Read-only and retention
 

@@ -111,7 +111,9 @@ def test_the_end_state_and_reason_are_ones_the_contract_already_names() -> None:
 async def test_closure_writes_only_the_running_sweep_and_never_the_ledger(
     sessions: list[_Session],
 ) -> None:
-    tx = _Session([_row()], ["rec-0"], ["sw-1"])
+    # The result query reads (entity_id, response): outcome counters are
+    # recomputed from the stored replies (EIE-PR-002).
+    tx = _Session([_row()], [("rec-0", {"state": "completed"})], ["sw-1"])
     sessions.append(tx)
     closed = await PgSweepStore().close_stale_sweeps(NOW, timedelta(minutes=30), exclude={"sw-9"})
     assert closed == ["sw-1"]
@@ -123,6 +125,7 @@ async def test_closure_writes_only_the_running_sweep_and_never_the_ledger(
     assert "FOR UPDATE OF enrichment_sweeps SKIP LOCKED" in select_stale
     assert "enrichment_sweeps.sweep_id NOT IN" in select_stale
     assert "FROM enrichment_sweep_results" in handled
+    assert "enrichment_sweep_results.response" in handled
     assert close.startswith("UPDATE enrichment_sweeps SET")
     assert "enrichment_sweeps.state = " in close
     params = tx.statements[2].compile(dialect=postgresql.dialect()).params

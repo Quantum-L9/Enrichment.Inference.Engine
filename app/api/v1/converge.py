@@ -749,7 +749,13 @@ async def converge_single(
     )
 
 
-@router.post("/converge/batch", response_model=BatchConvergeResponse)
+@router.post(
+    "/converge/batch",
+    responses={
+        400: {"description": "The named `domain` is not a legal tenant id."},
+        403: _DIRECT_DOMAIN_ACCESS_RESPONSE,
+    },
+)
 async def converge_batch(
     body: BatchConvergeRequestBody,
     settings: Settings = Depends(get_settings),
@@ -760,6 +766,18 @@ async def converge_batch(
     from ...engines.convergence.convergence_config import ConvergenceConfig
     from ...engines.convergence_controller import run_convergence_loop
 
+    # EIE-008: the direct-tenant posture, before a profile, a run or a spec is
+    # touched. It used to apply only when this node had already loaded the named
+    # domain's spec, so an unloaded tenant id ran (and persisted) paid
+    # convergence under that tenant. It applies to a domainless batch too: the
+    # response is only run ids, and GET /v1/converge/{run_id} is refused in the
+    # same environments, so a signed node would run work no route returns.
+    require_direct_domain_access()
+    if body.domain:
+        try:
+            validate_tenant_id(body.domain)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         approval_mode = ApprovalMode(body.approval_mode)
     except ValueError as exc:
@@ -781,7 +799,6 @@ async def converge_batch(
     discovery_digest: str | None = None
     context: dict[str, Any] = {"hints": {}, "rules": []}
     if body.domain in _domain_specs or body.node_label is not None:
-        require_direct_domain_access()
         _, discovery_digest = _discovery_snapshot(body.domain, body.node_label, context=context)
     entities = body.entities
     if not entities:
@@ -858,8 +875,12 @@ async def converge_batch(
     )
 
 
-@router.get("/converge/{run_id}")
+@router.get("/converge/{run_id}", responses={403: _DIRECT_DOMAIN_ACCESS_RESPONSE})
 async def get_convergence_status(run_id: str) -> dict[str, Any]:
+    # EIE-002: a run carries a tenant's entity, domain and cost. Knowing its id
+    # is not authorization, and the refusal comes before the lookup so the
+    # status never reveals which run ids exist.
+    require_direct_domain_access()
     store = _get_state_store()
     state = await store.load(run_id)
     if state is None:

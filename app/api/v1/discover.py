@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.utils.safe_convert import safe_float
 
-from ...core.auth import require_direct_tenant_read, tenant_scope, verify_api_key
+from ...core.auth import require_direct_tenant_read, tenant_scope
 from ...engines.handlers import handle_discover
 from ...services import pg_store
 from ...services.crm_field_scanner import CRMField, scan_result_to_dict
@@ -183,7 +183,10 @@ async def get_proposals(
 
 @router.post(
     "/api/v1/proposals/{proposal_id}/approve",
-    dependencies=[Depends(verify_api_key)],
+    # EIE-001: a proposal belongs to a tenant, and the shared key binds the
+    # caller to none, so the decision takes the direct-tenant posture (403
+    # outside local/dev/test) before the proposal UUID is looked up.
+    dependencies=[Depends(require_direct_tenant_read)],
     summary="Approve or reject a schema proposal",
 )
 async def approve_proposal(
