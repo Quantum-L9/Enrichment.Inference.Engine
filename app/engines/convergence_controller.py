@@ -66,7 +66,7 @@ from .convergence.field_evidence import (
 from .convergence.observation_evidence import observation_evidence
 from .field_classifier import DomainClassification, auto_classify_domain
 from .inference.rule_loader import build_unlock_index
-from .inference_bridge_adapter import InferenceBridge
+from .inference_bridge_adapter import InferenceBridge, _spec_nodes
 from .inference_bridge_v2 import prioritize_search_targets
 from .meta_prompt_planner import MetaPromptPlanner, PromptPlan
 from .search_optimizer import (
@@ -75,7 +75,7 @@ from .search_optimizer import (
     cap_variations,
     resolve_from_classification,
 )
-from .spec_types import SCALAR_ALIASES, SCALAR_TYPES, node_properties, value_defects
+from .spec_types import SCALAR_ALIASES, SCALAR_TYPES, value_defects
 
 logger = structlog.get_logger("convergence_controller")
 
@@ -836,19 +836,26 @@ def _field_declarations(
 
 
 def _declaration_groups(spec: Mapping[str, Any], node: str | None) -> list[list[dict[str, Any]]]:
-    """Each applicable node's property declarations: the bound node's, else every node's."""
-    ontology = spec.get("ontology")
-    nodes = ontology.get("nodes") if isinstance(ontology, Mapping) else None
+    """Each applicable node's property declarations: the bound node's, else every node's.
+
+    Nodes are resolved exactly as the derivation graph resolves them
+    (`ontology.nodes`, `ontology.entities` or a top-level `nodes`), so admission
+    and derivation always see the same declarations.
+    """
+    nodes = _spec_nodes(dict(spec))
     if isinstance(nodes, Mapping):  # legacy shape: nodes.{Label}.properties.{name}
         return [
             _legacy_declarations(body)
             for label, body in nodes.items()
             if node is None or str(label) == node
         ]
-    if node is not None:
-        return [node_properties(spec, node) or []]
-    labels = [n.get("label") for n in nodes or [] if isinstance(n, Mapping)]
-    return [node_properties(spec, label) or [] for label in labels if isinstance(label, str)]
+    if not isinstance(nodes, list):
+        return []
+    return [
+        [dict(p) for p in entry.get("properties") or [] if isinstance(p, Mapping) and "name" in p]
+        for entry in nodes
+        if isinstance(entry, Mapping) and (node is None or entry.get("label") == node)
+    ]
 
 
 def _legacy_declarations(body: object) -> list[dict[str, Any]]:

@@ -576,3 +576,20 @@ async def test_control_a_valid_mixed_origin_converge_is_unchanged() -> None:
     assert response.fields.get("power_units") == 820
     assert response.fields.get("fleet_class") == "enterprise"
     assert response.fields.get("tier") == "gold"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ["ontology.nodes", "top-level nodes", "ontology.entities"],
+)
+def test_declarations_cover_every_shape_the_graph_builder_reads(shape: str) -> None:
+    """Review (CodeRabbit, #426): admission and derivation must see the same declarations."""
+    nodes = LEGACY_SPEC["ontology"]["nodes"]
+    spec = {
+        "ontology.nodes": {"ontology": {"nodes": nodes}},
+        "top-level nodes": {"nodes": nodes},
+        "ontology.entities": {"ontology": {"entities": nodes}},
+    }[shape]
+    declarations = _field_declarations(spec, "Carrier")
+    assert declarations is not None
+    assert declarations["fleet_class"][0]["values"] == ["enterprise", "regional"]
