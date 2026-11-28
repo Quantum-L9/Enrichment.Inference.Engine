@@ -122,7 +122,7 @@ repo-check:  ## Non-mutating static gate: ruff check, no print() in service code
 # ledger is empty today, and a non-empty ledger fails here until its entries
 # are written below as `--deselect <nodeid>`, never hidden behind an expansion.
 # An empty or all-skipped selection fails.
-repo-test-fast:  ## Bounded PR selection: tests/unit, tests/contracts and two named files
+repo-test-fast:  ## Bounded PR selection: tests/unit, tests/contracts and four named files
 	@quarantined="$$($(PYTHON) tools/pytest_quarantine_deselects.py)"; \
 	if [ -n "$${quarantined}" ]; then \
 	  echo "PR-fast: the quarantine ledger is not empty; list each entry in repo-test-fast as a literal --deselect" >&2; \
@@ -137,6 +137,7 @@ repo-test-fast:  ## Bounded PR selection: tests/unit, tests/contracts and two na
 	  tests/services/test_gate_registration.py \
 	  tests/architecture/test_no_bespoke_gate_transport.py \
 	  tests/test_pr21_packet_router.py \
+	  tests/ci/test_gitleaks_config_contract.py \
 	  -p no:xdist \
 	  --timeout=120 \
 	  --tb=short -q \

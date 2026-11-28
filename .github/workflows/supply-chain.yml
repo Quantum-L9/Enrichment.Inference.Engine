@@ -41,9 +41,9 @@
 name: Supply Chain Security
 
 on:
+  # Every target branch: dependency review here replaces the removed
+  # pr-pipeline security job, which reviewed PRs into any branch (EIE-PR-001).
   pull_request:
-    branches:
-      - main
   push:
     branches:
       - main
