@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,6 +39,7 @@ from ..models.schemas import (
 )
 from ..services.graph_return_channel import (
     REJECT_FIELD_NOT_IN_SCHEMA,
+    REJECT_TYPE_MISMATCH,
     EnrichmentTarget,
     GraphReturnChannel,
     GraphReturnClaim,
@@ -65,7 +66,7 @@ from .convergence.field_evidence import (
 from .convergence.observation_evidence import observation_evidence
 from .field_classifier import DomainClassification, auto_classify_domain
 from .inference.rule_loader import build_unlock_index
-from .inference_bridge_adapter import InferenceBridge
+from .inference_bridge_adapter import InferenceBridge, _spec_nodes
 from .inference_bridge_v2 import prioritize_search_targets
 from .meta_prompt_planner import MetaPromptPlanner, PromptPlan
 from .search_optimizer import (
@@ -74,6 +75,7 @@ from .search_optimizer import (
     cap_variations,
     resolve_from_classification,
 )
+from .spec_types import SCALAR_ALIASES, SCALAR_TYPES, value_defects
 
 logger = structlog.get_logger("convergence_controller")
 
@@ -249,10 +251,22 @@ async def run_convergence_loop(
         raise ValueError(f"unsupported_contract: {response_contract!r}")
     start = time.monotonic()
     state = ConvergenceState()
+    # EIE-PR-U01: one admission boundary. Every declared property entering
+    # operational state satisfies its declaration, whatever its origin, and an
+    # inference executor consults it before a derived value can feed another.
+    declarations = _field_declarations(domain_spec, node_label)
     bridge = InferenceBridge(
         rules=inference_rules or [],
         domain_spec=domain_spec,
         node=node_label,
+        admit=_admission(declarations),
+    )
+    # The request's own facts are an origin too. The original request is kept
+    # for evidence and identity; everything operational -- state, the planner,
+    # each pass request -- reads only its admitted facts. An off-type value is
+    # held as None: an unknown the loop may still find, never a fact.
+    operational = request.model_copy(
+        update={"entity": _admitted_entity(request.entity, declarations)}
     )
 
     # ── Convergence config ─────────────────────────────────
@@ -302,7 +316,7 @@ async def run_convergence_loop(
     default_enricher = enricher is None
 
     # Seed known_fields from the entity's existing data
-    state.known_fields = {k: v for k, v in request.entity.items() if v is not None}
+    state.known_fields = {k: v for k, v in operational.entity.items() if v is not None}
 
     # A4: what each pass did with the graph-return targets it leased.
     graph_ledger = GraphConsumption()
@@ -345,6 +359,7 @@ async def run_convergence_loop(
                 confidence_tracker,
                 pass_num,
                 declared_fields=_declared_fields(domain_classification),
+                declarations=declarations,
                 ledger=graph_ledger,
             )
 
@@ -358,7 +373,7 @@ async def run_convergence_loop(
         search_plan: PromptPlan = planner.plan_pass(
             # The request's null fields stay visible as gaps (F-016); known_fields
             # drops None values on seeding.
-            entity_state={**request.entity, **state.known_fields},
+            entity_state={**operational.entity, **state.known_fields},
             pass_context=pass_context,
             field_confidences=confidence_tracker.get_all_confidences(),
             uncertainty_score=state.action_uncertainty,
@@ -444,7 +459,7 @@ async def run_convergence_loop(
 
         # --- BUILD PASS-SPECIFIC REQUEST ---
         pass_request = _build_pass_request(
-            request,
+            operational,
             search_plan,
             state,
             pass_num,
@@ -511,7 +526,12 @@ async def run_convergence_loop(
             "withheld_fields"
         ) or {}
 
-        # Merge into accumulated state with per-field confidence
+        # Merge into accumulated state with per-field confidence. Provider
+        # admission already checked these; the merge re-checks them so no
+        # origin, an injected enricher included, writes an off-type value.
+        pass_result.enriched_fields = _typed_entries(
+            pass_result.enriched_fields, declarations, origin="provider", pass_num=pass_num
+        )
         for field_name, value in pass_result.enriched_fields.items():
             field_conf = normalize_confidence(
                 per_field_conf.get(field_name, pass_response.confidence)
@@ -548,14 +568,18 @@ async def run_convergence_loop(
             entity=facts,
             confidence_map={k: v for k, v in state.confidence_map.items() if k in facts},
         )
-        pass_result.inferred_fields = inference_result.derived_fields
+        # The bridge admitted every derivation at the boundary (EIE-PR-U01), so a
+        # refused value never fed a rule, the unlock map or `rules_fired`. One
+        # this loop held before and that is no longer derived is retracted below.
+        derived = inference_result.derived_fields
+        pass_result.inferred_fields = derived
         pass_result.inference_fired = inference_result.rules_fired
         pass_result.inference_provenance = inference_result.provenance
 
-        for field_name in sorted(derived_before - set(inference_result.derived_fields)):
+        for field_name in sorted(derived_before - set(derived)):
             _retract_derivation(field_name, state, confidence_tracker, pass_num)
 
-        for field_name, value in inference_result.derived_fields.items():
+        for field_name, value in derived.items():
             state.inferred_fields[field_name] = value
             state.known_fields[field_name] = value
             inferred_conf = normalize_confidence(
@@ -787,6 +811,135 @@ def _declared_fields(classification: DomainClassification | None) -> frozenset[s
     return frozenset(classification.field_map)
 
 
+#: Every declaration of each declared property name (EIE-PR-U01).
+FieldDeclarations = Mapping[str, tuple[Mapping[str, Any], ...]]
+
+
+def _field_declarations(
+    spec: Mapping[str, Any] | None, node: str | None
+) -> dict[str, tuple[dict[str, Any], ...]] | None:
+    """The declarations a value entering state is held to; None when none exist.
+
+    A bound node supplies only its own declarations. With no node bound the
+    property is ambiguous across the spec's nodes, so every declaration of the
+    name applies and a value must violate none of them.
+    """
+    if not isinstance(spec, Mapping):
+        return None
+    found: dict[str, tuple[dict[str, Any], ...]] = {}
+    for props in _declaration_groups(spec, node):
+        for prop in props:
+            name = prop["name"]
+            if isinstance(name, str):
+                found[name] = (*found.get(name, ()), prop)
+    return found or None
+
+
+def _declaration_groups(spec: Mapping[str, Any], node: str | None) -> list[list[dict[str, Any]]]:
+    """Each applicable node's property declarations: the bound node's, else every node's.
+
+    Nodes are resolved exactly as the derivation graph resolves them
+    (`ontology.nodes`, `ontology.entities` or a top-level `nodes`), so admission
+    and derivation always see the same declarations.
+    """
+    nodes = _spec_nodes(dict(spec))
+    if isinstance(nodes, Mapping):  # legacy shape: nodes.{Label}.properties.{name}
+        return [
+            _legacy_declarations(body)
+            for label, body in nodes.items()
+            if node is None or str(label) == node
+        ]
+    if not isinstance(nodes, list):
+        return []
+    return [
+        [dict(p) for p in entry.get("properties") or [] if isinstance(p, Mapping) and "name" in p]
+        for entry in nodes
+        if isinstance(entry, Mapping) and (node is None or entry.get("label") == node)
+    ]
+
+
+def _legacy_declarations(body: object) -> list[dict[str, Any]]:
+    """A legacy node's checkable declarations: scalars with a complete shape.
+
+    The legacy mapping declares no item or property shape for a container and
+    may name a type outside the shared grammar; neither is a contract a value
+    can be checked against, so neither is enforced here.
+    """
+    props = body.get("properties") if isinstance(body, Mapping) else None
+    found: list[dict[str, Any]] = []
+    for name, decl in (props or {}).items():
+        if not isinstance(decl, Mapping) or not isinstance(decl.get("type"), str):
+            continue
+        type_name = SCALAR_ALIASES.get(decl["type"], decl["type"])
+        if type_name not in SCALAR_TYPES:
+            continue
+        if type_name == "enum" and not isinstance(decl.get("values"), list):
+            continue
+        found.append({**decl, "name": str(name), "type": type_name})
+    return found
+
+
+def _admission(declarations: FieldDeclarations | None) -> Callable[[str, Any], bool] | None:
+    """The inference executors' admission check; None when nothing is declared."""
+    if not declarations:
+        return None
+
+    def admit(name: str, value: Any) -> bool:
+        defect = _type_defect(name, value, declarations)
+        if defect is None:
+            return True
+        logger.warning("typed_state_entry_refused", origin="inference", field=name, defect=defect)
+        return False
+
+    return admit
+
+
+def _admitted_entity(
+    entity: Mapping[str, Any], declarations: FieldDeclarations | None
+) -> dict[str, Any]:
+    """The request's facts with every off-type declared value held as None."""
+    admitted = dict(entity)
+    for name, value in entity.items():
+        defect = _type_defect(name, value, declarations)
+        if defect is not None:
+            logger.warning("typed_state_entry_refused", origin="request", field=name, defect=defect)
+            admitted[name] = None
+    return admitted
+
+
+def _type_defect(name: str, value: Any, declarations: FieldDeclarations | None) -> str | None:
+    """Why `value` may not enter state as `name`; None when it may or is undeclared."""
+    for decl in (declarations or {}).get(name, ()):
+        defects = value_defects(value, decl, name)
+        if defects:
+            return str(defects[0])
+    return None
+
+
+def _typed_entries(
+    values: Mapping[str, Any],
+    declarations: FieldDeclarations | None,
+    *,
+    origin: str,
+    pass_num: int,
+) -> dict[str, Any]:
+    """`values` without any entry that violates its declaration; each refusal is logged."""
+    kept: dict[str, Any] = {}
+    for name, value in values.items():
+        defect = _type_defect(name, value, declarations)
+        if defect is None:
+            kept[name] = value
+            continue
+        logger.warning(
+            "typed_state_entry_refused",
+            origin=origin,
+            field=name,
+            pass_number=pass_num,
+            defect=defect,
+        )
+    return kept
+
+
 def _apply_graph_targets(
     targets: list[EnrichmentTarget],
     state: ConvergenceState,
@@ -794,6 +947,7 @@ def _apply_graph_targets(
     pass_num: int,
     *,
     declared_fields: frozenset[str] | None = None,
+    declarations: FieldDeclarations | None = None,
     ledger: GraphConsumption | None = None,
 ) -> dict[str, Any]:
     """Seed graph-inference targets into convergence state.
@@ -803,7 +957,10 @@ def _apply_graph_targets(
     replaces a value the request's entity supplied: that is the record's own
     data, which carries no confidence here, so no inference outranks it. The
     channel has already applied CONFIDENCE_FLOOR. A target for a field the
-    tenant spec does not declare is refused (`declared_fields`). Returns the
+    tenant spec does not declare is refused (`declared_fields`), and so is one
+    whose value violates its field's declaration (`declarations`,
+    REJECT_TYPE_MISMATCH): it is never seeded and never displaces a value
+    (EIE-PR-U01). Returns the
     fields this pass actually seeded; `ledger` records every target's outcome.
 
     A seeded value stays a graph inference (GRAPH_INFERENCE_SOURCE): it is
@@ -815,6 +972,17 @@ def _apply_graph_targets(
         name = target.field_name
         if declared_fields is not None and name not in declared_fields:
             ledger.refuse(target, REJECT_FIELD_NOT_IN_SCHEMA)
+            continue
+        defect = _type_defect(name, target.seed_value, declarations)
+        if defect is not None:
+            logger.warning(
+                "typed_state_entry_refused",
+                origin="graph_inference",
+                field=name,
+                pass_number=pass_num,
+                defect=defect,
+            )
+            ledger.refuse(target, REJECT_TYPE_MISMATCH)
             continue
         if name in state.known_fields and name not in state.confidence_map:
             ledger.record(target, "kept_entity_value")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import structlog
@@ -188,6 +188,10 @@ def _try_fire(rule: RuleDefinition, entity: dict[str, Any]) -> dict[str, Any] | 
 # ── cascade helpers ───────────────────────────────────────────────────────────
 
 
+#: `admit(field, value)`: may this value become a derived field? (EIE-PR-U01)
+Admit = Callable[[str, Any], bool]
+
+
 def _fire_cascade_candidate(
     rule: RuleDefinition,
     working: dict[str, Any],
@@ -195,11 +199,22 @@ def _fire_cascade_candidate(
     best_output: dict[str, tuple[Any, int, float, str]],
     derivation_chains: dict[str, list[str]],
     new_fields: dict[str, Any],
-) -> RuleFired | None:
-    """Fire one rule candidate; update output tracking. Returns RuleFired or None."""
+    admit: Admit | None = None,
+) -> RuleFired | None | bool:
+    """Fire one rule candidate; update output tracking.
+
+    Returns the RuleFired record, None when its conditions do not hold, or
+    False when they hold but `admit` refuses every output. A refused output
+    never claims its field and never enters `working`, so it can neither feed
+    a later rule nor suppress a lower-priority output that is admitted.
+    """
     result = _try_fire(rule, working)
     if result is None:
         return None
+    if admit is not None:
+        result["outputs"] = {f: v for f, v in result["outputs"].items() if admit(f, v)}
+        if not result["outputs"]:
+            return False
 
     fired_record = RuleFired(
         rule_id=rule.rule_id,
@@ -236,6 +251,7 @@ def _run_cascade_pass(
     best_output: dict[str, tuple[Any, int, float, str]],
     derivation_chains: dict[str, list[str]],
     fired_ids: set[str],
+    admit: Admit | None = None,
 ) -> tuple[list[RuleFired], int, int, int]:
     """Run one cascade pass; return (fired_records, evaluated, skipped, new_field_count).
 
@@ -258,17 +274,20 @@ def _run_cascade_pass(
             continue
         evaluated += 1
         record = _fire_cascade_candidate(
-            rule, working, cascade, best_output, derivation_chains, new_fields
+            rule, working, cascade, best_output, derivation_chains, new_fields, admit
         )
-        if record is not None:
+        if isinstance(record, RuleFired):
             fired.append(record)
+        if record is not None:  # fired, or refused: the same inputs refuse again
             fired_ids.add(rule.rule_id)
 
     working.update(new_fields)
     return fired, evaluated, skipped, len(new_fields)
 
 
-def infer(entity_fields: dict[str, Any], registry: RuleRegistry) -> InferenceResult:
+def infer(
+    entity_fields: dict[str, Any], registry: RuleRegistry, admit: Admit | None = None
+) -> InferenceResult:
     working = dict(entity_fields)
     all_fired: list[RuleFired] = []
     derivation_chains: dict[str, list[str]] = {}
@@ -279,7 +298,7 @@ def infer(entity_fields: dict[str, Any], registry: RuleRegistry) -> InferenceRes
 
     for cascade in range(MAX_CASCADE_DEPTH + 1):
         fired, evaluated, skipped, new_field_count = _run_cascade_pass(
-            cascade, working, registry, best_output, derivation_chains, fired_ids
+            cascade, working, registry, best_output, derivation_chains, fired_ids, admit
         )
         all_fired.extend(fired)
         total_evaluated += evaluated

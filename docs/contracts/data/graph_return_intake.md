@@ -65,7 +65,7 @@ Indexes: `ix_graph_return_targets_entity` (`tenant_id`, `entity_id`, `state`, `s
 intake ──eligible──────────────────────────▶ retained
 intake ──ineligible / unchanged fact────────▶ rejected
 retained ──converge claim──▶ consuming ──settled──▶ consumed (outcome)
-                                │      └──refused──▶ rejected (field_not_in_schema)
+                                │      └──refused──▶ rejected (field_not_in_schema | type_mismatch)
                                 └──lease expired──▶ claimable again
 retained/consuming ──TTL passed────────────▶ expired (ttl_expired)
 retained/consuming ──attempts spent────────▶ expired (attempts_exhausted)
@@ -119,7 +119,12 @@ retained/consuming ──attempts spent────────▶ expired (atte
    verified field, an attestation or a consumer writeback. It never replaces a
    value the request's entity supplied, and a stronger value the loop holds
    wins. A target for a field the tenant spec does not declare is `rejected`
-   (`field_not_in_schema`); with no declared spec, no field is refused.
+   (`field_not_in_schema`); with no declared spec, no field is refused. A
+   target whose value violates its field's declaration (the shared grammar,
+   `app/engines/spec_types.value_defects`) is `rejected` (`type_mismatch`): it
+   is never seeded and never displaces a value. With a bound node only that
+   node's declaration applies; with none, every declaration of the name does
+   (EIE-PR-U01).
 
 ## Outcomes
 

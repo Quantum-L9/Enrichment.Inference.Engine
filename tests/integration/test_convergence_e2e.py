@@ -503,10 +503,15 @@ class TestLiveDomainInference:
     async def test_malformed_provider_value_fails_the_rule_not_the_converge(
         self, sdk_converge, processed_polymers: Any
     ) -> None:
-        """Provider values are untrusted shapes; a rule that cannot read one is False.
+        """Provider values are untrusted shapes; one that violates its declaration never fires a rule.
 
         On the pre-fix head both shapes raised TypeError out of the SDK handler
         with nothing persisted, where main completed and persisted the same answer.
+
+        Superseded expectation: this asserted the malformed value was kept in
+        the answer ("evidence kept"). Under the EIE-PR-U01 ruling a value that
+        violates its declared type never enters convergence state, so it is not
+        in the answer either; the converge still completes and persists.
         """
         state, run, _router = sdk_converge
         state["evidence"] = _evidence(processed_polymers=(processed_polymers, 0.95))
@@ -514,7 +519,7 @@ class TestLiveDomainInference:
 
         assert response["state"] == "completed"
         assert state["persist"].call_count == 1
-        assert response["fields"]["processed_polymers"] == processed_polymers  # evidence kept
+        assert "processed_polymers" not in response["fields"]  # off-type: never entered state
         assert "material_grade" not in response["fields"]
         assert "tier" not in response["fields"]
         assert _inferred(response) == {}

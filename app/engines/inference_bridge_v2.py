@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
@@ -264,6 +264,7 @@ class InferenceStatus(StrEnum):
     NO_RULE = "no_rule"  # inputs satisfied but no rule registered
     ALREADY_SET = "already_set"  # field already has a value above threshold
     CYCLE = "cycle"  # field is in a dependency cycle
+    TYPE_REFUSED = "type_refused"  # value violates its field's declaration (EIE-PR-U01)
 
 
 @dataclass
@@ -441,6 +442,7 @@ def run_inference(
     entity: dict[str, Any],
     confidence_map: dict[str, float],
     existing_threshold: float = 0.7,
+    admit: Callable[[str, Any], bool] | None = None,
 ) -> InferenceResult:
     """Execute inference pass over an entity using the derivation graph.
 
@@ -461,6 +463,8 @@ def run_inference(
         entity: current entity field values
         confidence_map: {field_name: confidence} for each known field
         existing_threshold: skip fields already at this confidence
+        admit: `admit(field, value)` refuses a value that may not become a
+            derived field; it is blocked TYPE_REFUSED and never chains on
     """
     # Working copies (inference results feed into later derivations)
     working_entity = dict(entity)
@@ -522,7 +526,9 @@ def run_inference(
             edge.inference_rule, rule_fn, input_values, input_confs, edge, target_field
         )
 
-        if result.value is not None and result.confidence > 0.0:
+        if result.value is not None and admit is not None and not admit(target_field, result.value):
+            blocked[target_field] = replace(result, status=InferenceStatus.TYPE_REFUSED)
+        elif result.value is not None and result.confidence > 0.0:
             # Propagate into working copies for multi-hop chaining
             working_entity[target_field] = result.value
             working_confidence[target_field] = result.confidence

@@ -78,6 +78,7 @@ REJECT_MALFORMED = "malformed"
 REJECT_CROSS_TENANT = "cross_tenant"
 REJECT_BELOW_THRESHOLD = "below_threshold"
 REJECT_FIELD_NOT_IN_SCHEMA = "field_not_in_schema"
+REJECT_TYPE_MISMATCH = "type_mismatch"
 
 
 class GraphReturnCapacityError(RuntimeError):
