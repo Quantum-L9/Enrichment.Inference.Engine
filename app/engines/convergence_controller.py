@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -75,7 +75,7 @@ from .search_optimizer import (
     cap_variations,
     resolve_from_classification,
 )
-from .spec_types import node_properties, value_defects
+from .spec_types import SCALAR_ALIASES, SCALAR_TYPES, node_properties, value_defects
 
 logger = structlog.get_logger("convergence_controller")
 
@@ -251,10 +251,22 @@ async def run_convergence_loop(
         raise ValueError(f"unsupported_contract: {response_contract!r}")
     start = time.monotonic()
     state = ConvergenceState()
+    # EIE-PR-U01: one admission boundary. Every declared property entering
+    # operational state satisfies its declaration, whatever its origin, and an
+    # inference executor consults it before a derived value can feed another.
+    declarations = _field_declarations(domain_spec, node_label)
     bridge = InferenceBridge(
         rules=inference_rules or [],
         domain_spec=domain_spec,
         node=node_label,
+        admit=_admission(declarations),
+    )
+    # The request's own facts are an origin too. The original request is kept
+    # for evidence and identity; everything operational -- state, the planner,
+    # each pass request -- reads only its admitted facts. An off-type value is
+    # held as None: an unknown the loop may still find, never a fact.
+    operational = request.model_copy(
+        update={"entity": _admitted_entity(request.entity, declarations)}
     )
 
     # ── Convergence config ─────────────────────────────────
@@ -294,9 +306,6 @@ async def run_convergence_loop(
             gate_fields=sorted(domain_classification.gate_fields),
         )
 
-    # EIE-PR-U01: what every value entering state is checked against.
-    declarations = _field_declarations(domain_spec, node_label)
-
     # ── Cost tracker ───────────────────────────────────────
     max_budget = getattr(settings, "max_budget_tokens", 30000)
     if config.max_budget_tokens is not None:
@@ -307,7 +316,7 @@ async def run_convergence_loop(
     default_enricher = enricher is None
 
     # Seed known_fields from the entity's existing data
-    state.known_fields = {k: v for k, v in request.entity.items() if v is not None}
+    state.known_fields = {k: v for k, v in operational.entity.items() if v is not None}
 
     # A4: what each pass did with the graph-return targets it leased.
     graph_ledger = GraphConsumption()
@@ -364,7 +373,7 @@ async def run_convergence_loop(
         search_plan: PromptPlan = planner.plan_pass(
             # The request's null fields stay visible as gaps (F-016); known_fields
             # drops None values on seeding.
-            entity_state={**request.entity, **state.known_fields},
+            entity_state={**operational.entity, **state.known_fields},
             pass_context=pass_context,
             field_confidences=confidence_tracker.get_all_confidences(),
             uncertainty_score=state.action_uncertainty,
@@ -450,7 +459,7 @@ async def run_convergence_loop(
 
         # --- BUILD PASS-SPECIFIC REQUEST ---
         pass_request = _build_pass_request(
-            request,
+            operational,
             search_plan,
             state,
             pass_num,
@@ -559,15 +568,13 @@ async def run_convergence_loop(
             entity=facts,
             confidence_map={k: v for k, v in state.confidence_map.items() if k in facts},
         )
-        # A derivation that violates its field's declaration is not derived: it
-        # never reaches state, and one this loop held before is retracted. Nor
-        # is any derivation computed from it in the same run (its descendants).
-        derived = _typed_derivations(inference_result, bridge, declarations, pass_num=pass_num)
+        # The bridge admitted every derivation at the boundary (EIE-PR-U01), so a
+        # refused value never fed a rule, the unlock map or `rules_fired`. One
+        # this loop held before and that is no longer derived is retracted below.
+        derived = inference_result.derived_fields
         pass_result.inferred_fields = derived
         pass_result.inference_fired = inference_result.rules_fired
-        pass_result.inference_provenance = {
-            k: v for k, v in inference_result.provenance.items() if k in derived
-        }
+        pass_result.inference_provenance = inference_result.provenance
 
         for field_name in sorted(derived_before - set(derived)):
             _retract_derivation(field_name, state, confidence_tracker, pass_num)
@@ -819,11 +826,17 @@ def _field_declarations(
     """
     if not isinstance(spec, Mapping):
         return None
-    if node is not None:
+    ontology = spec.get("ontology")
+    nodes = ontology.get("nodes") if isinstance(ontology, Mapping) else None
+    if isinstance(nodes, Mapping):  # legacy shape: nodes.{Label}.properties.{name}
+        groups = [
+            _legacy_declarations(body)
+            for label, body in nodes.items()
+            if node is None or str(label) == node
+        ]
+    elif node is not None:
         groups = [node_properties(spec, node) or []]
     else:
-        ontology = spec.get("ontology")
-        nodes = ontology.get("nodes") if isinstance(ontology, Mapping) else None
         labels = [n.get("label") for n in nodes or [] if isinstance(n, Mapping)]
         groups = [node_properties(spec, label) or [] for label in labels if isinstance(label, str)]
     found: dict[str, tuple[dict[str, Any], ...]] = {}
@@ -833,6 +846,55 @@ def _field_declarations(
             if isinstance(name, str):
                 found[name] = (*found.get(name, ()), prop)
     return found or None
+
+
+def _legacy_declarations(body: object) -> list[dict[str, Any]]:
+    """A legacy node's checkable declarations: scalars with a complete shape.
+
+    The legacy mapping declares no item or property shape for a container and
+    may name a type outside the shared grammar; neither is a contract a value
+    can be checked against, so neither is enforced here.
+    """
+    props = body.get("properties") if isinstance(body, Mapping) else None
+    found: list[dict[str, Any]] = []
+    for name, decl in (props or {}).items():
+        if not isinstance(decl, Mapping) or not isinstance(decl.get("type"), str):
+            continue
+        type_name = SCALAR_ALIASES.get(decl["type"], decl["type"])
+        if type_name not in SCALAR_TYPES:
+            continue
+        if type_name == "enum" and not isinstance(decl.get("values"), list):
+            continue
+        found.append({**decl, "name": str(name), "type": type_name})
+    return found
+
+
+def _admission(declarations: FieldDeclarations | None) -> Callable[[str, Any], bool] | None:
+    """The inference executors' admission check; None when nothing is declared."""
+    if not declarations:
+        return None
+
+    def admit(name: str, value: Any) -> bool:
+        defect = _type_defect(name, value, declarations)
+        if defect is None:
+            return True
+        logger.warning("typed_state_entry_refused", origin="inference", field=name, defect=defect)
+        return False
+
+    return admit
+
+
+def _admitted_entity(
+    entity: Mapping[str, Any], declarations: FieldDeclarations | None
+) -> dict[str, Any]:
+    """The request's facts with every off-type declared value held as None."""
+    admitted = dict(entity)
+    for name, value in entity.items():
+        defect = _type_defect(name, value, declarations)
+        if defect is not None:
+            logger.warning("typed_state_entry_refused", origin="request", field=name, defect=defect)
+            admitted[name] = None
+    return admitted
 
 
 def _type_defect(name: str, value: Any, declarations: FieldDeclarations | None) -> str | None:
@@ -865,39 +927,6 @@ def _typed_entries(
             pass_number=pass_num,
             defect=defect,
         )
-    return kept
-
-
-def _typed_derivations(
-    result: Any,
-    bridge: InferenceBridge,
-    declarations: FieldDeclarations | None,
-    *,
-    pass_num: int,
-) -> dict[str, Any]:
-    """The run's derivations minus off-type ones and every derivation built on one.
-
-    Rules cascade within one run, so a refused value may already have fed a
-    later rule. Refusal therefore closes over the derivation inputs: a value
-    computed from a refused derivation is refused too, however valid it looks.
-    """
-    candidates = dict(result.derived_fields)
-    kept = _typed_entries(candidates, declarations, origin="inference", pass_num=pass_num)
-    refused = set(candidates) - set(kept)
-    while refused:
-        tainted = {name for name in kept if bridge.derivation_inputs(result, name) & refused}
-        if not tainted:
-            break
-        for name in sorted(tainted):
-            logger.warning(
-                "typed_state_entry_refused",
-                origin="inference",
-                field=name,
-                pass_number=pass_num,
-                defect="derived from a refused derivation",
-            )
-            del kept[name]
-        refused |= tainted
     return kept
 
 

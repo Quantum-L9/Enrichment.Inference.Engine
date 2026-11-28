@@ -58,7 +58,7 @@ rule outcome and the convergence confidence map:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -130,8 +130,14 @@ class InferenceBridge:
         rules: list[dict] | None = None,
         domain_spec: dict[str, Any] | None = None,
         node: str | None = None,
+        admit: Callable[[str, Any], bool] | None = None,
     ):
         """`node` is the request's resolved ontology node (see `node_for_subject`).
+
+        `admit(field, value)` is the type admission boundary (EIE-PR-U01): both
+        executors consult it before a derived value can feed another derivation,
+        so a refused value never fires a rule, never wins a field over an
+        admitted one and never reaches the unlock map or `rules_fired`.
 
         Given a `node` and a spec, inference is bound to that node: only the
         condition rules bound to it run (a rule that cannot be bound to one
@@ -152,6 +158,7 @@ class InferenceBridge:
         # `status`: the rules were valid, a run over some entity was not.
         self._run_errors: list[str] = []
         self._last_unlock_map: dict[str, float] = {}
+        self._admit = admit
 
         # Binding needs both a node and the spec that declares the node labels.
         labels = _node_labels(domain_spec) if domain_spec is not None and node is not None else None
@@ -246,6 +253,7 @@ class InferenceBridge:
             graph=self._graph,
             entity=entity,
             confidence_map=confidence_map,
+            admit=self._admit,
         )
 
         # Translate v2 → v1 result shape
@@ -309,7 +317,7 @@ class InferenceBridge:
         known_conf = {**confidence_map, **result.confidence_map}
 
         try:
-            outcome = infer(present, registry)
+            outcome = infer(present, registry, admit=self._admit)
         except Exception as exc:
             # Provider values are untrusted shapes; a fault evaluating them is a
             # degraded inference, not a failed converge. Report it where the
@@ -388,23 +396,6 @@ class InferenceBridge:
             }
             for r in self._rules
         ]
-
-    def derivation_inputs(self, result: InferenceResult, name: str) -> frozenset[str]:
-        """The fields `result`'s derivation of `name` was computed from.
-
-        A condition rule's output is a literal, so it depends on exactly the
-        conditions that held (its provenance `inputs`). A derivation-graph value
-        depends on the inputs of every edge declared for it. Used to refuse the
-        descendants of a refused derivation (EIE-PR-U01).
-        """
-        record = result.provenance.get(name)
-        if record is not None:
-            return frozenset(record.get("inputs") or ())
-        if self._graph is None:
-            return frozenset()
-        return frozenset(
-            field for edge in self._graph.edges if edge.target == name for field in edge.inputs
-        )
 
     @property
     def unlock_map(self) -> dict[str, float]:

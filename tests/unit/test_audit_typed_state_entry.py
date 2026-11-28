@@ -343,3 +343,236 @@ async def test_control_a_cascade_over_a_conforming_derivation_is_kept() -> None:
 
     assert response.fields.get("fleet_class") == "enterprise"
     assert response.fields.get("tier") == "gold"
+
+
+# ── Re-audit 2026-11-28 (EIE-426-001..003): one admission boundary ──────────
+#
+# Every declared property entering operational state satisfies its type,
+# request facts included, and admission happens before a value becomes an input
+# to any later rule -- not as cleanup afterwards.
+
+FULL_SPEC = {
+    "ontology": {
+        "nodes": [
+            {
+                "label": "Carrier",
+                "properties": [
+                    {"name": "power_units", "type": "int"},
+                    {"name": "haul_miles", "type": "int"},
+                    {"name": "fleet_class", "type": "enum", "values": ["enterprise", "regional"]},
+                    {"name": "tier", "type": "enum", "values": ["gold", "silver"]},
+                    {"name": "band", "type": "enum", "values": ["A", "B"]},
+                ],
+            }
+        ]
+    }
+}
+
+
+def _when(rule_id: str, field: str, value: Any, out: str, out_value: Any, priority: int = 10):
+    return {
+        "rule_id": rule_id,
+        "node": "Carrier",
+        "conditions": [{"field": field, "operator": "EQUALS", "value": value}],
+        "outputs": [{"field": out, "value_expr": out_value, "derivation_type": "classification"}],
+        "confidence": 0.9,
+        "priority": priority,
+        "rule_or_model_version": "t-0.1.0",
+    }
+
+
+def _from_power(rule_id: str, fleet_class: str, priority: int) -> dict[str, Any]:
+    rule = _rule(fleet_class)
+    rule.update(rule_id=rule_id, priority=priority)
+    return rule
+
+
+async def _loop(
+    *,
+    entity: dict[str, Any] | None = None,
+    provider: dict[str, Any] | None = None,
+    rules: list[dict[str, Any]] | None = None,
+    spec: dict[str, Any] = FULL_SPEC,
+    node: str = "Carrier",
+    seen: list[EnrichRequest] | None = None,
+    **kwargs: Any,
+) -> EnrichResponse:
+    async def enricher(pass_request: EnrichRequest, *_args: Any, **_kwargs: Any) -> EnrichResponse:
+        if seen is not None:
+            seen.append(pass_request)
+        return EnrichResponse(
+            state="completed", fields=dict(provider or {}), confidence=0.93, tokens_used=1
+        )
+
+    request = EnrichRequest(
+        entity={"id": "c-1", **(entity or {})}, object_type="carrier", objective="probe"
+    )
+    return await convergence_controller.run_convergence_loop(
+        request=request,
+        settings=Settings(l9_environment="test"),
+        kb_resolver=None,
+        enricher=enricher,
+        inference_rules=rules or [],
+        domain_spec=spec,
+        node_label=node,
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_off_type_request_fact_never_fires_a_rule() -> None:
+    """EIE-426-001: a request fact is an origin too; `galactic` must not derive `tier`."""
+    response = await _loop(
+        entity={"fleet_class": "galactic"},
+        rules=[_when("tier-from-class", "fleet_class", "galactic", "tier", "gold")],
+    )
+    assert "tier" not in response.fields
+    assert "fleet_class" not in response.fields
+
+
+@pytest.mark.asyncio
+async def test_an_off_type_request_fact_reaches_neither_the_planner_nor_a_pass_request() -> None:
+    """EIE-426-001: filtering known_fields alone is not enough; no operational input carries it."""
+    planned: list[dict[str, Any]] = []
+    real = convergence_controller.MetaPromptPlanner.plan_pass
+
+    def spy(self: Any, *args: Any, **kwargs: Any) -> Any:
+        planned.append(dict(kwargs["entity_state"]))
+        return real(self, *args, **kwargs)
+
+    seen: list[EnrichRequest] = []
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(convergence_controller.MetaPromptPlanner, "plan_pass", spy)
+        await _loop(entity={"fleet_class": "galactic", "power_units": 12}, seen=seen)
+
+    assert planned and seen
+    for state in planned:
+        assert state.get("fleet_class") is None
+        assert state["power_units"] == 12  # a conforming request fact is kept
+    for pass_request in seen:
+        assert pass_request.entity.get("fleet_class") is None
+        assert pass_request.entity["power_units"] == 12
+
+
+@pytest.mark.asyncio
+async def test_a_valid_graph_seed_is_not_suppressed_by_an_off_type_request_fact() -> None:
+    """EIE-426-001: the record's value wins over a seed only when it is a value at all."""
+    seed = _target("fleet_class", "enterprise", 0.9)
+
+    async def claim(_ledger: Any, _tenant: str, _entity: str) -> list[EnrichmentTarget]:
+        return [seed]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(convergence_controller, "_claim_graph_targets", claim)
+        response = await _loop(
+            entity={"fleet_class": "galactic"}, tenant_id="synthco", entity_id="c-1"
+        )
+    assert response.fields.get("fleet_class") == "enterprise"
+
+
+@pytest.mark.asyncio
+async def test_a_three_level_cascade_over_a_refused_value_derives_nothing() -> None:
+    response = await _loop(
+        provider={"power_units": 820},
+        rules=[
+            _from_power("class", "galactic", 20),
+            _when("tier", "fleet_class", "galactic", "tier", "gold"),
+            _when("band", "tier", "gold", "band", "A"),
+        ],
+    )
+    for field in ("fleet_class", "tier", "band"):
+        assert field not in response.fields, field
+
+
+@pytest.mark.asyncio
+async def test_an_off_type_higher_priority_rule_does_not_suppress_a_valid_fallback() -> None:
+    """EIE-426-003: refusal before resolution, so the valid lower-priority output wins."""
+    response = await _loop(
+        provider={"power_units": 820},
+        rules=[
+            _from_power("class-invalid", "galactic", 100),
+            _from_power("class-valid", "enterprise", 50),
+            _when("tier", "fleet_class", "enterprise", "tier", "gold"),
+        ],
+    )
+    assert response.fields.get("fleet_class") == "enterprise"
+    assert response.fields.get("tier") == "gold"
+
+
+def test_a_refused_derivation_signals_no_unlock_and_counts_no_firing() -> None:
+    """EIE-426-002: search planning and statistics see only admitted derivations.
+
+    With `galactic` admitted, `tier-needs-haul` would have one missing input
+    (`haul_miles`) and credit it in the unlock map; refused, it has two.
+    """
+    from app.engines.inference_bridge_adapter import InferenceBridge
+
+    needs_haul = _when("tier-needs-haul", "fleet_class", "galactic", "tier", "gold")
+    needs_haul["conditions"].append({"field": "haul_miles", "operator": "GT", "value": 1})
+    bridge = InferenceBridge(
+        rules=[_from_power("class", "galactic", 20), needs_haul],
+        domain_spec=FULL_SPEC,
+        node="Carrier",
+        admit=convergence_controller._admission(_field_declarations(FULL_SPEC, "Carrier")),
+    )
+    result = bridge.run({"power_units": 820}, {"power_units": 0.93})
+
+    assert result.derived_fields == {}
+    assert result.rules_fired == 0
+    assert "haul_miles" not in result.unlock_map
+
+
+LEGACY_SPEC = {
+    "ontology": {
+        "nodes": {
+            "Carrier": {
+                "properties": {
+                    "power_units": {"type": "int"},
+                    "fleet_class": {
+                        "type": "enum",
+                        "values": ["enterprise", "regional"],
+                        "derived_from": ["power_units"],
+                        "inference_rule": "audit-u01-galactic",
+                        "confidence_floor": 0.5,
+                    },
+                    "tier": {"type": "enum", "values": ["gold", "silver"]},
+                }
+            }
+        }
+    }
+}
+
+
+@pytest.mark.asyncio
+async def test_a_refused_graph_derivation_cannot_cross_into_condition_rules() -> None:
+    """The derivation graph and the condition rules are two executors; neither leaks."""
+    from app.engines import inference_bridge_v2 as v2
+
+    def galactic(_inputs: dict[str, Any], _edge: Any) -> tuple[Any, float]:
+        return "galactic", 0.95
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(v2._RULE_REGISTRY, "audit-u01-galactic", galactic)
+        response = await _loop(
+            provider={"power_units": 820},
+            rules=[_when("tier", "fleet_class", "galactic", "tier", "gold")],
+            spec=LEGACY_SPEC,
+        )
+    assert "fleet_class" not in response.fields
+    assert "tier" not in response.fields
+
+
+@pytest.mark.asyncio
+async def test_control_a_valid_mixed_origin_converge_is_unchanged() -> None:
+    """Request fact + provider evidence + derivation, all conforming: all kept."""
+    response = await _loop(
+        entity={"haul_miles": 600},
+        provider={"power_units": 820},
+        rules=[
+            _from_power("class", "enterprise", 20),
+            _when("tier", "fleet_class", "enterprise", "tier", "gold"),
+        ],
+    )
+    assert response.fields.get("power_units") == 820
+    assert response.fields.get("fleet_class") == "enterprise"
+    assert response.fields.get("tier") == "gold"
